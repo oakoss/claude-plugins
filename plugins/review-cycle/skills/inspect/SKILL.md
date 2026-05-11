@@ -55,9 +55,14 @@ In a single conversation turn, invoke:
 
    No dependency on the codex Claude plugin; uses the `codex` CLI directly. Multi-agent parallelism comes from `multi_agent = true` in `~/.codex/config.toml`.
 
-2. **pr-review-toolkit (parallel mode)**: `/pr-review-toolkit:review-pr all parallel`
+2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true`. Conditional dispatch based on diff scope:
 
-Wait for both to complete.
+   - `review-cycle:code-reviewer` — always
+   - `review-cycle:pr-test-analyzer` — if diff touches test files
+   - `review-cycle:silent-failure-hunter` — if diff touches error-handling code
+   - `review-cycle:type-design-analyzer` — if diff adds or modifies type declarations
+
+Wait for the codex bash output AND every spawned subagent to complete.
 
 ### Phase 3: Aggregate
 

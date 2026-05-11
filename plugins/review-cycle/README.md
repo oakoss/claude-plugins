@@ -71,11 +71,30 @@ Arguments:
 
 - `--base <ref>` — same as above
 
+### `/review-cycle:cleanup`
+
+Spawns the bundled `cleanup` subagent on the current diff. Applies the comment policy (clean and minimal) and de-slopify methodology in a single pass. Edits files directly; returns a summary. Does NOT update the review sentinel — use `/review-cycle:accept` after if you want to satisfy the commit gate.
+
+### `/review-cycle:accept`
+
+Marks the current uncommitted state as reviewed by updating the review sentinel. Use when you've manually reviewed the substance of your changes and want to commit without running the full cycle. Per-state escape hatch (lighter than the project-wide `.claude/.no-review-gate` opt-out).
+
 ### `/review-cycle:de-slopify`
 
-Bundled de-slopify skill — removes AI writing artifacts from prose surfaces (comments, README files, commit messages, docs). Authored separately at [oakoss/agent-skills](https://github.com/oakoss/agent-skills) and bundled here so the plugin works without external skill dependencies.
+Bundled de-slopify skill — methodology for removing AI writing artifacts from prose. Authored separately at [oakoss/agent-skills](https://github.com/oakoss/agent-skills); bundled here so the plugin is self-contained. The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle.
 
-The cycle invokes this automatically in its final cleanup phase. You can also invoke it directly for ad-hoc prose cleanup.
+## Subagents (bundled)
+
+Migrated verbatim from Anthropic's pr-review-toolkit (Apache 2.0; see `LICENSE-pr-review-toolkit` and `NOTICE`):
+
+- `review-cycle:code-reviewer` — general quality + CLAUDE.md compliance
+- `review-cycle:silent-failure-hunter` — error handling, swallowed errors
+- `review-cycle:type-design-analyzer` — type invariants, encapsulation
+- `review-cycle:pr-test-analyzer` — test coverage gaps
+
+New (this plugin):
+
+- `review-cycle:cleanup` — comment policy + de-slopify in one pass
 
 ## Hooks (active when plugin is enabled)
 

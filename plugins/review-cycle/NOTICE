@@ -1,0 +1,25 @@
+review-cycle
+Copyright 2026 Oak OSS
+
+This plugin includes the following subagent definitions copied from
+Anthropic's pr-review-toolkit plugin, licensed under the Apache License,
+Version 2.0:
+
+  agents/code-reviewer.md
+  agents/silent-failure-hunter.md
+  agents/type-design-analyzer.md
+  agents/pr-test-analyzer.md
+
+Source: https://github.com/anthropics/claude-plugins-public/tree/main/plugins/pr-review-toolkit
+License: see LICENSE-pr-review-toolkit in this directory.
+
+The pr-review-toolkit's code-simplifier and comment-analyzer agents are
+intentionally not migrated. code-simplifier was excluded because it
+competes with the review-cycle loop's own fix application. comment-analyzer
+was replaced by the cleanup subagent, which combines comment-policy review
+with de-slopify cleanup application.
+
+No modifications have been made to the copied agent definitions beyond
+their location in the filesystem. When the plugin's review-cycle namespace
+applies, they are invoked as `review-cycle:<agent-name>` instead of
+`pr-review-toolkit:<agent-name>`.

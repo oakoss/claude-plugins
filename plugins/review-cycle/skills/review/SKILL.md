@@ -105,14 +105,29 @@ In a single conversation turn, invoke ALL of the following:
    - Returns immediately with a bash shell ID; output streams to the task output file
    - Save the shell ID; you'll read its output later when notified of completion
 
-2. **pr-review-toolkit (parallel mode)**: `/pr-review-toolkit:review-pr all parallel`
-   - The toolkit handles its own conditional dispatch based on what's in the diff
-   - Spawns Claude subagents for code, tests, errors, types, and comments as applicable
-   - Returns when all subagents complete
+2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true` in the same single message as the codex invocation. Conditional dispatch based on diff scope (decided in Phase 1):
 
-De-slopify is the FINAL cleanup pass at the end of the cycle, not part of the fan-out.
+   - `review-cycle:code-reviewer` — always
+   - `review-cycle:pr-test-analyzer` — if diff touches `*.test.*`, `*.spec.*`, `tests/`, `__tests__/`, or similar test paths
+   - `review-cycle:silent-failure-hunter` — if diff touches error-handling code (try/catch, `Result<`, `.catch(`, error returns)
+   - `review-cycle:type-design-analyzer` — if diff adds or modifies type declarations (interfaces, structs, classes, type aliases)
 
-Wait for both reviewers to finish before proceeding.
+   Each spawn pattern:
+
+   ```
+   Agent({
+     subagent_type: "review-cycle:code-reviewer",
+     description: "Code review of uncommitted changes",
+     run_in_background: true,
+     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Output findings as file:line — severity — issue — suggested fix."
+   })
+   ```
+
+   All applicable agents fire in parallel. Auto-notification on completion — do not poll.
+
+Cleanup (Phase 6) handles de-slopify and comment policy at end of cycle, not part of the fan-out.
+
+Wait for the codex bash output AND every spawned subagent to complete before proceeding.
 
 ### Phase 3: Aggregate findings
 
@@ -143,23 +158,31 @@ After applying fixes:
 - If NO inline fixes were applied (everything was clean or correctly deferred) → exit loop
 - If iteration count == max-iter → exit loop with summary of remaining findings
 
-### Phase 6: Final de-slopify cleanup
+### Phase 6: Cleanup
 
-Invoke the bundled de-slopify skill on prose surfaces in modified files:
+Spawn the cleanup subagent to apply the comment policy and de-slopify methodology in a single pass:
 
 ```
-Skill(review-cycle:de-slopify)
+Agent({
+  subagent_type: "review-cycle:cleanup",
+  description: "Final cleanup pass — comments + de-slopify",
+  prompt: "Run cleanup on the current diff (post-fix state). Apply comment policy to modified code comments and de-slopify to prose surfaces. Do not touch algorithm logic, type definitions, or test assertions."
+})
 ```
 
-Scope:
+The cleanup agent has de-slopify preloaded via its `skills` frontmatter, so it handles both lenses in one invocation. It edits files directly and returns a summary of changes.
+
+Scope of cleanup (the agent enforces this):
 
 - Comments in modified code
 - Modified `.md` files
 - Any commit message drafts (if generated)
 
-Do NOT apply de-slopify to algorithm logic, type definitions, or test assertions — those should stay exactly as written.
+Excluded from cleanup:
 
-This catches AI-flavored phrasings, formulaic patterns, and other slop that may have been introduced during fix iterations. The bundled skill is at `plugins/review-cycle/skills/de-slopify/` — no external dependency on a user-level `de-slopify`.
+- Algorithm logic
+- Type definitions
+- Test assertions
 
 ### Phase 7: Update sentinel
 
