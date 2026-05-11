@@ -57,7 +57,7 @@ fi
 # Block the commit
 jq -n '{
   decision: "block",
-  reason: "Cannot commit unreviewed changes. Run /review-cycle:cycle first, or touch .claude/.no-review-gate in the project root to bypass for this project."
-}' 2>/dev/null || printf '{"decision":"block","reason":"Cannot commit unreviewed changes. Run /review-cycle:cycle first."}\n'
+  reason: "Cannot commit unreviewed changes. Run /review-cycle:review first, or touch .claude/.no-review-gate in the project root to bypass for this project."
+}' 2>/dev/null || printf '{"decision":"block","reason":"Cannot commit unreviewed changes. Run /review-cycle:review first."}\n'
 
 exit 0

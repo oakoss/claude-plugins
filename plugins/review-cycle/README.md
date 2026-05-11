@@ -17,9 +17,9 @@ Stop hook fires when you finish a turn
        │
        ├── Yes → allow turn to end
        │
-       └── No → block with "invoke /review-cycle:cycle"
+       └── No → block with "invoke /review-cycle:review"
               ↓
-        /review-cycle:cycle runs
+        /review-cycle:review runs
               ↓
         ┌─────┴─────┐
         ↓           ↓
@@ -44,7 +44,7 @@ You review the diff and commit yourself
 
 ## Skills
 
-### `/review-cycle:cycle`
+### `/review-cycle:review`
 
 The action loop. Fans out reviewers, applies fixes, loops until clean (max 4 iterations by default), final de-slopify pass, updates sentinel.
 
@@ -69,7 +69,7 @@ Seeds the per-project sentinel once at session startup. Treats pre-existing WIP 
 
 ### Stop
 
-Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:cycle`. Fail-open on any error.
+Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:review`. Fail-open on any error.
 
 ### PreToolUse (Bash matcher)
 
@@ -147,7 +147,7 @@ Run `/reload-plugins`. If still nothing, check `claude --debug` for hook registr
 Touch the global kill-switch immediately: `touch ~/.claude/.disable-review-gate`. Then file an issue with hook output. The sentinel-based gate should prevent this, but the kill-switch is the safety net.
 
 **Stop hook fires on every turn even after running the cycle.**
-The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a 64-char hex hash. Re-run `/review-cycle:cycle` — it should write the sentinel as its final step.
+The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a 64-char hex hash. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
 
 **Codex is missing or not authenticated.**
 The cycle surfaces this and stops. Install with `npm install -g @openai/codex`, then `codex login`. Verify `multi_agent = true` in `~/.codex/config.toml`.

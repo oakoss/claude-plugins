@@ -1,5 +1,5 @@
 ---
-name: cycle
+name: review
 description: Run the full automated code review cycle on uncommitted changes. Fans out Codex and pr-review-toolkit reviewers in parallel, applies fixes inline per the embedded policies, loops up to 4 iterations until clean, then runs de-slopify cleanup on prose. Updates the review sentinel on completion. Does NOT commit.
 argument-hint: "[--max-iter N] [--base <ref>]"
 disable-model-invocation: true
@@ -8,7 +8,7 @@ allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, AskUserQue
 
 # Review cycle
 
-Automated multi-agent review cycle on uncommitted changes. Invoke manually with `/review-cycle:cycle` or via the Stop hook when uncommitted-and-unreviewed changes exist.
+Automated multi-agent review cycle on uncommitted changes. Invoke manually with `/review-cycle:review` or via the Stop hook when uncommitted-and-unreviewed changes exist.
 
 ## Embedded policies
 

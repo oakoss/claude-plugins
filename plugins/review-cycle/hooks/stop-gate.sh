@@ -2,7 +2,7 @@
 # review-cycle: Stop hook
 #
 # Blocks Claude from finishing a turn if uncommitted-and-unreviewed changes
-# exist. Tells Claude to invoke /review-cycle:cycle. Fail-open on any error.
+# exist. Tells Claude to invoke /review-cycle:review. Fail-open on any error.
 
 # Global kill-switch
 [ -f "$HOME/.claude/.disable-review-gate" ] && exit 0
@@ -63,8 +63,8 @@ jq -n '{
   reason: "Uncommitted changes have not been reviewed.",
   hookSpecificOutput: {
     hookEventName: "Stop",
-    additionalContext: "BLOCKED: There are uncommitted changes that have not been reviewed. You MUST invoke /review-cycle:cycle now before attempting to stop again. The cycle will fan out reviewers, apply fixes per its embedded policies, and update the review sentinel. Do not commit; the user is the final reviewer."
+    additionalContext: "BLOCKED: There are uncommitted changes that have not been reviewed. You MUST invoke /review-cycle:review now before attempting to stop again. The cycle will fan out reviewers, apply fixes per its embedded policies, and update the review sentinel. Do not commit; the user is the final reviewer."
   }
-}' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes have not been reviewed.","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"Run /review-cycle:cycle to review uncommitted changes."}}\n'
+}' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes have not been reviewed.","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"Run /review-cycle:review to review uncommitted changes."}}\n'
 
 exit 0

@@ -8,7 +8,7 @@ allowed-tools: Bash, Read, Glob, Grep, Agent, AskUserQuestion
 
 # Review inspect
 
-Read-only review pass. Runs the same reviewers as `/review-cycle:cycle` but does not apply fixes, does not loop, and does not update the review sentinel.
+Read-only review pass. Runs the same reviewers as `/review-cycle:review` but does not apply fixes, does not loop, and does not update the review sentinel.
 
 Use this when you want to see findings without committing to a fix cycle — for example, a mid-implementation sanity check, a pre-commit final inspection, or when you want to triage findings manually rather than letting the cycle decide.
 
@@ -79,7 +79,7 @@ Then a "Next steps" block:
 
 ```
 Next steps:
-  - Address findings automatically: /review-cycle:cycle
+  - Address findings automatically: /review-cycle:review
   - Triage manually: edit files directly
   - Bypass the gate for this project: touch .claude/.no-review-gate
 ```
@@ -88,4 +88,4 @@ Next steps:
 
 Do NOT apply any fixes. Do NOT update the sentinel. Do NOT create tickets. Do NOT commit.
 
-The Stop hook will still gate on unreviewed changes — `/review-cycle:inspect` does not satisfy the gate (because no review-cycle has run, no sentinel was updated). To clear the gate, either run `/review-cycle:cycle` or use the per-project opt-out marker.
+The Stop hook will still gate on unreviewed changes — `/review-cycle:inspect` does not satisfy the gate (because no review-cycle has run, no sentinel was updated). To clear the gate, either run `/review-cycle:review` or use the per-project opt-out marker.

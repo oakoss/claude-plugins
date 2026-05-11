@@ -64,7 +64,7 @@ When deferring, briefly state which criterion above applies.
 
 ## How these interact with the cycle
 
-Both policies are already embedded in `/review-cycle:cycle` and `/review-cycle:inspect`, so the cycle behaves correctly even without these reference snippets installed.
+Both policies are already embedded in `/review-cycle:review` and `/review-cycle:inspect`, so the cycle behaves correctly even without these reference snippets installed.
 
 The reference snippets matter when Claude is doing related work outside the cycle:
 
