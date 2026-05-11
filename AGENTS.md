@@ -6,7 +6,7 @@ Conventions for authoring plugins in this marketplace.
 
 Every plugin lives under `plugins/<name>/` with the following minimum structure:
 
-```
+```bash
 plugins/<name>/
 ├── .claude-plugin/
 │   └── plugin.json          # required: manifest
