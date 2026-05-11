@@ -11,13 +11,14 @@ One-time setup for using `review-cycle`. Run this once globally, then optionally
 
 ## What this skill does
 
-Five named checks, each idempotent:
+Six named checks, each idempotent:
 
-1. **Codex CLI** — verifies `codex --version` works
-2. **Codex multi_agent** — verifies `~/.codex/config.toml` has `multi_agent = true`
-3. **Codex auth** — reminder to run `codex login` if needed
-4. **CLAUDE.md policies** — offers to append comment + fix-vs-defer policies (global or project scope)
-5. **Project `.gitignore`** — adds `.claude/.review-mark` and `.claude/.no-review-gate` if inside a git repo
+1. **Hook prerequisites** — verifies `jq`, `git`, and a sha256 tool (`sha256sum` or `shasum`) are on `$PATH`. The hooks silently fail-open if any are missing, so a misconfigured machine would have the gate quietly disabled.
+2. **Codex CLI** — verifies `codex --version` works
+3. **Codex multi_agent** — verifies `~/.codex/config.toml` has `multi_agent = true`
+4. **Codex auth** — reminder to run `codex login` if needed
+5. **CLAUDE.md policies** — offers to append comment + fix-vs-defer policies (global or project scope)
+6. **Project `.gitignore`** — adds the sentinel and opt-out marker entries if inside a git repo
 
 Each step checks state first. If something is already configured, it reports "✓ already done" and continues.
 
@@ -33,6 +34,30 @@ fi
 ```
 
 Remember whether we're inside a git repo. Project-scope options only apply when `PROJECT_ROOT` is set.
+
+### Step 1.5: Hook prerequisites
+
+Verify that `jq`, `git`, and a sha256 tool are available. The hooks fail-open if any are missing, which means the gate would silently do nothing on this machine.
+
+```bash
+command -v jq >/dev/null && echo "✓ jq" || echo "⚠ jq missing"
+command -v git >/dev/null && echo "✓ git" || echo "⚠ git missing"
+if command -v sha256sum >/dev/null; then
+  echo "✓ sha256sum"
+elif command -v shasum >/dev/null; then
+  echo "✓ shasum"
+else
+  echo "⚠ no sha256 tool (need sha256sum or shasum)"
+fi
+```
+
+For any missing tool, surface a clear install hint in the final summary:
+
+- `jq`: macOS `brew install jq`; Debian/Ubuntu `apt install jq`
+- `git`: macOS `xcode-select --install` or `brew install git`; Debian/Ubuntu `apt install git`
+- `sha256sum`/`shasum`: should ship with the OS; on macOS use `shasum` (already present), on Linux `sha256sum` (coreutils)
+
+Continue with subsequent steps regardless — each one is independent.
 
 ### Step 2: Codex CLI check
 
@@ -66,7 +91,7 @@ If missing:
 
 ### Step 4: Codex auth reminder
 
-We don't auto-detect auth state precisely (requires interpreting codex CLI output). Just print a reminder:
+Auth state can't be precisely detected without interpreting codex CLI output. Print a reminder:
 - If `~/.codex/auth.json` exists (or equivalent token file): assume authed, no warning.
 - Otherwise: warn "Run `codex login` if you haven't already."
 
@@ -99,9 +124,14 @@ If user chose "Skip", print the policy snippets to the conversation so they can 
 
 Only run this step if `PROJECT_ROOT` is set.
 
+Get the entries to add from the sentinel CLI so this stays in sync with whatever the hooks actually write:
+
 ```bash
 GITIGNORE="$PROJECT_ROOT/.gitignore"
-ENTRIES_TO_ADD=(".claude/.review-mark" ".claude/.no-review-gate")
+ENTRIES_TO_ADD=()
+while IFS= read -r line; do
+  ENTRIES_TO_ADD+=("$line")
+done < <("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" paths)
 ```
 
 For each entry:
@@ -121,6 +151,7 @@ Print a compact checklist of what was done. One line per item, single status gly
 
 ```
 review-cycle init summary:
+  ✓ Prereqs: jq, git, sha256sum
   ✓ Codex CLI: codex-cli 0.130.0
   ✓ multi_agent enabled
   ✓ Codex auth detected
@@ -134,6 +165,7 @@ When something needs manual action, surface it inline with `⚠` and a clear nex
 
 ```
 review-cycle init summary:
+  ⚠ Prereqs: jq missing — brew install jq
   ✓ Codex CLI: codex-cli 0.130.0
   ⚠ multi_agent not enabled — add `multi_agent = true` to [features] in ~/.codex/config.toml
   ⚠ Codex auth not detected — run: codex login

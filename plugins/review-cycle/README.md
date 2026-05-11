@@ -100,7 +100,9 @@ New (this plugin):
 
 ### SessionStart
 
-Seeds the per-project sentinel once at session startup. Treats pre-existing WIP as "already reviewed" so you don't get nagged about changes you made before installing this plugin. Re-seeds only on fresh startups (not `/clear`, not `/resume`, not auto-compaction). Idempotent — won't overwrite an existing sentinel.
+Seeds the per-project sentinel at session startup. Re-seeds only when the sentinel is missing (first install — treats pre-existing WIP as "already reviewed") or when the sentinel still matches the current state (idempotent refresh). If the sentinel disagrees with the current state, the previous session left unreviewed work — startup keeps the old sentinel so the Stop and commit gates can do their job. Only fires on `source: "startup"` events, not `/clear`, `/compact`, or `resume`.
+
+Side effect: dependency bumps or IDE edits between Claude sessions (after a clean commit) will be detected as drift on the next startup. Run `/review-cycle:accept` (or `/review-cycle:review`) once to re-baseline. The alternative silently absorbed unreviewed in-progress work into the new baseline whenever Claude was quit.
 
 ### Stop
 
@@ -170,7 +172,7 @@ The sentinel is per-project state, not source. Add to your project's `.gitignore
 ## State files
 
 ```
-${PROJECT}/.claude/.review-mark          sha256 of last-reviewed git state
+${PROJECT}/.claude/.review-mark          sha256:<hex> of last-reviewed state
 ${PROJECT}/.claude/.no-review-gate       per-project opt-out (user-touched)
 ~/.claude/.disable-review-gate           global kill-switch (user-touched)
 ```
@@ -184,7 +186,7 @@ Run `/reload-plugins`. If still nothing, check `claude --debug` for hook registr
 Touch the global kill-switch immediately: `touch ~/.claude/.disable-review-gate`. Then file an issue with hook output. The sentinel-based gate should prevent this, but the kill-switch is the safety net.
 
 **Stop hook fires on every turn even after running the cycle.**
-The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a 64-char hex hash. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
+The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a `sha256:<hex>` line. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
 
 **Codex is missing or not authenticated.**
 The cycle surfaces this and stops. Install with `npm install -g @openai/codex`, then `codex login`. Verify `multi_agent = true` in `~/.codex/config.toml`.

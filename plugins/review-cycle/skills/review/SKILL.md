@@ -186,24 +186,11 @@ Excluded from cleanup:
 
 ### Phase 7: Update sentinel
 
-Write the review sentinel atomically:
-
 ```bash
-mkdir -p "$PROJECT_ROOT/.claude"
-SENTINEL="$PROJECT_ROOT/.claude/.review-mark"
-
-if command -v sha256sum >/dev/null 2>&1; then
-  SHA_CMD="sha256sum"
-else
-  SHA_CMD="shasum -a 256"
-fi
-
-HASH=$(cd "$PROJECT_ROOT" && git status --porcelain --untracked-files=all | $SHA_CMD | cut -d' ' -f1)
-TMP="${SENTINEL}.tmp.$$"
-echo "$HASH" > "$TMP" && mv "$TMP" "$SENTINEL"
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark
 ```
 
-The sentinel updating is what allows the Stop hook and commit-gate to let the user commit.
+This is what allows the Stop hook and commit-gate to let the user commit. If the CLI exits nonzero (not in a git repo, sha256 tool missing), surface the error in the final summary — do not silently succeed.
 
 ### Phase 8: Final summary
 

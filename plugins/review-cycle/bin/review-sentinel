@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# review-sentinel: state for the review-cycle gate.
+#
+# Subcommands:
+#   seed         Write current state hash. Always overwrites. Used by SessionStart.
+#   mark         Write current state hash. Always overwrites. Used by /accept
+#                and /review Phase 7.
+#   check        Exit 0 if clean tree OR sentinel matches; 1 if drifted; 2 on
+#                error (no git repo, no sha tool). Hooks should fail-open on 2.
+#   current-hash Print current state hash to stdout.
+#   paths        Print sentinel and opt-out paths (relative to project root,
+#                one per line) for use in .gitignore.
+#
+# Format on disk: `sha256:<64-hex-chars>` single line.
+# Path:           <project-root>/.claude/.review-mark
+#
+# Project root resolution (in order):
+#   1. --root <path> flag (explicit)
+#   2. CLAUDE_PROJECT_DIR env var (set by Claude Code)
+#   3. git rev-parse --show-toplevel from current cwd
+
+set -u
+
+EMPTY_SHA256="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+usage() {
+  cat >&2 <<EOF
+usage: review-sentinel [--root <path>] <subcommand>
+
+subcommands:
+  seed          write current hash (used by SessionStart)
+  mark          write current hash (used by /accept and /review)
+  check         exit 0=clean/match, 1=drift, 2=error
+  current-hash  print current hash
+  paths         print gitignore-relative paths
+EOF
+  exit 2
+}
+
+ROOT_OVERRIDE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root)
+      [ $# -ge 2 ] || usage
+      ROOT_OVERRIDE="$2"
+      shift 2
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "review-sentinel: unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+[ $# -ge 1 ] || usage
+CMD="$1"
+shift
+
+pick_sha() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    echo "shasum -a 256"
+  else
+    return 1
+  fi
+}
+
+resolve_project_root() {
+  local candidate
+  for candidate in "$ROOT_OVERRIDE" "${CLAUDE_PROJECT_DIR:-}"; do
+    [ -n "$candidate" ] || continue
+    [ -d "$candidate" ] || continue
+    git -C "$candidate" rev-parse --show-toplevel 2>/dev/null && return 0
+  done
+  git rev-parse --show-toplevel 2>/dev/null
+}
+
+compute_current_hash() {
+  local root="$1" sha h
+  # Defense-in-depth: verify root is inside a git work tree.
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  sha=$(pick_sha) || return 1
+  # Hash four streams concatenated:
+  #   1. Porcelain status (file-level: which files are added/modified/deleted)
+  #   2. `git diff --cached --binary` (staged content — works in unborn repos)
+  #   3. `git diff --binary` (unstaged content)
+  #   4. Contents of untracked files
+  # The sentinel and opt-out marker are excluded so writing them doesn't
+  # invalidate the hash. Splitting --cached + unstaged (vs. `git diff HEAD`)
+  # ensures coverage in repos without an initial commit.
+  h=$(cd "$root" && {
+        git status --porcelain --untracked-files=all \
+          ':(exclude).claude/.review-mark' \
+          ':(exclude).claude/.no-review-gate' 2>/dev/null
+        git diff --cached --binary \
+          ':(exclude).claude/.review-mark' \
+          ':(exclude).claude/.no-review-gate' 2>/dev/null
+        git diff --binary \
+          ':(exclude).claude/.review-mark' \
+          ':(exclude).claude/.no-review-gate' 2>/dev/null
+        git ls-files --others --exclude-standard \
+          ':(exclude).claude/.review-mark' \
+          ':(exclude).claude/.no-review-gate' 2>/dev/null \
+          | while IFS= read -r f; do
+              printf '\n--UNTRACKED:%s--\n' "$f"
+              [ -f "$f" ] && cat -- "$f" 2>/dev/null
+            done
+      } | $sha 2>/dev/null | cut -d' ' -f1)
+  [ -n "$h" ] || return 1
+  echo "sha256:$h"
+}
+
+read_sentinel() {
+  local sentinel="$1" content
+  [ -f "$sentinel" ] || return 0
+  content=$(tr -d '[:space:]' < "$sentinel" 2>/dev/null)
+  if echo "$content" | grep -qE '^sha256:[a-f0-9]{64}$'; then
+    echo "$content"
+    return 0
+  fi
+  echo "review-sentinel: malformed sentinel at $sentinel; expected 'sha256:<64-hex>' — treating as drift" >&2
+  return 1
+}
+
+write_sentinel() {
+  local sentinel="$1" content="$2" tmp err
+  if ! err=$(mkdir -p "$(dirname "$sentinel")" 2>&1); then
+    echo "review-sentinel: $err" >&2
+    return 1
+  fi
+  tmp="${sentinel}.tmp.$$"
+  if ! err=$(echo "$content" > "$tmp" 2>&1); then
+    echo "review-sentinel: write to $tmp failed: $err" >&2
+    /bin/rm -f "$tmp" 2>/dev/null
+    return 1
+  fi
+  if ! err=$(mv "$tmp" "$sentinel" 2>&1); then
+    echo "review-sentinel: rename $tmp -> $sentinel failed: $err" >&2
+    /bin/rm -f "$tmp" 2>/dev/null
+    return 1
+  fi
+  return 0
+}
+
+case "$CMD" in
+  seed|mark)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 1
+    fi
+    HASH=$(compute_current_hash "$PROJECT_ROOT") || {
+      echo "review-sentinel: cannot compute hash (sha256sum/shasum missing?)" >&2
+      exit 2
+    }
+    write_sentinel "$PROJECT_ROOT/.claude/.review-mark" "$HASH" || {
+      echo "review-sentinel: cannot write sentinel" >&2
+      exit 2
+    }
+    exit 0
+    ;;
+
+  check)
+    PROJECT_ROOT=$(resolve_project_root)
+    [ -n "$PROJECT_ROOT" ] || exit 2
+    HASH=$(compute_current_hash "$PROJECT_ROOT") || exit 2
+    [ "$HASH" = "$EMPTY_SHA256" ] && exit 0
+    LAST=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark")
+    [ "$HASH" = "$LAST" ] && exit 0
+    exit 1
+    ;;
+
+  current-hash)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 1
+    fi
+    HASH=$(compute_current_hash "$PROJECT_ROOT") || exit 2
+    echo "$HASH"
+    exit 0
+    ;;
+
+  paths)
+    echo ".claude/.review-mark"
+    echo ".claude/.no-review-gate"
+    exit 0
+    ;;
+
+  *)
+    echo "review-sentinel: unknown subcommand: $CMD" >&2
+    usage
+    ;;
+esac

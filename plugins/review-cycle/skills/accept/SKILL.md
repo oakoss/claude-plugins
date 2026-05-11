@@ -7,7 +7,7 @@ allowed-tools: Bash
 
 # Accept current state as reviewed
 
-Updates the review sentinel at `${PROJECT_ROOT}/.claude/.review-mark` to match the current uncommitted state. The Stop hook and commit-gate will then pass for this exact state.
+Updates the review sentinel so the Stop hook and commit-gate will pass for this exact state. The sentinel is `${PROJECT_ROOT}/.claude/.review-mark`, atomically written.
 
 Use cases:
 
@@ -18,46 +18,24 @@ Use cases:
 ## Execution
 
 ```bash
-# Resolve project root
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
-  echo "Error: not inside a git repository."
-  exit 1
-}
-
-# Compute current state hash
-if command -v sha256sum >/dev/null 2>&1; then
-  SHA_CMD="sha256sum"
-elif command -v shasum >/dev/null 2>&1; then
-  SHA_CMD="shasum -a 256"
-else
-  echo "Error: no sha256sum or shasum available."
-  exit 1
-fi
-
-HASH=$(cd "$PROJECT_ROOT" && git status --porcelain --untracked-files=all | $SHA_CMD | cut -d' ' -f1)
-
-# Atomic write to sentinel
-mkdir -p "$PROJECT_ROOT/.claude"
-SENTINEL="$PROJECT_ROOT/.claude/.review-mark"
-TMP="${SENTINEL}.tmp.$$"
-echo "$HASH" > "$TMP" && mv "$TMP" "$SENTINEL"
-
-echo "Marked current state as reviewed."
-echo "Sentinel: $SENTINEL"
-echo "Hash: $HASH"
-echo ""
-echo "The commit gate will pass for this exact state. Any further edits will re-trigger the gate."
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark
 ```
+
+Report the exit code to the user:
+
+- Exit 0: sentinel updated. The commit gate will pass for this exact state. Any further edits will re-trigger the gate.
+- Exit 1: not inside a git repository.
+- Exit 2: sha256 tool not available.
 
 ## Edge cases
 
-- **Not in a git repo**: print error, do not modify anything.
-- **Working tree clean (no changes)**: still safe to run; sentinel reflects the empty-diff state. The commit gate will pass trivially.
-- **Sentinel already matches**: writing the same hash is harmless. Idempotent.
+- **Not in a git repo**: CLI exits 1. Report to user; do not modify anything.
+- **Working tree clean (no changes)**: sentinel records the empty-state hash. The commit gate passes trivially. Safe.
+- **Sentinel already matches**: writing the same hash is idempotent.
 
 ## What this skill does NOT do
 
-- Does NOT run any reviewers. If you want a full review before accepting, use `/review-cycle:review` (which auto-updates the sentinel at Phase 7).
+- Does NOT run any reviewers. For a full review before accepting, use `/review-cycle:review` (which auto-updates the sentinel at Phase 7).
 - Does NOT modify any code. Sentinel-only.
 - Does NOT bypass the per-project opt-out marker. If `.claude/.no-review-gate` exists, hooks ignore the sentinel anyway.
 

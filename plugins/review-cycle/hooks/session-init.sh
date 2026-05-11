@@ -1,55 +1,53 @@
 #!/usr/bin/env bash
 # review-cycle: SessionStart hook
 #
-# Seeds the sentinel once at session startup so pre-existing uncommitted
-# changes don't trigger the gate. Idempotent — only seeds if sentinel doesn't
-# already exist. Fail-open on any error (never trap the user).
+# Re-seeds the sentinel on fresh session starts. The rule:
+#
+#   - Sentinel missing                  → seed (first install: treat WIP as
+#                                         "already reviewed" to avoid gating
+#                                         pre-existing changes)
+#   - Sentinel matches current state    → seed (no-op, keeps it fresh)
+#   - Sentinel disagrees with current   → DO NOT seed (the previous session
+#                                         left unreviewed work; let Stop/commit
+#                                         gates do their job)
+#
+# `/clear`, `/compact`, and resume events are NOT `startup` and do not invoke
+# this hook at all, so in-progress work in those flows always stays gated.
 
-# Global kill-switch
-[ -f "$HOME/.claude/.disable-review-gate" ] && exit 0
+source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh"
 
-# Read stdin (don't fail if empty)
 INPUT=$(cat 2>/dev/null || true)
 
-# Only act on fresh session startups, not resume/clear/compact
 SOURCE=$(echo "$INPUT" | jq -r '.source // "unknown"' 2>/dev/null || echo "unknown")
 [ "$SOURCE" != "startup" ] && exit 0
 
-# Resolve project root: prefer CLAUDE_PROJECT_DIR, fall back to git rev-parse.
-# Plugin hooks can see an empty CLAUDE_PROJECT_DIR in some cases (see issue #6023).
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-}"
-if [ -z "$PROJECT_ROOT" ]; then
-  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-fi
-[ -z "$PROJECT_ROOT" ] && exit 0
+PROJECT_ROOT=$(gate_should_run) || exit 0
 
-# Per-project opt-out
-[ -f "$PROJECT_ROOT/.claude/.no-review-gate" ] && exit 0
+SENTINEL_FILE="$PROJECT_ROOT/.claude/.review-mark"
 
-# Must be a git repo
-git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-
-SENTINEL="$PROJECT_ROOT/.claude/.review-mark"
-
-# Skip if already seeded — preserves "unreviewed changes" state across sessions
-[ -f "$SENTINEL" ] && exit 0
-
-# Pick a sha256 tool (cross-platform: sha256sum on Linux, shasum on macOS)
-if command -v sha256sum >/dev/null 2>&1; then
-  SHA_CMD="sha256sum"
-elif command -v shasum >/dev/null 2>&1; then
-  SHA_CMD="shasum -a 256"
-else
+# One-time migration from 0.5.0's bare-hex sentinel format. The old format
+# can't compare against the new sha256:<hex> + content-aware hash, so without
+# this path users upgrading mid-WIP would be gated until they ran /accept.
+# This intentionally re-seeds even if the working tree is dirty — the user's
+# 0.5.0 sentinel was their declared "reviewed" state, and we honor it once.
+if [ -f "$SENTINEL_FILE" ] && \
+   grep -qE '^[a-f0-9]{64}$' "$SENTINEL_FILE" 2>/dev/null; then
+  "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" seed >/dev/null 2>&1 || true
   exit 0
 fi
 
-# Compute state hash
-HASH=$(cd "$PROJECT_ROOT" && git status --porcelain --untracked-files=all 2>/dev/null | $SHA_CMD 2>/dev/null | cut -d' ' -f1)
-[ -z "$HASH" ] && exit 0
-
-# Atomic write
-mkdir -p "$PROJECT_ROOT/.claude" 2>/dev/null
-TMP="${SENTINEL}.tmp.$$"
-echo "$HASH" > "$TMP" 2>/dev/null && mv "$TMP" "$SENTINEL" 2>/dev/null
-
+# Strict re-seed: only when sentinel exists AND its content exactly matches
+# the current hash (idempotent refresh), or when the sentinel is missing
+# (first install). Comparing exact content — not piggybacking on `check`'s
+# clean-tree exit-0 — prevents transient `git stash` / `git checkout`
+# states from absorbing prior drift.
+if [ ! -f "$SENTINEL_FILE" ]; then
+  "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" seed >/dev/null || true
+else
+  CURRENT=$("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" current-hash 2>/dev/null || true)
+  STORED=$(tr -d '[:space:]' < "$SENTINEL_FILE" 2>/dev/null || true)
+  if [ -n "$CURRENT" ] && [ "$CURRENT" = "$STORED" ]; then
+    "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" seed >/dev/null || true
+  fi
+fi
 exit 0

@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-11
+
+### Changed
+
+- **Gate state is now factored into a shared CLI (`bin/review-sentinel`) and a sourced lib (`hooks/lib/gate.sh`).** The four hooks (`session-init`, `stop-gate`, `commit-gate`, `posttool-slop`) each shrink to their actual decision logic; preconditions and sentinel I/O live in one place. `/review-cycle:accept` and Phase 7 also call the CLI instead of re-implementing hash computation inline. The sentinel path (`${PROJECT_ROOT}/.claude/.review-mark`) is unchanged; existing sentinels self-heal on the next `startup` session.
+
+- **Hash now captures content changes, not just file-level state.** Previously the sentinel hashed `git status --porcelain --untracked-files=all` only, so editing an already-modified file (without adding new files) didn't update the hash — the gate would pass when it shouldn't. The new computation concatenates porcelain status, `git diff --cached --binary`, `git diff --binary`, and the contents of untracked files. Splitting staged+unstaged (vs. `git diff HEAD`) covers repos without an initial commit; staged content in unborn repos now correctly contributes to the hash. Subsequent edits to the same file also correctly drift the sentinel.
+
+- **`session-init` re-seeds on `startup` only when the prior state was reviewed.** Re-seeds when the sentinel is missing (first install; pre-existing WIP becomes the baseline) or when the sentinel matches the current state (idempotent refresh). If the sentinel disagrees with the current state, the previous session left unreviewed work; `session-init` keeps the old sentinel and lets Stop/commit gates do their job. `/clear`, `/compact`, and resume events are not `startup` events and don't fire this hook. Trade-off: dependency bumps or IDE edits between sessions now require a one-time `/review-cycle:accept` or `/review-cycle:review` to re-baseline, but quit-and-restart with WIP no longer silently absorbs unreviewed changes.
+
+- **Clean working tree always passes `check`.** The sentinel CLI exits 0 on a clean tree regardless of the stored hash, eliminating the post-commit re-block loop where the user would have to run `/accept` after every commit just to clear the gate.
+
+### Fixed
+
+- **One-time migration from 0.5.0 sentinel format.** 0.5.0 wrote a bare 64-char hex hash; 0.5.1 writes `sha256:<hex>`. On the first 0.5.1 `startup` session that finds an old-format sentinel, `session-init` re-seeds it. This restores self-heal for the upgrade path without absorbing in-session unreviewed work on subsequent restarts.
+- **`hooks/posttool-slop.sh`: comment-slop findings rendered with literal `\n` instead of newlines.** Pre-existing bug from 0.5.0 — the `FINDINGS` variable used `"\n\n"` inside double quotes (which doesn't interpret escapes) and jq propagated those as `\\n` into Claude's `additionalContext`. Switched to `$'\n'` so the rendered context is actually newline-separated and readable.
+- **`hooks/posttool-slop.sh`: now bails when the modified file is outside any git repo**, matching the scope of the other three hooks. Previously it would inject context for orphan files.
+- **`bin/review-sentinel`: defense-in-depth git work-tree check** in `compute_current_hash`. If a refactor ever calls it with a non-repo path, it now returns nonzero instead of silently producing the empty-tree hash and reporting "clean".
+- **`bin/review-sentinel`: `read_sentinel` warns to stderr and returns nonzero** on malformed content. Callers can now distinguish missing from corrupted (`check` still treats corrupted as drift; the warning surfaces in the next hook output).
+- **`bin/review-sentinel`: `write_sentinel` forwards underlying error to stderr.** Previously `2>/dev/null` swallowed permission/disk-full/path errors silently. The mkdir, write, and rename now each capture stderr and emit a specific message before returning. Temp file is cleaned up on write or rename failure.
+- **`hooks/session-init.sh`: strict re-seed.** Only re-seeds when the sentinel exactly matches the current hash (idempotent refresh) or is missing (first install). Previously the conditional piggybacked on `check`'s clean-tree exit-0, which let a transient `git stash` or `git checkout` overwrite a prior-session sentinel with the empty-tree hash. The strict version preserves the prior sentinel as evidence whenever current state diverges.
+
+### Added
+
+- **`/review-cycle:init` now preflights `jq`, `git`, and a sha256 tool** (`sha256sum` or `shasum`). Previously a machine missing any of these would silently fail-open at every hook — the gate would appear to be doing nothing for no obvious reason. Each missing tool now surfaces a clear install hint in the init summary.
+
+- **Bats smoke suite** at `tests/`. Covers the sentinel CLI (seed/mark/check/paths, clean-tree, drift detection, format validation, exit codes) and the gate lib (kill-switch, opt-out marker, project-root resolution chain, composite check). Run with `tests/run.sh`, which wraps bats with a post-suite cleanup to work around a known hang on macOS.
+
 ## [0.5.0] - 2026-05-11
 
 ### Added
