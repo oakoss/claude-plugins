@@ -54,10 +54,14 @@ fi
 # Match means current state was reviewed → allow commit
 [ "$CURRENT_HASH" = "$LAST_HASH" ] && exit 0
 
-# Block the commit
+# Block the commit. PreToolUse uses hookSpecificOutput.permissionDecision,
+# NOT the deprecated top-level `decision`/`reason` fields.
 jq -n '{
-  decision: "block",
-  reason: "Cannot commit unreviewed changes. Run /review-cycle:review first, or touch .claude/.no-review-gate in the project root to bypass for this project."
-}' 2>/dev/null || printf '{"decision":"block","reason":"Cannot commit unreviewed changes. Run /review-cycle:review first."}\n'
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "deny",
+    permissionDecisionReason: "Cannot commit unreviewed changes. Run /review-cycle:review first, or touch .claude/.no-review-gate in the project root to bypass for this project."
+  }
+}' 2>/dev/null || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Cannot commit unreviewed changes. Run /review-cycle:review first."}}\n'
 
 exit 0
