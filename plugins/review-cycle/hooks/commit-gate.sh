@@ -18,11 +18,44 @@ if ! echo "$COMMAND" | grep -qE '(^|[;&|]|[[:space:]])git[[:space:]]+commit\b'; 
   exit 0
 fi
 
-# Resolve project root
-PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-}"
-if [ -z "$PROJECT_ROOT" ]; then
-  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
-fi
+# Resolve project root. Try multiple signals in order:
+#   1. A leading `cd <path>` in the command itself (Claude often runs
+#      `cd PATH && git commit`)
+#   2. The hook input's `cwd` field (set by Claude Code dispatcher)
+#   3. The CLAUDE_PROJECT_DIR env var (when set by Claude Code)
+#   4. The current shell's cwd as last resort
+resolve_project_root() {
+  local candidate root
+
+  # Try a leading `cd <path>` from the command
+  candidate=$(echo "$COMMAND" | sed -nE 's/^[[:space:]]*cd[[:space:]]+("([^"]+)"|'\''([^'\'']+)'\''|([^[:space:]&;|]+)).*/\2\3\4/p' | head -1)
+  if [ -n "$candidate" ]; then
+    # Expand leading ~ to $HOME (cd doesn't expand ~ inside double quotes)
+    candidate="${candidate/#\~/$HOME}"
+    if [ -d "$candidate" ]; then
+      root=$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true)
+      if [ -n "$root" ]; then echo "$root"; return; fi
+    fi
+  fi
+
+  # Try the hook input's cwd field
+  candidate=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+  if [ -n "$candidate" ]; then
+    root=$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true)
+    if [ -n "$root" ]; then echo "$root"; return; fi
+  fi
+
+  # Try the CLAUDE_PROJECT_DIR env var
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    root=$(git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || true)
+    if [ -n "$root" ]; then echo "$root"; return; fi
+  fi
+
+  # Last resort: current shell cwd
+  git rev-parse --show-toplevel 2>/dev/null || true
+}
+
+PROJECT_ROOT=$(resolve_project_root)
 [ -z "$PROJECT_ROOT" ] && exit 0
 
 # Per-project opt-out
