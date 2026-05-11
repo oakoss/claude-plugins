@@ -61,6 +61,12 @@ Arguments:
 
 - `--base <ref>` — same as above
 
+### `/review-cycle:de-slopify`
+
+Bundled de-slopify skill — removes AI writing artifacts from prose surfaces (comments, README files, commit messages, docs). Authored separately at [oakoss/agent-skills](https://github.com/oakoss/agent-skills) and bundled here so the plugin works without external skill dependencies.
+
+The cycle invokes this automatically in its final cleanup phase. You can also invoke it directly for ad-hoc prose cleanup.
+
 ## Hooks (active when plugin is enabled)
 
 ### SessionStart

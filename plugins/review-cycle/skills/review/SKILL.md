@@ -16,22 +16,26 @@ The following two policies apply throughout this cycle. Standalone copies live i
 
 ### Comment policy
 
-Default to writing NO comments. Only add a comment when the WHY is non-obvious:
+Comments are useful when they add value. Keep them clean and minimal.
 
-- A hidden constraint or invariant not visible in the code
-- A workaround for a specific bug (link the issue)
-- Behavior that would surprise a reader
-- A non-obvious performance reason for an unusual approach
+A good comment:
 
-Do NOT write comments that:
+- Is accurate (matches the code; remove if stale)
+- Earns its place (explains WHY or non-obvious context, not WHAT)
+- Is concise (one or two lines unless documenting a complex invariant)
 
-- Restate what the code does
-- Document parameters or returns that types already convey
-- Explain "added for X" or "used by Y" — that belongs in the PR description
-- Mark sections (`// ===== SECTION =====`)
-- Apologize, hedge, or leave TODOs without tickets
+Avoid:
 
-If removing the comment wouldn't confuse a future reader, don't write it.
+- Restating what the code does
+- Section markers like `// ===== HELPERS =====`
+- Hedge words, apologies, "obviously", "basically", "just"
+- "Note:" / "Important:" prefixes when surrounding text already conveys importance
+- TODOs without ticket references
+- Cross-references that belong in the PR description ("added for X", "used by Y")
+- Multi-line comments on trivial code
+- AI-flavored phrasings ("Here we...", "Let's...", "This...")
+
+When in doubt: keep the comment, but make it tighter.
 
 ### Fix-vs-defer policy
 
@@ -141,7 +145,13 @@ After applying fixes:
 
 ### Phase 6: Final de-slopify cleanup
 
-Apply de-slopify ONLY to prose surfaces in modified files:
+Invoke the bundled de-slopify skill on prose surfaces in modified files:
+
+```
+Skill(review-cycle:de-slopify)
+```
+
+Scope:
 
 - Comments in modified code
 - Modified `.md` files
@@ -149,7 +159,7 @@ Apply de-slopify ONLY to prose surfaces in modified files:
 
 Do NOT apply de-slopify to algorithm logic, type definitions, or test assertions — those should stay exactly as written.
 
-Use the de-slopify skill methodology (installed at user level as `de-slopify`). Apply its patterns to the targets above. This catches comment slop or formulaic phrases that may have been introduced during fix iterations.
+This catches AI-flavored phrasings, formulaic patterns, and other slop that may have been introduced during fix iterations. The bundled skill is at `plugins/review-cycle/skills/de-slopify/` — no external dependency on a user-level `de-slopify`.
 
 ### Phase 7: Update sentinel
 

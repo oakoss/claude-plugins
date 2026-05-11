@@ -19,22 +19,26 @@ Recommended scope: **global** (applies to any code Claude writes).
 ```markdown
 # Comment policy
 
-Default to writing NO comments. Only add a comment when the WHY is non-obvious:
+Comments are useful when they add value. Keep them clean and minimal.
 
-- A hidden constraint or invariant not visible in the code
-- A workaround for a specific bug (link the issue)
-- Behavior that would surprise a reader
-- A non-obvious performance reason for an unusual approach
+A good comment:
 
-Do NOT write comments that:
+- Is accurate (matches the code; remove if stale)
+- Earns its place (explains WHY or non-obvious context, not WHAT)
+- Is concise (one or two lines unless documenting a complex invariant)
 
-- Restate what the code does
-- Document parameters or returns that types already convey
-- Explain "added for X" or "used by Y" — that belongs in the PR description
-- Mark sections (`// ===== SECTION =====`)
-- Apologize, hedge, or leave TODOs without tickets
+Avoid:
 
-If removing the comment wouldn't confuse a future reader, don't write it.
+- Restating what the code does
+- Section markers like `// ===== HELPERS =====`
+- Hedge words, apologies, "obviously", "basically", "just"
+- "Note:" / "Important:" prefixes when surrounding text already conveys importance
+- TODOs without ticket references
+- Cross-references that belong in the PR description ("added for X", "used by Y")
+- Multi-line comments on trivial code
+- AI-flavored phrasings ("Here we...", "Let's...", "This...")
+
+When in doubt: keep the comment, but make it tighter.
 ```
 
 ---
