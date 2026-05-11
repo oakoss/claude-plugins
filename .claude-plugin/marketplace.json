@@ -1,0 +1,33 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "oakoss",
+  "description": "Curated Claude Code plugins by Oak OSS",
+  "owner": {
+    "name": "Oak OSS",
+    "email": "hello@oakoss.dev",
+    "url": "https://oakoss.dev"
+  },
+  "plugins": [
+    {
+      "name": "review-cycle",
+      "description": "Automated multi-agent code review cycle with hook-driven gates. Spawns Codex and pr-review-toolkit reviewers in parallel, applies fixes per CLAUDE.md policy, and prevents commits on unreviewed changes.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Oak OSS",
+        "email": "hello@oakoss.dev",
+        "url": "https://oakoss.dev"
+      },
+      "category": "development",
+      "source": "./plugins/review-cycle",
+      "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/review-cycle",
+      "keywords": [
+        "code-review",
+        "review-loop",
+        "codex",
+        "automation",
+        "hooks",
+        "pr-review"
+      ]
+    }
+  ]
+}
