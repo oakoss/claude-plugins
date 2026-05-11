@@ -44,6 +44,16 @@ You review the diff and commit yourself
 
 ## Skills
 
+### `/review-cycle:init`
+
+One-time setup helper. Run after installing the plugin to:
+
+- Verify Codex CLI is installed and `multi_agent = true` is set in `~/.codex/config.toml`
+- Optionally append the comment and fix-vs-defer policies to your global or project `CLAUDE.md`
+- Update project `.gitignore` to exclude `.claude/.review-mark` and `.claude/.no-review-gate`
+
+Idempotent — safe to run multiple times. Replaces the manual setup steps below.
+
 ### `/review-cycle:review`
 
 The action loop. Fans out reviewers, applies fixes, loops until clean (max 4 iterations by default), final de-slopify pass, updates sentinel.
