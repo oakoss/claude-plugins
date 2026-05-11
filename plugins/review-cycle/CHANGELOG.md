@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-11
+
+### Added
+
+- **PostToolUse comment-slop detector** (`hooks/posttool-slop.sh`). Fires after `Write`, `Edit`, or `MultiEdit` and scans the modified file for high-confidence comment-slop patterns. When detected, returns `hookSpecificOutput.additionalContext` so Claude addresses them on the next turn. Does NOT block — the write already happened; this is informational reinforcement of the comment policy in real time.
+
+  Patterns flagged:
+  - Section markers (`// ===== HELPERS =====`)
+  - Restate-the-code verbs at start of comment (`// fetches the user`)
+  - AI-flavored phrasings (`// Here we ...`, `// Let's ...`, `// This function does ...`)
+  - Hedge prefixes (`// Note:`, `// Important:`, `// NB:`)
+  - TODO/FIXME without ticket reference (skipped if `#123`, `ABC-123`, or URL follows)
+  - Hedge words in comments (`obviously`, `basically`, `simply`, `just`, `actually`)
+
+  Limits: skips binary/lock/build-artifact paths and files over 1MB. Respects the global kill-switch and per-project opt-out marker like the other hooks. Catches the comment patterns Opus 4.7 most often introduces mid-implementation — supplements the cycle's end-of-cycle cleanup with real-time intervention.
+
 ## [0.4.2] - 2026-05-10
 
 ### Fixed

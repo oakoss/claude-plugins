@@ -16,3 +16,6 @@ pnpm-debug.log
 
 # Local test artifacts
 .tmp/
+
+# review-cycle per-project state (this repo opts out of its own gate)
+.claude/.review-mark
