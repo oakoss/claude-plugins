@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **`review`, `cleanup`, and `inspect` are now model-invocable.** The commit-gate hook is the actual boundary against unreviewed commits, so blocking model invocation on these skills only created an incoherent flow: the Stop hook would tell Claude to invoke `/review-cycle:review`, and Claude couldn't. `accept` (gate bypass) and `init` (meta-setup) remain user-only.
+
 ## [0.5.1] - 2026-05-11
 
 ### Changed

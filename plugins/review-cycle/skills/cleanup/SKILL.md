@@ -2,7 +2,6 @@
 name: cleanup
 description: Run the cleanup agent on modified files in the current diff. Applies the comment policy (clean and minimal) and de-slopify methodology. Acts directly via Edit — does NOT loop, does NOT update the review sentinel. Use after ad-hoc edits to tidy up, or as a standalone cleanup pass outside the full /review-cycle:review cycle.
 argument-hint: "[--base <ref>] [--files <file1,file2,...>]"
-disable-model-invocation: true
 allowed-tools: Agent, Bash, AskUserQuestion
 ---
 

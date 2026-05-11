@@ -73,7 +73,7 @@ jq -n '{decision:"block", reason:"..."}' 2>/dev/null \
 
 ## Skill conventions
 
-- Skills with side effects (modify files, write state, commit) should set `disable-model-invocation: true` so Claude only invokes them explicitly via `/<plugin>:<skill>` or via a hook's `additionalContext` directive.
+- Set `disable-model-invocation: true` only for skills that bypass a safety gate (e.g. marking state as reviewed without reviewing it) or perform meta-setup the user should explicitly initiate (e.g. writing global config). Local side effects like editing files don't qualify on their own — Claude already edits files freely, and the relevant boundary (commit, push, send) should be enforced by a hook, not by hiding the skill. When disabled, the skill is reachable only via `/<plugin>:<skill>` or a hook's `additionalContext` directive.
 - Embed any load-bearing policies (comment rules, deferral criteria, etc.) directly in the skill body. The skill should be self-contained.
 - If a policy could also apply outside the skill, provide a standalone snippet in `reference/` that users can copy into their `CLAUDE.md`.
 - Keep skill bodies under ~500 lines. Move detailed reference material to supporting files in the skill directory.

@@ -19,6 +19,7 @@ pnpm-debug.log
 
 # review-cycle per-project state (this repo opts out of its own gate)
 .claude/.review-mark
+.claude/.no-review-gate
 
 # Local Claude Code overrides
 .claude/settings.local.json

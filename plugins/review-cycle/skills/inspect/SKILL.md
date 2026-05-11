@@ -2,7 +2,6 @@
 name: inspect
 description: Run reviewers in parallel and report findings without applying fixes. Use for sanity checks, mid-implementation inspection, or to see what reviewers think before committing to a full cycle. Does NOT modify code, does NOT update the review sentinel, does NOT loop.
 argument-hint: "[--base <ref>]"
-disable-model-invocation: true
 allowed-tools: Bash, Read, Glob, Grep, Agent, AskUserQuestion
 ---
 
