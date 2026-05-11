@@ -112,24 +112,38 @@ No user prompt — these entries are safe and minimal.
 
 ### Step 7: Summary
 
-Print a checklist of what was done:
+Print a compact checklist of what was done. One line per item, single status glyph at the start of each line:
+
+- `✓` succeeded or already done
+- `⚠` needs user action
+- `✗` failed
+- `-` skipped or not applicable
 
 ```
 review-cycle init summary:
+  ✓ Codex CLI: codex-cli 0.130.0
+  ✓ multi_agent enabled
+  ✓ Codex auth detected
+  ✓ Policies appended to ~/.claude/CLAUDE.md (backup: .bak)
+  - .gitignore: skipped (not in a git repo)
 
-  [✓|⚠|✗] Codex CLI: <version | not installed>
-  [✓|⚠|✗] multi_agent: <enabled | not enabled | skipped by user>
-  [✓|⚠]   Codex auth: <looks authed | run `codex login`>
-  [✓|✗]   CLAUDE.md policies (global): <appended | already present | skipped>
-  [✓|✗]   CLAUDE.md policies (project): <appended | already present | skipped | N/A>
-  [✓|N/A] .gitignore entries: <added | already present | N/A (not in git repo)>
-
-Manual steps remaining:
-  - <any step that printed ⚠ — e.g. "Run codex login">
-  - (None if everything ✓)
-
-review-cycle is set up. Try /review-cycle:review on a project with uncommitted changes.
+Run /review-cycle:review on a project with uncommitted changes.
 ```
+
+When something needs manual action, surface it inline with `⚠` and a clear next step. Example:
+
+```
+review-cycle init summary:
+  ✓ Codex CLI: codex-cli 0.130.0
+  ⚠ multi_agent not enabled — add `multi_agent = true` to [features] in ~/.codex/config.toml
+  ⚠ Codex auth not detected — run: codex login
+  - Policies: skipped by user (snippets at ${CLAUDE_PLUGIN_ROOT}/reference/policies.md)
+  ✓ .gitignore updated in /Users/.../my-project
+
+Run /review-cycle:review on a project with uncommitted changes.
+```
+
+Keep each line short. Avoid bracketed status fields (`[✓]`) that widen the layout. Avoid two columns. The goal is no line wrapping in a typical 80-100 column terminal.
 
 ## Edge cases
 
