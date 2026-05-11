@@ -74,16 +74,32 @@ git status --porcelain --untracked-files=all
 
 If empty, report "nothing to review" and stop.
 
-Verify Codex is available by running `/codex:status` or checking `codex --version`. If Codex is missing or unauthenticated, surface the error and stop — do not silently skip it.
+Verify Codex CLI is available:
+
+```bash
+codex --version
+```
+
+If the command fails or codex is unauthenticated, surface the error and stop — do not silently skip it.
 
 ### Phase 2: Fan-out (parallel)
 
 In a single conversation turn, invoke ALL of the following:
 
-1. **Codex review (background)**: `/codex:review --background`
-   - Backed by `codex review` through the codex plugin's companion script
-   - The user has `multi_agent = true` enabled in `~/.codex/config.toml`, so Codex spawns parallel review agents internally
-   - Returns immediately; output streams to the user; results auto-arrive when complete
+1. **Codex review (background)** — direct CLI invocation, not the `/codex:review` slash command:
+
+   ```
+   Bash({
+     command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",
+     description: "Codex review",
+     run_in_background: true
+   })
+   ```
+
+   - Uses the `codex` CLI directly; no dependency on the codex Claude plugin
+   - The user has `multi_agent = true` enabled in `~/.codex/config.toml`, so Codex spawns parallel review agents internally during a single review call
+   - Returns immediately with a bash shell ID; output streams to the task output file
+   - Save the shell ID; you'll read its output later when notified of completion
 
 2. **pr-review-toolkit (parallel mode)**: `/pr-review-toolkit:review-pr all parallel`
    - The toolkit handles its own conditional dispatch based on what's in the diff

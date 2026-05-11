@@ -86,6 +86,8 @@ Two Codex settings:
    codex login
    ```
 
+   Only the Codex CLI binary is required; the Codex Claude plugin is not a dependency.
+
 2. **Multi-agent enabled** in `~/.codex/config.toml`:
 
    ```toml

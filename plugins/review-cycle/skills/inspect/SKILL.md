@@ -37,13 +37,24 @@ git status --porcelain --untracked-files=all
 
 If empty, report "nothing to review" and stop.
 
-Verify Codex is available. If not, surface the error and continue with pr-review-toolkit only — note in the summary that Codex was skipped.
+Verify Codex CLI is available by running `codex --version`. If it fails, surface the error and continue with pr-review-toolkit only — note in the summary that Codex was skipped.
 
 ### Phase 2: Fan-out (parallel)
 
 In a single conversation turn, invoke:
 
-1. **Codex review (background)**: `/codex:review --background`
+1. **Codex review (background)** — direct CLI invocation:
+
+   ```
+   Bash({
+     command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",
+     description: "Codex review",
+     run_in_background: true
+   })
+   ```
+
+   No dependency on the codex Claude plugin; uses the `codex` CLI directly. Multi-agent parallelism comes from `multi_agent = true` in `~/.codex/config.toml`.
+
 2. **pr-review-toolkit (parallel mode)**: `/pr-review-toolkit:review-pr all parallel`
 
 Wait for both to complete.
