@@ -58,13 +58,12 @@ fi
 [ "$CURRENT_HASH" = "$LAST_HASH" ] && exit 0
 
 # Block with directive. Fallback printf preserves block decision if jq fails.
+# Stop hook output schema does NOT support hookSpecificOutput — all directive
+# content goes in the top-level `reason` field.
 jq -n '{
   decision: "block",
-  reason: "Uncommitted changes have not been reviewed.",
-  hookSpecificOutput: {
-    hookEventName: "Stop",
-    additionalContext: "BLOCKED: There are uncommitted changes that have not been reviewed. You MUST invoke /review-cycle:review now before attempting to stop again. The cycle will fan out reviewers, apply fixes per its embedded policies, and update the review sentinel. Do not commit; the user is the final reviewer."
-  }
-}' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes have not been reviewed.","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"Run /review-cycle:review to review uncommitted changes."}}\n'
+  reason: "BLOCKED: There are uncommitted changes that have not been reviewed. You MUST invoke /review-cycle:review now before attempting to stop again. The cycle will fan out reviewers, apply fixes per its embedded policies, and update the review sentinel. Do not commit; the user is the final reviewer.",
+  systemMessage: "review-cycle: changes unreviewed"
+}' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes have not been reviewed. Run /review-cycle:review.","systemMessage":"review-cycle: changes unreviewed"}\n'
 
 exit 0
