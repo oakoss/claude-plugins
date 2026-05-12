@@ -2,17 +2,31 @@
 # review-sentinel: state for the review-cycle gate.
 #
 # Subcommands:
-#   seed         Write current state hash. Always overwrites. Used by SessionStart.
-#   mark         Write current state hash. Always overwrites. Used by /accept
+#   seed         Write current state. Always overwrites. Used by SessionStart.
+#   mark         Write current state. Always overwrites. Used by /accept
 #                and /review Phase 7.
 #   check        Exit 0 if clean tree OR sentinel matches; 1 if drifted; 2 on
 #                error (no git repo, no sha tool). Hooks should fail-open on 2.
-#   current-hash Print current state hash to stdout.
+#   match        Exit 0 only if sentinel exists AND its hash equals current
+#                hash computed from its anchor. No clean-tree fast-path.
+#                Used by session-init to decide on idempotent re-seed.
+#   current-hash Print current hash computed from current HEAD (or the
+#                empty tree for unborn HEAD) to stdout.
 #   paths        Print sentinel and opt-out paths (relative to project root,
 #                one per line) for use in .gitignore.
 #
-# Format on disk: `sha256:<64-hex-chars>` single line.
-# Path:           <project-root>/.claude/.review-mark
+# Format on disk: two lines.
+#   anchor:<40-hex-sha>     ← HEAD SHA at mark time, or the empty-tree SHA
+#                             (4b825dc6…) when HEAD is unborn
+#   sha256:<64-hex-chars>   ← hash of `git diff <anchor>` plus untracked content
+# Path: <project-root>/.claude/.review-mark
+#
+# Why anchor + diff-hash instead of one hash: each `git commit` advances HEAD
+# and shrinks `git diff HEAD`, so a HEAD-relative sentinel drifts the moment
+# any reviewed work is committed. Anchoring at the commit that was HEAD at
+# mark time means subsequent commits of already-reviewed content leave the
+# anchor→working-tree diff unchanged, so a single review covers an arbitrary
+# number of follow-up commits.
 #
 # Project root resolution (in order):
 #   1. --root <path> flag (explicit)
@@ -21,17 +35,18 @@
 
 set -u
 
-EMPTY_SHA256="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 usage() {
   cat >&2 <<EOF
 usage: review-sentinel [--root <path>] <subcommand>
 
 subcommands:
-  seed          write current hash (used by SessionStart)
-  mark          write current hash (used by /accept and /review)
+  seed          write current state (used by SessionStart)
+  mark          write current state (used by /accept and /review)
   check         exit 0=clean/match, 1=drift, 2=error
-  current-hash  print current hash
+  match         exit 0=exact match only (no clean-tree shortcut)
+  current-hash  print current state
   paths         print gitignore-relative paths
 EOF
   exit 2
@@ -86,27 +101,27 @@ resolve_project_root() {
   git rev-parse --show-toplevel 2>/dev/null
 }
 
-compute_current_hash() {
-  local root="$1" sha h
-  # Defense-in-depth: verify root is inside a git work tree.
+# Resolve current anchor: HEAD SHA if present, empty-tree SHA otherwise.
+current_anchor() {
+  local root="$1" sha
+  sha=$(git -C "$root" rev-parse HEAD 2>/dev/null) && {
+    echo "$sha"
+    return 0
+  }
+  echo "$EMPTY_TREE_SHA"
+}
+
+# Compute the sha256 of (diff from anchor to working tree) + (untracked file
+# contents). Returns 0 with hash on stdout; 1 on unrecoverable error; 2 if the
+# anchor is not reachable in the object database.
+compute_hash_from_anchor() {
+  local root="$1" anchor="$2" sha h
   git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
   sha=$(pick_sha) || return 1
-  # Hash four streams concatenated:
-  #   1. Porcelain status (file-level: which files are added/modified/deleted)
-  #   2. `git diff --cached --binary` (staged content — works in unborn repos)
-  #   3. `git diff --binary` (unstaged content)
-  #   4. Contents of untracked files
-  # The sentinel and opt-out marker are excluded so writing them doesn't
-  # invalidate the hash. Splitting --cached + unstaged (vs. `git diff HEAD`)
-  # ensures coverage in repos without an initial commit.
+  git -C "$root" cat-file -e "$anchor" 2>/dev/null || return 2
+
   h=$(cd "$root" && {
-        git status --porcelain --untracked-files=all \
-          ':(exclude).claude/.review-mark' \
-          ':(exclude).claude/.no-review-gate' 2>/dev/null
-        git diff --cached --binary \
-          ':(exclude).claude/.review-mark' \
-          ':(exclude).claude/.no-review-gate' 2>/dev/null
-        git diff --binary \
+        git diff --binary "$anchor" -- \
           ':(exclude).claude/.review-mark' \
           ':(exclude).claude/.no-review-gate' 2>/dev/null
         git ls-files --others --exclude-standard \
@@ -121,15 +136,31 @@ compute_current_hash() {
   echo "sha256:$h"
 }
 
+# Detect a working tree with no changes (ignoring our own sentinel files).
+# Mirrors 0.5.1's clean-tree fast-path so post-commit clean states pass
+# regardless of the stored sentinel.
+is_clean_tree() {
+  local root="$1" status
+  status=$(cd "$root" && git status --porcelain --untracked-files=all \
+            ':(exclude).claude/.review-mark' \
+            ':(exclude).claude/.no-review-gate' 2>/dev/null)
+  [ -z "$status" ]
+}
+
+# Read a two-line sentinel; emit `anchor:<sha>` and `sha256:<hex>` separated
+# by a literal newline on stdout. Returns nonzero with a stderr warning on
+# malformed content; returns 0 with empty output when the file does not exist.
 read_sentinel() {
-  local sentinel="$1" content
+  local sentinel="$1" anchor_line hash_line
   [ -f "$sentinel" ] || return 0
-  content=$(tr -d '[:space:]' < "$sentinel" 2>/dev/null)
-  if echo "$content" | grep -qE '^sha256:[a-f0-9]{64}$'; then
-    echo "$content"
+  anchor_line=$(sed -n '1p' "$sentinel" 2>/dev/null | tr -d '[:space:]')
+  hash_line=$(sed -n '2p' "$sentinel" 2>/dev/null | tr -d '[:space:]')
+  if [[ "$anchor_line" =~ ^anchor:[a-f0-9]{40}$ ]] && \
+     [[ "$hash_line"   =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    printf '%s\n%s\n' "$anchor_line" "$hash_line"
     return 0
   fi
-  echo "review-sentinel: malformed sentinel at $sentinel; expected 'sha256:<64-hex>' — treating as drift" >&2
+  echo "review-sentinel: malformed sentinel at $sentinel; expected 'anchor:<40-hex>' + 'sha256:<64-hex>' — treating as drift" >&2
   return 1
 }
 
@@ -140,7 +171,7 @@ write_sentinel() {
     return 1
   fi
   tmp="${sentinel}.tmp.$$"
-  if ! err=$(echo "$content" > "$tmp" 2>&1); then
+  if ! err=$(printf '%s\n' "$content" > "$tmp" 2>&1); then
     echo "review-sentinel: write to $tmp failed: $err" >&2
     /bin/rm -f "$tmp" 2>/dev/null
     return 1
@@ -160,11 +191,15 @@ case "$CMD" in
       echo "review-sentinel: not in a git repo" >&2
       exit 1
     fi
-    HASH=$(compute_current_hash "$PROJECT_ROOT") || {
-      echo "review-sentinel: cannot compute hash (sha256sum/shasum missing?)" >&2
+    ANCHOR=$(current_anchor "$PROJECT_ROOT")
+    HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$ANCHOR")
+    RC=$?
+    if [ $RC -ne 0 ]; then
+      echo "review-sentinel: cannot compute hash from anchor $ANCHOR" >&2
       exit 2
-    }
-    write_sentinel "$PROJECT_ROOT/.claude/.review-mark" "$HASH" || {
+    fi
+    write_sentinel "$PROJECT_ROOT/.claude/.review-mark" "anchor:$ANCHOR
+$HASH" || {
       echo "review-sentinel: cannot write sentinel" >&2
       exit 2
     }
@@ -174,10 +209,28 @@ case "$CMD" in
   check)
     PROJECT_ROOT=$(resolve_project_root)
     [ -n "$PROJECT_ROOT" ] || exit 2
-    HASH=$(compute_current_hash "$PROJECT_ROOT") || exit 2
-    [ "$HASH" = "$EMPTY_SHA256" ] && exit 0
-    LAST=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark")
-    [ "$HASH" = "$LAST" ] && exit 0
+    is_clean_tree "$PROJECT_ROOT" && exit 0
+    STORED=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark") || exit 1
+    [ -n "$STORED" ] || exit 1
+    STORED_ANCHOR=$(echo "$STORED" | sed -n '1p' | sed 's/^anchor://')
+    STORED_HASH=$(echo "$STORED" | sed -n '2p')
+    CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR")
+    RC=$?
+    [ $RC -eq 1 ] && exit 2
+    [ $RC -eq 2 ] && exit 1  # anchor unreachable: treat as drift
+    [ "$CURRENT_HASH" = "$STORED_HASH" ] && exit 0
+    exit 1
+    ;;
+
+  match)
+    PROJECT_ROOT=$(resolve_project_root)
+    [ -n "$PROJECT_ROOT" ] || exit 1
+    STORED=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark") || exit 1
+    [ -n "$STORED" ] || exit 1
+    STORED_ANCHOR=$(echo "$STORED" | sed -n '1p' | sed 's/^anchor://')
+    STORED_HASH=$(echo "$STORED" | sed -n '2p')
+    CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR") || exit 1
+    [ "$CURRENT_HASH" = "$STORED_HASH" ] && exit 0
     exit 1
     ;;
 
@@ -187,8 +240,9 @@ case "$CMD" in
       echo "review-sentinel: not in a git repo" >&2
       exit 1
     fi
-    HASH=$(compute_current_hash "$PROJECT_ROOT") || exit 2
-    echo "$HASH"
+    ANCHOR=$(current_anchor "$PROJECT_ROOT")
+    HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$ANCHOR") || exit 2
+    printf 'anchor:%s\n%s\n' "$ANCHOR" "$HASH"
     exit 0
     ;;
 

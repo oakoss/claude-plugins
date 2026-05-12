@@ -6,7 +6,9 @@
 #   - Sentinel missing                  → seed (first install: treat WIP as
 #                                         "already reviewed" to avoid gating
 #                                         pre-existing changes)
-#   - Sentinel matches current state    → seed (no-op, keeps it fresh)
+#   - Sentinel matches current state    → seed (idempotent; advances the
+#                                         stored anchor forward to current
+#                                         HEAD so the diff window stays small)
 #   - Sentinel disagrees with current   → DO NOT seed (the previous session
 #                                         left unreviewed work; let Stop/commit
 #                                         gates do their job)
@@ -24,30 +26,76 @@ SOURCE=$(echo "$INPUT" | jq -r '.source // "unknown"' 2>/dev/null || echo "unkno
 PROJECT_ROOT=$(gate_should_run) || exit 0
 
 SENTINEL_FILE="$PROJECT_ROOT/.claude/.review-mark"
+REVIEW_SENTINEL="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
 
-# One-time migration from 0.5.0's bare-hex sentinel format. The old format
-# can't compare against the new sha256:<hex> + content-aware hash, so without
-# this path users upgrading mid-WIP would be gated until they ran /accept.
-# This intentionally re-seeds even if the working tree is dirty — the user's
-# 0.5.0 sentinel was their declared "reviewed" state, and we honor it once.
-if [ -f "$SENTINEL_FILE" ] && \
-   grep -qE '^[a-f0-9]{64}$' "$SENTINEL_FILE" 2>/dev/null; then
-  "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" seed >/dev/null 2>&1 || true
-  exit 0
+# Compute the 0.5.x-format hash of the current state. Used only during the
+# pre-0.6.0 → 0.6.0 migration check below; will be removed once we drop the
+# migration. Returns the bare 64-hex hash (no prefix) on stdout.
+compute_legacy_hash() {
+  local root="$1" sha
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    sha="shasum -a 256"
+  else
+    return 1
+  fi
+  (cd "$root" && {
+    git status --porcelain --untracked-files=all \
+      ':(exclude).claude/.review-mark' \
+      ':(exclude).claude/.no-review-gate' 2>/dev/null
+    git diff --cached --binary \
+      ':(exclude).claude/.review-mark' \
+      ':(exclude).claude/.no-review-gate' 2>/dev/null
+    git diff --binary \
+      ':(exclude).claude/.review-mark' \
+      ':(exclude).claude/.no-review-gate' 2>/dev/null
+    git ls-files --others --exclude-standard \
+      ':(exclude).claude/.review-mark' \
+      ':(exclude).claude/.no-review-gate' 2>/dev/null \
+      | while IFS= read -r f; do
+          printf '\n--UNTRACKED:%s--\n' "$f"
+          [ -f "$f" ] && cat -- "$f" 2>/dev/null
+        done
+  } | $sha 2>/dev/null | cut -d' ' -f1)
+}
+
+# One-time migration from any pre-0.6.0 sentinel format. The 0.5.0 format was
+# bare 64-hex; 0.5.1 prefixed it with `sha256:`. Both are single-line and
+# neither carries an anchor SHA, so they can't be compared with the 0.6.0
+# anchor-aware check. Without this branch, every user upgrading mid-WIP would
+# be gated on next session start.
+#
+# Lossless upgrade: if the legacy hash of the current state matches what was
+# stored, we know the user's reviewed state has not drifted, so we re-seed
+# in 0.6.0 format anchored at current HEAD. If it does NOT match, the user
+# has unreviewed drift since their last review; we leave the old sentinel
+# alone and let the gate fire (the new parser treats it as malformed = drift).
+if [ -f "$SENTINEL_FILE" ]; then
+  FIRST_LINE=$(sed -n '1p' "$SENTINEL_FILE" 2>/dev/null | tr -d '[:space:]')
+  STORED_BARE=""
+  if [[ "$FIRST_LINE" =~ ^sha256:([a-f0-9]{64})$ ]]; then
+    STORED_BARE="${BASH_REMATCH[1]}"
+  elif [[ "$FIRST_LINE" =~ ^([a-f0-9]{64})$ ]]; then
+    STORED_BARE="${BASH_REMATCH[1]}"
+  fi
+  if [ -n "$STORED_BARE" ]; then
+    CURRENT_BARE=$(compute_legacy_hash "$PROJECT_ROOT" 2>/dev/null || true)
+    if [ -n "$CURRENT_BARE" ] && [ "$CURRENT_BARE" = "$STORED_BARE" ]; then
+      "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null 2>&1 || true
+    fi
+    exit 0
+  fi
 fi
 
-# Strict re-seed: only when sentinel exists AND its content exactly matches
-# the current hash (idempotent refresh), or when the sentinel is missing
-# (first install). Comparing exact content — not piggybacking on `check`'s
-# clean-tree exit-0 — prevents transient `git stash` / `git checkout`
-# states from absorbing prior drift.
+# Strict re-seed: only when sentinel is missing (first install — adopt WIP)
+# or when the sentinel still matches current state (idempotent refresh, which
+# advances the anchor to current HEAD so the diff window stays small).
+# Uses `match` rather than `check` to bypass the clean-tree fast-path; a
+# transient stash/checkout shouldn't absorb prior drift.
 if [ ! -f "$SENTINEL_FILE" ]; then
-  "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" seed >/dev/null || true
-else
-  CURRENT=$("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" current-hash 2>/dev/null || true)
-  STORED=$(tr -d '[:space:]' < "$SENTINEL_FILE" 2>/dev/null || true)
-  if [ -n "$CURRENT" ] && [ "$CURRENT" = "$STORED" ]; then
-    "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" seed >/dev/null || true
-  fi
+  "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
+elif "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" match >/dev/null 2>&1; then
+  "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
 fi
 exit 0

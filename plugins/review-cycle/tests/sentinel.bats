@@ -5,12 +5,13 @@ setup() {
   setup_repo
 }
 
-@test "seed writes sentinel in fresh repo" {
+@test "seed writes two-line sentinel in fresh repo" {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" seed
   [ "$status" -eq 0 ]
   [ -f "$TEST_REPO/.claude/.review-mark" ]
-  grep -qE '^sha256:[a-f0-9]{64}$' "$TEST_REPO/.claude/.review-mark"
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
+  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
 }
 
 @test "mark writes sentinel in fresh repo" {
@@ -117,11 +118,12 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "current-hash prints sha256:<hex>" {
+@test "current-hash prints anchor and sha256 on two lines" {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" current-hash
   [ "$status" -eq 0 ]
-  [[ "$output" =~ ^sha256:[a-f0-9]{64}$ ]]
+  [[ "${lines[0]}" =~ ^anchor:[a-f0-9]{40}$ ]]
+  [[ "${lines[1]}" =~ ^sha256:[a-f0-9]{64}$ ]]
 }
 
 @test "check treats malformed sentinel as missing" {
@@ -240,4 +242,160 @@ setup() {
   git add a.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
+}
+
+# Unborn repo: empty-tree anchor lets mark + check round-trip cleanly.
+@test "unborn HEAD: mark uses empty-tree anchor and check passes" {
+  UNBORN="$BATS_TEST_TMPDIR/unborn2"
+  mkdir -p "$UNBORN"
+  cd "$UNBORN"
+  git init -q
+  git config user.email t@t
+  git config user.name t
+  echo "v1" > a.txt
+  git add a.txt
+  "$REVIEW_SENTINEL" mark
+  ANCHOR_LINE=$(sed -n '1p' "$UNBORN/.claude/.review-mark")
+  [ "$ANCHOR_LINE" = "anchor:4b825dc642cb6eb9a060e54bf8d69288fbee4904" ]
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# THE FIX: committing reviewed work doesn't drift the sentinel when other
+# reviewed work is still uncommitted. Before 0.6.0, every commit advanced HEAD
+# and invalidated the sentinel, forcing a re-review per commit.
+@test "check stays 0 after committing one reviewed edit with another still uncommitted" {
+  echo "original" > foo.txt
+  echo "original" > bar.txt
+  git add foo.txt bar.txt
+  git commit -q -m "add foo and bar"
+  echo "v1" > foo.txt
+  echo "v1" > bar.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "edit foo"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# THE FIX, untracked variant: committing a tracked file doesn't drift even
+# when an untracked file (still uncommitted) was part of the reviewed batch.
+@test "check stays 0 after committing tracked file when reviewed untracked file is still present" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  echo "v1" > foo.txt
+  echo "u1" > new.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "edit foo"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# New unreviewed edit after mark is still detected even after a reviewed commit.
+@test "check exits 1 when a new edit appears after a reviewed commit" {
+  echo "original" > foo.txt
+  echo "original" > bar.txt
+  git add foo.txt bar.txt
+  git commit -q -m "add foo and bar"
+  echo "v1" > foo.txt
+  echo "v1" > bar.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "edit foo"
+  echo "v2" > bar.txt  # unreviewed edit
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# `git commit --amend` with no content change keeps the diff-from-anchor
+# identical, so the sentinel still matches.
+@test "check stays 0 after amend that only changes commit message" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  echo "v1" > foo.txt
+  echo "u1" > new.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "edit foo"
+  git commit --amend -q -m "edit foo (better message)"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# `git commit --amend` that changes file content shifts the cumulative diff
+# from the anchor and must be re-reviewed.
+@test "check exits 1 after amend that changes file contents" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  echo "v1" > foo.txt
+  echo "u1" > new.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "edit foo"
+  echo "v1-modified" > foo.txt
+  git add foo.txt
+  git commit --amend -q --no-edit
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# Anchor unreachable (history rewrite that drops the marked commit) → drift.
+@test "check exits 1 when anchor is no longer reachable in the object db" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  # Manually corrupt the anchor line to point at an object that doesn't exist.
+  printf 'anchor:%s\nsha256:%s\n' \
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
+    "0000000000000000000000000000000000000000000000000000000000000000" \
+    > "$TEST_REPO/.claude/.review-mark"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# `match` is stricter than `check`: no clean-tree fast-path.
+@test "match exits 1 on clean tree with stale sentinel (no fast-path)" {
+  echo "stale" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  rm foo.txt
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 1 ]
+}
+
+@test "match exits 0 when sentinel matches current state" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 0 ]
+}
+
+@test "match exits 1 when sentinel is missing" {
+  echo "change" > foo.txt
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 1 ]
+}
+
+# Idempotent re-seed after a reviewed commit advances the anchor.
+@test "re-seeding after a reviewed commit advances the anchor forward" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  ANCHOR_AT_MARK=$(git rev-parse HEAD)
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  STORED_ANCHOR_1=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  [ "$STORED_ANCHOR_1" = "$ANCHOR_AT_MARK" ]
+  git add foo.txt
+  git commit -q -m "edit foo"
+  NEW_HEAD=$(git rev-parse HEAD)
+  # `match` passes because content hasn't changed.
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 0 ]
+  # Idempotent re-seed should rewrite the anchor to NEW_HEAD.
+  "$REVIEW_SENTINEL" seed
+  STORED_ANCHOR_2=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  [ "$STORED_ANCHOR_2" = "$NEW_HEAD" ]
 }

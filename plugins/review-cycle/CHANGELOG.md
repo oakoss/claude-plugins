@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-12
+
+### Fixed
+
+- **Multi-commit drift after a single review.** Previously every `git commit` advanced HEAD and shrank the diff the sentinel hashed against, so the gate flagged drift even when no unreviewed content had been introduced. Reviewing a batch and then splitting it into N commits required N reviews. The sentinel now pins (anchor SHA, diff-from-anchor hash) instead of (diff-from-HEAD hash), so committing already-reviewed content does not invalidate the sentinel — the cumulative anchor→working-tree diff stays the same regardless of how many of the reviewed hunks have been committed.
+
+### Changed
+
+- **Sentinel format is now two lines:** `anchor:<40-hex>` (HEAD SHA at mark time, or the empty-tree SHA `4b825dc6…` for unborn HEAD) and `sha256:<64-hex>` (hash of `git diff <anchor>` plus untracked file contents). Migration from 0.5.x is automatic via `session-init` on next startup, with lossless upgrade when the working tree still matches the previously-reviewed state.
+- **New `match` subcommand on `bin/review-sentinel`.** Used by `session-init` to decide whether to advance the anchor; differs from `check` in that it does not treat a clean tree as a pass. `check` and `match` together replace the prior pattern of comparing `current-hash` output against the raw sentinel file.
+- **`current-hash` output is now two lines** (`anchor:` then `sha256:`) to match the on-disk format. Anyone scripting against the old single-line output will need to update.
+
+### Migrated
+
+- **Single 0.5.x → 0.6.0 migration block** in `session-init.sh` replaces the previous 0.5.0 → 0.5.1 block. Detects any pre-0.6.0 sentinel (bare hex or `sha256:`-prefixed), computes the legacy hash against current state, and re-seeds in the new format only when they match (lossless upgrade). When they don't match, the old sentinel is preserved so the gate fires on the unreviewed drift.
+
+### Behavior unchanged
+
+- The four hooks (`session-init`, `stop-gate`, `commit-gate`, `posttool-slop`) keep their existing semantics. Only `session-init` changed; the others just call `review-sentinel check`.
+- Clean-tree fast-path is preserved: `check` still exits 0 on a working tree with no changes regardless of stored sentinel content.
+
 ## [0.5.2] - 2026-05-12
 
 ### Changed
