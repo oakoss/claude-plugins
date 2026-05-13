@@ -101,3 +101,16 @@ echo '{"source":"startup","cwd":"/tmp/test"}' | bash plugins/<name>/hooks/sessio
 ```
 
 Verify hook scripts exit 0 on every code path that shouldn't trap the user.
+
+### Bats
+
+Plugin and repo-local hooks have `.bats` suites. **Always invoke bats through `bin/run-bats`, never directly.** Bats 1.13 on macOS hangs after the final `ok`/`not ok` line because it holds file descriptors open during post-suite cleanup; the wrapper polls the TAP plan and force-kills bats once every test has reported. A direct `bats path/to/suite.bats` invocation will appear to succeed but leave an orphaned bats process tree that lingers until launchd reaps it.
+
+```bash
+bin/run-bats                                # auto-discover every .bats in the repo
+bin/run-bats plugins/review-cycle/tests/    # everything under a directory
+bin/run-bats path/to/one.bats               # a single file
+bin/run-bats -f "test name" path/to.bats    # filter, like bats -f
+```
+
+Plugin-local wrappers (e.g. `plugins/review-cycle/tests/run.sh`) are thin shims that delegate to `bin/run-bats` and can still be invoked from inside a plugin directory.
