@@ -80,9 +80,11 @@ if [ -f "$SENTINEL_FILE" ]; then
     STORED_BARE="${BASH_REMATCH[1]}"
   fi
   if [ -n "$STORED_BARE" ]; then
-    CURRENT_BARE=$(compute_legacy_hash "$PROJECT_ROOT" 2>/dev/null || true)
-    if [ -n "$CURRENT_BARE" ] && [ "$CURRENT_BARE" = "$STORED_BARE" ]; then
-      "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null 2>&1 || true
+    CURRENT_BARE=$(compute_legacy_hash "$PROJECT_ROOT")
+    if [ $? -ne 0 ] || [ -z "$CURRENT_BARE" ]; then
+      echo "review-sentinel: legacy hash computation failed; skipping 0.5.x → 0.6.0 migration (no sha256sum/shasum?). Run /review-cycle:review or /review-cycle:accept to clear the gate." >&2
+    elif [ "$CURRENT_BARE" = "$STORED_BARE" ]; then
+      "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
     fi
     exit 0
   fi

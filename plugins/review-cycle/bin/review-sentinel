@@ -33,7 +33,7 @@
 #   2. CLAUDE_PROJECT_DIR env var (set by Claude Code)
 #   3. git rev-parse --show-toplevel from current cwd
 
-set -u
+set -uo pipefail
 
 EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -111,27 +111,76 @@ current_anchor() {
   echo "$EMPTY_TREE_SHA"
 }
 
-# Compute the sha256 of (diff from anchor to working tree) + (untracked file
-# contents). Returns 0 with hash on stdout; 1 on unrecoverable error; 2 if the
-# anchor is not reachable in the object database.
+# Compute the sha256 of the diff from anchor to the current effective state
+# (anchor→index AND index→working-tree, per path, sorted by path) plus
+# untracked file contents. Returns 0 with hash on stdout; 1 on unrecoverable
+# error (no work tree, no sha tool, pipeline failure); 2 if the anchor is not
+# reachable as a commit or tree in the object database.
+#
+# Per-path iteration with sorted ordering is what makes the hash invariant
+# under three different transformations of the same content:
+#
+#   1. Committing reviewed content. After commit, --cached <anchor> covers
+#      the committed delta and `git diff` covers what remains uncommitted.
+#      The combined per-path bytes match the pre-commit state where the same
+#      content was all in `git diff`.
+#   2. Staging or unstaging reviewed content (no content change). With
+#      --no-prefix the cached and uncached diff streams produce byte-identical
+#      output for the same content delta, so moving content between staged
+#      and unstaged does not drift the hash.
+#   3. Codex P1 bypass — staging unreviewed content and then restoring the
+#      working tree to the reviewed state. The --cached diff captures the
+#      unreviewed index content, so the hash changes and the gate fires.
+#
+# A naïve `--cached anchor` ++ `diff` concatenation breaks property 1: the
+# alphabetical ordering shifts across stream boundaries (e.g. {bar, foo}
+# alphabetical in one stream pre-commit, then {foo cached, bar unstaged}
+# split across two streams post-commit). Sorting paths and emitting both
+# streams per path keeps the output order stable regardless of which stream
+# a particular file's diff lives in.
 compute_hash_from_anchor() {
-  local root="$1" anchor="$2" sha h
-  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
-  sha=$(pick_sha) || return 1
-  git -C "$root" cat-file -e "$anchor" 2>/dev/null || return 2
+  local root="$1" anchor="$2" sha h kind paths
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "review-sentinel: not inside a git work tree" >&2
+    return 1
+  }
+  sha=$(pick_sha) || {
+    echo "review-sentinel: no sha256 tool (sha256sum/shasum missing?)" >&2
+    return 1
+  }
+  kind=$(git -C "$root" cat-file -t "$anchor" 2>/dev/null) || return 2
+  case "$kind" in
+    commit|tree) ;;
+    *) return 2 ;;
+  esac
 
   h=$(cd "$root" && {
-        git diff --binary "$anchor" -- \
-          ':(exclude).claude/.review-mark' \
-          ':(exclude).claude/.no-review-gate' 2>/dev/null
+        paths=$({
+                  git diff --cached --name-only "$anchor" -- \
+                    ':(exclude).claude/.review-mark' \
+                    ':(exclude).claude/.no-review-gate'
+                  git diff --name-only -- \
+                    ':(exclude).claude/.review-mark' \
+                    ':(exclude).claude/.no-review-gate'
+                } | LC_ALL=C sort -u)
+        if [ -n "$paths" ]; then
+          while IFS= read -r p; do
+            git diff --cached --binary --no-prefix "$anchor" -- "$p"
+            git diff --binary --no-prefix -- "$p"
+          done <<< "$paths"
+        fi
         git ls-files --others --exclude-standard \
           ':(exclude).claude/.review-mark' \
-          ':(exclude).claude/.no-review-gate' 2>/dev/null \
+          ':(exclude).claude/.no-review-gate' \
+          | LC_ALL=C sort \
           | while IFS= read -r f; do
               printf '\n--UNTRACKED:%s--\n' "$f"
               [ -f "$f" ] && cat -- "$f" 2>/dev/null
             done
-      } | $sha 2>/dev/null | cut -d' ' -f1)
+      } 2>/dev/null | $sha 2>/dev/null | cut -d' ' -f1)
+  for s in "${PIPESTATUS[@]}"; do
+    [ "$s" -eq 0 ] || return 1
+  done
   [ -n "$h" ] || return 1
   echo "sha256:$h"
 }
@@ -224,12 +273,15 @@ $HASH" || {
 
   match)
     PROJECT_ROOT=$(resolve_project_root)
-    [ -n "$PROJECT_ROOT" ] || exit 1
+    [ -n "$PROJECT_ROOT" ] || exit 2
     STORED=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark") || exit 1
     [ -n "$STORED" ] || exit 1
     STORED_ANCHOR=$(echo "$STORED" | sed -n '1p' | sed 's/^anchor://')
     STORED_HASH=$(echo "$STORED" | sed -n '2p')
-    CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR") || exit 1
+    CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR")
+    RC=$?
+    [ $RC -eq 1 ] && exit 2  # real error (no sha tool, no work tree, pipeline failed)
+    [ $RC -eq 2 ] && exit 1  # anchor unreachable: cannot match
     [ "$CURRENT_HASH" = "$STORED_HASH" ] && exit 0
     exit 1
     ;;

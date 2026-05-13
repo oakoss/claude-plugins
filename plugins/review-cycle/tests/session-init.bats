@@ -37,7 +37,8 @@ legacy_hash() {
 }
 
 run_session_init() {
-  echo "{\"source\":\"startup\",\"cwd\":\"$TEST_REPO\"}" \
+  local source="${1:-startup}"
+  echo "{\"source\":\"$source\",\"cwd\":\"$TEST_REPO\"}" \
     | CLAUDE_PROJECT_DIR="$TEST_REPO" bash "$SESSION_INIT"
 }
 
@@ -48,17 +49,28 @@ run_session_init() {
   grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
 }
 
-@test "session-init re-seeds when 0.6.0 sentinel matches current state" {
+# When the 0.6.0 sentinel matches current state, session-init must re-seed so
+# the anchor advances to current HEAD. This keeps the diff window small as
+# work gets committed and reduces the chance the anchor becomes unreachable
+# (rebase, branch delete). Asserting that the anchor literally advanced is
+# the only way to distinguish a working hook from a no-op.
+@test "session-init advances anchor to current HEAD on idempotent re-seed" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "init"
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" mark
-  ORIG_CONTENT=$(cat "$TEST_REPO/.claude/.review-mark")
-  # Touch the sentinel to a known older mtime to detect rewrite.
-  touch -t 200001010000 "$TEST_REPO/.claude/.review-mark"
+  OLD_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  git add foo.txt
+  git commit -q -m "commit reviewed change"
+  NEW_HEAD=$(git rev-parse HEAD)
   run_session_init
-  # Sentinel should have been re-written (mtime is no longer in the past).
-  NEW_MTIME=$(date -r "$TEST_REPO/.claude/.review-mark" +%Y 2>/dev/null || stat -c '%Y' "$TEST_REPO/.claude/.review-mark")
-  # Just verify it's still valid and parseable (content may be byte-identical).
-  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
+  NEW_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  [ "$NEW_ANCHOR" = "$NEW_HEAD" ]
+  [ "$NEW_ANCHOR" != "$OLD_ANCHOR" ]
+  # And the gate still passes against the new sentinel.
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
 }
 
 @test "session-init leaves 0.6.0 sentinel alone when it disagrees with current state" {
@@ -71,27 +83,35 @@ run_session_init() {
   [ "$STORED_BEFORE" = "$STORED_AFTER" ]
 }
 
-@test "session-init migrates 0.5.1 sentinel that matches current state" {
+@test "session-init migrates 0.5.1 sentinel and new gate passes against migrated state" {
   echo "v1" > foo.txt
   echo "u1" > new.txt
   mkdir -p .claude
   HASH=$(legacy_hash)
   echo "sha256:$HASH" > "$TEST_REPO/.claude/.review-mark"
   run_session_init
-  # After migration the sentinel should be in two-line 0.6.0 format.
+  # On-disk format flipped to two-line 0.6.0.
   grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
   grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
+  # End-to-end: the migrated sentinel should make the new gate pass.
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+  # And a new unreviewed edit should still trip drift detection.
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
 }
 
-@test "session-init migrates 0.5.0 sentinel (bare hex) that matches current state" {
+@test "session-init migrates 0.5.0 sentinel (bare hex) and new gate passes against migrated state" {
   echo "v1" > foo.txt
   mkdir -p .claude
   HASH=$(legacy_hash)
   echo "$HASH" > "$TEST_REPO/.claude/.review-mark"
   run_session_init
-  # After migration the sentinel should be in two-line 0.6.0 format.
   grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
   grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
 }
 
 @test "session-init does NOT migrate 0.5.x sentinel when state has drifted" {
@@ -107,10 +127,21 @@ run_session_init() {
   [ "$STORED_BEFORE" = "$STORED_AFTER" ]
 }
 
-@test "session-init no-ops on non-startup source" {
+@test "session-init no-ops on resume source" {
   echo "v1" > foo.txt
-  echo '{"source":"resume","cwd":"'"$TEST_REPO"'"}' \
-    | CLAUDE_PROJECT_DIR="$TEST_REPO" bash "$SESSION_INIT"
+  run_session_init "resume"
+  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+@test "session-init no-ops on clear source" {
+  echo "v1" > foo.txt
+  run_session_init "clear"
+  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+@test "session-init no-ops on compact source" {
+  echo "v1" > foo.txt
+  run_session_init "compact"
   [ ! -f "$TEST_REPO/.claude/.review-mark" ]
 }
 

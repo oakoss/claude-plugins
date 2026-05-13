@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Multi-commit drift after a single review.** Previously every `git commit` advanced HEAD and shrank the diff the sentinel hashed against, so the gate flagged drift even when no unreviewed content had been introduced. Reviewing a batch and then splitting it into N commits required N reviews. The sentinel now pins (anchor SHA, diff-from-anchor hash) instead of (diff-from-HEAD hash), so committing already-reviewed content does not invalidate the sentinel — the cumulative anchor→working-tree diff stays the same regardless of how many of the reviewed hunks have been committed.
+- **Staged-content bypass closed.** The hash now captures both `git diff --cached <anchor>` (anchor → index) and `git diff` (index → working tree) per file, sorted by path. The initial 0.6.0 implementation used only `git diff <anchor>` (anchor → working tree) and would have allowed staging unreviewed content, restoring the working tree to the reviewed state, then committing — slipping unreviewed bytes past the gate. Per-path iteration also keeps the hash byte-stable across staging-state changes, so moving reviewed content between staged and unstaged does not drift.
+- **`match` subcommand exit codes distinguish error from no-match.** Now exits 2 on real errors (missing sha tool, not in work tree, pipeline failure) and 1 only on actual no-match. The previous implementation collapsed all failures to exit 1, breaking `session-init`'s ability to detect a misconfigured environment.
+- **Silent failure in legacy-hash migration.** `session-init` now emits a stderr warning when the 0.5.x→0.6.0 migration cannot compute the legacy hash (e.g., missing sha256sum/shasum). Previously the failure was swallowed and the user was left permanently gated with no breadcrumb.
+- **Anchor type validation.** Sentinel anchors are now checked via `git cat-file -t` and must resolve to a commit or tree object. The previous `cat-file -e` accepted any object (including blobs and tags), which would have produced a meaningless hash.
+- **Pipefail and PIPESTATUS checks** on the hash compute pipeline. A mid-pipeline `git diff` crash now surfaces as a compute error instead of silently producing a valid-looking but wrong hash.
 
 ### Changed
 

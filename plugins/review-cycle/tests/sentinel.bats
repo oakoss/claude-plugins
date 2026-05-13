@@ -343,6 +343,39 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
+# Codex P1 bypass: after mark, stage unreviewed content and restore the
+# working tree to the reviewed state. Without the staged-content half of
+# the hash, the gate would let `git commit` ship unreviewed index content.
+@test "check exits 1 when staged content differs from reviewed working tree" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  # Stage v2 then restore wtree to v1 — wtree matches mark, index doesn't.
+  echo "v2" > foo.txt
+  git add foo.txt
+  echo "v1" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# Inverse: same final content, staging state changed. The `--no-prefix` flag
+# on git diff makes the cached and uncached streams hash-equivalent for
+# identical content, so moving reviewed content between staged and unstaged
+# does NOT drift the sentinel. This is the property that makes the bypass
+# detection above coexist with the multi-commit-doesn't-drift property.
+@test "check stays 0 when reviewed content moves between staged and unstaged" {
+  echo "original" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
 # Anchor unreachable (history rewrite that drops the marked commit) → drift.
 @test "check exits 1 when anchor is no longer reachable in the object db" {
   echo "v1" > foo.txt
@@ -375,6 +408,57 @@ setup() {
 @test "match exits 1 when sentinel is missing" {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 1 ]
+}
+
+@test "match exits 2 outside git repo" {
+  cd "$BATS_TEST_TMPDIR"
+  rm -rf "$TEST_REPO"
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 2 ]
+}
+
+@test "match exits 0 against empty-tree anchor in unborn repo" {
+  UNBORN="$BATS_TEST_TMPDIR/unborn-match"
+  mkdir -p "$UNBORN"
+  cd "$UNBORN"
+  git init -q
+  git config user.email t@t
+  git config user.name t
+  echo "v1" > a.txt
+  git add a.txt
+  "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 0 ]
+  echo "v2" > a.txt
+  git add a.txt
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 1 ]
+}
+
+@test "mark exits 2 when .claude is blocked by a file (write_sentinel failure)" {
+  echo "v1" > foo.txt
+  # Block mkdir -p by placing a non-directory at the .claude path.
+  echo "blocking" > "$TEST_REPO/.claude"
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 2 ]
+  [[ "$output" =~ "cannot write sentinel" || "$output" =~ "Not a directory" || "$output" =~ "File exists" ]]
+}
+
+@test "mark + check works in detached HEAD state" {
+  echo "a" > foo.txt
+  git add foo.txt
+  git commit -q -m c1
+  echo "b" > foo.txt
+  git add foo.txt
+  git commit -q -m c2
+  git checkout -q HEAD~1
+  echo "wip" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+  echo "wip2" > foo.txt
+  run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
 }
 
