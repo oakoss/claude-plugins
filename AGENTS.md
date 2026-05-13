@@ -84,6 +84,7 @@ jq -n '{decision:"block", reason:"..."}' 2>/dev/null \
 - Every user-visible change goes in `CHANGELOG.md` under `## [Unreleased]`.
 - On release, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD` and add a fresh `[Unreleased]` heading above it.
 - Bump `version` in `plugin.json` and `marketplace.json` together.
+- **Runtime changes** (anything under `plugins/<name>/` except `README.md`, `LICENSE*`, `CHANGELOG.md`, `NOTICE`, and `tests/`) require a version bump in the same commit. A repo-local PreToolUse hook at `.claude/hooks/version-bump-gate.sh` (registered in `.claude/settings.json`) enforces this mechanically against any plugin marketplace repo. Touch `.claude/.no-version-gate` to opt a project out; tests live next to the hook at `.claude/hooks/version-bump-gate.bats`.
 
 ## Testing
 
