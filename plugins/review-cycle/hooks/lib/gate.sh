@@ -19,8 +19,20 @@ gate_disabled() {
 }
 
 gate_project_opted_out() {
-  local root="$1"
-  [ -n "$root" ] && [ -f "$root/.claude/.no-review-gate" ]
+  local root="$1" config
+  [ -n "$root" ] || return 1
+  config="$root/.claude/review-cycle.json"
+  # Honor `disabled` only when it's a proper JSON boolean. `null`, strings,
+  # numbers, and missing values fall through to the legacy marker; a
+  # hand-edit of `disabled: null` shouldn't silently lose the prior opt-out.
+  # `disabled: false` (proper bool) does override a stale `.no-review-gate`.
+  if [ -f "$config" ] && command -v jq >/dev/null 2>&1; then
+    if jq -e '(.disabled | type) == "boolean"' "$config" >/dev/null 2>&1; then
+      jq -e '.disabled == true' "$config" >/dev/null 2>&1
+      return $?
+    fi
+  fi
+  [ -f "$root/.claude/.no-review-gate" ]
 }
 
 gate_in_git_repo() {

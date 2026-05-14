@@ -17,7 +17,7 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "gate_project_opted_out returns 0 when marker exists" {
+@test "gate_project_opted_out returns 0 when legacy marker exists" {
   mkdir -p "$TEST_REPO/.claude"
   touch "$TEST_REPO/.claude/.no-review-gate"
   run gate_project_opted_out "$TEST_REPO"
@@ -27,6 +27,107 @@ setup() {
 @test "gate_project_opted_out returns 1 when no marker" {
   run gate_project_opted_out "$TEST_REPO"
   [ "$status" -eq 1 ]
+}
+
+@test "gate_project_opted_out returns 0 when review-cycle.json has disabled:true" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":true}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 0 ]
+}
+
+@test "gate_project_opted_out returns 1 when review-cycle.json has disabled:false" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":false}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 1 ]
+}
+
+@test "gate_project_opted_out returns 1 when review-cycle.json omits disabled key" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"ignore":["foo/**"]}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 1 ]
+}
+
+@test "gate_project_opted_out returns 1 on malformed review-cycle.json (fail-open)" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf 'not-json{' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 1 ]
+}
+
+@test "gate_project_opted_out: review-cycle.json disabled:true wins over absent legacy marker" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":true}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 0 ]
+}
+
+# Explicit `disabled:false` in config must override a stale legacy marker.
+# The user opted back IN; a leftover .no-review-gate from before they made
+# that decision must not silently disable the gate.
+@test "gate_project_opted_out: explicit disabled:false overrides legacy marker" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":false}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  touch "$TEST_REPO/.claude/.no-review-gate"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 1 ]
+}
+
+# Config without `disabled` key falls back to legacy marker (back-compat).
+@test "gate_project_opted_out: config with no disabled key falls back to legacy marker" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"ignore":["foo/**"]}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  touch "$TEST_REPO/.claude/.no-review-gate"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 0 ]
+}
+
+# Type-strictness on `disabled`: string "true" and numeric 1 are NOT
+# treated as truthy. Pins the current strict-bool semantics; a future
+# refactor that broadens this without a deliberate decision would
+# fail these tests.
+@test "gate_project_opted_out: string 'true' does not opt out" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":"true"}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 1 ]
+}
+
+@test "gate_project_opted_out: numeric 1 does not opt out" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":1}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 1 ]
+}
+
+# Non-boolean `disabled` values fall through to the legacy marker. A
+# hand-edit of `disabled: null` (or any non-bool) shouldn't silently lose
+# a prior opt-out; only a proper `disabled: false` re-enables the gate.
+@test "gate_project_opted_out: disabled:null falls back to legacy marker" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":null}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  touch "$TEST_REPO/.claude/.no-review-gate"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 0 ]
+}
+
+@test "gate_project_opted_out: disabled as string falls back to legacy marker" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":"true"}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  touch "$TEST_REPO/.claude/.no-review-gate"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 0 ]
+}
+
+# Malformed JSON + legacy marker → fallback still opts the user out.
+@test "gate_project_opted_out: malformed JSON falls back to legacy marker" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf 'not-json{' > "$TEST_REPO/.claude/review-cycle.json"
+  touch "$TEST_REPO/.claude/.no-review-gate"
+  run gate_project_opted_out "$TEST_REPO"
+  [ "$status" -eq 0 ]
 }
 
 @test "gate_in_git_repo returns 0 inside repo" {

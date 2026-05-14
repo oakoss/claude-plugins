@@ -91,6 +91,40 @@ pick_sha() {
   fi
 }
 
+# Path to the per-project config file. Intentionally NOT included in the
+# default excludes; see SECURITY note below.
+CONFIG_PATH=".claude/review-cycle.json"
+
+# Declared here so `set -u` doesn't error before the first build_excludes call.
+EXCLUDES_LIST=()
+
+# SECURITY: the config file itself is intentionally NOT in the default
+# excludes. compute_hash_from_anchor and is_clean_tree force-include
+# CONFIG_PATH in their inputs, so user `ignore` patterns matching the config
+# (`**`, `.claude/**`, etc.) cannot hide config edits from the hash. Editing
+# the config always forces a review pass before its rules take effect.
+build_excludes() {
+  local root="$1" pattern
+  EXCLUDES_LIST=(
+    ':(exclude).claude/.review-mark'
+    ':(exclude).claude/.no-review-gate'
+    ':(exclude,glob).beads/**'
+    ':(exclude,glob).trekker/**'
+    ':(exclude,glob).vscode/**'
+    ':(exclude,glob).idea/**'
+    ':(exclude,glob).zed/**'
+    ':(exclude,glob).cursor/**'
+    ':(exclude,glob).fleet/**'
+  )
+  local config_file="$root/$CONFIG_PATH"
+  [ -f "$config_file" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  while IFS= read -r pattern; do
+    [ -z "$pattern" ] && continue
+    EXCLUDES_LIST+=(":(exclude,glob)$pattern")
+  done < <(jq -r '(.ignore // []) | .[]? | select(type == "string")' "$config_file" 2>/dev/null)
+}
+
 resolve_project_root() {
   local candidate
   for candidate in "$ROOT_OVERRIDE" "${CLAUDE_PROJECT_DIR:-}"; do
@@ -154,14 +188,22 @@ compute_hash_from_anchor() {
     *) return 2 ;;
   esac
 
+  build_excludes "$root"
+
+  # Smoke-test the assembled pathspec. If git rejects it (malformed user
+  # pattern, corrupted index, missing object), return 2; check maps that
+  # to drift, so hooks block. Returning 1 here would map to check exit 2
+  # which hooks fail-open on, re-opening the bypass.
+  git -C "$root" status --porcelain -- "${EXCLUDES_LIST[@]}" >/dev/null 2>&1 || return 2
+
   h=$(cd "$root" && {
         paths=$({
-                  git diff --cached --name-only "$anchor" -- \
-                    ':(exclude).claude/.review-mark' \
-                    ':(exclude).claude/.no-review-gate'
-                  git diff --name-only -- \
-                    ':(exclude).claude/.review-mark' \
-                    ':(exclude).claude/.no-review-gate'
+                  git diff --cached --name-only "$anchor" -- "${EXCLUDES_LIST[@]}"
+                  git diff --name-only -- "${EXCLUDES_LIST[@]}"
+                  # Force-include the config file: user `ignore` patterns
+                  # must not hide config edits from the hash.
+                  git diff --cached --name-only "$anchor" -- "$CONFIG_PATH"
+                  git diff --name-only -- "$CONFIG_PATH"
                 } | LC_ALL=C sort -u)
         if [ -n "$paths" ]; then
           while IFS= read -r p; do
@@ -169,10 +211,18 @@ compute_hash_from_anchor() {
             git diff --binary --no-prefix -- "$p"
           done <<< "$paths"
         fi
-        git ls-files --others --exclude-standard \
-          ':(exclude).claude/.review-mark' \
-          ':(exclude).claude/.no-review-gate' \
-          | LC_ALL=C sort \
+        {
+          git ls-files --others --exclude-standard -- "${EXCLUDES_LIST[@]}"
+          # Force-include the config as untracked content even when it's
+          # gitignored (common when the project gitignores all of .claude/).
+          # `ls-files --exclude-standard` and `--others` both honor gitignore,
+          # so a direct `[ -f ]` check is the only way to ensure the file's
+          # bytes always reach the hash input.
+          if [ -f "$CONFIG_PATH" ] \
+             && ! git ls-files --error-unmatch -- "$CONFIG_PATH" >/dev/null 2>&1; then
+            printf '%s\n' "$CONFIG_PATH"
+          fi
+        } | LC_ALL=C sort -u \
           | while IFS= read -r f; do
               printf '\n--UNTRACKED:%s--\n' "$f"
               [ -f "$f" ] && cat -- "$f" 2>/dev/null
@@ -185,20 +235,38 @@ compute_hash_from_anchor() {
   echo "sha256:$h"
 }
 
-# Detect a working tree with no changes (ignoring our own sentinel files).
 # Mirrors 0.5.1's clean-tree fast-path so post-commit clean states pass
 # regardless of the stored sentinel.
 is_clean_tree() {
-  local root="$1" status
-  status=$(cd "$root" && git status --porcelain --untracked-files=all \
-            ':(exclude).claude/.review-mark' \
-            ':(exclude).claude/.no-review-gate' 2>/dev/null)
-  [ -z "$status" ]
+  local root="$1" status config_status
+  build_excludes "$root"
+  # Force not-clean when the config exists AND is gitignored: `git status`
+  # can't see edits to ignored files, so the fast-path would short-circuit
+  # past a real bypass. Tracked configs and untracked-not-gitignored
+  # configs go through the status check normally, preserving the 0.6.0
+  # multi-commit-doesn't-drift property after they're committed.
+  if [ -f "$root/$CONFIG_PATH" ] \
+     && (cd "$root" && git check-ignore -q "$CONFIG_PATH" 2>/dev/null); then
+    return 1
+  fi
+  if ! status=$(cd "$root" && git status --porcelain --untracked-files=all -- \
+                "${EXCLUDES_LIST[@]}" 2>/dev/null); then
+    return 1
+  fi
+  # Independent visibility check for the config path. User `ignore`
+  # patterns like `**` or `.claude/**` would otherwise hide config edits
+  # from the main status call; we re-check the config path without
+  # applying user excludes so those patterns can't fast-path past their
+  # own edit.
+  if ! config_status=$(cd "$root" && git status --porcelain --untracked-files=all -- \
+                       "$CONFIG_PATH" 2>/dev/null); then
+    return 1
+  fi
+  [ -z "$status" ] && [ -z "$config_status" ]
 }
 
-# Read a two-line sentinel; emit `anchor:<sha>` and `sha256:<hex>` separated
-# by a literal newline on stdout. Returns nonzero with a stderr warning on
-# malformed content; returns 0 with empty output when the file does not exist.
+# Returns 0 with empty output when the file does not exist; nonzero with a
+# stderr warning on malformed content.
 read_sentinel() {
   local sentinel="$1" anchor_line hash_line
   [ -f "$sentinel" ] || return 0
@@ -209,7 +277,7 @@ read_sentinel() {
     printf '%s\n%s\n' "$anchor_line" "$hash_line"
     return 0
   fi
-  echo "review-sentinel: malformed sentinel at $sentinel; expected 'anchor:<40-hex>' + 'sha256:<64-hex>' — treating as drift" >&2
+  echo "review-sentinel: malformed sentinel at $sentinel; expected 'anchor:<40-hex>' + 'sha256:<64-hex>' (treating as drift)" >&2
   return 1
 }
 

@@ -50,7 +50,7 @@ One-time setup helper. Run after installing the plugin to:
 
 - Verify Codex CLI is installed and `multi_agent = true` is set in `~/.codex/config.toml`
 - Optionally append the comment and fix-vs-defer policies to your global or project `CLAUDE.md`
-- Update project `.gitignore` to exclude `.claude/.review-mark` and `.claude/.no-review-gate`
+- Update project `.gitignore` to exclude `.claude/.review-mark` (auto-managed state)
 
 Idempotent — safe to run multiple times. Replaces the manual setup steps below.
 
@@ -77,7 +77,7 @@ Spawns the bundled `cleanup` subagent on the current diff. Applies the comment p
 
 ### `/review-cycle:accept`
 
-Marks the current uncommitted state as reviewed by updating the review sentinel. Use when you've manually reviewed the substance of your changes and want to commit without running the full cycle. Per-state escape hatch (lighter than the project-wide `.claude/.no-review-gate` opt-out).
+Marks the current uncommitted state as reviewed by updating the review sentinel. Use when you've manually reviewed the substance of your changes and want to commit without running the full cycle. Per-state escape hatch (lighter than the project-wide `disabled: true` opt-out).
 
 ### `/review-cycle:de-slopify`
 
@@ -140,15 +140,57 @@ This lets Codex spawn parallel review agents internally during a single `codex r
 
 The skills embed the comment and fix-vs-defer policies, so the cycle itself works without setup. But if you want the same policies active outside the cycle (when Claude is implementing code or addressing a single PR comment), copy the snippets from `reference/policies.md` into `~/.claude/CLAUDE.md`.
 
-### Opt out per project
+### Per-project config: `.claude/review-cycle.json`
 
-If a project shouldn't be gated (scratch repos, throwaway experiments):
+A single JSON config file controls project-level behavior. All fields are optional:
 
-```bash
-touch .claude/.no-review-gate
+```json
+{
+  "disabled": false,
+  "ignore": [
+    "dist/**",
+    "generated/**",
+    "tests/fixtures/large-corpora/**"
+  ]
+}
 ```
 
-All three hooks check for this file and exit cleanly if present.
+- `disabled: true` opts the project out of all gates.
+- `ignore: [...]` extends the built-in exclusion list with project-specific pathspec-glob patterns. Additive; built-ins still apply.
+
+The file is meant to be committed so a team gets the same gate behavior. `jq` is required to read it. Malformed JSON falls back to defaults (gate active, no extra ignores); the gate fails open on `disabled` and fails closed on `ignore` so a typo can't accidentally disable review.
+
+### Migrating from `.no-review-gate`
+
+The legacy `touch .claude/.no-review-gate` marker is still honored indefinitely as a fallback. There is no auto-migration: the old marker was typically gitignored (local-only opt-out) while `review-cycle.json` is meant to be committed (team-wide), and silently converting one to the other could publish an opt-out unintentionally.
+
+To consolidate manually:
+
+```bash
+# write the new config explicitly (and commit it if you want team-wide)
+echo '{"disabled": true}' > .claude/review-cycle.json
+rm .claude/.no-review-gate
+```
+
+### Default exclusions
+
+The gate skips paths that are state or preferences rather than reviewable code, so working in them won't force a review:
+
+- Agent task trackers: `.beads/`, `.trekker/`
+- IDE state: `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`
+- Gate's own state: `.claude/.review-mark`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
+
+Exclusion is anchored at the repo root; a nested `subproject/.beads/` is still hashed. `/review-cycle:review` still works manually against excluded paths if you want a pass.
+
+### Adding new `ignore` patterns
+
+Editing `.claude/review-cycle.json` itself drifts the sentinel by design: the config file is force-included in the hash and cannot be excluded by any pattern (including `**`). The flow is:
+
+1. Edit `.claude/review-cycle.json` and add the patterns you want
+2. Run `/review-cycle:review` once; reviewers see the config change (and any matching source edits) and you mark
+3. From now on, changes within the new patterns don't trip the gate
+
+This prevents an unreviewed config edit from silently hiding source drift.
 
 ### Global kill-switch
 
@@ -166,14 +208,16 @@ The sentinel is per-project state, not source. Add to your project's `.gitignore
 
 ```
 .claude/.review-mark
-.claude/.no-review-gate
 ```
+
+The config file (`.claude/review-cycle.json`) is meant to be committed so the team gets consistent gate behavior. Don't gitignore it.
 
 ## State files
 
 ```
-${PROJECT}/.claude/.review-mark          sha256:<hex> of last-reviewed state
-${PROJECT}/.claude/.no-review-gate       per-project opt-out (user-touched)
+${PROJECT}/.claude/.review-mark          two-line sentinel (anchor + sha256)
+${PROJECT}/.claude/review-cycle.json     per-project config (disabled, ignore)
+${PROJECT}/.claude/.no-review-gate       legacy opt-out marker (still honored)
 ~/.claude/.disable-review-gate           global kill-switch (user-touched)
 ```
 
@@ -192,7 +236,7 @@ The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.rev
 The cycle surfaces this and stops. Install with `npm install -g @openai/codex`, then `codex login`. Verify `multi_agent = true` in `~/.codex/config.toml`.
 
 **False trigger on a project I don't want gated.**
-`touch .claude/.no-review-gate` in that project root.
+Write `{"disabled": true}` to `.claude/review-cycle.json` in that project root.
 
 ## Local development
 

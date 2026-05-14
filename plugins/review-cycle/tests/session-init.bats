@@ -7,9 +7,7 @@ setup() {
   SESSION_INIT="$PLUGIN_ROOT/hooks/session-init.sh"
 }
 
-# Compute the 0.5.x-format hash of the current state so tests can construct
-# legacy sentinels that match the working tree. Mirrors the legacy logic
-# inside session-init.sh.
+# Produces 0.5.x-format hashes for constructing legacy sentinel fixtures.
 legacy_hash() {
   if command -v sha256sum >/dev/null 2>&1; then
     SHA="sha256sum"
@@ -68,7 +66,6 @@ run_session_init() {
   NEW_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
   [ "$NEW_ANCHOR" = "$NEW_HEAD" ]
   [ "$NEW_ANCHOR" != "$OLD_ANCHOR" ]
-  # And the gate still passes against the new sentinel.
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
 }
@@ -90,13 +87,10 @@ run_session_init() {
   HASH=$(legacy_hash)
   echo "sha256:$HASH" > "$TEST_REPO/.claude/.review-mark"
   run_session_init
-  # On-disk format flipped to two-line 0.6.0.
   grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
   grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
-  # End-to-end: the migrated sentinel should make the new gate pass.
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
-  # And a new unreviewed edit should still trip drift detection.
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -152,10 +146,42 @@ run_session_init() {
   [ ! -f "$TEST_REPO/.claude/.review-mark" ]
 }
 
-@test "session-init no-ops when project opted out" {
+@test "session-init no-ops when project opted out (legacy marker)" {
   mkdir -p "$TEST_REPO/.claude"
   touch "$TEST_REPO/.claude/.no-review-gate"
   echo "v1" > foo.txt
   run_session_init
   [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+@test "session-init no-ops when review-cycle.json sets disabled:true" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":true}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  echo "v1" > foo.txt
+  run_session_init
+  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+# Legacy `.no-review-gate` is NOT auto-migrated. The old marker is
+# typically gitignored (per the pre-0.6.2 README) and treating it as
+# equivalent to a commit-worthy `disabled:true` config would risk
+# accidentally publishing the opt-out to the team. session-init leaves
+# the marker alone; gate.sh's fallback continues to honor it indefinitely.
+@test "session-init does NOT auto-migrate legacy .no-review-gate" {
+  mkdir -p "$TEST_REPO/.claude"
+  touch "$TEST_REPO/.claude/.no-review-gate"
+  run_session_init
+  [ -f "$TEST_REPO/.claude/.no-review-gate" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle.json" ]
+}
+
+# Regression guard: session-init must proceed (write sentinel) when an
+# explicit disabled:false config is present with no legacy marker. A
+# refactor that treated any config file as opt-out would skip the seed.
+@test "session-init seeds when review-cycle.json has disabled:false" {
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled":false}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  echo "v1" > foo.txt
+  run_session_init
+  [ -f "$TEST_REPO/.claude/.review-mark" ]
 }

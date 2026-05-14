@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-13
+
+Fixes the bug where edits confined to agent task-state (e.g. `.beads/`) forced a review. Also closes a self-exclusion bypass found by `/review-cycle:review` against an in-progress patch.
+
+### Changed
+
+- **Gate ignores non-code state by default.** Agent task tracker directories (`.beads/`, `.trekker/`) and IDE state directories (`.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`) are now excluded from the sentinel hash. Changes confined to those paths no longer trip the Stop or commit-gate hooks. `/review-cycle:review` still works manually for users who want a review pass anyway. Exclusion is anchored at the repo root; a nested `subproject/.beads/` is still hashed.
+- **New `.claude/review-cycle.json` config.** Schema: `{"disabled": bool, "ignore": [string]}`. `disabled: true` opts the project out of all gates. `ignore: [...]` extends the built-in exclusion list with project-specific pathspec-glob patterns. Requires `jq`. The legacy `.no-review-gate` marker is still honored indefinitely; there is no auto-migration, because the old marker was typically gitignored (local-only opt-out) while the new file is meant to be committed (team-wide), and silently converting one to the other could publish an opt-out unintentionally. Users who want to consolidate can write the new file themselves and remove the marker manually.
+
+### Added
+
+- **Pipeline fail-closed on git/jq errors.** A malformed pathspec, missing sha tool, or any mid-pipeline git failure now returns drift (1) instead of silently producing `sha256("")` and passing the gate. Added a smoke-test using the assembled pathspec before hashing.
+
+### Security
+
+- **Self-exclusion bypass closed.** The previous in-progress draft excluded the user-provided ignore file from its own hash, so an unreviewed edit adding `src/**` plus an unreviewed `src/app.ts` change could pass the gate without ever being reviewed. The new config file is **not** in the default excludes AND is force-included in the hash regardless of user `ignore` patterns. Editing `.claude/review-cycle.json` always forces a review pass before its rules take effect, even if the user added patterns that would otherwise match it (e.g. `**`, `.claude/**`).
+- **Malformed-pathspec bypass closed.** Earlier draft of the smoke-test returned exit 1 on git rejection, which `check` mapped to exit 2 (internal error, hooks fail-open). A user with a broken `ignore` pattern could therefore disable the gate until the config was fixed. The smoke-test now returns 2 directly, which `check` maps to drift (hooks block).
+- **Explicit `disabled: false` honored over stale legacy marker.** `gate_project_opted_out` now honors the config's `disabled` key exclusively when present, so a hand-written `{"disabled": false}` cannot be silently overridden by a leftover `.no-review-gate`.
+
 ## [0.6.1] - 2026-05-12
 
 Security and robustness fixes for issues found by running `/review-cycle:review` against the 0.6.0 release before broader adoption. **Users on 0.6.0 should upgrade immediately** — 0.6.0 contained a gate bypass.

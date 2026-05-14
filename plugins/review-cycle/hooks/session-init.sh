@@ -28,9 +28,7 @@ PROJECT_ROOT=$(gate_should_run) || exit 0
 SENTINEL_FILE="$PROJECT_ROOT/.claude/.review-mark"
 REVIEW_SENTINEL="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
 
-# Compute the 0.5.x-format hash of the current state. Used only during the
-# pre-0.6.0 → 0.6.0 migration check below; will be removed once we drop the
-# migration. Returns the bare 64-hex hash (no prefix) on stdout.
+# Computes the 0.5.x-format hash (bare 64-hex, no prefix) for migration only.
 compute_legacy_hash() {
   local root="$1" sha
   if command -v sha256sum >/dev/null 2>&1; then
@@ -60,17 +58,14 @@ compute_legacy_hash() {
   } | $sha 2>/dev/null | cut -d' ' -f1)
 }
 
-# One-time migration from any pre-0.6.0 sentinel format. The 0.5.0 format was
-# bare 64-hex; 0.5.1 prefixed it with `sha256:`. Both are single-line and
-# neither carries an anchor SHA, so they can't be compared with the 0.6.0
-# anchor-aware check. Without this branch, every user upgrading mid-WIP would
-# be gated on next session start.
+# One-time migration from any pre-0.6.0 sentinel format. Neither the 0.5.0
+# (bare hex) nor the 0.5.1 (`sha256:`-prefixed) format carries an anchor SHA,
+# so they can't be compared with the 0.6.0 anchor-aware check. Without this
+# branch, every user upgrading mid-WIP would be gated on next session start.
 #
-# Lossless upgrade: if the legacy hash of the current state matches what was
-# stored, we know the user's reviewed state has not drifted, so we re-seed
-# in 0.6.0 format anchored at current HEAD. If it does NOT match, the user
-# has unreviewed drift since their last review; we leave the old sentinel
-# alone and let the gate fire (the new parser treats it as malformed = drift).
+# Lossless: if the legacy hash matches current state, re-seed in 0.6.0 format.
+# If not, the user has unreviewed drift; leave the old sentinel so the gate
+# fires (the new parser treats single-line sentinels as malformed = drift).
 if [ -f "$SENTINEL_FILE" ]; then
   FIRST_LINE=$(sed -n '1p' "$SENTINEL_FILE" 2>/dev/null | tr -d '[:space:]')
   STORED_BARE=""
@@ -90,7 +85,7 @@ if [ -f "$SENTINEL_FILE" ]; then
   fi
 fi
 
-# Strict re-seed: only when sentinel is missing (first install — adopt WIP)
+# Strict re-seed: only when sentinel is missing (first install, adopt WIP)
 # or when the sentinel still matches current state (idempotent refresh, which
 # advances the anchor to current HEAD so the diff window stays small).
 # Uses `match` rather than `check` to bypass the clean-tree fast-path; a

@@ -261,9 +261,9 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-# THE FIX: committing reviewed work doesn't drift the sentinel when other
-# reviewed work is still uncommitted. Before 0.6.0, every commit advanced HEAD
-# and invalidated the sentinel, forcing a re-review per commit.
+# Committing reviewed work must not drift the sentinel when other reviewed
+# work is still uncommitted. Before 0.6.0, every commit advanced HEAD and
+# invalidated the sentinel, forcing a re-review per commit.
 @test "check stays 0 after committing one reviewed edit with another still uncommitted" {
   echo "original" > foo.txt
   echo "original" > bar.txt
@@ -278,8 +278,8 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-# THE FIX, untracked variant: committing a tracked file doesn't drift even
-# when an untracked file (still uncommitted) was part of the reviewed batch.
+# Untracked variant: committing a tracked file must not drift even when an
+# untracked file (still uncommitted) was part of the reviewed batch.
 @test "check stays 0 after committing tracked file when reviewed untracked file is still present" {
   echo "original" > foo.txt
   git add foo.txt
@@ -460,6 +460,336 @@ setup() {
   echo "wip2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
+}
+
+# --- Exclusion defaults (agent task trackers, IDE state) -------------------
+
+# X1: beads state edits don't drift an existing sentinel.
+@test "check stays 0 when only .beads/ content changes after mark" {
+  echo "code" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  mkdir -p .beads
+  echo '{"id":"x-1","status":"closed"}' > .beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X2: beads-only edits in a never-reviewed repo hit the clean-tree fast path.
+@test "check exits 0 when only .beads/ has changes and no sentinel exists" {
+  mkdir -p .beads
+  echo '{"id":"x-1","status":"closed"}' > .beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X3: IDE state changes are also excluded.
+@test "check exits 0 when only .vscode/ has changes and no sentinel exists" {
+  mkdir -p .vscode
+  echo '{"editor.formatOnSave": true}' > .vscode/settings.json
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X4: every default-excluded directory hits the fast path on a fresh repo.
+@test "check exits 0 for each built-in excluded directory in isolation" {
+  for dir in .beads .trekker .vscode .idea .zed .cursor .fleet; do
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    echo "noise" > "$dir/state"
+    run "$REVIEW_SENTINEL" check
+    [ "$status" -eq 0 ] || { echo "drifted on $dir" >&2; return 1; }
+    rm -rf "$dir"
+  done
+}
+
+# X5: regression guard: actual code changes still drift.
+@test "check exits 1 when a real source file changes alongside excluded state" {
+  echo "real code" > app.ts
+  mkdir -p .beads
+  echo '{"id":"x-1"}' > .beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X6: current-hash is invariant under default-excluded changes.
+@test "current-hash unchanged when only excluded directories differ" {
+  echo "code" > foo.txt
+  H1=$("$REVIEW_SENTINEL" current-hash)
+  mkdir -p .beads .vscode .idea
+  echo "a" > .beads/issues.jsonl
+  echo "b" > .vscode/settings.json
+  echo "c" > .idea/workspace.xml
+  H2=$("$REVIEW_SENTINEL" current-hash)
+  [ "$H1" = "$H2" ]
+}
+
+# X7: nested .beads/ in a subdirectory is NOT excluded (only repo-root).
+@test "check exits 1 when nested subproject/.beads/ changes (not anchored at root)" {
+  mkdir -p subproject/.beads
+  echo "stuff" > subproject/.beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# --- User-extensible .claude/review-cycle.json -----------------------------
+
+# X8: user `ignore` array is honored after the config has been marked.
+@test "check stays 0 when changes match an ignore pattern from review-cycle.json" {
+  echo "code" > foo.txt
+  mkdir -p .claude generated
+  printf '{"ignore":["generated/**"]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "machine output" > generated/bundle.js
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X9: ignore patterns are additive; built-ins still apply.
+@test "user ignore patterns do not disable built-in defaults" {
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":["other/**"]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  mkdir -p .beads other
+  echo "x" > .beads/issues.jsonl
+  echo "y" > other/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X10: an unrelated source change still drifts even with user excludes set.
+@test "user ignore patterns do not mask real code drift" {
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":["scratch/**"]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# --- Self-exclusion bypass defense (Codex P1 + code-reviewer C95) ---------
+
+# X11: editing the config file itself always drifts an existing sentinel.
+# The load-bearing assertion that force-include works when user patterns
+# match the config path is in X12 (pattern `**`) and X13 (`.claude/**`).
+# X11 covers the "new config file appears after mark" case.
+@test "check exits 1 when review-cycle.json is added after mark" {
+  echo "code" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X12: editing the config file drifts even when an `ignore` pattern would
+# otherwise match the config path itself.
+@test "user ignore pattern '**' cannot hide config edits from the hash" {
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  echo "code" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  printf '{"ignore":["**"]}\n' > .claude/review-cycle.json
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X13: same defense, narrower pattern that explicitly targets the config.
+@test "user ignore pattern '.claude/**' cannot hide config edits from the hash" {
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  echo "code" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  printf '{"ignore":[".claude/**"]}\n' > .claude/review-cycle.json
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X14: malformed JSON degrades to "no user patterns" rather than a silent
+# pass. With no extra excludes, real code drift still flags.
+@test "malformed review-cycle.json does not silently disable the gate" {
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf 'not-json{{' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X15: trailing-newline-less JSON file still parses.
+@test "review-cycle.json without trailing newline is parsed" {
+  echo "code" > foo.txt
+  mkdir -p .claude artifacts
+  printf '{"ignore":["artifacts/**"]}' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "blob" > artifacts/output.bin
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X16: staged changes to a tracked excluded path don't drift. The
+# `--cached` branch coverage is X16b below; X16 is a property test that
+# `is_clean_tree`'s exclude pathspec correctly hides the staged change.
+@test "staged change to a tracked excluded path does not drift" {
+  mkdir -p .beads
+  echo "v1" > .beads/issues.jsonl
+  echo "code" > foo.txt
+  git add foo.txt .beads/issues.jsonl
+  git commit -q -m "add tracked beads file"
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > .beads/issues.jsonl
+  git add .beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X16b: staged-only change to a non-excluded tracked file MUST drift even
+# when the working tree matches the marked state. This exercises the
+# --cached branch of compute_hash_from_anchor specifically: a regression
+# that dropped it (and relied only on `git diff` of unstaged changes) would
+# fail to flag this scenario.
+@test "staged-only change to tracked file drifts even when working tree matches mark" {
+  echo "v1" > foo.txt
+  git add foo.txt
+  git commit -q -m "add foo"
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  git add foo.txt
+  echo "v1" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X17: independent is_clean_tree coverage. `match` doesn't call
+# is_clean_tree, so it can't disambiguate the fast-path from a coincidental
+# hash collision. To pin is_clean_tree specifically: with no sentinel,
+# create a non-excluded untracked file AND an excluded-dir change. The
+# clean-tree fast-path must report "not clean" (because of the non-excluded
+# file), forcing the sentinel-lookup path. With no sentinel present, that
+# returns drift.
+@test "is_clean_tree returns not-clean when non-excluded file is present alongside excluded changes" {
+  mkdir -p .beads
+  echo "real code" > app.ts
+  echo "noise" > .beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X18: unusual-looking user patterns don't crash the gate. `build_excludes`
+# wraps every user line as `:(exclude,glob)<pattern>` and git's pathspec
+# parser only inspects magic at the start, so user-supplied magic-prefix
+# bytes become a literal path component, not a pathspec-rejection trigger.
+# The smoke-test in compute_hash_from_anchor is defense-in-depth against
+# corrupted git state, not against user input; it isn't reachable from a
+# pure-string `ignore` entry. This test verifies the wrapped-literal
+# behavior is stable and that real drift still flags alongside it.
+@test "unusual-looking ignore pattern does not break drift detection" {
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":[":(badmagic)oops"]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X19: schema robustness: `ignore` as a string (not array) degrades to
+# "no user patterns" rather than crashing.
+@test "ignore as string (not array) degrades to no user patterns" {
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":"foo/**"}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X20: schema robustness: non-string entries in `ignore` are dropped, but
+# string entries still apply. select(type == "string") in build_excludes
+# pins this behavior.
+@test "ignore array with mixed types keeps only string entries" {
+  echo "code" > foo.txt
+  mkdir -p .claude artifacts
+  printf '{"ignore":[123, "artifacts/**", null]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  echo "blob" > artifacts/output.bin
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X21: empty ignore array is the same as no array; built-ins still apply.
+@test "empty ignore array preserves built-in exclusions" {
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  mkdir -p .beads
+  echo "x" > .beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X22: a gitignored config file must still be in the hash. Repos that
+# gitignore all of .claude/ would otherwise let the config rules take
+# effect while the config edit itself is invisible to git, which is a
+# bypass: change config to `ignore: ["foo.txt"]`, edit foo.txt, gate
+# passes without review.
+@test "gitignored review-cycle.json is still hashed" {
+  echo ".claude/" > .gitignore
+  git add .gitignore
+  git commit -q -m "gitignore .claude"
+  echo "code" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" mark
+  # Edit the gitignored config to exclude foo.txt, then change foo.txt.
+  # Without the fix, neither change reaches the hash and the gate passes.
+  printf '{"ignore":["foo.txt"]}\n' > .claude/review-cycle.json
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X23: is_clean_tree must not take its fast path when the config is
+# GITIGNORED. A gitignored config that has been edited would otherwise be
+# invisible to git status and the fast-path would short-circuit before
+# the sentinel compare can catch the drift.
+@test "is_clean_tree skips fast-path when config is gitignored" {
+  echo ".claude/" > .gitignore
+  git add .gitignore
+  git commit -q -m "gitignore .claude"
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  # No mark exists; the fast path would have returned exit 0 (clean tree)
+  # without seeing the config. The check-ignore guard forces not-clean
+  # → sentinel lookup → no sentinel → drift.
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X24: regression guard: when the config is TRACKED (the recommended
+# setup), is_clean_tree must keep the post-commit fast-path. The 0.6.0
+# multi-commit-doesn't-drift property would otherwise be lost for any
+# project that adopted review-cycle.json. With the config tracked, status
+# can see edits to it, so we don't need to override the fast-path.
+@test "tracked config preserves post-commit clean-tree fast-path" {
+  echo "v1" > foo.txt
+  mkdir -p .claude
+  printf '{"ignore":[]}\n' > .claude/review-cycle.json
+  git add foo.txt .claude/review-cycle.json
+  git commit -q -m "init with tracked config"
+  echo "v2" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "commit reviewed change"
+  # Working tree is clean post-commit. Fast-path should keep check at 0
+  # without falling through to a hash compare that would mismatch on the
+  # untracked-to-tracked format transition.
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
 }
 
 # Idempotent re-seed after a reviewed commit advances the anchor.
