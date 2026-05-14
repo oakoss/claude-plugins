@@ -288,8 +288,12 @@ write_sentinel() {
     return 1
   fi
   tmp="${sentinel}.tmp.$$"
-  if ! err=$(printf '%s\n' "$content" > "$tmp" 2>&1); then
-    echo "review-sentinel: write to $tmp failed: $err" >&2
+  # `command > file` redirects stdout to the file before any capture sees
+  # it, so capturing stderr-as-stdout via $(... 2>&1) is impossible here.
+  # Check the exit code directly; printf failures (full disk, EROFS) are
+  # rare enough that the bare path in the error message suffices.
+  if ! printf '%s\n' "$content" > "$tmp" 2>/dev/null; then
+    echo "review-sentinel: write to $tmp failed" >&2
     /bin/rm -f "$tmp" 2>/dev/null
     return 1
   fi

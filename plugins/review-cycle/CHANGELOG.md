@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-13
+
+### Fixed
+
+- **`write_sentinel` correctly reports `printf` failures.** The previous form `err=$(printf '%s\n' "$content" > "$tmp" 2>&1)` intercepted stdout via the file redirect before `2>&1` could merge stderr into the capture, so `err` was always empty and the failure branch was unreachable. The function now checks `printf`'s exit code directly. Functional impact is small (the existing `mv` step catches most downstream failures), but the function now fails honestly on a `printf` error.
+
+### Changed
+
+- **Built-in-exclusion test split per directory.** The single parameterized X4 test became seven small tests so bats can identify which exclusion regressed if one of them breaks.
+
 ## [0.6.2] - 2026-05-13
 
 Fixes the bug where edits confined to agent task-state (e.g. `.beads/`) forced a review. Also closes a self-exclusion bypass found by `/review-cycle:review` against an in-progress patch.

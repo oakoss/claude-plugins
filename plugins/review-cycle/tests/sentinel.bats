@@ -491,15 +491,54 @@ setup() {
 }
 
 # X4: every default-excluded directory hits the fast path on a fresh repo.
-@test "check exits 0 for each built-in excluded directory in isolation" {
-  for dir in .beads .trekker .vscode .idea .zed .cursor .fleet; do
-    rm -rf "$dir"
-    mkdir -p "$dir"
-    echo "noise" > "$dir/state"
-    run "$REVIEW_SENTINEL" check
-    [ "$status" -eq 0 ] || { echo "drifted on $dir" >&2; return 1; }
-    rm -rf "$dir"
-  done
+# Split one per directory so bats can identify which exclusion regressed.
+@test "check exits 0 with only .beads/ change on fresh repo" {
+  mkdir -p .beads
+  echo "noise" > .beads/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only .trekker/ change on fresh repo" {
+  mkdir -p .trekker
+  echo "noise" > .trekker/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only .vscode/ change on fresh repo" {
+  mkdir -p .vscode
+  echo "noise" > .vscode/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only .idea/ change on fresh repo" {
+  mkdir -p .idea
+  echo "noise" > .idea/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only .zed/ change on fresh repo" {
+  mkdir -p .zed
+  echo "noise" > .zed/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only .cursor/ change on fresh repo" {
+  mkdir -p .cursor
+  echo "noise" > .cursor/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only .fleet/ change on fresh repo" {
+  mkdir -p .fleet
+  echo "noise" > .fleet/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
 }
 
 # X5: regression guard: actual code changes still drift.
