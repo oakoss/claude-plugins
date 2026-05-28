@@ -98,6 +98,19 @@ Provide your analysis in this structure:
 - Inconsistent enforcement across mutation methods
 - Types that rely on external code to maintain invariants
 
+**Type-Boundary Smells:**
+
+Beyond whole-type design, scan the diff for boundary-level laziness that erodes the contract even when no new type was declared. These are often the highest-confidence findings:
+
+- **Needless optionality.** A field, prop, or parameter typed optional (`?`, `| undefined`, nullable) when the surrounding code always supplies it or cannot function without it. Agents reflexively mark new props optional to lessen the blast radius of a change; if the value is in fact always required, the optionality is a lie that forces every reader to handle a case that never happens. Push for required.
+- **Escape-hatch types.** New `any`, an `unknown` that is never narrowed, or a value typed loosely (`object`, `Record<string, any>`, untyped JSON) where a concrete shape is known. These defer the error from compile time to runtime.
+- **Casts that paper over a boundary.** `as` casts (especially `as unknown as T`), non-null assertions (`!`), or coercions used to silence the type checker rather than to express a real, justified narrowing. Ask what invariant the cast assumes and whether the boundary should make it explicit instead.
+- **Silent fallback over an unclear invariant.** A default value or `??` chain that hides the fact that a value's presence was never actually guaranteed. Prefer making the boundary explicit (or failing loudly) over papering it over.
+
+For each smell, state the concrete clearer boundary: which field becomes required, which union replaces the `any`, which narrowing removes the cast. A boundary-smell finding without a concrete replacement is just a complaint.
+
+Flag these whenever they appear in the diff — they are worth reporting even when the change did not add or modify a named type declaration.
+
 **When Suggesting Improvements:**
 
 Always consider:

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-28
+
+Adds two report-only reviewers and consolidates the plugin to a single `review` command, informed by Cursor's `thermo-nuclear-code-quality-review` and Matt Pocock's two-axis `review` skill.
+
+### Added
+
+- **`maintainability-auditor` agent** — an ambitious structural lens: "code-judo" moves (restructurings that delete whole categories of complexity), file-size sprawl (~1000-line threshold), spaghetti-branch growth, weak seams, and testability regressions. Runs once per review as a **report-only** reviewer — its speculative restructurings are surfaced in a "Structural suggestions" section for you to action by prompting, never auto-applied, because high-blast-radius rewrites must not be applied unsupervised in a loop.
+- **`spec-conformance-analyzer` agent** — a **report-only** spec axis: checks the diff against its originating issue/task/PRD and reports missing or partial requirements, scope creep, and implemented-but-wrong, each quoted against the spec line. Reported separately from quality findings, because a change can follow every standard while building the wrong thing.
+
+### Changed
+
+- **`/review-cycle:review` is the single command for the whole cycle.** The auto-fix reviewers (Codex, code-reviewer, tests, error handling, type design) run in the fix loop; the two report-only reviewers and the de-slopify cleanup run once *after* the loop converges, against the final post-fix state — so the expensive opus maintainability pass runs a single time rather than on every iteration.
+- **Arguments are natural language, not flags** — `against <ref>` and `max <n>` instead of `--base` / `--max-iter`; bare `/review-cycle:review` covers the common case. Flags don't autocomplete in Claude Code and are awkward to dictate.
+- **`pr-test-analyzer` fires on any source change**, closing the blind spot where a feature that shipped zero tests skipped coverage analysis entirely.
+- **`type-design-analyzer` catches type-boundary smells** — needless optionality, escape-hatch `any` / un-narrowed `unknown`, and casts that paper over a boundary — anywhere in the diff, not only on type declarations.
+- **The cleanup agent removes redundant comments decisively.** A comment that restates the code is removed on sight; only a comment that may encode a constraint the agent cannot verify is kept, and it is flagged in the summary for a human to confirm.
+
+### Removed
+
+- **`/review-cycle:inspect` and `/review-cycle:cleanup` skills.** The maintainability lens that `inspect` hosted now runs inside `/review-cycle:review` (report-only), and `/review-cycle:de-slopify` covers ad-hoc prose cleanup; the cleanup *agent* still runs automatically in the cycle. `review` is now the only review command.
+
 ## [0.6.3] - 2026-05-13
 
 ### Fixed

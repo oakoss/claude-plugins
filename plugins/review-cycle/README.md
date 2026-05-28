@@ -33,11 +33,15 @@ Stop hook fires when you finish a turn
               ↓
         Loop (up to 4 iterations)
               ↓
-        De-slopify cleanup (prose only)
+        Post-loop pass, once:
+        report-only reviewers
+        (maintainability + spec)
+        + de-slopify cleanup
               ↓
         Atomic sentinel write
               ↓
-        Summary → stop (no commit)
+        Summary (with report-only
+        suggestions) → stop (no commit)
               ↓
 You review the diff and commit yourself
 ```
@@ -56,24 +60,13 @@ Idempotent — safe to run multiple times. Replaces the manual setup steps below
 
 ### `/review-cycle:review`
 
-The action loop. Fans out reviewers, applies fixes, loops until clean (max 4 iterations by default), final de-slopify pass, updates sentinel.
+The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until clean (max 4 iterations by default), surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and updates the sentinel.
 
-Arguments:
+Arguments are natural language — no flags:
 
-- `--max-iter N` — override iteration cap (default 4)
-- `--base <ref>` — scope review to `git diff <ref>..HEAD` instead of `git diff HEAD`
-
-### `/review-cycle:inspect`
-
-Read-only inspection. Same reviewers, no fixes, no loop, no sentinel update. Use for mid-implementation sanity checks or pre-commit final review.
-
-Arguments:
-
-- `--base <ref>` — same as above
-
-### `/review-cycle:cleanup`
-
-Spawns the bundled `cleanup` subagent on the current diff. Applies the comment policy (clean and minimal) and de-slopify methodology in a single pass. Edits files directly; returns a summary. Does NOT update the review sentinel — use `/review-cycle:accept` after if you want to satisfy the commit gate.
+- bare `/review-cycle:review` — review the uncommitted working tree, default 4 iterations
+- `against <ref>` (e.g. `against main`) — scope to `git diff <ref>..HEAD`
+- `max <n>` — override the iteration cap
 
 ### `/review-cycle:accept`
 
@@ -95,6 +88,8 @@ Migrated verbatim from Anthropic's pr-review-toolkit (Apache 2.0; see `LICENSE-p
 New (this plugin):
 
 - `review-cycle:cleanup` — comment policy + de-slopify in one pass
+- `review-cycle:maintainability-auditor` — ambitious structural lens (code-judo moves, file-size sprawl, spaghetti branches, weak seams). Runs in `review` on substantial-code diffs, **report-only** — its speculative restructurings are surfaced for you to action, never auto-applied.
+- `review-cycle:spec-conformance-analyzer` — spec axis: does the diff implement what the originating issue/task/PRD asked for? Reported separately from quality findings, when a spec source is discoverable.
 
 ## Hooks (active when plugin is enabled)
 

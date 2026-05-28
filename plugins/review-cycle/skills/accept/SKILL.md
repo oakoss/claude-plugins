@@ -12,7 +12,7 @@ Updates the review sentinel so the Stop hook and commit-gate will pass for this 
 Use cases:
 
 - You've manually reviewed your changes and don't want to run the full cycle
-- You ran `/review-cycle:cleanup` and want to commit without running reviewers
+- You ran `/review-cycle:de-slopify` and want to commit without running reviewers
 - You've made small changes you don't want gated, but don't want to disable the gate project-wide
 
 ## Execution
@@ -42,9 +42,9 @@ Report the exit code to the user:
 ## Composition
 
 ```
-/review-cycle:cleanup   → tidy up edits
-/review-cycle:accept    → mark as reviewed
-git commit              → gate passes, commit succeeds
+/review-cycle:de-slopify   → tidy up prose
+/review-cycle:accept       → mark as reviewed
+git commit                 → gate passes, commit succeeds
 ```
 
 vs the full cycle:
