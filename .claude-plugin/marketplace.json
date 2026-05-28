@@ -28,6 +28,28 @@
         "hooks",
         "pr-review"
       ]
+    },
+    {
+      "name": "pr-kit",
+      "description": "Pull-request workflow toolkit: summarize review feedback, resolve merge conflicts, make diffs reviewable, and drive CI to green — gate-aware, with no unreviewed commits.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Oak OSS",
+        "email": "hello@oakoss.dev",
+        "url": "https://oakoss.dev"
+      },
+      "category": "development",
+      "source": "./plugins/pr-kit",
+      "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/pr-kit",
+      "keywords": [
+        "pull-request",
+        "github",
+        "gh",
+        "ci",
+        "merge-conflicts",
+        "code-review",
+        "workflow"
+      ]
     }
   ]
 }
