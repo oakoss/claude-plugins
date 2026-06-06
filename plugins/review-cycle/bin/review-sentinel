@@ -4,7 +4,7 @@
 # Subcommands:
 #   seed         Write current state. Always overwrites. Used by SessionStart.
 #   mark         Write current state. Always overwrites. Used by /accept
-#                and /review Phase 7.
+#                and /review Phase 8.
 #   check        Exit 0 if clean tree OR sentinel matches; 1 if drifted; 2 on
 #                error (no git repo, no sha tool). Hooks should fail-open on 2.
 #   match        Exit 0 only if sentinel exists AND its hash equals current
@@ -105,16 +105,27 @@ EXCLUDES_LIST=()
 # the config always forces a review pass before its rules take effect.
 build_excludes() {
   local root="$1" pattern
+  # Excluded at any depth: a monorepo subpackage's `.beads/` would otherwise
+  # read as code drift and gate the commit. The bare-root form is kept because
+  # older git pathspec parsers treat a leading `**/` as one-or-more dirs, not
+  # zero-or-more.
   EXCLUDES_LIST=(
     ':(exclude).claude/.review-mark'
     ':(exclude).claude/.no-review-gate'
     ':(exclude,glob).beads/**'
+    ':(exclude,glob)**/.beads/**'
     ':(exclude,glob).trekker/**'
+    ':(exclude,glob)**/.trekker/**'
     ':(exclude,glob).vscode/**'
+    ':(exclude,glob)**/.vscode/**'
     ':(exclude,glob).idea/**'
+    ':(exclude,glob)**/.idea/**'
     ':(exclude,glob).zed/**'
+    ':(exclude,glob)**/.zed/**'
     ':(exclude,glob).cursor/**'
+    ':(exclude,glob)**/.cursor/**'
     ':(exclude,glob).fleet/**'
+    ':(exclude,glob)**/.fleet/**'
   )
   local config_file="$root/$CONFIG_PATH"
   [ -f "$config_file" ] || return 0

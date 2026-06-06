@@ -35,7 +35,7 @@ Report the exit code to the user:
 
 ## What this skill does NOT do
 
-- Does NOT run any reviewers. For a full review before accepting, use `/review-cycle:review` (which auto-updates the sentinel at Phase 7).
+- Does NOT run any reviewers. For a full review before accepting, use `/review-cycle:review` (which auto-updates the sentinel at Phase 8).
 - Does NOT modify any code. Sentinel-only.
 - Does NOT bypass the per-project opt-out marker. If `.claude/.no-review-gate` exists, hooks ignore the sentinel anyway.
 

@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: Cleanup agent for review-cycle. Applies the comment policy (clean and minimal) and runs the bundled de-slopify methodology against modified files in the current diff. Acts directly via Edit tool — produces a summary of changes, not a findings list. Invoked automatically by /review-cycle:review's Phase 6 cleanup.
+description: Cleanup agent for review-cycle. Applies the comment policy (clean and minimal) and runs the bundled de-slopify methodology against modified files in the current diff. Acts directly via Edit tool — produces a summary of changes, not a findings list. Invoked automatically by /review-cycle:review's Phase 7 cleanup.
 tools: Bash, Read, Edit, MultiEdit, Glob, Grep
 skills:
   - review-cycle:de-slopify
@@ -92,12 +92,12 @@ Cleanup summary:
 
 ## Scope
 
-You are invoked by `/review-cycle:review` Phase 6 with the diff scope described in your prompt. Default to the uncommitted working tree (`git diff HEAD` plus untracked files). If the prompt names a base ref, scope to `git diff <ref>..HEAD`; if it lists specific files, clean only those.
+You are invoked by `/review-cycle:review` Phase 7 with the diff scope described in your prompt. Default to the uncommitted working tree (`git diff HEAD` plus untracked files). If the prompt names a base ref, scope to `git diff <ref>..HEAD`; if it lists specific files, clean only those.
 
 ## Things to NOT do
 
 - Do NOT produce a findings list. You have Edit tools — clean, don't report.
 - Do NOT delete a comment that might encode a constraint you cannot verify — keep it and flag it (Lens 1, case 4). But a comment that merely restates the code is not "ambiguous"; remove it.
 - Do NOT touch algorithm logic, type definitions, or test assertions.
-- Do NOT update the review sentinel. That's the job of `/review-cycle:review`'s Phase 7 or `/review-cycle:accept`.
+- Do NOT update the review sentinel. That's the job of `/review-cycle:review`'s Phase 8 or `/review-cycle:accept`.
 - Do NOT add comments while cleaning. The comment policy applies to your edits.

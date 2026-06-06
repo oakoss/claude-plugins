@@ -175,7 +175,7 @@ The gate skips paths that are state or preferences rather than reviewable code, 
 - IDE state: `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`
 - Gate's own state: `.claude/.review-mark`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
 
-Exclusion is anchored at the repo root; a nested `subproject/.beads/` is still hashed. `/review-cycle:review` still works manually against excluded paths if you want a pass.
+These directories are excluded at any depth, so a monorepo `subproject/.beads/` is skipped too. `/review-cycle:review` still works manually against excluded paths if you want a pass.
 
 ### Adding new `ignore` patterns
 
@@ -226,6 +226,14 @@ Touch the global kill-switch immediately: `touch ~/.claude/.disable-review-gate`
 
 **Stop hook fires on every turn even after running the cycle.**
 The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a `sha256:<hex>` line. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
+
+**Review re-triggers right after a commit, on a clean-looking change.**
+A pre-commit hook that mutates files at commit time (a formatter or linter) can leave residual working-tree changes the gate correctly reads as fresh unreviewed drift. The rule for any such hook: it must leave a clean tree — only ever touch files that end up *in* the commit. Two ways to guarantee that:
+
+- **Scope formatters to the staged set, not the whole workspace.** `cargo fmt --all`, `prettier --write .`, etc. reformat files beyond what you're committing; with lefthook's `stage_fixed` those unrelated edits aren't re-staged and are stranded dirty after the commit. Use the staged-file form instead — e.g. `rustfmt --edition <ed> {staged_files}`, `prettier --write {staged_files}`.
+- **Normalize before you mark.** Run the formatters as part of the change *before* `/review-cycle:review`, so the marked state already equals the formatted state and the commit-time hook is a no-op.
+
+Beads/Trekker exports are already excluded (at any depth), so `bd`'s commit-time `issues.jsonl` re-export is not the cause — look at formatters/linters.
 
 **Codex is missing or not authenticated.**
 The cycle surfaces this and stops. Install with `npm install -g @openai/codex`, then `codex login`. Verify `multi_agent = true` in `~/.codex/config.toml`.

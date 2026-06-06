@@ -1,6 +1,6 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. Fans out Codex and the auto-fix reviewers (code quality, tests, error handling, type design) in parallel, applies fixes inline per the embedded policies, and loops up to 4 iterations until clean. Then, once against the final state, runs the report-only reviewers (structural maintainability and spec conformance) and a de-slopify cleanup pass. Updates the review sentinel on completion. Does NOT commit.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Fans out Codex and the auto-fix reviewers (code quality, tests, error handling, type design) in parallel, applies fixes inline per the embedded policies, and loops up to 4 iterations until clean. Then, once against the final state, runs the report-only reviewers (structural maintainability and spec conformance) and a de-slopify cleanup pass. Updates the review sentinel on completion. Does NOT commit.
 argument-hint: "[against <ref>] [max <n>]"
 allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, AskUserQuestion, Skill
 ---
@@ -86,7 +86,18 @@ codex --version
 
 If the command fails or codex is unauthenticated, surface the error and stop — do not silently skip it.
 
-### Phase 2: Fan-out (parallel)
+### Phase 2: Canonicalize the working tree
+
+Before reviewing, bring the tree to the project's canonical state so reviewers see clean code and the marked state matches what the commit-time hooks produce. Otherwise a pre-commit formatter re-runs at commit, restaging or stranding changes the gate reads as fresh unreviewed drift and forcing a needless second review.
+
+**Use the project's own checks — don't invent commands.** Source them from context you most likely already have: `CLAUDE.md` / `AGENTS.md`, the pre-commit config (`lefthook.yml`, `.husky/`, `.pre-commit-config.yaml`), `package.json` scripts, a `justfile` / `Makefile` / `Taskfile.yml` / `mise.toml`, or the CI workflow. If none is discoverable, skip this phase and note "no project checks found" in the summary.
+
+1. **Auto-fixers (mutating)** — formatters and `lint --fix`. Run them and keep the result, scoped to the changed fileset so unrelated files aren't swept into the diff. (If the project's convention is genuinely whole-tree, follow it.)
+2. **Read-only checks** — typecheck and fast/affected tests. Fold any failures into the review findings; the fix-vs-defer policy applies. Do NOT run a slow full suite on every review — surface it as "run `<cmd>` before merging" instead.
+
+Fail-open: a missing tool or a check that errors out is noted and skipped, never blocks the review.
+
+### Phase 3: Fan-out (parallel)
 
 In a single conversation turn, invoke ALL of the following:
 
@@ -112,7 +123,7 @@ In a single conversation turn, invoke ALL of the following:
    - `review-cycle:silent-failure-hunter` — if diff touches error-handling code (try/catch, `Result<`, `.catch(`, error returns)
    - `review-cycle:type-design-analyzer` — if diff adds or modifies type declarations (interfaces, structs, classes, type aliases), OR introduces type-boundary smells anywhere (`any`, an un-narrowed `unknown`, `as` casts, non-null `!`, or newly optional fields/params)
 
-   The **report-only** reviewers — `review-cycle:spec-conformance-analyzer` and `review-cycle:maintainability-auditor` — are deliberately **not** in this loop fan-out. They run once after the loop converges (Phase 6), against the final post-fix state. That keeps the expensive opus maintainability pass and the spec-discovery step from re-running on every iteration, and means their findings reflect exactly the code you'll commit rather than an intermediate state.
+   The **report-only** reviewers — `review-cycle:spec-conformance-analyzer` and `review-cycle:maintainability-auditor` — are deliberately **not** in this loop fan-out. They run once after the loop converges (Phase 7), against the final post-fix state. That keeps the expensive opus maintainability pass and the spec-discovery step from re-running on every iteration, and means their findings reflect exactly the code you'll commit rather than an intermediate state.
 
    Each spawn pattern:
 
@@ -127,11 +138,11 @@ In a single conversation turn, invoke ALL of the following:
 
    All applicable agents fire in parallel. Auto-notification on completion — do not poll.
 
-The post-loop pass (Phase 6) runs the report-only reviewers and cleanup; none of those are part of this fan-out.
+The post-loop pass (Phase 7) runs the report-only reviewers and cleanup; none of those are part of this fan-out.
 
 Wait for the codex bash output AND every spawned subagent to complete before proceeding.
 
-### Phase 3: Aggregate findings
+### Phase 4: Aggregate findings
 
 Collect findings from every reviewer:
 
@@ -140,9 +151,9 @@ Collect findings from every reviewer:
 
 Attribute each finding to its source. Group by file when presenting. Do not aggressively dedupe — if two reviewers flag the same line, merge them into one bullet with both sources listed.
 
-This phase covers only the loop's auto-fix reviewers. The report-only reviewers (spec conformance, maintainability) run post-loop and are aggregated in Phase 6.
+This phase covers only the loop's auto-fix reviewers. The report-only reviewers (spec conformance, maintainability) run post-loop and are aggregated in Phase 7.
 
-### Phase 4: Apply fixes per policy
+### Phase 5: Apply fixes per policy
 
 For each finding, apply the fix-vs-defer policy:
 
@@ -154,17 +165,17 @@ When fixing, follow the comment policy — do not add comments that restate the 
 
 Track fixed items and deferred items separately for the final summary. Do not auto-create beads or trekker tickets for deferred findings — just list them in the summary; the user decides.
 
-Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (spec conformance, maintainability) run after the loop (Phase 6); nothing they find is auto-applied.
+Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (spec conformance, maintainability) run after the loop (Phase 7); nothing they find is auto-applied.
 
-### Phase 5: Loop check
+### Phase 6: Loop check
 
 After applying fixes:
 
-- If ANY inline fixes were applied AND iteration count < max-iter → GOTO Phase 2 (re-run reviewers against the new state)
+- If ANY inline fixes were applied AND iteration count < max-iter → GOTO Phase 3 (re-run reviewers against the new state)
 - If NO inline fixes were applied (everything was clean or correctly deferred) → exit loop
 - If iteration count == max-iter → exit loop with summary of remaining findings
 
-### Phase 6: Post-loop pass (report-only reviewers + cleanup)
+### Phase 7: Post-loop pass (report-only reviewers + cleanup)
 
 The loop has converged. Run the report-only reviewers **once** here — against the final post-fix state — together with cleanup. Spawn all applicable agents in a single turn; they don't conflict (the reviewers only read; cleanup only edits comments/prose, which doesn't change a structural or spec verdict):
 
@@ -193,7 +204,7 @@ Agent({
 
 It edits files directly and returns a summary. Scope: comments in modified code, modified `.md` files, commit-message drafts. Excluded: algorithm logic, type definitions, test assertions.
 
-### Phase 7: Update sentinel
+### Phase 8: Update sentinel
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark
@@ -201,7 +212,7 @@ It edits files directly and returns a summary. Scope: comments in modified code,
 
 This is what allows the Stop hook and commit-gate to let the user commit. If the CLI exits nonzero (not in a git repo, sha256 tool missing), surface the error in the final summary — do not silently succeed.
 
-### Phase 8: Final summary
+### Phase 9: Final summary
 
 Print a structured summary:
 
@@ -230,7 +241,7 @@ Structural suggestions (report-only — prompt to address the ones you want):
 Final state: clean / N findings remain
 ```
 
-### Phase 9: Stop
+### Phase 10: Stop
 
 Do NOT run `git commit`. The user is the final reviewer before commit. The commit-gate hook will block a commit attempt anyway, but you should not attempt one regardless.
 
@@ -242,5 +253,5 @@ The Stop hook will see the sentinel now matches the current state and allow the 
 - Do NOT silently skip Codex if it fails. Surface the error.
 - Do NOT auto-create beads or trekker tickets for deferred findings.
 - Do NOT touch the opt-out marker (`.claude/.no-review-gate`) programmatically. The user controls it.
-- Do NOT modify the sentinel except at Phase 7, after a complete successful cycle.
+- Do NOT modify the sentinel except at Phase 8, after a complete successful cycle.
 - Do NOT add comments to code while fixing. The comment policy applies to fix code, not just original code.

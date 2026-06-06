@@ -562,12 +562,107 @@ setup() {
   [ "$H1" = "$H2" ]
 }
 
-# X7: nested .beads/ in a subdirectory is NOT excluded (only repo-root).
-@test "check exits 1 when nested subproject/.beads/ changes (not anchored at root)" {
+# X7: nested .beads/ is excluded so a bd/lefthook pre-commit re-export doesn't
+# read as code drift.
+@test "check exits 0 when only nested subproject/.beads/ changes" {
   mkdir -p subproject/.beads
   echo "stuff" > subproject/.beads/issues.jsonl
   run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X7b: exercises the hash-comparison path (real uncommitted code bypasses the
+# clean-tree fast-path); also covers .trekker/.
+@test "check stays 0 when nested .beads/ and .trekker/ drift after mark alongside reviewed code" {
+  echo "original" > app.ts
+  git add app.ts
+  git commit -q -m "add app"
+  echo "reviewed change" > app.ts
+  mkdir -p packages/api/.beads packages/web/.trekker
+  echo '{"id":"x-1"}' > packages/api/.beads/issues.jsonl
+  echo "state" > packages/web/.trekker/state
+  "$REVIEW_SENTINEL" mark
+  # bd re-export bumps the nested jsonl; code unchanged.
+  printf '{"id":"x-1"}\n{"id":"x-hwm0"}\n' > packages/api/.beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X7c: regression guard — adjacent real source still drifts.
+@test "check exits 1 when nested source changes alongside nested excluded state" {
+  mkdir -p packages/api/.beads
+  echo "real code" > packages/api/app.ts
+  echo '{"id":"x-1"}' > packages/api/.beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
+}
+
+# X7d: one test per directory (mirrors root-level X4 split) so a regression
+# in any single any-depth glob is self-localizing.
+@test "check exits 0 with only nested .vscode/ change on fresh repo" {
+  mkdir -p packages/api/.vscode
+  echo "noise" > packages/api/.vscode/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only nested .idea/ change on fresh repo" {
+  mkdir -p packages/api/.idea
+  echo "noise" > packages/api/.idea/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only nested .zed/ change on fresh repo" {
+  mkdir -p packages/api/.zed
+  echo "noise" > packages/api/.zed/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only nested .cursor/ change on fresh repo" {
+  mkdir -p packages/api/.cursor
+  echo "noise" > packages/api/.cursor/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "check exits 0 with only nested .fleet/ change on fresh repo" {
+  mkdir -p packages/api/.fleet
+  echo "noise" > packages/api/.fleet/state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# X7e: glob-boundary guard — a substring match or a dot-less `beads/` dir must
+# still hash, otherwise the gate silently stops reviewing real source.
+@test "check exits 1 when a filename merely contains '.beads' (no .beads dir)" {
+  mkdir -p src
+  echo "real code" > src/notes.beads.md
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "check exits 1 when a dot-less 'beads' directory changes" {
+  mkdir -p src/beads
+  echo "real code" > src/beads/util.ts
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# X7f: at-depth analog of X16 — exercises the --cached stream, which X7b
+# (untracked) never reaches.
+@test "staged change to a tracked nested excluded path does not drift" {
+  mkdir -p packages/api/.beads
+  echo "v1" > packages/api/.beads/issues.jsonl
+  echo "code" > foo.txt
+  git add foo.txt packages/api/.beads/issues.jsonl
+  git commit -q -m "add tracked nested beads file"
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > packages/api/.beads/issues.jsonl
+  git add packages/api/.beads/issues.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
 }
 
 # --- User-extensible .claude/review-cycle.json -----------------------------

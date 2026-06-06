@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-05
+
+Closes the loop on a class of spurious review re-triggers: a pre-commit hook that reformats files at commit time leaves working-tree churn the gate reads as fresh unreviewed drift, forcing a needless second review.
+
+### Added
+
+- **Phase 2 "Canonicalize the working tree."** `/review-cycle:review` now brings the tree to the project's canonical state *before* the reviewer fan-out — running the project's own auto-fixers (formatters, `lint --fix`) and fast read-only checks (typecheck, affected tests), sourced from definitions the agent already has (`CLAUDE.md`/`AGENTS.md`, the pre-commit config, `package.json` scripts, `justfile`/`Makefile`/`Taskfile`/`mise`, CI). Reviewers see clean code; the marked state matches what the commit-time hook produces, so a formatter re-running at commit no longer strands changes the gate reads as drift. Auto-fixers are scoped to the changed fileset; slow suites are surfaced rather than run; the whole phase is fail-open. The later phases renumber accordingly (Fan-out → Phase 3, … Stop → Phase 10).
+- **README note on pre-commit hooks and review re-triggers** (Troubleshooting). The leave-a-clean-tree principle: a hook that mutates files at commit time must fold those edits into the commit (scope formatters to staged files) or the residue re-fires the gate. Names the common `cargo fmt --all` vs. staged-scoped footgun.
+
+### Changed
+
+- **Agent task-state and IDE exclusions now match at any depth, not just the repo root.** `.beads/`, `.trekker/`, `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, and `.fleet/` are excluded from the sentinel hash wherever they appear, so a monorepo that keeps `.beads/` in a subpackage no longer trips the gate when a `bd`/lefthook pre-commit hook re-exports that subpackage's `issues.jsonl`. Each directory now carries both a root-anchored (`.beads/**`) and an any-depth (`**/.beads/**`) pathspec; the root form is retained because older git pathspec parsers treat a leading `**/` as one-or-more directories rather than zero-or-more. Reverses the deliberate root-only scoping documented in 0.6.2. Test X7 flipped accordingly, with new hash-path and regression coverage (X7b/X7c).
+
 ## [0.7.0] - 2026-05-28
 
 Adds two report-only reviewers and consolidates the plugin to a single `review` command, informed by Cursor's `thermo-nuclear-code-quality-review` and Matt Pocock's two-axis `review` skill.
