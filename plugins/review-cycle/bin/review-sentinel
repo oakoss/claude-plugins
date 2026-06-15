@@ -18,7 +18,9 @@
 # Format on disk: two lines.
 #   anchor:<40-hex-sha>     ← HEAD SHA at mark time, or the empty-tree SHA
 #                             (4b825dc6…) when HEAD is unborn
-#   sha256:<64-hex-chars>   ← hash of `git diff <anchor>` plus untracked content
+#   sha256:<64-hex-chars>   ← hash of the anchor→index and index→working-tree
+#                             diffs (untracked files normalized via a scratch
+#                             intent-to-add index; see compute_hash_from_anchor)
 # Path: <project-root>/.claude/.review-mark
 #
 # Why anchor + diff-hash instead of one hash: each `git commit` advances HEAD
@@ -51,35 +53,6 @@ subcommands:
 EOF
   exit 2
 }
-
-ROOT_OVERRIDE=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --root)
-      [ $# -ge 2 ] || usage
-      ROOT_OVERRIDE="$2"
-      shift 2
-      ;;
-    -h|--help|help)
-      usage
-      ;;
-    --)
-      shift
-      break
-      ;;
-    -*)
-      echo "review-sentinel: unknown option: $1" >&2
-      usage
-      ;;
-    *)
-      break
-      ;;
-  esac
-done
-
-[ $# -ge 1 ] || usage
-CMD="$1"
-shift
 
 pick_sha() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -156,14 +129,46 @@ current_anchor() {
   echo "$EMPTY_TREE_SHA"
 }
 
+# Populate the throwaway index at $2 from $1's real index, then intent-to-add
+# the untracked files so the index→working-tree diff renders each as a
+# new-file patch byte-identical to its staged form (which is what lets an
+# untracked, staged, and committed new file all hash the same). Uses the
+# global EXCLUDES_LIST and CONFIG_PATH. Returns nonzero if any cp/git step
+# fails; the caller must treat that as drift, never a clean hash. $2 must not
+# already exist as a non-empty file — git rejects a 0-byte index as corrupt.
+# Runs `cd "$root"`, so callers invoke it in a subshell to contain that.
+build_scratch_index() {
+  local root="$1" scratch="$2" realidx
+  cd "$root" || return 1
+  realidx=$(git rev-parse --git-path index)
+  if [ -f "$realidx" ]; then cp "$realidx" "$scratch" || return 1; fi
+  # Only intent-add when there are untracked files: GNU xargs (unlike BSD)
+  # runs the command once even on empty input, so an unguarded pipe would
+  # invoke `git add -N --` with no paths and fail on a clean or tracked-only
+  # tree. The guard skips xargs entirely in that common case. `xargs -0`
+  # propagates a `git add` failure (e.g. a path that vanished mid-run).
+  if [ -n "$(git ls-files --others --exclude-standard -- "${EXCLUDES_LIST[@]}")" ]; then
+    git ls-files --others --exclude-standard -z -- "${EXCLUDES_LIST[@]}" \
+      | GIT_INDEX_FILE="$scratch" xargs -0 git add -N -- 2>/dev/null || return 1
+  fi
+  # Force-include the config even when gitignored (common when the project
+  # gitignores all of .claude/), so its untracked bytes always reach the hash.
+  # -f overrides the ignore; -N keeps it an intent-to-add like the others so
+  # staged and untracked config hash the same way.
+  if [ -f "$CONFIG_PATH" ] \
+     && ! git ls-files --error-unmatch -- "$CONFIG_PATH" >/dev/null 2>&1; then
+    GIT_INDEX_FILE="$scratch" git add -Nf -- "$CONFIG_PATH" 2>/dev/null || return 1
+  fi
+}
+
 # Compute the sha256 of the diff from anchor to the current effective state
-# (anchor→index AND index→working-tree, per path, sorted by path) plus
-# untracked file contents. Returns 0 with hash on stdout; 1 on unrecoverable
-# error (no work tree, no sha tool, pipeline failure); 2 if the anchor is not
-# reachable as a commit or tree in the object database.
+# (anchor→index AND index→working-tree, per path, sorted by path). Returns 0
+# with hash on stdout; 1 on unrecoverable error (no work tree, no sha tool,
+# pipeline failure); 2 if the anchor is not reachable as a commit or tree in
+# the object database.
 #
 # Per-path iteration with sorted ordering is what makes the hash invariant
-# under three different transformations of the same content:
+# under four different transformations of the same content:
 #
 #   1. Committing reviewed content. After commit, --cached <anchor> covers
 #      the committed delta and `git diff` covers what remains uncommitted.
@@ -173,9 +178,20 @@ current_anchor() {
 #      --no-prefix the cached and uncached diff streams produce byte-identical
 #      output for the same content delta, so moving content between staged
 #      and unstaged does not drift the hash.
-#   3. Codex P1 bypass — staging unreviewed content and then restoring the
-#      working tree to the reviewed state. The --cached diff captures the
-#      unreviewed index content, so the hash changes and the gate fires.
+#   3. Staging a reviewed *new* file. An untracked file would otherwise hash
+#      via a different representation than its staged form, so `git add`-ing
+#      it between mark and commit read as drift. To normalize, untracked files
+#      are intent-to-added (`git add -N`) into a throwaway copy of the index
+#      and the index→working-tree segment is diffed against that scratch
+#      index. Intent-to-add makes `git diff` emit a new file exactly as
+#      `git diff --cached` emits a staged add, so untracked, staged, and
+#      committed forms of the same new file all hash identically. The real
+#      index and working tree are never mutated.
+#   4. Codex P1 bypass — staging unreviewed content and then restoring the
+#      working tree to the reviewed state. The --cached diff (against the real
+#      index) captures the unreviewed index content, so the hash changes and
+#      the gate fires. The scratch index covers only the worktree segment, so
+#      it cannot mask an index/worktree divergence.
 #
 # A naïve `--cached anchor` ++ `diff` concatenation breaks property 1: the
 # alphabetical ordering shifts across stream boundaries (e.g. {bar, foo}
@@ -184,7 +200,7 @@ current_anchor() {
 # streams per path keeps the output order stable regardless of which stream
 # a particular file's diff lives in.
 compute_hash_from_anchor() {
-  local root="$1" anchor="$2" sha h kind paths
+  local root="$1" anchor="$2" sha h kind paths scratch rc=0
   git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "review-sentinel: not inside a git work tree" >&2
     return 1
@@ -207,41 +223,41 @@ compute_hash_from_anchor() {
   # which hooks fail-open on, re-opening the bypass.
   git -C "$root" status --porcelain -- "${EXCLUDES_LIST[@]}" >/dev/null 2>&1 || return 2
 
+  # mktemp leaves an empty file, which git rejects as a corrupt index, so it
+  # is removed first; build_scratch_index recreates it. The build runs in a
+  # subshell to contain its `cd`, and its failure is coupled to return 2
+  # (drift → block): a `git diff` against a *missing* GIT_INDEX_FILE silently
+  # reports an empty index and exits 0, so a partial scratch would drop the
+  # entire worktree segment from the hash and yield a stale-looking-but-
+  # passing hash. A build failure must never read as a clean hash.
+  scratch=$(mktemp) || return 1
+  /bin/rm -f "$scratch"
+  if ! ( build_scratch_index "$root" "$scratch" ); then
+    /bin/rm -f "$scratch"
+    return 2
+  fi
+
   h=$(cd "$root" && {
         paths=$({
                   git diff --cached --name-only "$anchor" -- "${EXCLUDES_LIST[@]}"
-                  git diff --name-only -- "${EXCLUDES_LIST[@]}"
+                  GIT_INDEX_FILE="$scratch" git diff --name-only -- "${EXCLUDES_LIST[@]}"
                   # Force-include the config file: user `ignore` patterns
                   # must not hide config edits from the hash.
                   git diff --cached --name-only "$anchor" -- "$CONFIG_PATH"
-                  git diff --name-only -- "$CONFIG_PATH"
+                  GIT_INDEX_FILE="$scratch" git diff --name-only -- "$CONFIG_PATH"
                 } | LC_ALL=C sort -u)
         if [ -n "$paths" ]; then
           while IFS= read -r p; do
             git diff --cached --binary --no-prefix "$anchor" -- "$p"
-            git diff --binary --no-prefix -- "$p"
+            GIT_INDEX_FILE="$scratch" git diff --binary --no-prefix -- "$p"
           done <<< "$paths"
         fi
-        {
-          git ls-files --others --exclude-standard -- "${EXCLUDES_LIST[@]}"
-          # Force-include the config as untracked content even when it's
-          # gitignored (common when the project gitignores all of .claude/).
-          # `ls-files --exclude-standard` and `--others` both honor gitignore,
-          # so a direct `[ -f ]` check is the only way to ensure the file's
-          # bytes always reach the hash input.
-          if [ -f "$CONFIG_PATH" ] \
-             && ! git ls-files --error-unmatch -- "$CONFIG_PATH" >/dev/null 2>&1; then
-            printf '%s\n' "$CONFIG_PATH"
-          fi
-        } | LC_ALL=C sort -u \
-          | while IFS= read -r f; do
-              printf '\n--UNTRACKED:%s--\n' "$f"
-              [ -f "$f" ] && cat -- "$f" 2>/dev/null
-            done
       } 2>/dev/null | $sha 2>/dev/null | cut -d' ' -f1)
   for s in "${PIPESTATUS[@]}"; do
-    [ "$s" -eq 0 ] || return 1
+    [ "$s" -eq 0 ] || rc=1
   done
+  /bin/rm -f "$scratch"
+  [ $rc -eq 0 ] || return 1
   [ -n "$h" ] || return 1
   echo "sha256:$h"
 }
@@ -316,7 +332,40 @@ write_sentinel() {
   return 0
 }
 
-case "$CMD" in
+# Parse args and dispatch. Kept behind the BASH_SOURCE guard below so the file
+# can be sourced (e.g. by bats) to unit-test individual functions without
+# running a subcommand.
+main() {
+  ROOT_OVERRIDE=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --root)
+        [ $# -ge 2 ] || usage
+        ROOT_OVERRIDE="$2"
+        shift 2
+        ;;
+      -h|--help|help)
+        usage
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "review-sentinel: unknown option: $1" >&2
+        usage
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [ $# -ge 1 ] || usage
+  CMD="$1"
+  shift
+
+  case "$CMD" in
   seed|mark)
     PROJECT_ROOT=$(resolve_project_root)
     if [ -z "$PROJECT_ROOT" ]; then
@@ -391,4 +440,9 @@ $HASH" || {
     echo "review-sentinel: unknown subcommand: $CMD" >&2
     usage
     ;;
-esac
+  esac
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

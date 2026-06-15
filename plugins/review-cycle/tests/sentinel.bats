@@ -376,6 +376,51 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+# Same property for a brand-new file: an untracked file marked as reviewed
+# must keep matching once `git add`-ed. Before normalization the untracked
+# form hashed differently from the staged form, so `git add -A` between
+# mark and commit read as drift and blocked the commit.
+@test "check stays 0 when a reviewed untracked file is then staged" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# And it must still match after that file is committed (multi-commit property
+# extends to files first reviewed while untracked).
+@test "check stays 0 after a reviewed untracked file is staged and committed" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  git add foo.txt
+  git commit -q -m "add foo"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# A filename with spaces must survive the NUL-delimited ls-files | xargs -0
+# intent-add path. Without -z/-0 the name would split into two bogus paths.
+@test "check stays 0 when a reviewed untracked file WITH SPACES is staged" {
+  printf 'v1\n' > "my notes.md"
+  "$REVIEW_SENTINEL" mark
+  git add "my notes.md"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+# The motivating case: bookkeeping that `git add -A`s several new files at
+# once must not drift a tree that was marked while they were all untracked.
+@test "check stays 0 when several reviewed untracked files are staged together" {
+  printf 'a\n' > a.txt
+  printf 'b\n' > b.txt
+  printf 'c\n' > c.txt
+  "$REVIEW_SENTINEL" mark
+  git add -A
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
 # Anchor unreachable (history rewrite that drops the marked commit) → drift.
 @test "check exits 1 when anchor is no longer reachable in the object db" {
   echo "v1" > foo.txt

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-06-14
+
+### Fixed
+
+- **A reviewed *new* file no longer reads as drift once `git add`-ed.** An untracked file was hashed via a different representation (a `--UNTRACKED:` content dump) than its staged form (a `git diff --cached` patch), so any `git add`/`git add -A` between marking the sentinel and committing (e.g. routine bead bookkeeping that touches new files) flipped the gate to false drift and blocked the commit. Untracked files are now intent-to-added (`git add -N`) into a throwaway copy of the index, and the index→working-tree segment is diffed against that scratch index, so untracked, staged, and committed forms of the same new file hash identically. The real index and working tree are never mutated, and the index/worktree divergence check that catches the Codex P1 bypass is unaffected (the scratch index covers only the worktree segment). New regression tests cover the untracked→staged and untracked→staged→committed transitions.
+
 ## [0.8.0] - 2026-06-05
 
 Closes the loop on a class of spurious review re-triggers: a pre-commit hook that reformats files at commit time leaves working-tree churn the gate reads as fresh unreviewed drift, forcing a needless second review.
