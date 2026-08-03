@@ -168,3 +168,111 @@ EOF
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+# Global-option and subshell commit shapes must reach the gate — these are
+# the detection bypasses closed in review-cycle 0.8.2; the regex here is a
+# synced twin of that hook's GIT_COMMIT_RE.
+
+run_gate_jq() {
+  local cmd="$1"
+  jq -n --arg cmd "$cmd" --arg cwd "$TEST_REPO" \
+    '{tool_input: {command: $cmd}, cwd: $cwd}' \
+    | CLAUDE_PROJECT_DIR="$TEST_REPO" bash "$GATE"
+}
+
+stage_unbumped_runtime() {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  git add plugins/foo/hooks/runtime.sh
+}
+
+@test "BLOCKS git -C <repo> commit without version bump" {
+  stage_unbumped_runtime
+  run run_gate_jq "git -C \"$TEST_REPO\" commit -m x"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS git -C <repo> commit from outside the repo (no CLAUDE_PROJECT_DIR)" {
+  stage_unbumped_runtime
+  cd "$BATS_TEST_TMPDIR"
+  run bash -c "jq -n --arg cmd 'git -C $TEST_REPO commit -m x' --arg cwd '$BATS_TEST_TMPDIR' \
+    '{tool_input: {command: \$cmd}, cwd: \$cwd}' | bash '$GATE'"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS git -c with quoted spaced value commit without version bump" {
+  stage_unbumped_runtime
+  run run_gate_jq "git -c user.name='Jace Babin' commit -m x"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS subshell (git commit) without version bump" {
+  stage_unbumped_runtime
+  run run_gate_jq "(git commit -m x)"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS git --git-dir --work-tree commit with separate arguments" {
+  stage_unbumped_runtime
+  run run_gate_jq "git --git-dir \"$TEST_REPO/.git\" --work-tree \"$TEST_REPO\" commit -m x"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+make_other_repo() {
+  mkdir -p "$BATS_TEST_TMPDIR/otherrepo"
+  local r
+  r="$(cd "$BATS_TEST_TMPDIR/otherrepo" && pwd -P)"
+  git -C "$r" init -q
+  git -C "$r" config user.email "test@example.com"
+  git -C "$r" config user.name "Test"
+  git -C "$r" commit --allow-empty -q -m "init"
+  echo "$r"
+}
+
+@test "BLOCKS backslash-continued git \\ commit" {
+  stage_unbumped_runtime
+  run run_gate_jq "git \\
+commit -m x"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "prose mentioning git -C another repo does not steer the gate" {
+  stage_unbumped_runtime
+  local other
+  other=$(make_other_repo)
+  run run_gate_jq "echo run git -C $other commit later ; git commit -m x"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "an earlier git -C commit does not exempt a second plain commit" {
+  stage_unbumped_runtime
+  local other
+  other=$(make_other_repo)
+  run run_gate_jq "git -C $other commit --allow-empty -m a && git commit -m x"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS relative -C resolved against the payload cwd" {
+  stage_unbumped_runtime
+  cd "$BATS_TEST_TMPDIR"
+  run bash -c "jq -n --arg cmd 'git -C repo commit -m x' --arg cwd '$BATS_TEST_TMPDIR' \
+    '{tool_input: {command: \$cmd}, cwd: \$cwd}' | bash '$GATE'"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS git -C . when the payload cwd is the repo but the hook cwd is elsewhere" {
+  stage_unbumped_runtime
+  cd "$BATS_TEST_TMPDIR"
+  run bash -c "jq -n --arg cmd 'git -C . commit -m x' --arg cwd '$TEST_REPO' \
+    '{tool_input: {command: \$cmd}, cwd: \$cwd}' | bash '$GATE'"
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
