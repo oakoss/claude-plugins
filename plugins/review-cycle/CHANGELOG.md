@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-08-03
+
+### Fixed
+
+- **Chained `review-sentinel mark && git commit` is no longer denied.** The commit-gate hook fires before the whole Bash chain executes, so it evaluated the sentinel against the pre-mark state and blocked the chained form of the `/accept` flow, forcing mark and commit into separate Bash calls. The pass-through is strict about what qualifies: the command must contain exactly one `git commit`, and a bare `mark` (no `--root`) at a command position, with the binary name at a path boundary, must be joined to it by `&&` with nothing in between — so the commit only runs if the mark actually succeeded. `;`, `||`, and newline separators stay denied (they'd let a failed or short-circuited mark's commit through — including `||` anywhere before the mark), as do commands between mark and commit, a mark after the commit, and extra commits after a marked one. Shell comments are stripped before the prefix match, while the commit count is taken from the raw bytes so a quoted `#` (e.g. `-m "fix #12"`) can never hide a later commit; the single-commit requirement keeps quoted or heredoc text containing the phrase from standing in for the real commit. New `commit-gate.bats` suite (57 tests) pins both directions.
+- **`git -C <repo> commit` (and other global-option forms like `git -c k=v commit`) no longer slip past the gate.** The commit detection only matched `commit` immediately after `git`, so the natural cd-free shape `git -C <path> commit` — and subshell/backtick forms like `(git commit …)` — bypassed the sentinel check entirely. Detection now skips global options in every real shape — quoted values with spaces (`-c user.name='A B'`, `-C "/my repo"`), separate-argument long options (`--git-dir <path> --work-tree <path>`) — and recognizes `(`/backtick command openers. The `-C` path feeds project-root resolution the way a leading `cd` already did: extracted only when the command holds a single commit invocation (prose mentioning `git -C` cannot steer the gate), last `-C` wins to match git, it outranks `cd` (the `-C` decides where the commit lands), and relative paths resolve against the cd target or payload cwd.
+
 ## [0.8.1] - 2026-06-14
 
 ### Fixed

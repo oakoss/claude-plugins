@@ -47,6 +47,14 @@ Report the exit code to the user:
 git commit                 → gate passes, commit succeeds
 ```
 
+Mark and commit may also be chained in one Bash call, in exactly this shape — a bare `mark` (no `--root`) joined to `git commit` by `&&` with nothing in between:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark && git commit -m "..."
+```
+
+Looser chains are denied by the gate: `;`, `||`, or a bare newline as the separator, any command between mark and commit, git options on the chained commit (`git -C <path> commit`, `git -c k=v commit`), or more than one `git commit` in the same Bash call. When in doubt, run mark and commit as separate Bash calls.
+
 vs the full cycle:
 
 ```
