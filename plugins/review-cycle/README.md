@@ -107,6 +107,27 @@ Fires when Claude finishes a turn. If there are uncommitted changes whose hash d
 
 Fires before any Bash command. If the command is `git commit` and the sentinel doesn't match the current state, blocks the commit. This is the deterministic enforcement layer — Claude cannot bypass it with a CLAUDE.md rule or memory.
 
+A chained `review-sentinel mark && git commit` (the `/accept` flow) passes when it is exactly that shape: one `git commit` in the call, bare `mark` immediately `&&`-joined to it. The lexical rules and their rationale live in `hooks/lib/command-parse.sh`.
+
+## Optional: commit-time enforcement (`install-hook`)
+
+The PreToolUse gate evaluates before a Bash chain runs, on command text. That leaves structural blind spots: a chain that edits files after the check and then commits, or commits issued from a terminal outside the Claude session. For repos where you want ground-truth enforcement, install a git pre-commit hook:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" install-hook
+```
+
+The hook runs `review-sentinel check` inside the commit — after everything earlier in the chain has executed — and blocks on drift. Properties:
+
+- **Humans are never gated.** The hook exits immediately unless `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT` is set, so it only fires for agent sessions. Commits from your own terminal are untouched.
+- **Opt-outs are honored.** The global kill-switch (`~/.claude/.disable-review-gate`), the per-project marker (`.claude/.no-review-gate`), and `.claude/review-cycle.json` `{"disabled": true}` all disable the installed hook with the same precedence as the PreToolUse gate.
+- **Fail-open by design.** A missing plugin binary (teammate's machine, uninstall) or a `check` error exits 0.
+- **Hook-manager aware.** Lefthook repos get a helper script plus a lefthook job (direct `.git/hooks` writes get clobbered by `lefthook install`; the config is only auto-edited when it has no `pre-commit` key yet). Repos using pre-commit or simple-git-hooks get the helper plus a printed config snippet — their committed config is never auto-edited. Husky and other `core.hooksPath` setups are handled implicitly. Under plain git, a pre-existing hook is relocated to `pre-commit.local` and chained first with its exit status preserved — appending to it instead could swallow its failures, sit dead behind an `exit 0`, or corrupt a non-shell hook. A hook file that is *tracked by git* (husky commits `.husky/`) is never rewritten — you get the helper plus a one-line snippet to add yourself, so no machine-specific path ever lands in a committed file.
+- **Worktree-safe.** The hooks path is resolved through `git rev-parse --git-path hooks`, so linked worktrees are covered.
+- **Removable.** `review-sentinel uninstall-hook` removes the gate, restores a relocated `pre-commit.local`, and deletes the helper script.
+
+The PreToolUse gate stays active either way — it fails fast (before a doomed chain runs its side effects) while the git hook is the accurate backstop. Per commit, the double check costs a few tens of milliseconds.
+
 ## Required configuration
 
 Two Codex settings:

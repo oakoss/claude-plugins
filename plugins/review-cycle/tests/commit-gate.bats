@@ -368,6 +368,13 @@ git commit -am 'actual'"
   assert_deny
 }
 
+@test "backslash-continued git commit is detected" {
+  make_drift
+  run run_hook 'git \
+commit -am "msg"'
+  assert_deny
+}
+
 @test "decoy token git committed-x does not stand in for the real commit" {
   make_drift
   run run_hook "\"$REVIEW_SENTINEL\" mark && git committed-x ; git commit -m 'msg'"
