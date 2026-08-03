@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-03
+
+### Added
+
+- **`review-sentinel install-hook`: opt-in commit-time enforcement.** Installs a git pre-commit hook that runs `review-sentinel check` inside the commit — closing the two structural blind spots of PreToolUse-time evaluation: chains that re-drift the tree after the check (`sed -i … && git commit -a`), and agent commits from outside the session's Bash tool. Only agent sessions are gated (`CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT` env guard — humans are never blocked); the kill-switch and per-project opt-outs are honored with the same precedence as the PreToolUse gate; a missing binary or check error fails open. Manager-aware installation: lefthook repos get a guarded helper script plus a lefthook job (config auto-edited only when it has no `pre-commit` key, append failures reported), pre-commit and simple-git-hooks repos get the helper plus a printed snippet (committed config never auto-edited), husky/`core.hooksPath` setups are handled implicitly via `git rev-parse --git-path hooks`. Under plain git a pre-existing hook is relocated to `pre-commit.local` and chained first with its exit status preserved — appending would swallow its failures or sit dead behind an `exit 0` — while a git-tracked hook file (husky commits `.husky/`) is never rewritten: helper plus snippet instead, so no machine-specific path lands in committed files. The embedded binary path is quote-escaped so unusual install paths can't break the hook. `review-sentinel uninstall-hook` reverses everything, restoring a relocated hook. Worktree commits are covered. The PreToolUse gate stays active as the zero-setup default everywhere; the git hook is added depth, never a dependency. New `install-hook.bats` suite (41 tests).
+- **SessionStart notes missing commit-time enforcement, context-only.** When the gate is active and no commit-time hook is installed, session-init emits one line into model context describing `install-hook` — explicitly marked not to be suggested unprompted.
+
+### Changed
+
+- **Lexical analysis extracted to `hooks/lib/command-parse.sh`.** The commit-detection regex, commit counting, sanctioned-mark-chain decision, and `cd`/`-C` extraction now live in one sourceable lib of pure string functions, unit-tested without git repos (new `command-parse.bats`, 23 tests). `commit-gate.sh` shrinks to orchestration. The policy rationale moved next to the code that implements it. Marketplace repos' version-bump gates can source the same lib so twin definitions cannot drift.
+- **Commit detection runs on the joined command view.** A backslash-continued `git \<newline>commit` is one invocation to bash and is now one invocation to the gate; previously the per-line entry grep missed it entirely.
+
 ## [0.8.2] - 2026-08-03
 
 ### Fixed

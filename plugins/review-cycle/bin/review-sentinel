@@ -14,6 +14,21 @@
 #                empty tree for unborn HEAD) to stdout.
 #   paths        Print sentinel and opt-out paths (relative to project root,
 #                one per line) for use in .gitignore.
+#   install-hook Install commit-time enforcement as a git pre-commit hook.
+#                Only agent sessions are gated (CLAUDECODE env guard); the
+#                kill-switch and per-project opt-outs are honored; humans
+#                and repos without this binary fail open. Manager-aware:
+#                lefthook repos get a helper script plus a lefthook job
+#                (direct .git/hooks writes get clobbered by `lefthook
+#                install`); pre-commit and simple-git-hooks repos get the
+#                helper plus a printed snippet (their committed config is
+#                not auto-edited); husky and other core.hooksPath setups
+#                are handled implicitly because the hooks dir is resolved
+#                via `git rev-parse --git-path hooks`; plain git gets a
+#                marker-managed hook, with any pre-existing hook relocated
+#                to pre-commit.local and chained first, status preserved.
+#   uninstall-hook  Remove the gate: restore a relocated .local hook and
+#                delete the helper script.
 #
 # Format on disk: two lines.
 #   anchor:<40-hex-sha>     ← HEAD SHA at mark time, or the empty-tree SHA
@@ -50,6 +65,8 @@ subcommands:
   match         exit 0=exact match only (no clean-tree shortcut)
   current-hash  print current state
   paths         print gitignore-relative paths
+  install-hook  install commit-time git pre-commit enforcement
+  uninstall-hook  remove the gate, restoring any relocated hook
 EOF
   exit 2
 }
@@ -332,6 +349,341 @@ write_sentinel() {
   return 0
 }
 
+HOOK_MARK_BEGIN="# >>> review-cycle gate >>>"
+HOOK_MARK_END="# <<< review-cycle gate <<<"
+
+# Emit the pre-commit gate body (POSIX sh). $1 is the absolute path of this
+# binary at install time, embedded single-quoted with '\'' escaping so a $
+# or " in the path can neither re-expand at hook runtime (silent fail-open)
+# nor break the generated script (blocking humans with a bare syntax error).
+#
+# Behavior of the generated hook:
+#   - A pre-existing hook relocated by the installer to <hook>.local runs
+#     first with its exit status preserved; the gate only runs after it
+#     passed. Under the standalone helper $0.local never exists, so the
+#     chain is a no-op there.
+#   - The env guard means humans are never gated; the kill-switch and
+#     per-project opt-outs are honored next, mirroring hooks/lib/gate.sh
+#     precedence (a proper-boolean config `disabled` wins; otherwise the
+#     legacy marker decides).
+#   - A missing binary (plugin uninstalled, different machine) and check's
+#     error exit (rc=2) both fail open.
+#   - The check runs in a subshell with git's hook-time env vars cleared:
+#     GIT_INDEX_FILE may point at a partial-commit temp index and a
+#     relative GIT_DIR would skew hash computation. cwd is the worktree top
+#     for pre-commit hooks, so --root . resolves the right repo even when
+#     CLAUDE_PROJECT_DIR points elsewhere.
+hook_block() {
+  local esc_self
+  esc_self=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+  cat <<EOF
+$HOOK_MARK_BEGIN
+# Installed by 'review-sentinel install-hook' (review-cycle plugin).
+# Blocks agent-session commits of unreviewed changes at commit time.
+# Do not edit between markers; re-run install-hook to regenerate, or
+# run 'review-sentinel uninstall-hook' to remove.
+if [ -x "\$0.local" ]; then
+  "\$0.local" "\$@"
+  rc_local=\$?
+  [ "\$rc_local" -ne 0 ] && exit "\$rc_local"
+fi
+review_cycle_gate() {
+  [ -n "\${CLAUDECODE:-}\${CLAUDE_CODE_ENTRYPOINT:-}" ] || return 0
+  [ -f "\$HOME/.claude/.disable-review-gate" ] && return 0
+  cfg=".claude/review-cycle.json"
+  if [ -f "\$cfg" ] && command -v jq >/dev/null 2>&1 \\
+     && jq -e '(.disabled | type) == "boolean"' "\$cfg" >/dev/null 2>&1; then
+    jq -e '.disabled == true' "\$cfg" >/dev/null 2>&1 && return 0
+  elif [ -f .claude/.no-review-gate ]; then
+    return 0
+  fi
+  rs='$esc_self'
+  [ -x "\$rs" ] || return 0
+  ( unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; exec "\$rs" --root . check )
+  case \$? in
+    1)
+      echo "review-cycle: unreviewed changes — run /review-cycle:review or /review-cycle:accept, then commit again" >&2
+      return 1
+      ;;
+    *) return 0 ;;
+  esac
+}
+review_cycle_gate || exit 1
+$HOOK_MARK_END
+EOF
+}
+
+# Create or refresh hook file $1 with managed content $2. A pre-existing
+# foreign hook is relocated to $1.local and chained by the managed block —
+# appending shell text to a foreign hook could swallow its failure status
+# (its last fallible command no longer decides the exit), sit dead behind
+# an explicit `exit 0`, or corrupt a non-shell interpreter's script. When
+# the file carries our marker, the managed block is stripped first and any
+# nontrivial remainder (an append-era install, hand-added lines) is
+# relocated the same way rather than truncated.
+write_hook_file() {
+  local target="$1" block="$2" moved=0 tmp
+  if [ -f "$target" ]; then
+    if grep -qF "$HOOK_MARK_BEGIN" "$target"; then
+      tmp="${target}.tmp.$$"
+      awk -v begin="$HOOK_MARK_BEGIN" -v end="$HOOK_MARK_END" '
+        $0 == begin {skip=1; next}
+        $0 == end {skip=0; next}
+        !skip' "$target" > "$tmp" || { /bin/rm -f "$tmp"; return 1; }
+      if grep -qEv '^#!/bin/sh$|^#!/usr/bin/env sh$|^[[:space:]]*$' "$tmp"; then
+        if [ -e "${target}.local" ]; then
+          /bin/rm -f "$tmp"
+          echo "review-sentinel: both $target and ${target}.local hold non-managed content; resolve manually before installing" >&2
+          return 2
+        fi
+        mv "$tmp" "${target}.local" || { /bin/rm -f "$tmp"; return 1; }
+        chmod +x "${target}.local" 2>/dev/null
+        moved=1
+        echo "review-sentinel: non-managed hook content moved to ${target}.local; it still runs first"
+      else
+        /bin/rm -f "$tmp"
+      fi
+    else
+      if [ -e "${target}.local" ]; then
+        echo "review-sentinel: both $target and ${target}.local exist; resolve manually before installing" >&2
+        return 2
+      fi
+      mv "$target" "${target}.local" || {
+        echo "review-sentinel: cannot relocate $target" >&2
+        return 2
+      }
+      moved=1
+      if [ -x "${target}.local" ]; then
+        echo "review-sentinel: existing hook moved to ${target}.local; it still runs first and its failures still block"
+      else
+        echo "review-sentinel: existing hook moved to ${target}.local; it is not executable, so the chain skips it (git ignored it too)" >&2
+      fi
+    fi
+  fi
+  # A failed write or chmod must never report success — git skips a
+  # non-executable hook, which would also strand a just-relocated foreign
+  # hook. Roll the relocation back on failure.
+  if ! printf '#!/bin/sh\n%s\n' "$block" > "$target" || ! chmod +x "$target"; then
+    echo "review-sentinel: cannot install executable hook at $target" >&2
+    /bin/rm -f "$target"
+    [ "$moved" -eq 1 ] && mv "${target}.local" "$target"
+    return 1
+  fi
+  return 0
+}
+
+uninstall_hook() {
+  local root="$1" hooks_dir target removed=0 tmp
+  hooks_dir=$(git -C "$root" rev-parse --git-path hooks 2>/dev/null) || {
+    echo "review-sentinel: cannot resolve hooks dir" >&2
+    return 2
+  }
+  case "$hooks_dir" in
+    /*) ;;
+    *) hooks_dir="$root/$hooks_dir" ;;
+  esac
+  target="$hooks_dir/pre-commit"
+  if [ -f "$target" ] && grep -qF "$HOOK_MARK_BEGIN" "$target"; then
+    # Mirror write_hook_file: content outside the markers is not ours and
+    # must survive the uninstall too.
+    tmp="${target}.tmp.$$"
+    awk -v begin="$HOOK_MARK_BEGIN" -v end="$HOOK_MARK_END" '
+      $0 == begin {skip=1; next}
+      $0 == end {skip=0; next}
+      !skip' "$target" > "$tmp" || {
+      /bin/rm -f "$tmp"
+      echo "review-sentinel: cannot update $target (hooks dir not writable?)" >&2
+      return 2
+    }
+    if grep -qEv '^#!/bin/sh$|^#!/usr/bin/env sh$|^[[:space:]]*$' "$tmp"; then
+      mv "$tmp" "$target" || {
+        /bin/rm -f "$tmp"
+        echo "review-sentinel: cannot rewrite $target" >&2
+        return 2
+      }
+      chmod +x "$target" 2>/dev/null
+      echo "review-sentinel: gate removed from $target; non-managed hook content kept"
+      if [ -e "${target}.local" ]; then
+        echo "review-sentinel: ${target}.local also exists and is NOT running; merge or restore it manually" >&2
+      fi
+    elif [ -f "${target}.local" ]; then
+      /bin/rm -f "$tmp"
+      mv "${target}.local" "$target" || {
+        echo "review-sentinel: cannot restore ${target}.local" >&2
+        return 2
+      }
+      echo "review-sentinel: gate removed; original hook restored at $target"
+    else
+      /bin/rm -f "$tmp"
+      /bin/rm -f "$target" || {
+        echo "review-sentinel: cannot remove $target" >&2
+        return 2
+      }
+      echo "review-sentinel: gate removed from $target"
+    fi
+    removed=1
+  elif [ -e "${target}.local" ]; then
+    echo "review-sentinel: $target is not managed by review-cycle but ${target}.local exists — a hook relocated by install-hook is currently NOT running; restore it with: mv ${target}.local $target" >&2
+  fi
+  if [ -f "$root/$HELPER_REL" ]; then
+    /bin/rm -f "$root/$HELPER_REL" || {
+      echo "review-sentinel: cannot remove $root/$HELPER_REL" >&2
+      return 2
+    }
+    echo "review-sentinel: helper removed ($HELPER_REL); any lefthook/pre-commit job referencing it is guarded and now a no-op — remove the config entry at leisure"
+    removed=1
+  fi
+  [ $removed -eq 0 ] && echo "review-sentinel: nothing to uninstall"
+  return 0
+}
+
+# The committed-config managers get a helper script plus a snippet; the
+# helper is the same gate body, so the snippet's entry works verbatim.
+HELPER_REL=".claude/review-cycle-pre-commit.sh"
+
+write_helper() {
+  local root="$1" self="$2"
+  mkdir -p "$root/.claude" || return 1
+  printf '#!/bin/sh\n%s\n' "$(hook_block "$self")" > "$root/$HELPER_REL" || return 1
+  chmod +x "$root/$HELPER_REL" 2>/dev/null
+  return 0
+}
+
+install_hook() {
+  local root="$1" self="$2" f config hooks_dir target
+  # Lefthook first: `lefthook install` clobbers .git/hooks, so enforcement
+  # must ride its config. The job's run is guarded so teammates without
+  # the helper (e.g. .claude/ gitignored) are never broken.
+  config=""
+  for f in lefthook.yml lefthook.yaml .lefthook.yml .lefthook.yaml; do
+    [ -f "$root/$f" ] && { config="$root/$f"; break; }
+  done
+  if [ -n "$config" ]; then
+    write_helper "$root" "$self" || {
+      echo "review-sentinel: cannot write $HELPER_REL" >&2
+      return 2
+    }
+    if grep -qF "review-cycle-pre-commit.sh" "$config"; then
+      echo "review-sentinel: lefthook job already present in $(basename "$config"); helper refreshed at $HELPER_REL"
+      return 0
+    fi
+    if grep -qE '^pre-commit:' "$config"; then
+      cat <<EOF
+review-sentinel: helper written to $HELPER_REL.
+$(basename "$config") already defines pre-commit; add this job to it manually:
+
+  pre-commit:
+    commands:
+      review-cycle:
+        run: sh -c 'test ! -f $HELPER_REL || sh $HELPER_REL'
+EOF
+      return 0
+    fi
+    if ! cat >> "$config" <<EOF
+
+pre-commit:
+  commands:
+    review-cycle:
+      run: sh -c 'test ! -f $HELPER_REL || sh $HELPER_REL'
+EOF
+    then
+      echo "review-sentinel: cannot append to $(basename "$config")" >&2
+      return 2
+    fi
+    echo "review-sentinel: helper written to $HELPER_REL; pre-commit job appended to $(basename "$config") (run 'lefthook install' to activate)"
+    return 0
+  fi
+
+  # pre-commit (the Python tool): its generated .git/hooks/pre-commit execs
+  # the runtime, so appended code is dead, and the file is regenerated by
+  # `pre-commit install`. A repo-local hook entry in its committed config
+  # is the only correct integration; print it, never auto-edit.
+  if [ -f "$root/.pre-commit-config.yaml" ]; then
+    write_helper "$root" "$self" || {
+      echo "review-sentinel: cannot write $HELPER_REL" >&2
+      return 2
+    }
+    cat <<EOF
+review-sentinel: helper written to $HELPER_REL.
+This repo uses pre-commit; add this to .pre-commit-config.yaml:
+
+  - repo: local
+    hooks:
+      - id: review-cycle
+        name: review-cycle gate
+        entry: sh $HELPER_REL
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+EOF
+    return 0
+  fi
+
+  # simple-git-hooks: clobbers .git/hooks on install and supports one
+  # command per hook, so chaining must go through its package.json config.
+  if [ -f "$root/package.json" ] && grep -q '"simple-git-hooks"' "$root/package.json"; then
+    write_helper "$root" "$self" || {
+      echo "review-sentinel: cannot write $HELPER_REL" >&2
+      return 2
+    }
+    cat <<EOF
+review-sentinel: helper written to $HELPER_REL.
+This repo uses simple-git-hooks; chain the gate into its pre-commit in
+package.json, e.g.:
+
+  "simple-git-hooks": {
+    "pre-commit": "<existing command> && sh $HELPER_REL"
+  }
+
+then re-run: npx simple-git-hooks
+EOF
+    return 0
+  fi
+
+  # Plain git — including husky and anything else using core.hooksPath,
+  # which --git-path resolves for us (husky hooks are plain shell, so the
+  # marker-managed append composes with them).
+  hooks_dir=$(git -C "$root" rev-parse --git-path hooks 2>/dev/null) || {
+    echo "review-sentinel: cannot resolve hooks dir for $root" >&2
+    return 2
+  }
+  case "$hooks_dir" in
+    /*) ;;
+    *) hooks_dir="$root/$hooks_dir" ;;
+  esac
+  mkdir -p "$hooks_dir" || {
+    echo "review-sentinel: cannot create $hooks_dir" >&2
+    return 2
+  }
+  target="$hooks_dir/pre-commit"
+  # A tracked hook file (husky commits .husky/) is team-owned config;
+  # rewriting it would bake a machine-specific path into a committed file
+  # and strand the team's hook in an untracked .local. Same rule as the
+  # other committed-config managers: helper plus snippet, never auto-edit.
+  if [ -f "$target" ] && ! grep -qF "$HOOK_MARK_BEGIN" "$target" \
+     && git -C "$root" ls-files --error-unmatch -- "$target" >/dev/null 2>&1; then
+    write_helper "$root" "$self" || {
+      echo "review-sentinel: cannot write $HELPER_REL" >&2
+      return 2
+    }
+    cat <<EOF
+review-sentinel: helper written to $HELPER_REL.
+$target is tracked by git (hook-manager config); not auto-editing it.
+Add this line to it manually:
+
+  sh -c 'test ! -f $HELPER_REL || sh $HELPER_REL'
+EOF
+    return 0
+  fi
+  write_hook_file "$target" "$(hook_block "$self")" || {
+    RC=$?
+    [ "$RC" -eq 2 ] || echo "review-sentinel: cannot write $target" >&2
+    return 2
+  }
+  echo "review-sentinel: commit-time gate installed at $target"
+  return 0
+}
+
 # Parse args and dispatch. Kept behind the BASH_SOURCE guard below so the file
 # can be sourced (e.g. by bats) to unit-test individual functions without
 # running a subcommand.
@@ -434,6 +786,27 @@ $HASH" || {
     echo ".claude/.review-mark"
     echo ".claude/.no-review-gate"
     exit 0
+    ;;
+
+  install-hook)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 1
+    fi
+    SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+    install_hook "$PROJECT_ROOT" "$SELF"
+    exit $?
+    ;;
+
+  uninstall-hook)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 1
+    fi
+    uninstall_hook "$PROJECT_ROOT"
+    exit $?
     ;;
 
   *)

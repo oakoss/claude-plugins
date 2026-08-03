@@ -28,6 +28,34 @@ PROJECT_ROOT=$(gate_should_run) || exit 0
 SENTINEL_FILE="$PROJECT_ROOT/.claude/.review-mark"
 REVIEW_SENTINEL="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
 
+# SessionStart stdout lands in the model's context, not in front of the
+# user, so this is capability information for the model — explicitly not a
+# nag to relay. "Installed" needs evidence of wiring, not just the helper
+# file: on the pre-commit/simple-git-hooks paths install-hook only prints a
+# snippet, so an un-referenced helper enforces nothing and must not silence
+# the note. Called on every startup exit path, including legacy-sentinel
+# migration.
+emit_install_hook_note() {
+  local wired=0 hooks_dir cfg
+  hooks_dir=$(git -C "$PROJECT_ROOT" rev-parse --git-path hooks 2>/dev/null)
+  case "$hooks_dir" in
+    /*) ;;
+    *) hooks_dir="$PROJECT_ROOT/$hooks_dir" ;;
+  esac
+  grep -qsF '>>> review-cycle gate >>>' "$hooks_dir/pre-commit" && wired=1
+  if [ "$wired" -eq 0 ] && [ -f "$PROJECT_ROOT/.claude/review-cycle-pre-commit.sh" ]; then
+    for cfg in lefthook.yml lefthook.yaml .lefthook.yml .lefthook.yaml .pre-commit-config.yaml package.json; do
+      if grep -qsF 'review-cycle-pre-commit.sh' "$PROJECT_ROOT/$cfg"; then
+        wired=1
+        break
+      fi
+    done
+  fi
+  if [ "$wired" -eq 0 ]; then
+    echo "review-cycle: commit-time git hook not installed in this repo. If the user asks for deeper enforcement, \"\${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel\" install-hook adds an agent-only pre-commit check (humans are never gated). Do not suggest it unprompted."
+  fi
+}
+
 # Computes the 0.5.x-format hash (bare 64-hex, no prefix) for migration only.
 compute_legacy_hash() {
   local root="$1" sha
@@ -81,6 +109,7 @@ if [ -f "$SENTINEL_FILE" ]; then
     elif [ "$CURRENT_BARE" = "$STORED_BARE" ]; then
       "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
     fi
+    emit_install_hook_note
     exit 0
   fi
 fi
@@ -95,4 +124,6 @@ if [ ! -f "$SENTINEL_FILE" ]; then
 elif "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" match >/dev/null 2>&1; then
   "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
 fi
+
+emit_install_hook_note
 exit 0

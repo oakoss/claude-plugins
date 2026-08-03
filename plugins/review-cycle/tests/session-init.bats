@@ -185,3 +185,29 @@ run_session_init() {
   run_session_init
   [ -f "$TEST_REPO/.claude/.review-mark" ]
 }
+
+@test "session-init emits the install-hook context note when no commit-time hook exists" {
+  run run_session_init
+  [[ "$output" == *"commit-time git hook not installed"* ]]
+}
+
+@test "session-init stays quiet about install-hook when the git hook is installed" {
+  "$PLUGIN_ROOT/bin/review-sentinel" --root "$TEST_REPO" install-hook >/dev/null
+  run run_session_init
+  [[ "$output" != *"commit-time git hook not installed"* ]]
+}
+
+@test "session-init still emits the note when the helper exists but nothing references it" {
+  mkdir -p "$TEST_REPO/.claude"
+  touch "$TEST_REPO/.claude/review-cycle-pre-commit.sh"
+  run run_session_init
+  [[ "$output" == *"commit-time git hook not installed"* ]]
+}
+
+@test "session-init stays quiet when the helper is wired into lefthook config" {
+  mkdir -p "$TEST_REPO/.claude"
+  touch "$TEST_REPO/.claude/review-cycle-pre-commit.sh"
+  printf 'pre-commit:\n  commands:\n    review-cycle:\n      run: sh .claude/review-cycle-pre-commit.sh\n' > "$TEST_REPO/lefthook.yml"
+  run run_session_init
+  [[ "$output" != *"commit-time git hook not installed"* ]]
+}
