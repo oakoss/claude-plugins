@@ -85,12 +85,11 @@ jobs:
       # both runners is deliberate: the wrapper's process handling is the part
       # that differs between Linux and macOS.
       #
-      # One suite per invocation, not a single whole-repo run: the wrapper
-      # force-kills bats once it believes every test has reported, and across
-      # multiple suites it races, returning 330-347 of 349 tests non-
-      # deterministically with no failure reported. Each suite's TAP plan is
-      # checked against its result count so a truncated run fails here rather
-      # than passing as a shorter green run.
+      # One suite per invocation rather than a single whole-repo run, for
+      # per-suite failure attribution and to keep each run comfortably inside
+      # the wrapper's stall timeout. The plan-vs-result check is defence in
+      # depth: the wrapper already exits 2 on a short run, so this would only
+      # catch a regression in that reporting.
       - name: Run bats suites
         run: |
           status=0
