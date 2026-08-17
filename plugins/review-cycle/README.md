@@ -60,7 +60,9 @@ Idempotent — safe to run multiple times. Replaces the manual setup steps below
 
 ### `/review-cycle:review`
 
-The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until clean (max 4 iterations by default), surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and updates the sentinel.
+The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until clean, surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and updates the sentinel.
+
+The apparatus scales to the diff: light diffs (docs-only, or ~25 changed lines or fewer of anything) get Codex + the code reviewer with a 2-iteration cap; everything else gets the full conditional fan-out (max 4 iterations). Cleanup is a separate, size-only decision — inline under ~150 changed lines, the cleanup agent above that, whatever the tier. Iterations whose fixes were mechanical are verified by self-check against the findings list instead of a fresh reviewer fan-out, and a reviewer that stalls is nudged once, then dropped and named in the summary rather than holding the cycle hostage.
 
 Arguments are natural language — no flags:
 
@@ -101,13 +103,20 @@ Side effect: dependency bumps or IDE edits between Claude sessions (after a clea
 
 ### Stop
 
-Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:review`. Fail-open on any error.
+Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:review`. Fail-open on any error. Two release valves keep the block from becoming ceremony:
+
+- **A running cycle doesn't re-trigger the gate.** The review cycle writes `.claude/.review-in-progress` at fan-out, letting turns end while background reviewers run (their completion notifications re-wake the agent — no sleep-loop workarounds). The marker is cleared when the cycle marks the sentinel; a stale marker from a crashed cycle (over 60 minutes old) is removed and ignored.
+- **Blocks once per drift state.** The gate records the state hash it blocked on; a later stop on the identical state passes with a warning instead of re-blocking, so a user-directed "keep going, review at the end" batches naturally instead of hard-looping. This relaxes only *when* review happens — the commit gate still makes review non-optional before any commit.
 
 ### PreToolUse (Bash matcher)
 
 Fires before any Bash command. If the command is `git commit` and the sentinel doesn't match the current state, blocks the commit. This is the deterministic enforcement layer — Claude cannot bypass it with a CLAUDE.md rule or memory.
 
 A chained `review-sentinel mark && git commit` (the `/accept` flow) passes when it is exactly that shape: one `git commit` in the call, bare `mark` immediately `&&`-joined to it. The lexical rules and their rationale live in `hooks/lib/command-parse.sh`.
+
+### PostToolUse (Write|Edit|MultiEdit matcher)
+
+Fires after every file write. Scans for high-confidence comment slop — section markers, restate-the-code phrasings, hedge prefixes, ticketless TODOs — plus a comment-density check on the text just written (4+ comment lines making up ≥30% of a code edit; a Write payload's shebang and leading header comment block are exempt, since a new file's legitimate header is not an edit). On a hit it injects a directive to fix the comments immediately with a follow-up Edit, so slop is caught at generation time rather than waiting for the review cycle. Never blocks. Prose files (`.md`, `.txt`, …) are skipped entirely — `#` is a heading there, and prose cleanup belongs to de-slopify — and comment-carried config formats (`.yml`, `.toml`, …) are exempt from the density check.
 
 ## Optional: commit-time enforcement (`install-hook`)
 
@@ -194,7 +203,7 @@ The gate skips paths that are state or preferences rather than reviewable code, 
 
 - Agent task trackers: `.beads/`, `.trekker/`
 - IDE state: `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`
-- Gate's own state: `.claude/.review-mark`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
+- Gate's own state: `.claude/.review-mark`, `.claude/.review-in-progress`, `.claude/.review-stop-block`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
 
 These directories are excluded at any depth, so a monorepo `subproject/.beads/` is skipped too. `/review-cycle:review` still works manually against excluded paths if you want a pass.
 
@@ -220,10 +229,12 @@ Remove the file to re-enable.
 
 ### Gitignore the sentinel
 
-The sentinel is per-project state, not source. Add to your project's `.gitignore`:
+The sentinel and the Stop gate's markers are per-project state, not source. Add to your project's `.gitignore` (`/review-cycle:init` does this, sourcing the list from `review-sentinel paths`; installs that ran init before 0.10.0 should re-run it once to pick up the marker paths):
 
 ```
 .claude/.review-mark
+.claude/.review-in-progress
+.claude/.review-stop-block
 ```
 
 The config file (`.claude/review-cycle.json`) is meant to be committed so the team gets consistent gate behavior. Don't gitignore it.
@@ -231,10 +242,12 @@ The config file (`.claude/review-cycle.json`) is meant to be committed so the te
 ## State files
 
 ```
-${PROJECT}/.claude/.review-mark          two-line sentinel (anchor + sha256)
-${PROJECT}/.claude/review-cycle.json     per-project config (disabled, ignore)
-${PROJECT}/.claude/.no-review-gate       legacy opt-out marker (still honored)
-~/.claude/.disable-review-gate           global kill-switch (user-touched)
+${PROJECT}/.claude/.review-mark           two-line sentinel (anchor + sha256)
+${PROJECT}/.claude/review-cycle.json      per-project config (disabled, ignore)
+${PROJECT}/.claude/.review-in-progress    cycle-running marker (Stop gate passes while fresh)
+${PROJECT}/.claude/.review-stop-block     state hash the Stop gate last blocked on
+${PROJECT}/.claude/.no-review-gate        legacy opt-out marker (still honored)
+~/.claude/.disable-review-gate            global kill-switch (user-touched)
 ```
 
 ## Troubleshooting
@@ -247,6 +260,15 @@ Touch the global kill-switch immediately: `touch ~/.claude/.disable-review-gate`
 
 **Stop hook fires on every turn even after running the cycle.**
 The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a `sha256:<hex>` line. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
+
+**Commit blocked even though the changes were just reviewed.**
+The gate compares the current state against the last mark; a block after a real review means the state changed *after* marking, not that the review didn't count. Diagnose first:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" status
+```
+
+It prints the stored mark, the current hash, and a one-line verdict. Common causes of post-review drift, in observed order: a commit-time formatter mutating files (see the next entry), a hook manager restoring the index after a rejected commit (lefthook does this — your staged files are gone; re-stage before retrying), and ordinary edits after the mark, including agent bookkeeping files not covered by the default exclusions. Two things that are *not* the cause: staging order (marking works before or after `git add` — staged, unstaged, and untracked forms of the same content hash identically) and committing in batches (the mark anchors at the HEAD it was taken from, so splitting one reviewed state into several commits keeps passing).
 
 **Review re-triggers right after a commit, on a clean-looking change.**
 A pre-commit hook that mutates files at commit time (a formatter or linter) can leave residual working-tree changes the gate correctly reads as fresh unreviewed drift. The rule for any such hook: it must leave a clean tree — only ever touch files that end up *in* the commit. Two ways to guarantee that:

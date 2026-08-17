@@ -3,6 +3,19 @@
 #
 # Blocks Claude from finishing a turn if uncommitted-and-unreviewed changes
 # exist. Tells Claude to invoke /review-cycle:review. Fail-open on any error.
+#
+# Two release valves keep the block from degrading into ceremony:
+#
+#   - A fresh .claude/.review-in-progress marker (written by the review
+#     cycle at fan-out) lets the turn end while background reviewers run,
+#     so their completion notifications can re-wake the agent instead of
+#     the agent burning wall-clock on sleep loops. A stale marker (crashed
+#     cycle, older than the TTL) is removed and ignored.
+#   - The gate blocks once per drift state. The state hash it blocked on
+#     is recorded; a later stop on the identical state soft-passes with a
+#     warning instead of re-blocking, so a user-directed "review later"
+#     cannot hard-loop. The commit gate still blocks unreviewed commits —
+#     this only relaxes WHEN review happens, never WHETHER.
 
 source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh"
 
@@ -15,17 +28,57 @@ fi
 
 PROJECT_ROOT=$(gate_should_run) || exit 0
 
+IN_PROGRESS="$PROJECT_ROOT/.claude/.review-in-progress"
+STOP_RECORD="$PROJECT_ROOT/.claude/.review-stop-block"
+# The 60-min contract is also documented in bin/review-sentinel's
+# cycle-start header and echoed by its status output — keep them in sync.
+IN_PROGRESS_TTL=3600
+
+if [ -f "$IN_PROGRESS" ]; then
+  STARTED=$(sed -n '1p' "$IN_PROGRESS" 2>/dev/null | tr -cd '0-9')
+  NOW=$(date +%s 2>/dev/null | tr -cd '0-9')
+  # No clock means no TTL decision: fail open rather than kill a live cycle.
+  [ -n "$NOW" ] || exit 0
+  if [ -n "$STARTED" ] \
+     && [ $((NOW - STARTED)) -ge 0 ] && [ $((NOW - STARTED)) -lt "$IN_PROGRESS_TTL" ]; then
+    exit 0
+  fi
+  # Stale or unreadable marker: a crashed cycle must not hold the gate open.
+  /bin/rm -f "$IN_PROGRESS" 2>/dev/null
+fi
+
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" check
 RC=$?
-[ "$RC" -eq 0 ] && exit 0  # clean tree or sentinel matches
+if [ "$RC" -eq 0 ]; then
+  # Clean or reviewed: the recorded blocked-state is resolved, so the next
+  # drift gets a fresh block.
+  /bin/rm -f "$STOP_RECORD" 2>/dev/null
+  exit 0
+fi
 [ "$RC" -eq 2 ] && exit 0  # error: fail-open
 
-# RC=1 → drift. Block.
+# RC=1 → drift.
+CURRENT=$("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" current-hash 2>/dev/null)
+# An empty CURRENT (near-impossible: check just computed the same hash) must
+# not degrade block-once into the hard loop the reason text promises can't
+# happen — a fallback token keeps the second stop soft-passing.
+[ -n "$CURRENT" ] || CURRENT="unknown-state"
+if [ -f "$STOP_RECORD" ] && [ "$(cat "$STOP_RECORD" 2>/dev/null)" = "$CURRENT" ]; then
+  jq -n '{systemMessage:"review-cycle: unreviewed changes (already prompted for this state; commit gate still active)"}' 2>/dev/null \
+    || printf '{"systemMessage":"review-cycle: unreviewed changes (already prompted for this state; commit gate still active)"}\n'
+  exit 0
+fi
+
+# Record the state being blocked so the same state is not re-blocked. The
+# one path that still re-blocks every stop is an unwritable .claude dir.
+mkdir -p "$PROJECT_ROOT/.claude" 2>/dev/null
+printf '%s\n' "$CURRENT" > "$STOP_RECORD" 2>/dev/null || true
+
 # Stop hook output schema does NOT support hookSpecificOutput — directive
 # content goes in the top-level `reason` field.
 jq -n '{
   decision: "block",
-  reason: "BLOCKED: There are uncommitted changes that have not been reviewed. You MUST invoke /review-cycle:review now before attempting to stop again. The cycle will fan out reviewers, apply fixes per its embedded policies, and update the review sentinel. Do not commit; the user is the final reviewer.",
+  reason: "BLOCKED: There are uncommitted changes that have not been reviewed. Invoke /review-cycle:review now (or /review-cycle:accept if the user already reviewed these changes themselves). Only if the user explicitly asked to defer review may you stop again without reviewing — this gate blocks once per state, and the commit gate still prevents unreviewed commits. Do not commit; the user is the final reviewer.",
   systemMessage: "review-cycle: changes unreviewed"
 }' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes have not been reviewed. Run /review-cycle:review.","systemMessage":"review-cycle: changes unreviewed"}\n'
 

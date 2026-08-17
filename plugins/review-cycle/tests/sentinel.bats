@@ -96,7 +96,7 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "paths prints two relative paths" {
+@test "paths prints the sentinel and opt-out paths first" {
   run "$REVIEW_SENTINEL" paths
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = ".claude/.review-mark" ]
@@ -991,4 +991,86 @@ setup() {
   "$REVIEW_SENTINEL" seed
   STORED_ANCHOR_2=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
   [ "$STORED_ANCHOR_2" = "$NEW_HEAD" ]
+}
+
+# --- status: diagnostic verdicts mirror check's exit codes ---
+
+@test "status: clean tree exits 0 with clean verdict" {
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict: clean"* ]]
+}
+
+@test "status: marked state exits 0 with match verdict" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict: match"* ]]
+  [[ "$output" == *"anchor="* ]]
+}
+
+@test "status: drifted state exits 1 with drift verdict" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"verdict: drift"* ]]
+}
+
+@test "status: dirty tree with no mark exits 1 and says mark is missing" {
+  echo "change" > foo.txt
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"mark:    missing"* ]]
+  [[ "$output" == *"verdict: drift"* ]]
+}
+
+@test "status: unreachable stored anchor reads as drift (parity with check)" {
+  echo "change" > foo.txt
+  mkdir -p "$TEST_REPO/.claude"
+  printf 'anchor:%s\nsha256:%s\n' \
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
+    "0000000000000000000000000000000000000000000000000000000000000000" \
+    > "$TEST_REPO/.claude/.review-mark"
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unreachable"* ]]
+  [[ "$output" == *"verdict: drift"* ]]
+}
+
+@test "status: clean tree with a stale mismatched mark verdicts clean" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" mark
+  rm foo.txt
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict: clean"* ]]
+}
+
+@test "status: malformed mark on dirty tree reads as drift" {
+  echo "change" > foo.txt
+  mkdir -p "$TEST_REPO/.claude"
+  echo "garbage" > "$TEST_REPO/.claude/.review-mark"
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"malformed"* ]]
+}
+
+@test "status: agrees with check across staging (mark -> add -> status)" {
+  echo "change" > foo.txt
+  echo "new" > bar.txt
+  "$REVIEW_SENTINEL" mark
+  git add -A
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict: match"* ]]
+}
+
+@test "status: exits 2 outside git repo" {
+  mkdir -p "$BATS_TEST_TMPDIR/notarepo"
+  cd "$BATS_TEST_TMPDIR/notarepo"
+  run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 2 ]
 }

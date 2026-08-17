@@ -12,7 +12,16 @@
 #                Used by session-init to decide on idempotent re-seed.
 #   current-hash Print current hash computed from current HEAD (or the
 #                empty tree for unborn HEAD) to stdout.
-#   paths        Print sentinel and opt-out paths (relative to project root,
+#   cycle-start  Write .claude/.review-in-progress (epoch seconds). While
+#                fresh (< 60 min), the Stop gate lets turns end so the
+#                review cycle can await background reviewers. Cleared by
+#                mark/seed/cycle-end; the Stop gate removes stale copies.
+#   cycle-end    Remove the in-progress marker (abort path; a completed
+#                cycle's mark clears it anyway).
+#   status       Human-readable diagnostic: root, clean-tree verdict, stored
+#                mark, current hash from the stored anchor, and a one-line
+#                verdict mirroring check's decision. Exit codes match check.
+#   paths        Print sentinel and marker paths (relative to project root,
 #                one per line) for use in .gitignore.
 #   install-hook Install commit-time enforcement as a git pre-commit hook.
 #                Only agent sessions are gated (CLAUDECODE env guard); the
@@ -64,6 +73,9 @@ subcommands:
   check         exit 0=clean/match, 1=drift, 2=error
   match         exit 0=exact match only (no clean-tree shortcut)
   current-hash  print current state
+  cycle-start   write the review-in-progress marker (Stop gate passes)
+  cycle-end     remove the review-in-progress marker
+  status        diagnostic dump; exit codes mirror check
   paths         print gitignore-relative paths
   install-hook  install commit-time git pre-commit enforcement
   uninstall-hook  remove the gate, restoring any relocated hook
@@ -102,6 +114,8 @@ build_excludes() {
   EXCLUDES_LIST=(
     ':(exclude).claude/.review-mark'
     ':(exclude).claude/.no-review-gate'
+    ':(exclude).claude/.review-in-progress'
+    ':(exclude).claude/.review-stop-block'
     ':(exclude,glob).beads/**'
     ':(exclude,glob)**/.beads/**'
     ':(exclude,glob).trekker/**'
@@ -402,7 +416,8 @@ review_cycle_gate() {
   ( unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; exec "\$rs" --root . check )
   case \$? in
     1)
-      echo "review-cycle: unreviewed changes — run /review-cycle:review or /review-cycle:accept, then commit again" >&2
+      echo "review-cycle: unreviewed changes — state differs from the last reviewed mark." >&2
+      echo "review-cycle: run /review-cycle:review, or /review-cycle:accept if already reviewed (a commit-time formatter or hook manager may have changed files; re-stage first). Diagnose: \$rs status" >&2
       return 1
       ;;
     *) return 0 ;;
@@ -736,6 +751,14 @@ $HASH" || {
       echo "review-sentinel: cannot write sentinel" >&2
       exit 2
     }
+    # A marked state moots both Stop-gate markers: any running cycle is
+    # done (or superseded), and the recorded blocked-state is resolved.
+    /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress" \
+               "$PROJECT_ROOT/.claude/.review-stop-block" 2>/dev/null
+    for f in .review-in-progress .review-stop-block; do
+      [ ! -e "$PROJECT_ROOT/.claude/$f" ] \
+        || echo "review-sentinel: warning: could not remove .claude/$f; Stop-gate behavior may be stale" >&2
+    done
     exit 0
     ;;
 
@@ -782,9 +805,111 @@ $HASH" || {
     exit 0
     ;;
 
+  cycle-start)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 1
+    fi
+    mkdir -p "$PROJECT_ROOT/.claude" 2>/dev/null || {
+      echo "review-sentinel: cannot create .claude dir" >&2
+      exit 2
+    }
+    date +%s > "$PROJECT_ROOT/.claude/.review-in-progress" || {
+      # The redirect may have created an empty file before failing; a
+      # reported failure must leave no state behind.
+      /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress" 2>/dev/null
+      echo "review-sentinel: cannot write in-progress marker" >&2
+      exit 2
+    }
+    exit 0
+    ;;
+
+  cycle-end)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 1
+    fi
+    /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress" 2>/dev/null
+    if [ -e "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
+      echo "review-sentinel: cannot remove in-progress marker; Stop gate stays open until its TTL" >&2
+      exit 2
+    fi
+    exit 0
+    ;;
+
+  status)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 2
+    fi
+    SENTINEL="$PROJECT_ROOT/.claude/.review-mark"
+    STORED_HASH=""
+    CURRENT_HASH=""
+    HASH_RC=0
+    echo "root:    $PROJECT_ROOT"
+    CLEAN=no
+    is_clean_tree "$PROJECT_ROOT" && CLEAN=yes
+    echo "clean:   $CLEAN"
+    if [ -f "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
+      # Line 1 only, matching how the Stop gate reads it.
+      TS=$(sed -n '1p' "$PROJECT_ROOT/.claude/.review-in-progress" 2>/dev/null | tr -cd '0-9')
+      NOWS=$(date +%s 2>/dev/null | tr -cd '0-9')
+      if [ -n "$TS" ] && [ -n "$NOWS" ]; then
+        AGE=$((NOWS - TS))
+        if [ "$AGE" -ge 0 ] && [ "$AGE" -lt 3600 ]; then
+          echo "cycle:   in-progress marker present (age ${AGE}s of 3600s TTL; Stop gate passes while fresh)"
+        else
+          echo "cycle:   in-progress marker present but stale (age ${AGE}s; Stop gate will remove it)"
+        fi
+      else
+        echo "cycle:   in-progress marker present (unreadable timestamp; Stop gate will remove it)"
+      fi
+    fi
+    if [ -f "$PROJECT_ROOT/.claude/.review-stop-block" ]; then
+      echo "stop:    block-once record present (Stop gate soft-passes while this state is unchanged)"
+    fi
+    if [ ! -f "$SENTINEL" ]; then
+      echo "mark:    missing (no state has been marked reviewed)"
+    elif ! STORED=$(read_sentinel "$SENTINEL") || [ -z "$STORED" ]; then
+      echo "mark:    malformed (treated as drift)"
+    else
+      STORED_ANCHOR=$(echo "$STORED" | sed -n '1p' | sed 's/^anchor://')
+      STORED_HASH=$(echo "$STORED" | sed -n '2p')
+      echo "mark:    anchor=$STORED_ANCHOR"
+      echo "         $STORED_HASH"
+      CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR")
+      HASH_RC=$?
+      case $HASH_RC in
+        0) echo "current: $CURRENT_HASH" ;;
+        2) echo "current: (stored anchor unreachable — treated as drift)" ;;
+        *) echo "current: (hash computation failed — gates fail open)" ;;
+      esac
+    fi
+    # Verdict mirrors check: clean-tree fast-path first, then hash compare.
+    if [ "$CLEAN" = yes ]; then
+      echo "verdict: clean tree — gates pass"
+      exit 0
+    fi
+    if [ "$HASH_RC" -eq 1 ]; then
+      echo "verdict: error — cannot compute current hash; gates fail open"
+      exit 2
+    fi
+    if [ -n "$STORED_HASH" ] && [ "$CURRENT_HASH" = "$STORED_HASH" ]; then
+      echo "verdict: match — this exact state was marked reviewed; gates pass"
+      exit 0
+    fi
+    echo "verdict: drift — state differs from the last mark. Review (/review-cycle:review) or re-mark (/review-cycle:accept) if already reviewed. Common causes when a review DID happen: edits after marking, commit-time formatters, hook managers restoring the index."
+    exit 1
+    ;;
+
   paths)
     echo ".claude/.review-mark"
     echo ".claude/.no-review-gate"
+    echo ".claude/.review-in-progress"
+    echo ".claude/.review-stop-block"
     exit 0
     ;;
 
