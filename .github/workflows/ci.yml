@@ -63,11 +63,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # Pinned rather than floating: `bin/run-bats` works around a post-suite
-      # hang whose behavior is version-specific, so an unpinned bump could
-      # change what the wrapper is compensating for without touching this repo.
+      # Installed from the git tag rather than npm: npm's `bats` lags at 1.13.0
+      # while local development runs 1.14.0, and `bin/run-bats` works around a
+      # post-suite hang whose behavior is version-specific — CI diverging from
+      # local is the one place that difference must not appear. Pinned for the
+      # same reason: an unpinned bump could change what the wrapper compensates
+      # for without any change landing in this repo.
       - name: Install bats
-        run: npm install -g bats@1.14.0
+        run: |
+          git clone --depth 1 --branch v1.14.0 \
+            https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats-core"
+          sudo "$RUNNER_TEMP/bats-core/install.sh" /usr/local
+          bats --version
 
       - name: Verify sha256 tool is present
         run: |
