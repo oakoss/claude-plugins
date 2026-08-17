@@ -1,8 +1,8 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Fans out Codex and the auto-fix reviewers (code quality, tests, error handling, type design) in parallel, applies fixes inline per the embedded policies, and loops up to 4 iterations until clean. Then, once against the final state, runs the report-only reviewers (structural maintainability and spec conformance) and a de-slopify cleanup pass. Updates the review sentinel on completion. Does NOT commit.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — docs-only or ~25 changed lines or fewer — get Codex + code-reviewer and a 2-iteration cap; the rest get the full conditional fan-out, max 4). Applies fixes inline per the embedded policies, self-verifies mechanical fixes instead of re-fanning-out, then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state. Updates the review sentinel on completion. Does NOT commit.
 argument-hint: "[against <ref>] [max <n>]"
-allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, AskUserQuestion, Skill
+allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
 
 # Review cycle
@@ -31,10 +31,11 @@ Avoid:
 - "Note:" / "Important:" prefixes when surrounding text already conveys importance
 - TODOs without ticket references
 - Cross-references that belong in the PR description ("added for X", "used by Y")
+- Comments narrating change history ("previously", "no longer", "as it did before the refactor") — state the current invariant; the story belongs in the commit message
 - Multi-line comments on trivial code
 - AI-flavored phrasings ("Here we...", "Let's...", "This...")
 
-When in doubt: keep the comment, but make it tighter.
+When in doubt: keep the comment, but make it tighter. A review pass must never make a comment longer — explaining the previous version of a comment is accretion, not review.
 
 ### Fix-vs-defer policy
 
@@ -52,8 +53,8 @@ If you can describe the fix in one sentence, just do the fix.
 `$ARGUMENTS` is free-form natural language — there are no flags. Read intent from it:
 
 - **A base ref to scope against** — phrases like `against main`, `since v1.2`, or a bare ref / branch / tag / SHA → review `git diff <ref>..HEAD` instead of the default `git diff HEAD`.
-- **An iteration cap** — `max 6`, `6 iterations`, or a bare integer → use it as the max iteration count (default 4).
-- **Empty** → defaults: the uncommitted working tree, max 4 iterations.
+- **An iteration cap** — `max 6`, `6 iterations`, or a bare integer → use it as the max iteration count, overriding the tier default (4 for the full tier, 2 for light; see Phase 1).
+- **Empty** → defaults: the uncommitted working tree, tier-default iteration cap.
 
 If a token is ambiguous, treat a ref-like string as the base and a bare integer as the iteration cap. Parse before starting the cycle.
 
@@ -78,6 +79,15 @@ git status --porcelain --untracked-files=all
 
 If empty, report "nothing to review" and stop.
 
+**Classify the diff into a tier.** List the changed paths in scope (the working tree by default, `<ref>..HEAD` when a base was given) and pick one:
+
+- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Reduced: fan-out is Codex + `code-reviewer` only, default iteration cap 2 (an explicit user `max` still wins).
+- **full** — anything else. Full conditional fan-out, default cap 4.
+
+The tier decides fan-out and iteration cap only. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
+
+The tier is decided once, here, and named in the final summary — do not re-derive it per phase.
+
 Verify Codex CLI is available:
 
 ```bash
@@ -99,13 +109,23 @@ Fail-open: a missing tool or a check that errors out is noted and skipped, never
 
 ### Phase 3: Fan-out (parallel)
 
+First, on the loop's first iteration only, mark the cycle as in progress:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-start
+```
+
+While this marker is fresh, the Stop gate lets your turns end — so after spawning the reviewers you may simply end the turn and let their completion notifications re-wake you. Never busy-wait with sleep loops. The marker is cleared automatically by Phase 8's `mark`; if the cycle aborts before Phase 8 for any reason, run `"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-end` so the gate re-arms.
+
+**Compose an intent brief first** — 2–4 sentences on what the change is trying to accomplish and why, plus the changed-file list. Source it from the conversation that produced the changes, or from the commit messages in `<ref>..HEAD` when reviewing against a base. Every reviewer gets it: a reviewer that knows the intent flags real deviations instead of guessing at purpose, and its findings need less relitigating. Do not editorialize about expected findings — state intent, not hoped-for verdicts.
+
 In a single conversation turn, invoke ALL of the following:
 
-1. **Codex review (background)** — direct CLI invocation, not the `/codex:review` slash command:
+1. **Codex review (background)** — direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief goes to the subagents only — do not pass it to Codex:
 
    ```
    Bash({
-     command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",
+     command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",   // or: codex review --base <ref>
      description: "Codex review",
      run_in_background: true
    })
@@ -116,7 +136,7 @@ In a single conversation turn, invoke ALL of the following:
    - Returns immediately with a bash shell ID; output streams to the task output file
    - Save the shell ID; you'll read its output later when notified of completion
 
-2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true` in the same single message as the codex invocation. Conditional dispatch based on diff scope (decided in Phase 1):
+2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true` in the same single message as the codex invocation. Dispatch by the tier decided in Phase 1 — on the **light** tier, spawn `review-cycle:code-reviewer` and nothing else. On the **full** tier, conditional dispatch:
 
    - `review-cycle:code-reviewer` — always
    - `review-cycle:pr-test-analyzer` — if the diff changes source code at all, whether or not it touches `*.test.*`, `*.spec.*`, `tests/`, `__tests__/`, or similar test paths. A source change that ships **no** corresponding test is precisely the case to flag, so do not gate this on test files being touched.
@@ -132,7 +152,7 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
      run_in_background: true,
-     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Output findings as file:line — severity — issue — suggested fix."
+     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Output findings as file:line — severity — issue — suggested fix."
    })
    ```
 
@@ -140,7 +160,14 @@ In a single conversation turn, invoke ALL of the following:
 
 The post-loop pass (Phase 7) runs the report-only reviewers and cleanup; none of those are part of this fan-out.
 
-Wait for the codex bash output AND every spawned subagent to complete before proceeding.
+**Collecting results, with a stall watchdog.** Completion notifications arrive automatically — do not poll, and (with the in-progress marker set) end the turn rather than sleep while reviewers run. Background reviewers sometimes stall: they go idle without ever delivering a report. The watchdog is wake-driven — you cannot wait on a timer, so act on whatever wakes you (a completion, an idle notification, a user message):
+
+- On any wake where a reviewer has gone idle without delivering, or has stayed silent while the other reviewers all completed, send it ONE nudge via `SendMessage`: deliver findings now, even if incomplete.
+- If a nudged reviewer still hasn't reported by the next wake, proceed to Phase 4 without it and list it under "reviewers dropped (stalled)" in the final summary.
+- Never nudge the same reviewer twice, and never hold the whole cycle for a single straggler that has already been nudged.
+- Residual: if the last outstanding reviewer stalls without even an idle notification, no wake arrives until the user's next message — that message is the wake; apply the rules then. Do not burn turns polling to avoid this case.
+
+Proceed to Phase 4 when every reviewer has reported or been dropped under this policy.
 
 ### Phase 4: Aggregate findings
 
@@ -167,13 +194,21 @@ Track fixed items and deferred items separately for the final summary. Do not au
 
 Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (spec conformance, maintainability) run after the loop (Phase 7); nothing they find is auto-applied.
 
-### Phase 6: Loop check
+### Phase 6: Verify fixes (self-check), then loop check
 
-After applying fixes:
+A full reviewer re-fan-out is only worth its wall-clock when this iteration's fixes could themselves have introduced problems. Verify cheaply first:
 
-- If ANY inline fixes were applied AND iteration count < max-iter → GOTO Phase 3 (re-run reviewers against the new state)
-- If NO inline fixes were applied (everything was clean or correctly deferred) → exit loop
-- If iteration count == max-iter → exit loop with summary of remaining findings
+1. **Self-check every fix against the findings list.** Re-read each fixed site and confirm the finding is actually addressed — not merely edited near. Anything unaddressed gets fixed now, within this iteration.
+2. **Classify the iteration's fix churn:**
+   - **Mechanical** — strictly non-semantic fixes confined to the flagged lines: typo/wording corrections, renames, removing dead code or a redundant comment, doc corrections. The self-check is sufficient verification.
+   - **Substantive** — any fix that changes runtime behavior, however small: a new function, branch, or guard clause, a tightened condition, restructured control flow, edits beyond the flagged lines, or a fix where you chose among design alternatives. The self-check confirms the finding was addressed, not that the new behavior is right — behavior changes get re-reviewed.
+
+Then decide:
+
+- NO inline fixes applied (everything clean or correctly deferred) → exit loop.
+- Only mechanical fixes, all self-checked → exit loop. Do NOT re-fan-out just to confirm fixes landed — that confirmation is exactly what the self-check provided.
+- At least one substantive fix AND iteration count < max-iter → GOTO Phase 3, scoped: re-run Codex plus only the subagents whose domain the substantive fixes touched.
+- Iteration count == max-iter → exit loop with summary of remaining findings.
 
 ### Phase 7: Post-loop pass (report-only reviewers + cleanup)
 
@@ -183,7 +218,7 @@ The loop has converged. Run the report-only reviewers **once** here — against 
 
 2. **`review-cycle:spec-conformance-analyzer`** — if a spec source is discoverable: the diff's commits reference an issue/task ID, a spec or PRD file matches the branch/feature, or the user passed a spec path. If none exist, skip it and note "no spec source found" in the summary. The agent's current/unverified source rules still apply; an unverified source is caveated, not acted on.
 
-3. **`review-cycle:cleanup`** — comment policy + de-slopify (below).
+3. **Cleanup** — comment policy + de-slopify, tier-dependent (below).
 
 Running them here, once, is the whole point: the opus maintainability pass and the spec-discovery step execute a single time against the code you'll actually commit, instead of re-running on every loop iteration.
 
@@ -192,17 +227,20 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 - **maintainability-auditor** — speculative structural restructurings (delete a layer, split a file, reframe a state model): high-blast-radius, low-precision, never auto-apply. Surface them in the summary's "Structural suggestions" section; act on the ones you want by prompting afterward.
 - **spec-conformance-analyzer** — missing/partial requirements, scope creep, and implemented-but-wrong: all surfaced for you to decide, quoting the spec line. "Did we build the right thing" is your call, so report rather than fix.
 
-**Cleanup.** The cleanup subagent applies the comment policy and de-slopify in one pass (it has de-slopify preloaded via its `skills` frontmatter):
+**Cleanup.** A separate agent spawn only earns its place on a diff big enough that loading the de-slopify methodology into your own context would be the greater cost:
 
-```
-Agent({
-  subagent_type: "review-cycle:cleanup",
-  description: "Final cleanup pass — comments + de-slopify",
-  prompt: "Run cleanup on the current diff (post-fix state). Apply comment policy to modified code comments and de-slopify to prose surfaces. Do not touch algorithm logic, type definitions, or test assertions."
-})
-```
+- **diffs under ~150 changed lines, whatever the tier** — clean inline, yourself. Apply the embedded comment policy to comments you touched, and invoke `/review-cycle:de-slopify` via the Skill tool for the prose methodology, applying it to modified `.md` files and commit-message drafts. Same exclusions as the agent: never touch algorithm logic, type definitions, or test assertions.
+- **~150 changed lines or more** — spawn the cleanup subagent (it has de-slopify preloaded via its `skills` frontmatter). Size, not tier, decides: a large docs-only diff is light-tier for fan-out but is exactly the prose volume the agent spawn is for:
 
-It edits files directly and returns a summary. Scope: comments in modified code, modified `.md` files, commit-message drafts. Excluded: algorithm logic, type definitions, test assertions.
+  ```
+  Agent({
+    subagent_type: "review-cycle:cleanup",
+    description: "Final cleanup pass — comments + de-slopify",
+    prompt: "Run cleanup on the current diff (post-fix state). Apply comment policy to modified code comments and de-slopify to prose surfaces. Do not touch algorithm logic, type definitions, or test assertions."
+  })
+  ```
+
+  It edits files directly and returns a summary. Scope: comments in modified code, modified `.md` files, commit-message drafts. Excluded: algorithm logic, type definitions, test assertions.
 
 ### Phase 8: Update sentinel
 
@@ -210,7 +248,7 @@ It edits files directly and returns a summary. Scope: comments in modified code,
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark
 ```
 
-This is what allows the Stop hook and commit-gate to let the user commit. If the CLI exits nonzero (not in a git repo, sha256 tool missing), surface the error in the final summary — do not silently succeed.
+This is what allows the Stop hook and commit-gate to let the user commit. `mark` also clears the in-progress marker from Phase 3 and the Stop gate's blocked-state record. If the CLI exits nonzero (not in a git repo, sha256 tool missing), surface the error in the final summary — do not silently succeed, and run `cycle-end` so the Stop gate re-arms.
 
 ### Phase 9: Final summary
 
@@ -219,7 +257,9 @@ Print a structured summary:
 ```
 Review cycle complete.
 
+Tier: light | full
 Iterations: N / max
+Reviewers dropped (stalled): none | <names, each nudged once before dropping>
 Findings fixed inline: X
   - file:line — issue (source)
   - ...

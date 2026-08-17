@@ -4,7 +4,7 @@ description: Cleanup agent for review-cycle. Applies the comment policy (clean a
 tools: Bash, Read, Edit, MultiEdit, Glob, Grep
 skills:
   - review-cycle:de-slopify
-model: sonnet
+model: inherit
 color: cyan
 ---
 
@@ -34,6 +34,7 @@ Remove on sight — these are redundant, not judgment calls:
 - "Note:" / "Important:" prefixes when surrounding text already conveys importance
 - TODOs without ticket references
 - Cross-references that belong in the PR description ("added for X", "used by Y")
+- Comments narrating change history ("previously", "no longer", "as it did before the refactor") — keep the current invariant, cut the story
 - Multi-line comments on trivial code
 - AI-flavored phrasings ("Here we...", "Let's...", "This...")
 

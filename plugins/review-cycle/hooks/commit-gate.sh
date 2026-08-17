@@ -53,12 +53,16 @@ RC=$?
 # RC=1 → drift. Deny the commit.
 # PreToolUse uses hookSpecificOutput.permissionDecision, NOT the deprecated
 # top-level decision/reason fields.
-jq -n '{
+# The reason distinguishes "never reviewed" from "reviewed but drifted since
+# the mark": an agent whose review DID happen reads a bare "run review first"
+# as the review having failed, when the real cause is post-mark drift.
+RS_BIN="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
+jq -n --arg rs "$RS_BIN" '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
-    permissionDecisionReason: "Cannot commit unreviewed changes. Run /review-cycle:review first, or touch .claude/.no-review-gate in the project root to bypass for this project."
+    permissionDecisionReason: ("Commit blocked: the current state does not match the last reviewed mark. If no review has happened, run /review-cycle:review. If these changes WERE reviewed, something changed the state after marking — edits since the mark, a commit-time formatter mutating files, or a hook manager restoring the index after a rejected commit (re-stage in that case) — and /review-cycle:accept re-marks a state you have already reviewed. Diagnose with: \"" + $rs + "\" status. Marking works before or after staging; ordering is not the problem. The user can opt this project out entirely with {\"disabled\": true} in .claude/review-cycle.json.")
   }
-}' 2>/dev/null || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Cannot commit unreviewed changes. Run /review-cycle:review first."}}\n'
+}' 2>/dev/null || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Commit blocked: state does not match the last reviewed mark. Review with /review-cycle:review, or re-mark with /review-cycle:accept if already reviewed."}}\n'
 
 exit 0
