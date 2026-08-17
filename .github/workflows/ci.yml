@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # The hooks fail open by design, so a defect here disables the gate
+      # silently rather than erroring — which is exactly what static analysis
+      # catches and the bats suites, testing behavior, cannot.
+      - name: Lint shell scripts
+        run: |
+          mapfile -t files < <(
+            find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' | sort
+          )
+          files+=(bin/run-bats plugins/review-cycle/bin/review-sentinel)
+          printf 'checking %d files\n' "${#files[@]}"
+          shellcheck --external-sources --severity=warning "${files[@]}"
+
+  tests:
+    name: Bats (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # Pinned rather than floating: `bin/run-bats` works around a post-suite
+      # hang whose behavior is version-specific, so an unpinned bump could
+      # change what the wrapper is compensating for without touching this repo.
+      - name: Install bats
+        run: npm install -g bats@1.14.0
+
+      - name: Verify sha256 tool is present
+        run: |
+          command -v sha256sum || command -v shasum
+
+      # Always through the wrapper, never bare `bats` — a direct invocation
+      # leaves an orphaned process tree after the final TAP line. Running on
+      # both runners is deliberate: the wrapper's process handling is the part
+      # that differs between Linux and macOS.
+      #
+      # One suite per invocation, not a single whole-repo run: the wrapper
+      # force-kills bats once it believes every test has reported, and across
+      # multiple suites it races, returning 330-347 of 349 tests non-
+      # deterministically with no failure reported. Each suite's TAP plan is
+      # checked against its result count so a truncated run fails here rather
+      # than passing as a shorter green run.
+      - name: Run bats suites
+        run: |
+          status=0
+          total=0
+          while IFS= read -r suite; do
+            out="$(bin/run-bats "$suite" 2>&1)" || status=1
+            printf '%s\n' "$out"
+
+            planned="$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9]\{1,\}\)$/\1/p' | tail -1)"
+            reported="$(printf '%s\n' "$out" | grep -cE '^(not )?ok ')"
+            failed="$(printf '%s\n' "$out" | grep -cE '^not ok' || true)"
+            total=$((total + reported))
+
+            if [ -z "$planned" ]; then
+              printf '::error::%s emitted no TAP plan\n' "$suite"
+              status=1
+            elif [ "$planned" -ne "$reported" ]; then
+              printf '::error::%s truncated: planned %s, reported %s\n' \
+                "$suite" "$planned" "$reported"
+              status=1
+            fi
+            if [ "$failed" -ne 0 ]; then
+              printf '::error::%s had %s failing test(s)\n' "$suite" "$failed"
+              status=1
+            fi
+          done < <(find . -type f -name '*.bats' -not -path './.git/*' | sort)
+
+          printf '\n%d tests reported across all suites\n' "$total"
+          exit "$status"
