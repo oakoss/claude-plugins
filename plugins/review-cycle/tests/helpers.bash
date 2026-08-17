@@ -2,7 +2,10 @@
 # Shared setup for sentinel.bats and gate.bats. Loaded via `load 'helpers'`.
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Consumed by the .bats suites that `load 'helpers'`; shellcheck can't see them.
+# shellcheck disable=SC2034
 REVIEW_SENTINEL="$PLUGIN_ROOT/bin/review-sentinel"
+# shellcheck disable=SC2034
 GATE_LIB="$PLUGIN_ROOT/hooks/lib/gate.sh"
 
 setup_repo() {
@@ -11,7 +14,7 @@ setup_repo() {
   # the canonical path, so tests must compare against the canonical form.
   mkdir -p "$BATS_TEST_TMPDIR/repo"
   TEST_REPO="$(cd "$BATS_TEST_TMPDIR/repo" && pwd -P)"
-  cd "$TEST_REPO"
+  cd "$TEST_REPO" || return 1
   git init -q
   git config user.email "test@example.com"
   git config user.name "Test"
@@ -27,5 +30,7 @@ setup_repo() {
   # Stop git from walking above BATS_TEST_TMPDIR to find a parent repo
   # (the project tree we're running from is itself a git repo). Include both
   # the canonical and uncanonical forms because git compares paths verbatim.
-  export GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR:$(cd "$BATS_TEST_TMPDIR" && pwd -P)"
+  local canonical_tmpdir
+  canonical_tmpdir="$(cd "$BATS_TEST_TMPDIR" && pwd -P)"
+  export GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR:$canonical_tmpdir"
 }
