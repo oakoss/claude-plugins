@@ -24,7 +24,7 @@ Stop hook fires when you finish a turn
         ┌─────┴─────┐
         ↓           ↓
    Codex review    pr-review-toolkit
-   (multi-agent)   (parallel subagents)
+   (if available)  (parallel subagents)
         └─────┬─────┘
               ↓
         Aggregate findings
@@ -52,7 +52,7 @@ You review the diff and commit yourself
 
 One-time setup helper. Run after installing the plugin to:
 
-- Verify Codex CLI is installed and `multi_agent = true` is set in `~/.codex/config.toml`
+- Check for the optional Codex CLI, verify `multi_agent = true` in `~/.codex/config.toml`, and report stored-login state (advisory — auth doesn't gate the leg)
 - Optionally append the comment and fix-vs-defer policies to your global or project `CLAUDE.md`
 - Update project `.gitignore` to exclude `.claude/.review-mark` (auto-managed state)
 
@@ -62,7 +62,7 @@ Idempotent — safe to run multiple times. Replaces the manual setup steps below
 
 The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until clean, surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and updates the sentinel.
 
-The apparatus scales to the diff: light diffs (docs-only, or ~25 changed lines or fewer of anything) get Codex + the code reviewer with a 2-iteration cap; everything else gets the full conditional fan-out (max 4 iterations). Cleanup is a separate, size-only decision — inline under ~150 changed lines, the cleanup agent above that, whatever the tier. Iterations whose fixes were mechanical are verified by self-check against the findings list instead of a fresh reviewer fan-out, and a reviewer that stalls is nudged once, then dropped and named in the summary rather than holding the cycle hostage.
+The apparatus scales to the diff: light diffs (docs-only, or ~25 changed lines or fewer of anything) get the code reviewer with a 2-iteration cap; everything else gets the full conditional fan-out (max 4 iterations). The Codex leg joins either tier when it's available. Cleanup is a separate, size-only decision — inline under ~150 changed lines, the cleanup agent above that, whatever the tier. Iterations whose fixes were mechanical are verified by self-check against the findings list instead of a fresh reviewer fan-out, and a reviewer that stalls is nudged once, then dropped and named in the summary rather than holding the cycle hostage.
 
 Arguments are natural language — no flags:
 
@@ -137,9 +137,13 @@ The hook runs `review-sentinel check` inside the commit — after everything ear
 
 The PreToolUse gate stays active either way — it fails fast (before a doomed chain runs its side effects) while the git hook is the accurate backstop. Per commit, the double check costs a few tens of milliseconds.
 
-## Required configuration
+## Optional: the Codex review leg
 
-Two Codex settings:
+Codex is a second review leg from a different model family, not a prerequisite. `/review-cycle:review` probes for it at preflight: installed, it joins the fan-out; absent, the cycle runs Claude-only and names the skip in its summary.
+
+Presence of the CLI is the only gate. Auth deliberately isn't one: `codex login status` reports only on a stored session, so it says `Not logged in` for a Codex authenticated by environment variable (the normal CI setup), and skipping on that would drop a working reviewer in the exact environment this supports. If auth turns out to be genuinely missing, the review fails and the summary says so, naming `codex login` as the likely fix.
+
+That makes the plugin usable where Codex isn't — CI, a teammate who hasn't installed it, a machine without an OpenAI subscription — at the cost of the second opinion. Two model families disagreeing about the same diff is where the cycle's coverage comes from, so install it where you can:
 
 1. **Codex CLI installed and authenticated**:
 
@@ -148,7 +152,7 @@ Two Codex settings:
    codex login
    ```
 
-   Only the Codex CLI binary is required; the Codex Claude plugin is not a dependency.
+   Only the Codex CLI binary is used; the Codex Claude plugin is not a dependency.
 
 2. **Multi-agent enabled** in `~/.codex/config.toml`:
 
@@ -157,7 +161,17 @@ Two Codex settings:
    multi_agent = true
    ```
 
-This lets Codex spawn parallel review agents internally during a single `codex review` call, replacing the need for multiple sequential Codex invocations.
+   This lets Codex spawn parallel review agents internally during a single `codex review` call, replacing the need for multiple sequential Codex invocations.
+
+The one status the cycle treats as an error is a leg that passes the preflight probe and then dies mid-review: a regression, reported as `failed` rather than folded into the routine skips.
+
+### Review depth follows the tier
+
+A two-line `.gitignore` fix doesn't need the same depth as a 500-line refactor. Light-tier diffs ask Codex for `low` reasoning effort when that would actually be lower than your configured value — if you already run at `low`, `minimal`, or `none`, nothing is overridden. Full-tier diffs pass no override at all and inherit whatever your `~/.codex/config.toml` sets. With `multi_agent = true` the effort applies to Codex's internal review agents too, so the reduction compounds.
+
+The adjustment only ever goes down. If you configured `medium` globally, a large diff won't be silently upgraded to `high` — your config is the ceiling. The summary reports which applied (`participated (effort: low)` vs `(effort: inherited)`).
+
+Effort is the tuning axis rather than model name on purpose: `codex review` exposes neither `--model` nor `--profile` (only `-c`), model names churn often enough that Codex ships its own `[notice.model_migrations]` table, and a name pinned inside the plugin would rot into an error or a silent downgrade on someone else's account.
 
 ## Recommended configuration
 
@@ -279,7 +293,9 @@ A pre-commit hook that mutates files at commit time (a formatter or linter) can 
 Beads/Trekker exports are already excluded (at any depth), so `bd`'s commit-time `issues.jsonl` re-export is not the cause — look at formatters/linters.
 
 **Codex is missing or not authenticated.**
-The cycle surfaces this and stops. Install with `npm install -g @openai/codex`, then `codex login`. Verify `multi_agent = true` in `~/.codex/config.toml`.
+A missing CLI is not an error — the cycle skips that leg, runs Claude-only, and names the skip in its summary. To add the leg back: `npm install -g @openai/codex`, then `codex login`, and verify `multi_agent = true` in `~/.codex/config.toml`.
+
+Missing auth reads differently: the CLI is present, so the leg runs and then fails (or, in a non-TTY shell, blocks on a login prompt). The summary reports the auth state the preflight observed — `confirmed`, `no stored session`, or `unknown (probe unsupported)` — and suggests `codex login` only for `no stored session`. `unknown` means the probe itself didn't run, not that your credentials are wrong. A `failed` leg with auth `confirmed` means something else broke mid-review — a revoked session or a rate limit.
 
 **False trigger on a project I don't want gated.**
 Write `{"disabled": true}` to `.claude/review-cycle.json` in that project root.

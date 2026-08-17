@@ -1,6 +1,6 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — docs-only or ~25 changed lines or fewer — get Codex + code-reviewer and a 2-iteration cap; the rest get the full conditional fan-out, max 4). Applies fixes inline per the embedded policies, self-verifies mechanical fixes instead of re-fanning-out, then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state. Updates the review sentinel on completion. Does NOT commit.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — docs-only or ~25 changed lines or fewer — get code-reviewer and a 2-iteration cap; the rest get the full conditional fan-out, max 4). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies, self-verifies mechanical fixes instead of re-fanning-out, then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state. Updates the review sentinel on completion. Does NOT commit.
 argument-hint: "[against <ref>] [max <n>]"
 allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
@@ -81,20 +81,37 @@ If empty, report "nothing to review" and stop.
 
 **Classify the diff into a tier.** List the changed paths in scope (the working tree by default, `<ref>..HEAD` when a base was given) and pick one:
 
-- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Reduced: fan-out is Codex + `code-reviewer` only, default iteration cap 2 (an explicit user `max` still wins).
-- **full** — anything else. Full conditional fan-out, default cap 4.
+- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Reduced: fan-out is `code-reviewer` plus Codex when available, default iteration cap 2 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
+- **full** — anything else. Full conditional fan-out, default cap 4, Codex at the user's configured effort.
 
-The tier decides fan-out and iteration cap only. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
+The tier decides fan-out, iteration cap, and whether Codex's effort is capped. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
 
 The tier is decided once, here, and named in the final summary — do not re-derive it per phase.
 
-Verify Codex CLI is available:
+**Probe the Codex leg.** Codex is one of two review legs, not a prerequisite. Where it is available the cycle uses it; where it isn't (CI, a teammate without it) the cycle runs Claude-only rather than stopping.
 
 ```bash
-codex --version
+codex --version 2>&1; echo "version-exit=$?"
+codex login status 2>&1; echo "login-exit=$?"
 ```
 
-If the command fails or codex is unauthenticated, surface the error and stop — do not silently skip it.
+**`codex --version` alone decides participation**, and its exit code decides the reason. Read the code, not just success-or-failure:
+
+- **0** → leg status `eligible`; the leg runs. (`participated` is a Phase 3 *outcome*, not this — see below.)
+- **127, or `command not found`** → `skipped (not installed)`. Expected where Codex isn't deployed; not an error.
+- **any other nonzero** → `skipped (codex present but unusable: <first line of stderr>)`. A broken install, a non-executable file, a `$PATH` this shell can't see. Reporting these as "not installed" sends the user to `npm install -g` for something already installed — quote what actually happened instead.
+
+**`codex login status` is advisory, never a gate**, and it has three outcomes, not two. It reports only on a *stored* session, so it exits nonzero with `Not logged in` whenever Codex is authenticated by environment variable (`OPENAI_API_KEY` and friends) with no login on disk — the standard CI setup, and exactly the environment an optional Codex leg exists to serve. Record which of these applies:
+
+- exit 0 → auth `confirmed`
+- reports not logged in → auth `no stored session`
+- the subcommand is unrecognized (an older CLI) → auth `unknown (probe unsupported)`
+
+The third is not the second. Telling someone to run `codex login` when the probe simply doesn't exist on their CLI sends them to fix something that isn't broken.
+
+**Write all of this into the Phase 9 summary draft now, not at Phase 9.** Open the draft here with the tier, the leg status, and the auth state — and add the Codex effort once Phase 3 decides it — updating the draft as the cycle proceeds. The loop ends turns and re-wakes across up to four iterations, and none of these facts is re-derivable later without re-running the probe.
+
+Never stop the cycle over an absent Codex, and never let its absence go unmentioned — a review at half coverage must be visible in the summary.
 
 ### Phase 2: Canonicalize the working tree
 
@@ -115,24 +132,46 @@ First, on the loop's first iteration only, mark the cycle as in progress:
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-start
 ```
 
-While this marker is fresh, the Stop gate lets your turns end — so after spawning the reviewers you may simply end the turn and let their completion notifications re-wake you. Never busy-wait with sleep loops. The marker is cleared automatically by Phase 8's `mark`; if the cycle aborts before Phase 8 for any reason, run `"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-end` so the gate re-arms.
+While this marker is fresh, the Stop gate lets your turns end — so after spawning the reviewers you may simply end the turn and let their completion notifications re-wake you. Never busy-wait with sleep loops. The marker is cleared automatically by Phase 8's `mark`; if the cycle aborts before Phase 8 for any reason, run `"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-end` so the gate re-arms. Print an abbreviated status alongside it — tier, leg status, which reviewers had reported — because Phase 9 is the only thing that reports coverage, and an abort skips it entirely.
 
 **Compose an intent brief first** — 2–4 sentences on what the change is trying to accomplish and why, plus the changed-file list. Source it from the conversation that produced the changes, or from the commit messages in `<ref>..HEAD` when reviewing against a base. Every reviewer gets it: a reviewer that knows the intent flags real deviations instead of guessing at purpose, and its findings need less relitigating. Do not editorialize about expected findings — state intent, not hoped-for verdicts.
 
 In a single conversation turn, invoke ALL of the following:
 
-1. **Codex review (background)** — direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief goes to the subagents only — do not pass it to Codex:
+1. **Codex review (background)** — only when Phase 1 recorded the leg as `eligible`; skip this step entirely otherwise and fan out to the subagents alone. Direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief goes to the subagents only — do not pass it to Codex:
+
+   **Match the review's depth to the tier.** On the **full** tier pass no override at all and let the user's `~/.codex/config.toml` decide. The adjustment is one-directional by design — lower the effort on a trivial diff, never raise it on a large one. A user who set `medium` globally chose that.
+
+   On the **light** tier, lower the effort *only when it would actually be lower*. Check what is configured first:
+
+   ```bash
+   awk '/^[[:space:]]*\[/{exit} /^[[:space:]]*model_reasoning_effort/{print}' ~/.codex/config.toml 2>/dev/null
+   ```
+
+   Read the **root table only** — stop at the first `[section]` header. A plain grep also matches `model_reasoning_effort` keys inside `[profiles.*]`, so a root value of `minimal` alongside an unused profile value of `medium` would look like `medium` and get "lowered" to `low`, raising the effort the user is actually running at.
+
+   The effort scale, ascending, is `none` < `minimal` < `low` < `medium` < `high` < `xhigh` < `max` (the API rejects anything else, naming exactly this set). Append `-c model_reasoning_effort="low"` when the configured effort is above `low`, or when nothing is configured — the review model's own default sits at `low` or higher, so the override can only lower or no-op. When the configured value is already `low`, `minimal`, or `none`, **pass no override**: raising a user who deliberately chose `minimal` up to `low` would both break the one-directional rule and make a trivial diff cost more than a full-tier one.
+
+   Record the effort actually passed — `low` or `inherited` — into the summary draft at the moment of the spawn. It is not recoverable from the tier later: two light-tier runs report differently depending on what was configured.
 
    ```
    Bash({
+     // full tier — inherit the user's configured model and effort:
      command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",   // or: codex review --base <ref>
+
+     // light tier:
+     // cd "$PROJECT_ROOT" && codex review --uncommitted -c model_reasoning_effort="low"
+
      description: "Codex review",
      run_in_background: true
    })
    ```
 
    - Uses the `codex` CLI directly; no dependency on the codex Claude plugin
-   - The user has `multi_agent = true` enabled in `~/.codex/config.toml`, so Codex spawns parallel review agents internally during a single review call
+   - With `multi_agent = true` in `~/.codex/config.toml`, Codex spawns parallel review agents internally during a single review call — the effort setting applies to those internal agents too, so the light-tier reduction compounds across them
+   - `-c` is the only per-invocation lever available: `codex review` has no `--model` or `--profile` flag (both exist on the top-level command, not this subcommand)
+   - Tier on effort, never on model name. Model names churn — Codex records its own migrations under `[notice.model_migrations]` — and a name pinned here would rot into an error or a silent downgrade, on top of overriding a model the user picked deliberately.
+   - Emit the literal string `low` and nothing else. Codex does not validate `-c` values locally (a bogus effort passes straight into the session and fails at the API mid-review), so never interpolate a value read from config, user input, or a model list.
    - Returns immediately with a bash shell ID; output streams to the task output file
    - Save the shell ID; you'll read its output later when notified of completion
 
@@ -158,14 +197,25 @@ In a single conversation turn, invoke ALL of the following:
 
    All applicable agents fire in parallel. Auto-notification on completion — do not poll.
 
+   **Do not pass `name:` to these spawns** (see "Things to NOT do"). Address any nudge to the `agent_id` in the spawn result instead — that keeps `SendMessage` available without changing completion semantics.
+
 The post-loop pass (Phase 7) runs the report-only reviewers and cleanup; none of those are part of this fan-out.
 
 **Collecting results, with a stall watchdog.** Completion notifications arrive automatically — do not poll, and (with the in-progress marker set) end the turn rather than sleep while reviewers run. Background reviewers sometimes stall: they go idle without ever delivering a report. The watchdog is wake-driven — you cannot wait on a timer, so act on whatever wakes you (a completion, an idle notification, a user message):
 
-- On any wake where a reviewer has gone idle without delivering, or has stayed silent while the other reviewers all completed, send it ONE nudge via `SendMessage`: deliver findings now, even if incomplete.
-- If a nudged reviewer still hasn't reported by the next wake, proceed to Phase 4 without it and list it under "reviewers dropped (stalled)" in the final summary.
+- On any wake where a reviewer has gone idle without delivering, or has stayed silent while the other reviewers all completed, send it ONE nudge via `SendMessage`: deliver findings now, even if incomplete. Address the nudge to the `agent_id` from that reviewer's spawn result.
+- If a nudged reviewer still hasn't reported by the next wake **that carries information about it**, proceed to Phase 4 without it and list it under "reviewers dropped (stalled)" in the final summary. Evidence means an idle or completion notification naming that reviewer, or — only when other Claude-side reviewers exist — all of them having since reported. A wake triggered by unrelated agents is not evidence; dropping on it discards a reviewer that may be mid-reply.
+- **When it is the only Claude-side reviewer** (the light tier spawns `code-reviewer` alone), the set-relative test is vacuously true and must not be used: only that reviewer's own idle notification, or the user's next message, counts as evidence. Dropping it takes the entire Claude side of the review with it, so it gets the strictest reading.
 - Never nudge the same reviewer twice, and never hold the whole cycle for a single straggler that has already been nudged.
 - Residual: if the last outstanding reviewer stalls without even an idle notification, no wake arrives until the user's next message — that message is the wake; apply the rules then. Do not burn turns polling to avoid this case.
+
+**A Codex leg that dies after launch is a failure, not a skip.** It passed the Phase 1 probe, so anything short of a usable report means something broke mid-run — a revoked session, a rate limit, a crash, or credentials that were never valid.
+
+Read the status from the completion notification, which carries the shell's exit code — not from the output file, where a crashed run and a clean run look alike.
+
+`participated` is the outcome recorded here, replacing Phase 1's `eligible`; it is never the precondition for launching the run that produces it.
+
+Continue on the subagent findings either way, and report the leg in Phase 9 distinctly from the `skipped` cases — a skip is a known-shape environment, a failure is a regression worth looking at. Carry Phase 1's auth state into the message: `failed (<error> — no stored session, try codex login)` turns a puzzling failure into a one-command fix, while an auth state of `unknown` must never be dressed up as a login problem.
 
 Proceed to Phase 4 when every reviewer has reported or been dropped under this policy.
 
@@ -207,7 +257,7 @@ Then decide:
 
 - NO inline fixes applied (everything clean or correctly deferred) → exit loop.
 - Only mechanical fixes, all self-checked → exit loop. Do NOT re-fan-out just to confirm fixes landed — that confirmation is exactly what the self-check provided.
-- At least one substantive fix AND iteration count < max-iter → GOTO Phase 3, scoped: re-run Codex plus only the subagents whose domain the substantive fixes touched.
+- At least one substantive fix AND iteration count < max-iter → GOTO Phase 3, scoped: re-run Codex (when its leg is eligible) plus only the subagents whose domain the substantive fixes touched. A Codex leg that failed gets exactly one retry across the whole cycle; after a second failure stop launching it, since repeated attempts against a rate limit or a revoked session buy nothing. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)` rather than a bare `participated` — the iteration Codex missed is usually the one that had the findings.
 - Iteration count == max-iter → exit loop with summary of remaining findings.
 
 ### Phase 7: Post-loop pass (report-only reviewers + cleanup)
@@ -259,6 +309,9 @@ Review cycle complete.
 
 Tier: light | full
 Iterations: N / max
+Codex leg: participated (effort: low | inherited) | skipped (<reason>) | failed (<error>)
+  auth: confirmed | no stored session | unknown (probe unsupported)
+Canonicalization: ran (<commands>) | partial (<tool> unavailable) | no project checks found
 Reviewers dropped (stalled): none | <names, each nudged once before dropping>
 Findings fixed inline: X
   - file:line — issue (source)
@@ -290,7 +343,8 @@ The Stop hook will see the sentinel now matches the current state and allow the 
 ## Things to NOT do
 
 - Do NOT run `git commit`. The user owns the commit decision.
-- Do NOT silently skip Codex if it fails. Surface the error.
+- Do NOT let the Codex leg's status go unreported. Absent is fine and gets named; broken mid-run gets named louder.
+- Do NOT pass `name:` when spawning any review subagent, in either the Phase 3 loop fan-out or the Phase 7 post-loop pass. A named background agent parks as `idle` awaiting messages instead of completing and returning its report, so its findings never arrive — and Phase 7 has no watchdog to notice.
 - Do NOT auto-create beads or trekker tickets for deferred findings.
 - Do NOT touch the opt-out marker (`.claude/.no-review-gate`) programmatically. The user controls it.
 - Do NOT modify the sentinel except at Phase 8, after a complete successful cycle.
