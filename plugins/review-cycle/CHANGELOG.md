@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-17
+
+Makes the Codex review leg optional, so the cycle runs anywhere Claude Code does, and scales its review depth to the diff.
+
+### Added
+
+- **Codex review depth now follows the diff tier.** Every review ran at the user's globally configured reasoning effort, so a two-line `.gitignore` fix cost the same as a large refactor. Light-tier diffs now pass `-c model_reasoning_effort="low"` when that is a reduction — a config already at `low`, `minimal`, or `none` is left alone; full-tier diffs pass no override and inherit the user's `~/.codex/config.toml`. With `multi_agent = true` the setting reaches Codex's internal review agents, so the reduction compounds across them. The final summary reports which applied.
+- The adjustment is **one-directional**: the tier can lower effort but never raise it. A globally configured `medium` is a deliberate choice, and a large diff is not grounds to overrule it.
+- Effort, not model name, is the tuning axis: `codex review` exposes neither `--model` nor `--profile` (only `-c key=value`), model names churn often enough that Codex maintains a `[notice.model_migrations]` table, and a name pinned in the skill would rot into an error or a silent downgrade on another user's account. The skill emits the literal `low` and never interpolates a value — Codex does not validate `-c` values locally, so a bad one would surface only as an API failure mid-review.
+
+### Changed
+
+- **Codex is now an optional review leg rather than a hard prerequisite.** Phase 1 probed `codex --version` and stopped the entire cycle when it failed, which made the plugin unusable on any machine or CI runner without an authenticated Codex — including the PR-review contexts it is otherwise well suited to. The probe now records the leg's status and the cycle continues Claude-only when Codex is absent.
+- **The Codex leg's status is always named in the final summary** (`Codex leg: participated | skipped (…) | failed (…)`). Degraded coverage stays visible instead of silently halving the review.
+- **Absence and mid-run failure are distinguished.** A Codex that never passed the preflight probe is a `skipped` environment, not an error. A Codex that passed the probe and then exited nonzero or returned unusable output during `codex review` is reported as `failed` — the cycle still completes on the subagent findings, but the breakage is surfaced as a regression to look at.
+- **`/review-cycle:init` reports Codex as an available upgrade, not a warning.** A missing CLI prints what installing it would add and marks the multi_agent and auth steps not-applicable rather than flagging them.
+- **Auth is no longer a gate on the Codex leg.** Only `codex --version` decides participation. `codex login status` reports on a *stored* session only, so it exits nonzero with `Not logged in` whenever Codex is authenticated by environment variable (`OPENAI_API_KEY`) with no login on disk — the standard CI arrangement, and precisely the environment an optional Codex leg exists to serve. It now serves only to enrich a later failure message (`failed (… — no stored session, try codex login)`), and `skipped (not authenticated)` is gone as a status. Caught by this release's own dogfood run.
+
+### Fixed
+
+- **The Codex leg's status is read from the completion notification**, which carries the shell's exit code, rather than inferred from the output file — where a crashed run and a clean run both look like a file with no findings in it. `participated` is also now clearly an outcome recorded after the run, distinct from Phase 1's `eligible` precondition; the two shared a name, which made the launch gate read as depending on its own result.
+- **`codex --version` failing no longer always means "not installed".** Exit 127 does; a broken install, a non-executable binary, or a `$PATH` the tool shell can't see does not, and telling those users to `npm install -g` something already installed helps nobody. The probe now classifies on exit code and quotes the actual stderr.
+- **Auth state is three-valued and written down when observed.** `no stored session` and `unknown (probe unsupported)` were collapsed, so a user whose CLI simply lacks `login status` was sent to run `codex login` to fix something that wasn't broken. The state is also recorded into the summary draft at Phase 1 rather than recalled at Phase 9 — the loop ends turns and re-wakes across up to four iterations, and it isn't re-derivable later.
+- **The light-tier effort lookup reads the root table only.** A plain grep also matched `model_reasoning_effort` under `[profiles.*]`, so a root `minimal` beside an unused profile `medium` read as `medium` and got "lowered" to `low` — raising the user's actual effort, the exact thing one-directionality forbids.
+- **A failed Codex leg retries once, not every iteration**, and any iteration's failure sticks in the summary instead of being overwritten by a later success — the iteration Codex missed is usually the one that had the findings.
+- **The stall watchdog no longer drops a reviewer on an unrelated wake.** "Hasn't reported by the next wake" counted any wake, including one triggered by other agents milliseconds later, so a nudged reviewer could be discarded while mid-reply. A wake now has to carry information about that reviewer — it idled again, or every other reviewer has since reported.
+- **The watchdog's set-relative drop test no longer applies on the light tier.** "Every other reviewer has since reported" is vacuously true when `code-reviewer` is the only Claude-side reviewer, so the light tier could nudge and drop its sole reviewer on any wake — losing the entire Claude side of the review on the tier least able to afford it. Only that reviewer's own notification counts there.
+- **Review subagents must be spawned unnamed, in both fan-outs.** Passing `name:` turns a background agent into a persistent addressable teammate that parks as `idle` awaiting messages instead of completing and returning its report, so its findings never arrive and the watchdog spends its one nudge on an agent that was never going to deliver. The rule is now global rather than stated only in the Phase 3 fan-out — Phase 7 spawns agents too, and has no watchdog to notice. Found the hard way: the dogfood run lost all three Claude-side reviewers to this.
+- **Phase 2's canonicalization notes have somewhere to land.** A missing formatter or an erroring typecheck was to be "noted", but the summary had no field for it, so "the typecheck tool was missing" and "the typecheck passed" looked the same. The summary template now carries a `Canonicalization:` line, and an abort before Phase 8 prints an abbreviated status instead of reporting nothing at all.
+
 ## [0.10.0] - 2026-08-17
 
 Cuts the cycle's stall-and-ceremony overhead — the wall-clock cost that field feedback measured at roughly half of each cycle — without dropping any finding-catching mechanism.

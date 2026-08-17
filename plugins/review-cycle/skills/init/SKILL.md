@@ -1,6 +1,6 @@
 ---
 name: init
-description: One-time setup for review-cycle. Verifies Codex CLI and multi_agent config, optionally appends comment + fix-vs-defer policies to CLAUDE.md (global or project), and updates .gitignore to exclude per-project sentinel files. Idempotent — safe to run multiple times.
+description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, optionally appends comment + fix-vs-defer policies to CLAUDE.md (global or project), and updates .gitignore to exclude per-project sentinel files. Idempotent — safe to run multiple times.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 ---
@@ -14,9 +14,9 @@ One-time setup for using `review-cycle`. Run this once globally, then optionally
 Six named checks, each idempotent:
 
 1. **Hook prerequisites** — verifies `jq`, `git`, and a sha256 tool (`sha256sum` or `shasum`) are on `$PATH`. The hooks silently fail-open if any are missing, so a misconfigured machine would have the gate quietly disabled.
-2. **Codex CLI** — verifies `codex --version` works
-3. **Codex multi_agent** — verifies `~/.codex/config.toml` has `multi_agent = true`
-4. **Codex auth** — reminder to run `codex login` if needed
+2. **Codex CLI** (optional) — verifies `codex --version` works
+3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
+4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
 5. **CLAUDE.md policies** — offers to append comment + fix-vs-defer policies (global or project scope)
 6. **Project `.gitignore`** — adds the sentinel and opt-out marker entries if inside a git repo
 
@@ -61,17 +61,19 @@ Continue with subsequent steps regardless — each one is independent.
 
 ### Step 2: Codex CLI check
 
+Codex adds a second review leg from a different model family. It is optional — `/review-cycle:review` runs Claude-only without it — so a missing CLI is reported as an available upgrade, not a warning.
+
 ```bash
 codex --version
 ```
 
 - If command succeeds: ✓ record version
-- If command fails: ⚠ print install instructions:
+- If command fails: note that the cycle will run Claude-only, and print what installing it would add:
   ```
   npm install -g @openai/codex
   codex login
   ```
-  Note this in the summary and continue (don't abort — other steps may still apply).
+  Continue; steps 3 and 4 are moot without the CLI, so skip them.
 
 ### Step 3: Codex multi_agent config
 
@@ -89,11 +91,15 @@ If missing:
   Backup existing config to `~/.codex/config.toml.bak` first if the file exists.
 - If user skips: note in summary, continue.
 
-### Step 4: Codex auth reminder
+### Step 4: Codex auth check
 
-Auth state can't be precisely detected without interpreting codex CLI output. Print a reminder:
-- If `~/.codex/auth.json` exists (or equivalent token file): assume authed, no warning.
-- Otherwise: warn "Run `codex login` if you haven't already."
+```bash
+codex login status
+```
+
+- Exit 0 (e.g. `Logged in using ChatGPT`): ✓ authed.
+- Reports not logged in: use the `-` glyph, not `⚠` — this is unconfirmed, not broken. "no stored login — fine if you authenticate via `OPENAI_API_KEY`, else run `codex login`". The command only sees a stored session, so it says `Not logged in` for a working env-var setup, which is the normal CI arrangement.
+- Subcommand unrecognized (older CLI): report `- Codex auth: unknown (probe unsupported on this CLI)`. Don't silently drop the line — a check that vanishes reads as a check that passed.
 
 ### Step 5: CLAUDE.md policies
 
@@ -154,7 +160,7 @@ review-cycle init summary:
   ✓ Prereqs: jq, git, sha256sum
   ✓ Codex CLI: codex-cli 0.130.0
   ✓ multi_agent enabled
-  ✓ Codex auth detected
+  - Codex auth: no stored login — fine if you authenticate via OPENAI_API_KEY, else run codex login
   ✓ Policies appended to ~/.claude/CLAUDE.md (backup: .bak)
   - .gitignore: skipped (not in a git repo)
 
@@ -166,9 +172,9 @@ When something needs manual action, surface it inline with `⚠` and a clear nex
 ```
 review-cycle init summary:
   ⚠ Prereqs: jq missing — brew install jq
-  ✓ Codex CLI: codex-cli 0.130.0
-  ⚠ multi_agent not enabled — add `multi_agent = true` to [features] in ~/.codex/config.toml
-  ⚠ Codex auth not detected — run: codex login
+  - Codex CLI: not installed — review runs Claude-only (npm i -g @openai/codex to add it)
+  - multi_agent: n/a without the CLI
+  - Codex auth: n/a without the CLI
   - Policies: skipped by user (snippets at ${CLAUDE_PLUGIN_ROOT}/reference/policies.md)
   ✓ .gitignore updated in /Users/.../my-project
 
