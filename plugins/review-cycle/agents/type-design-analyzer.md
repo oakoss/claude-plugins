@@ -53,7 +53,7 @@ Prefer evidence over inference. Claims about compile-time enforcement are checka
 
 Provide your analysis in this structure:
 
-```
+```text
 ## Type: [TypeName]
 
 ### Invariants Identified
@@ -118,6 +118,7 @@ Flag these whenever they appear in the diff — they are worth reporting even wh
 **When Suggesting Improvements:**
 
 Always consider:
+
 - The complexity cost of your suggestions
 - Whether the improvement justifies potential breaking changes
 - The skill level and conventions of the existing codebase

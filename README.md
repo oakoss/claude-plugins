@@ -37,7 +37,7 @@ Use `/reload-plugins` inside Claude Code to pick up edits without restarting.
 
 ## Repository layout
 
-```
+```text
 claude-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json     # marketplace manifest

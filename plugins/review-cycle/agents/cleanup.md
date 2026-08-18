@@ -80,7 +80,7 @@ De-slopify's code-slop guidance (verbose naming, unnecessary abstractions, defen
 5. Make edits directly via Edit/MultiEdit.
 6. Return a structured summary:
 
-```
+```text
 Cleanup summary:
 
   file:line — removed "..." (reason)

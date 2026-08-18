@@ -25,9 +25,11 @@ Each round:
 
 1. **Read the check set.** If checks are still pending, watch them: `gh pr checks <number> --watch --fail-fast`. If they've already failed, skip the wait and diagnose.
 2. **Diagnose one failure.** Take a single failing check and find the root error — the first actionable failure, not a downstream symptom. For GitHub Actions, read the failed logs:
+
    ```bash
    gh run view <run-id> --log-failed
    ```
+
    For an external check, follow its `link` to find the failing command or service.
 3. **Apply the smallest safe fix** for that one cause. Don't batch unrelated fixes into one round — one cause at a time keeps each push diagnosable.
 4. **Review before it leaves your machine.** Route the fix through your review gate so it's never pushed unreviewed:
@@ -46,7 +48,7 @@ Each round:
 
 ## Output
 
-```
+```text
 PR #<n> — CI: <green / still failing / stuck>
 
 Rounds:

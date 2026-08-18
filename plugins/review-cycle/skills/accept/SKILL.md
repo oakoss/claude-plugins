@@ -41,7 +41,7 @@ Report the exit code to the user:
 
 ## Composition
 
-```
+```text
 /review-cycle:de-slopify   → tidy up prose
 /review-cycle:accept       → mark as reviewed
 git commit                 → gate passes, commit succeeds
@@ -57,7 +57,7 @@ Looser chains are denied by the gate: `;`, `||`, or a bare newline as the separa
 
 vs the full cycle:
 
-```
+```text
 /review-cycle:review    → fan out reviewers, apply fixes, cleanup, update sentinel
 git commit              → gate passes, commit succeeds
 ```

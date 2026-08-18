@@ -1,2 +1,5 @@
 packages:
   - "plugins/*"
+
+allowBuilds:
+  lefthook: true

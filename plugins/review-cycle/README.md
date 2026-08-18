@@ -8,7 +8,7 @@ After you implement changes, `review-cycle` fans out parallel reviewers, applies
 
 ## Architecture
 
-```
+```text
 Implement changes
        ↓
 Stop hook fires when you finish a turn
@@ -245,7 +245,7 @@ Remove the file to re-enable.
 
 The sentinel and the Stop gate's markers are per-project state, not source. Add to your project's `.gitignore` (`/review-cycle:init` does this, sourcing the list from `review-sentinel paths`; installs that ran init before 0.10.0 should re-run it once to pick up the marker paths):
 
-```
+```text
 .claude/.review-mark
 .claude/.review-in-progress
 .claude/.review-stop-block
@@ -255,7 +255,7 @@ The config file (`.claude/review-cycle.json`) is meant to be committed so the te
 
 ## State files
 
-```
+```text
 ${PROJECT}/.claude/.review-mark           two-line sentinel (anchor + sha256)
 ${PROJECT}/.claude/review-cycle.json      per-project config (disabled, ignore)
 ${PROJECT}/.claude/.review-in-progress    cycle-running marker (Stop gate passes while fresh)

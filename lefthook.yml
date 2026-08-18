@@ -1,0 +1,23 @@
+output:
+  - failure
+  - execution_out
+
+pre-commit:
+  parallel: true
+  commands:
+    shellcheck:
+      glob: '*.{sh,bash}'
+      run: shellcheck --external-sources --severity=warning {staged_files}
+    lint-md:
+      glob: '*.md'
+      run: pnpm exec markdownlint-cli2 --fix {staged_files}
+      stage_fixed: true
+    format-scripts:
+      glob: 'scripts/*.{mjs,js,cjs}'
+      run: pnpm exec oxfmt {staged_files}
+      stage_fixed: true
+
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}

@@ -60,4 +60,4 @@ As a PR evolves, make sure its bump file stays in sync. If the scope of changes 
 - `README.md` — this file
 - `*.md` (other than README.md) — pending bump files
 
-📖 Full documentation: https://bumpy.varlock.dev
+📖 Full documentation: <https://bumpy.varlock.dev>
