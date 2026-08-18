@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@varlock/bumpy/config-schema.json",
   "baseBranch": "main",
+  "versionCommitMessage": "chore(release): version packages",
   "changelog": ["github", { "internalAuthors": ["jbabin91"] }],
   "privatePackages": {
     "version": true,
