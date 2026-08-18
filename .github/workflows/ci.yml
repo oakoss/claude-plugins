@@ -250,3 +250,51 @@ jobs:
 
           printf '\n%d tests reported across all suites\n' "$total"
           exit "$status"
+
+  # The single required check: the branch ruleset gates on this job alone, so
+  # adding or renaming jobs never needs a ruleset edit. Every job above must be
+  # listed in `needs` — an omitted job is invisible to the gate.
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # always(), not !cancelled(): a skipped required check counts as
+    # satisfied, so cancellation must yield a red X here, not a skip.
+    if: always()
+    needs: [versions, bump-files, lint, validate, shellcheck, tests]
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Summarize results
+        run: |
+          {
+            echo "## CI Summary"
+            echo ""
+            echo "| Job | Status | Required |"
+            echo "| --- | --- | --- |"
+            echo "| Version consistency | \`${{ needs.versions.result }}\` | Yes |"
+            echo "| Bump files | \`${{ needs.bump-files.result }}\` | Yes (PRs; skips on push) |"
+            echo "| Markdown and format | \`${{ needs.lint.result }}\` | Yes |"
+            echo "| Plugin manifests | \`${{ needs.validate.result }}\` | Yes |"
+            echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes |"
+            echo "| Bats (both OSes) | \`${{ needs.tests.result }}\` | Yes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail_if_bad() {
+            if [ "$2" = "failure" ] || [ "$2" = "cancelled" ]; then
+              echo "Job '$1' failed or was cancelled"
+              exit 1
+            fi
+          }
+
+          fail_if_bad "versions" "${{ needs.versions.result }}"
+          fail_if_bad "bump-files" "${{ needs.bump-files.result }}"
+          fail_if_bad "lint" "${{ needs.lint.result }}"
+          fail_if_bad "validate" "${{ needs.validate.result }}"
+          fail_if_bad "shellcheck" "${{ needs.shellcheck.result }}"
+          fail_if_bad "tests" "${{ needs.tests.result }}"
