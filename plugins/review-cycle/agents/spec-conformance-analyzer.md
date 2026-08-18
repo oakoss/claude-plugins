@@ -38,6 +38,10 @@ Quote the relevant spec line for every finding so the reader can verify intent w
 - **Scope creep** — behavior in the diff that the spec did not ask for. Not automatically wrong, but it should be a deliberate decision, not an accident. Flag it so the author confirms it belongs.
 - **Implemented but wrong** — requirements that appear handled but where the implementation does not match what the spec described (wrong condition, wrong default, off-by-one against a stated rule, inverted logic). For each, state what the spec said and what the code actually does.
 
+## Verify empirically
+
+Prefer evidence over inference, especially for the "implemented but wrong" bucket: when a spec requirement describes observable behavior — a command's output, an exit code, a validation rejecting bad input — run it and compare against the spec's words rather than reasoning from the diff alone. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — run repros in a disposable directory.
+
 ## Output
 
 ```

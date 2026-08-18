@@ -45,6 +45,10 @@ When analyzing a type, you will:
    - Is it impossible to create invalid instances?
    - Are runtime checks appropriate and comprehensive?
 
+**Verify Empirically:**
+
+Prefer evidence over inference. Claims about compile-time enforcement are checkable: feed the typechecker an invalid construction in a disposable file and confirm it is actually rejected before rating enforcement, and run it against the real code before asserting a cast or `any` leaks. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — put probe files in a disposable directory.
+
 **Output Format:**
 
 Provide your analysis in this structure:

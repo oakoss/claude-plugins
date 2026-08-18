@@ -249,7 +249,8 @@ Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (s
 A full reviewer re-fan-out is only worth its wall-clock when this iteration's fixes could themselves have introduced problems. Verify cheaply first:
 
 1. **Self-check every fix against the findings list.** Re-read each fixed site and confirm the finding is actually addressed — not merely edited near. Anything unaddressed gets fixed now, within this iteration.
-2. **Classify the iteration's fix churn:**
+2. **Verify facts introduced by fixes.** A fix that adds or rewords a factual claim — in prose, a comment, a doc, or a commit-message draft — gets the claim itself checked before proceeding: run the command it describes, read the code it characterizes, confirm the name or version it cites. Step 1 confirms the finding was addressed; this step confirms the fix didn't trade the finding for a false statement, which otherwise survives until the next fan-out catches it — or ships.
+3. **Classify the iteration's fix churn:**
    - **Mechanical** — strictly non-semantic fixes confined to the flagged lines: typo/wording corrections, renames, removing dead code or a redundant comment, doc corrections. The self-check is sufficient verification.
    - **Substantive** — any fix that changes runtime behavior, however small: a new function, branch, or guard clause, a tightened condition, restructured control flow, edits beyond the flagged lines, or a fix where you chose among design alternatives. The self-check confirms the finding was addressed, not that the new behavior is right — behavior changes get re-reviewed.
 

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-17
+
+Makes reviewers prove their claims instead of inferring them.
+
+### Added
+
+- **Reviewers are instructed to verify empirically.** Five of the reviewer agents (code-reviewer, silent-failure-hunter, pr-test-analyzer, type-design-analyzer, spec-conformance-analyzer) now carry a "Verify empirically" section: when a finding rests on a claim a command can settle — an exit code, a build output, whether a test actually covers a path, whether the typechecker actually rejects an invalid construction — run the command and report what happened rather than reasoning about what should happen. Findings are labeled verified (with what was run) or inferred from reading, and verification must never disturb the review target — repros and probe files go in a disposable directory. The two exclusions are deliberate: cleanup originates no findings, and maintainability-auditor's structural suggestions are speculative by design — a probe adds cost without changing a verdict already labeled speculative. Field experience drove this: the findings that mattered came from agents that ran things, and this plugin's own release-breaking `codex login status` bug was caught only by an empirical probe no prompt had asked for.
+- **A local eval suite** (`evals/`, run with `claude plugin eval` — see `evals/README.md`). Two cases cover the 0.11.0 behavior that only exists as skill prose: a codex shim exiting 127 must yield a completed Claude-only cycle whose summary names `skipped (not installed)` and never launches `codex review`; a working shim plus a 2-line diff must produce a `codex review` invocation carrying `-c model_reasoning_effort="low"` and a summary reporting `participated (effort: low)`. Shims keep eval runs off any real Codex account. Local-only for now — CI has no `claude` CLI on the runner.
+- **Phase 6 verifies facts introduced by fixes, not just the fixes themselves.** The self-check confirmed a finding was addressed but never that new prose was true, so a fix could resolve a finding by asserting something false — surviving until the next fan-out caught it, or shipping. A fix that adds or rewords a factual claim now gets the claim itself checked (run the command it describes, read the code it characterizes, confirm the name or version it cites) before the loop proceeds.
+
 ## [0.11.0] - 2026-08-17
 
 Makes the Codex review leg optional, so the cycle runs anywhere Claude Code does, and scales its review depth to the diff.
