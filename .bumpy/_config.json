@@ -2,6 +2,10 @@
   "$schema": "../node_modules/@varlock/bumpy/config-schema.json",
   "baseBranch": "main",
   "versionCommitMessage": "chore(release): version packages",
+  "gitUser": {
+    "name": "oakoss[bot]",
+    "email": "oakoss[bot]@users.noreply.github.com"
+  },
   "changelog": ["github", { "internalAuthors": ["jbabin91"] }],
   "privatePackages": {
     "version": true,
