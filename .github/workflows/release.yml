@@ -79,7 +79,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BOT_APP_ID }}
+          client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
 
       - name: Checkout
@@ -106,8 +106,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUMPY_GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
-      # The push rides the checkout's app-token credential, so the synced
-      # manifests re-trigger CI on the version PR.
+      # Fold the synced manifests into bumpy's own commit: amend and
+      # force-push, which is safe because bumpy force-recreates this branch on
+      # every run. The version PR ends up with a single oakoss[bot] commit and
+      # one CI cycle on the surviving head. The push rides the checkout's
+      # app-token credential, so CI still triggers.
       - name: Sync plugin manifests into the version PR
         run: |
           git fetch origin bumpy/version-packages
@@ -116,8 +119,8 @@ jobs:
           if ! git diff --quiet; then
             git config user.name "oakoss[bot]"
             git config user.email "oakoss[bot]@users.noreply.github.com"
-            git commit -am "chore: sync plugin manifests"
-            git push origin bumpy/version-packages
+            git commit -a --amend --no-edit
+            git push --force-with-lease origin bumpy/version-packages
           fi
 
   # "Publish" for this repo is tags only — every package is private, so bumpy
@@ -158,7 +161,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.BOT_APP_ID }}
+          client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
 
       - name: Tag and create releases

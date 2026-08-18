@@ -14,9 +14,57 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # The release branch queues instead of cancelling: its two pushes land
+  # seconds apart, and a cancellation that races a just-started job can leave
+  # it stuck holding this group until its timeout.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.head_ref != 'bumpy/version-packages' }}
 
 jobs:
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shell: ${{ steps.filter.outputs.shell }}
+      bats: ${{ steps.filter.outputs.bats }}
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      # Push builds run everything; PR builds skip the shell-surface jobs when
+      # the diff touches no shell, hook, script, or test file. The summary job
+      # counts their skips as satisfied, so gating semantics are unchanged.
+      - name: Classify the diff
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "shell=true" >> "$GITHUB_OUTPUT"
+            echo "bats=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD)
+          changed=$(git diff --name-only "$base" HEAD)
+          printf 'changed files:\n%s\n' "$changed"
+          shell=false
+          bats=false
+          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)bin/|(^|/)hooks/'; then
+            shell=true
+          fi
+          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)(bin|hooks|tests|scripts)/|^\.github/workflows/|package\.json$|pnpm-lock\.yaml$'; then
+            bats=true
+          fi
+          echo "shell=$shell" >> "$GITHUB_OUTPUT"
+          echo "bats=$bats" >> "$GITHUB_OUTPUT"
+
   versions:
     name: Version consistency
     runs-on: ubuntu-latest
@@ -150,6 +198,8 @@ jobs:
 
   shellcheck:
     name: ShellCheck
+    needs: changes
+    if: needs.changes.outputs.shell == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -177,6 +227,8 @@ jobs:
 
   tests:
     name: Bats (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.bats == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -261,7 +313,7 @@ jobs:
     # always(), not !cancelled(): a skipped required check counts as
     # satisfied, so cancellation must yield a red X here, not a skip.
     if: always()
-    needs: [versions, bump-files, lint, validate, shellcheck, tests]
+    needs: [changes, versions, bump-files, lint, validate, shellcheck, tests]
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -281,8 +333,8 @@ jobs:
             echo "| Bump files | \`${{ needs.bump-files.result }}\` | Yes (PRs; skips on push) |"
             echo "| Markdown and format | \`${{ needs.lint.result }}\` | Yes |"
             echo "| Plugin manifests | \`${{ needs.validate.result }}\` | Yes |"
-            echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes |"
-            echo "| Bats (both OSes) | \`${{ needs.tests.result }}\` | Yes |"
+            echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes (skips when no shell surface changed) |"
+            echo "| Bats (both OSes) | \`${{ needs.tests.result }}\` | Yes (skips when no shell/test surface changed) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail_if_bad() {
@@ -292,6 +344,7 @@ jobs:
             fi
           }
 
+          fail_if_bad "changes" "${{ needs.changes.result }}"
           fail_if_bad "versions" "${{ needs.versions.result }}"
           fail_if_bad "bump-files" "${{ needs.bump-files.result }}"
           fail_if_bad "lint" "${{ needs.lint.result }}"
