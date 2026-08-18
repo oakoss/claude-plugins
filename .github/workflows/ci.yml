@@ -81,6 +81,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  lint:
+    name: Markdown and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint markdown
+        run: pnpm exec markdownlint-cli2 "**/*.md"
+
+      # oxfmt is scoped to hand-written scripts only: skill/agent markdown is
+      # runtime prose, changelogs are bumpy-generated, and the plugin manifests
+      # are written by the sync script — formatting any of those creates churn
+      # against their generators.
+      - name: Check script formatting
+        run: pnpm exec oxfmt --check scripts
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest

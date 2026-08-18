@@ -44,7 +44,7 @@ Prefer evidence over inference, especially for the "implemented but wrong" bucke
 
 ## Output
 
-```
+```text
 ## Spec conformance
 
 Spec source: <id / path / "none found">

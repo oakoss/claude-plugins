@@ -64,7 +64,7 @@ Confirm no `<<<<<<<`, `=======`, or `>>>>>>>` markers survive anywhere. Then rep
 
 ## Output
 
-```
+```text
 Conflicts resolved: N files
   - path — how it was resolved (kept both / took <side> because …)
 

@@ -154,7 +154,7 @@ In a single conversation turn, invoke ALL of the following:
 
    Record the effort actually passed — `low` or `inherited` — into the summary draft at the moment of the spawn. It is not recoverable from the tier later: two light-tier runs report differently depending on what was configured.
 
-   ```
+   ```js
    Bash({
      // full tier — inherit the user's configured model and effort:
      command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",   // or: codex review --base <ref>
@@ -186,7 +186,7 @@ In a single conversation turn, invoke ALL of the following:
 
    Each spawn pattern:
 
-   ```
+   ```js
    Agent({
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
@@ -283,7 +283,7 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 - **diffs under ~150 changed lines, whatever the tier** — clean inline, yourself. Apply the embedded comment policy to comments you touched, and invoke `/review-cycle:de-slopify` via the Skill tool for the prose methodology, applying it to modified `.md` files and commit-message drafts. Same exclusions as the agent: never touch algorithm logic, type definitions, or test assertions.
 - **~150 changed lines or more** — spawn the cleanup subagent (it has de-slopify preloaded via its `skills` frontmatter). Size, not tier, decides: a large docs-only diff is light-tier for fan-out but is exactly the prose volume the agent spawn is for:
 
-  ```
+  ```js
   Agent({
     subagent_type: "review-cycle:cleanup",
     description: "Final cleanup pass — comments + de-slopify",
@@ -305,7 +305,7 @@ This is what allows the Stop hook and commit-gate to let the user commit. `mark`
 
 Print a structured summary:
 
-```
+```text
 Review cycle complete.
 
 Tier: light | full

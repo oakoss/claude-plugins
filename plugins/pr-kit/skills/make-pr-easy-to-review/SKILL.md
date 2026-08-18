@@ -89,7 +89,7 @@ If a diff can't be made reviewable with notes and grouping — too many concerns
 
 ## Output
 
-```
+```text
 PR #<n> — reviewability pass
 
 Description: <updated / proposed — show it>

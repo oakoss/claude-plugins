@@ -64,7 +64,7 @@ Don't pad the list. Merge duplicate threads that ask for the same thing. Drop re
 
 ## Output
 
-```
+```text
 PR #<n> — <title>   (<review state: changes requested / approved / open>)
 
 Blocking (N):

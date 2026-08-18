@@ -69,10 +69,12 @@ codex --version
 
 - If command succeeds: ✓ record version
 - If command fails: note that the cycle will run Claude-only, and print what installing it would add:
-  ```
+
+  ```bash
   npm install -g @openai/codex
   codex login
   ```
+
   Continue; steps 3 and 4 are moot without the CLI, so skip them.
 
 ### Step 3: Codex multi_agent config
@@ -80,14 +82,17 @@ codex --version
 Read `~/.codex/config.toml` if it exists. Look for `multi_agent = true` (any whitespace) under `[features]`.
 
 If missing:
+
 - Use `AskUserQuestion` with options:
   - "Enable multi_agent in ~/.codex/config.toml (recommended)"
   - "Skip — I'll configure manually"
 - If user enables: append (or create) the config:
+
   ```toml
   [features]
   multi_agent = true
   ```
+
   Backup existing config to `~/.codex/config.toml.bak` first if the file exists.
 - If user skips: note in summary, continue.
 
@@ -141,6 +146,7 @@ done < <("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" paths)
 ```
 
 For each entry:
+
 - If `.gitignore` exists and already contains the entry (exact line match), skip.
 - Otherwise, append it (create `.gitignore` if missing).
 
@@ -155,7 +161,7 @@ Print a compact checklist of what was done. One line per item, single status gly
 - `✗` failed
 - `-` skipped or not applicable
 
-```
+```text
 review-cycle init summary:
   ✓ Prereqs: jq, git, sha256sum
   ✓ Codex CLI: codex-cli 0.130.0
@@ -169,7 +175,7 @@ Run /review-cycle:review on a project with uncommitted changes.
 
 When something needs manual action, surface it inline with `⚠` and a clear next step. Example:
 
-```
+```text
 review-cycle init summary:
   ⚠ Prereqs: jq missing — brew install jq
   - Codex CLI: not installed — review runs Claude-only (npm i -g @openai/codex to add it)
