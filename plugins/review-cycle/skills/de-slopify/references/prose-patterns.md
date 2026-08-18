@@ -118,6 +118,62 @@ BEFORE: To summarize, we covered three key patterns.
 AFTER:  (delete the closer entirely; the reader just read the patterns)
 ```
 
+## Wordiness and Instruction Patterns
+
+Rules shared with the `prose` plugin's output style and cleanup skill so both apply the same standard — mostly from the Google developer documentation style guide (the claims rows come from its excessive-claims page), plus LLM-era structural additions like the copula swap.
+
+### Word Swaps
+
+| Replace                                  | With                                       |
+| ---------------------------------------- | ------------------------------------------ |
+| in order to                              | to                                         |
+| leverage, utilize                        | use (utilization stays for resource metrics) |
+| enables you to, allows you to            | lets you                                   |
+| via                                      | through, with, by using                    |
+| e.g. / i.e. / etc.                       | for example / that is / "such as ..."      |
+| prior to / subsequently                  | before / then                              |
+| desired, wish                            | want, need                                 |
+| impacts (verb)                           | affects                                    |
+| comprise                                 | consists of, contains                      |
+| currently, now, soon, not yet            | delete; describe what is                   |
+| may (possibility)                        | might or can (keep "may" for permission)   |
+| will / would / could                     | present tense; can                         |
+| check out, refer to (links)              | see                                        |
+| and/or, slashed alternatives             | or, and, or "X, Y, or both"                |
+| new, latest, existing (of features)      | delete, or anchor to a version or date     |
+| best, fastest, ensures, guarantees       | a verifiable claim, "helps", or delete     |
+| serves as, stands as, functions as       | is, has                                    |
+
+### Instruction Mechanics
+
+Active voice and present tense are the default; make the actor explicit.
+
+```text
+BEFORE: The service is queried, and an acknowledgment will be sent.
+AFTER:  Send a query to the service. The server sends an acknowledgment.
+```
+
+Passive stays in three cases: emphasizing the object ("The file is saved"), softening blame ("Over 50 conflicts were found"), or an irrelevant actor.
+
+Condition comes before instruction, so readers can skip what doesn't apply:
+
+```text
+BEFORE: Click Delete if you want to delete the entire document.
+AFTER:  To delete the entire document, click Delete.
+```
+
+Address the reader as "you"; "please" belongs only in requests for an actual favor; don't anthropomorphize software (components specify, detect, and return; they don't want, think, or see).
+
+### Keep Function Words
+
+Terseness is not the goal. Google's guide explicitly keeps "that", "then", "all of the", and repeated "if"/"both" when they aid parsing:
+
+```text
+KEEP: Update the rules that you previously defined.
+KEEP: If the key is not found, then the default value is returned.
+KEEP: Create a VM instance. (articles stay, even in headings)
+```
+
 ## Linguistic Pattern Breaking
 
 Human writing has irregular rhythm. AI writing is metronomic. Breaking the pattern is as important as fixing individual phrases.
