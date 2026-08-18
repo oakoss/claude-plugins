@@ -70,6 +70,12 @@ Arguments are natural language — no flags:
 - `against <ref>` (e.g. `against main`) — scope to `git diff <ref>..HEAD`
 - `max <n>` — override the iteration cap
 
+### `/review-cycle:review-pr`
+
+Single-pass, report-only review of a GitHub pull request, run from your machine. Takes a PR number, URL, or branch (bare invocation reviews the current branch's PR). It fetches the PR head into a disposable detached worktree — your checkout, branch, and index are never touched. The fan-out matches the review cycle's, with the intent brief sourced from the PR's title, body, and commits; on the full tier the report-only pair joins the same pass, since a single pass has no fix loop to shield them from. Findings are reported in the conversation with per-reviewer coverage, so "no findings" is never mistaken for "nobody looked". The Codex leg joins when the CLI is installed, briefed and scoped with `--base` against the PR's base branch.
+
+Nothing is fixed and nothing is posted by default. Say `and post` (or ask after reading the report) to publish the findings as a single COMMENT review — never an approval — with fingerprint-marked comments, inline and body-level alike, that deduplicate across re-runs. The review sentinel and commit gate are untouched: this skill reviews someone's PR, not your working tree.
+
 ### `/review-cycle:accept`
 
 Marks the current uncommitted state as reviewed by updating the review sentinel. Use when you've manually reviewed the substance of your changes and want to commit without running the full cycle. Per-state escape hatch (lighter than the project-wide `disabled: true` opt-out).
@@ -139,7 +145,7 @@ The PreToolUse gate stays active either way — it fails fast (before a doomed c
 
 ## Optional: the Codex review leg
 
-Codex is a second review leg from a different model family, not a prerequisite. `/review-cycle:review` probes for it at preflight: installed, it joins the fan-out; absent, the cycle runs Claude-only and names the skip in its summary.
+Codex is a second review leg from a different model family, not a prerequisite. `/review-cycle:review` probes for it at preflight: installed, it joins the fan-out; absent, the cycle runs Claude-only and names the skip in its summary. When it runs, it gets the same intent brief as the Claude-side reviewers, passed as a per-invocation config override — nothing is written into your working tree.
 
 Presence of the CLI is the only gate. Auth deliberately isn't one: `codex login status` reports only on a stored session, so it says `Not logged in` for a Codex authenticated by environment variable (the normal CI setup), and skipping on that would drop a working reviewer in the exact environment this supports. If auth turns out to be genuinely missing, the review fails and the summary says so, naming `codex login` as the likely fix.
 

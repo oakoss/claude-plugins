@@ -66,8 +66,10 @@ Resolve the project root and verify the working state:
 
 ```bash
 git rev-parse --is-inside-work-tree
-PROJECT_ROOT=$(git rev-parse --show-toplevel)
+git rev-parse --show-toplevel
 ```
+
+Run the second command bare, not captured into a variable — the printed path is the `<PROJECT_ROOT>` value later phases substitute into prompts and commands, and a shell assignment neither survives to those calls nor lands in the transcript where you can read it.
 
 If not in a git repo, print a clear error and stop.
 
@@ -138,7 +140,9 @@ While this marker is fresh, the Stop gate lets your turns end — so after spawn
 
 In a single conversation turn, invoke ALL of the following:
 
-1. **Codex review (background)** — only when Phase 1 recorded the leg as `eligible`; skip this step entirely otherwise and fan out to the subagents alone. Direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief goes to the subagents only — do not pass it to Codex:
+1. **Codex review (background)** — only when Phase 1 recorded the leg as `eligible`; skip this step entirely otherwise and fan out to the subagents alone. Direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief rides a config override instead: `-c "developer_instructions=\"<brief>\""`.
+
+   **Reshape the brief for the flag.** The `-c` value is parsed as TOML and the argument passes through one layer of shell quoting, so flatten the Phase 3 brief into a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare rather than quoting them; the changed-file list stays, comma-separated.
 
    **Match the review's depth to the tier.** On the **full** tier pass no override at all and let the user's `~/.codex/config.toml` decide. The adjustment is one-directional by design — lower the effort on a trivial diff, never raise it on a large one. A user who set `medium` globally chose that.
 
@@ -154,24 +158,31 @@ In a single conversation turn, invoke ALL of the following:
 
    Record the effort actually passed — `low` or `inherited` — into the summary draft at the moment of the spawn. It is not recoverable from the tier later: two light-tier runs report differently depending on what was configured.
 
+   Assemble the invocation from these parts:
+
+   ```bash
+   # full tier, working-tree scope (re-derive the root in this call — shell values
+   # don't survive between Bash calls):
+   cd "$(git rev-parse --show-toplevel)" && codex review --uncommitted -c "developer_instructions=\"<brief>\""
+   # base scope: swap --uncommitted for --base <ref>
+   # light tier: append -c model_reasoning_effort="low"
+   ```
+
    ```js
    Bash({
-     // full tier — inherit the user's configured model and effort:
-     command: "cd \"$PROJECT_ROOT\" && codex review --uncommitted",   // or: codex review --base <ref>
-
-     // light tier:
-     // cd "$PROJECT_ROOT" && codex review --uncommitted -c model_reasoning_effort="low"
-
+     command: "<the invocation assembled above>",
      description: "Codex review",
      run_in_background: true
    })
    ```
 
    - Uses the `codex` CLI directly; no dependency on the codex Claude plugin
+   - `developer_instructions` is additive, not a replacement: Codex still discovers the repo's `AGENTS.md`, and the brief arrives on top of it (marker-verified on v0.147.0 — one review summary carried markers planted in both)
+   - The key is undocumented — absent from `codex review --help` but recognized by the config loader. Unrecognized `-c` keys are ignored without error, so a Codex version that drops the key degrades to an unbriefed review instead of breaking the leg. For the same reason, never add `--strict-config` to this invocation: it would turn that benign degradation into a hard failure
    - With `multi_agent = true` in `~/.codex/config.toml`, Codex spawns parallel review agents internally during a single review call — the effort setting applies to those internal agents too, so the light-tier reduction compounds across them
    - `-c` is the only per-invocation lever available: `codex review` has no `--model` or `--profile` flag (both exist on the top-level command, not this subcommand)
    - Tier on effort, never on model name. Model names churn — Codex records its own migrations under `[notice.model_migrations]` — and a name pinned here would rot into an error or a silent downgrade, on top of overriding a model the user picked deliberately.
-   - Emit the literal string `low` and nothing else. Codex does not validate `-c` values locally (a bogus effort passes straight into the session and fails at the API mid-review), so never interpolate a value read from config, user input, or a model list.
+   - For the effort override, emit the literal string `low` and nothing else. Codex does not validate `-c` values locally (a bogus effort passes straight into the session and fails at the API mid-review), so never interpolate an effort read from config, user input, or a model list.
    - Returns immediately with a bash shell ID; output streams to the task output file
    - Save the shell ID; you'll read its output later when notified of completion
 
