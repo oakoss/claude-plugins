@@ -1,0 +1,17 @@
+{
+  "$schema": "../node_modules/@varlock/bumpy/config-schema.json",
+  "baseBranch": "main",
+  "changelog": ["github", { "internalAuthors": ["jbabin91"] }],
+  "privatePackages": {
+    "version": true,
+    "tag": true
+  },
+  "changedFilePatterns": [
+    "**",
+    "!README.md",
+    "!CHANGELOG.md",
+    "!NOTICE",
+    "!LICENSE*",
+    "!tests/**"
+  ]
+}

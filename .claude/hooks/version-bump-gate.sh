@@ -80,6 +80,7 @@ while IFS= read -r path; do
     plugins/"$plugin"/tests/*) continue ;;
     plugins/"$plugin"/test/*) continue ;;
     plugins/"$plugin"/.claude-plugin/plugin.json) continue ;;
+    plugins/"$plugin"/package.json) continue ;;
   esac
   seen=0
   for p in "${AFFECTED[@]}"; do
@@ -103,8 +104,16 @@ for plugin in "${AFFECTED[@]}"; do
        | grep -qE '^\+.*"version"[[:space:]]*:'; then
     mp_bumped=1
   fi
-  if [ $pj_bumped -eq 0 ] || [ $mp_bumped -eq 0 ]; then
-    MISSING+=("$plugin (plugin.json bumped: $pj_bumped, marketplace.json bumped: $mp_bumped)")
+  # A staged bump file naming the plugin is the other valid shape: the bump
+  # lands later in bumpy's version PR, which stages real bumps and passes on
+  # its own. Frontmatter lines look like `"foo": patch` or `'foo': patch`.
+  cs_covered=0
+  if cd "$PROJECT_ROOT" && git diff --cached -- '.bumpy/*.md' 2>/dev/null \
+       | grep -qE "^\+[[:space:]]*[\"']${plugin}[\"'][[:space:]]*:"; then
+    cs_covered=1
+  fi
+  if [ $cs_covered -eq 0 ] && { [ $pj_bumped -eq 0 ] || [ $mp_bumped -eq 0 ]; }; then
+    MISSING+=("$plugin (plugin.json bumped: $pj_bumped, marketplace.json bumped: $mp_bumped, bump file staged: 0)")
   fi
 done
 
@@ -117,7 +126,7 @@ for entry in "${MISSING[@]}"; do
 done
 REASON="$REASON
 
-Bump \"version\" in plugins/<name>/.claude-plugin/plugin.json AND the matching entry in .claude-plugin/marketplace.json. Add a CHANGELOG entry under the new version heading. To bypass this gate, touch .claude/.no-version-gate."
+Either stage a bump file (.bumpy/<name>.md with \"<plugin>\": patch|minor|major in its frontmatter — \`npx bumpy add\` writes one) and let the version PR do the bump, or bump \"version\" in plugins/<name>/.claude-plugin/plugin.json AND the matching entry in .claude-plugin/marketplace.json with a CHANGELOG entry. To bypass this gate, touch .claude/.no-version-gate."
 
 jq -n --arg reason "$REASON" '{
   hookSpecificOutput: {

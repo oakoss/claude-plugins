@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Detects whether this push should update the version PR, publish (tag), or
+  # do nothing. Read-only; no credentials beyond the default token.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - id: plan
+        name: Detect release mode
+        run: npx bumpy ci plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Creates or updates the version PR, then pushes the plugin.json /
+  # marketplace.json sync into its branch — bumpy only versions package.json
+  # and CHANGELOG; the sync script propagates to the plugin manifests so the
+  # PR carries the full release shape the version-bump gate and the CI drift
+  # check both expect.
+  version-pr:
+    name: Version PR
+    needs: plan
+    if: needs.plan.outputs.mode == 'version-pr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      # Short-lived installation token from the oakoss GitHub App. PRs and
+      # pushes made with it trigger CI (the default github.token's don't, by
+      # GitHub's anti-recursion guard), and there is no PAT to expire.
+      - name: Mint app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create or update version PR
+        run: npx bumpy ci release --expect-mode version-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMPY_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      # The push rides the checkout's app-token credential, so the synced
+      # manifests re-trigger CI on the version PR.
+      - name: Sync plugin manifests into the version PR
+        run: |
+          git fetch origin bumpy/version-packages
+          git checkout bumpy/version-packages
+          node scripts/sync-plugin-versions.mjs
+          if ! git diff --quiet; then
+            git config user.name "oakoss[bot]"
+            git config user.email "oakoss[bot]@users.noreply.github.com"
+            git commit -am "chore: sync plugin manifests"
+            git push origin bumpy/version-packages
+          fi
+
+  # "Publish" for this repo is tags only — every package is private, so bumpy
+  # creates git tags and GitHub releases; nothing goes to npm and no publish
+  # credentials exist here.
+  publish:
+    name: Tag release
+    needs: plan
+    if: needs.plan.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Mint app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+
+      - name: Tag and create releases
+        run: npx bumpy ci release --expect-mode publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMPY_GH_TOKEN: ${{ steps.app-token.outputs.token }}

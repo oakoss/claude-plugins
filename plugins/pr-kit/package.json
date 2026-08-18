@@ -1,0 +1,6 @@
+{
+  "name": "pr-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Version anchor for bumpy; the real manifest is .claude-plugin/plugin.json, kept in sync by scripts/sync-plugin-versions.mjs."
+}
