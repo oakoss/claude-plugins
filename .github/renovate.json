@@ -12,7 +12,7 @@
   "rangeStrategy": "bump",
   "labels": ["dependencies"],
   "automerge": true,
-  "platformAutomerge": false,
+  "platformAutomerge": true,
   "platformCommit": "enabled",
   "prConcurrentLimit": 5,
   "minimumReleaseAge": "3 days",
