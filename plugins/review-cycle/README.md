@@ -76,7 +76,7 @@ Marks the current uncommitted state as reviewed by updating the review sentinel.
 
 ### `/review-cycle:de-slopify`
 
-Bundled de-slopify skill — methodology for removing AI writing artifacts from prose. Authored separately at [oakoss/agent-skills](https://github.com/oakoss/agent-skills); bundled here so the plugin is self-contained. The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle.
+Bundled de-slopify skill — methodology for removing AI writing artifacts from prose, maintained here as part of the plugin (originally imported from oakoss/agent-skills, which no longer carries the canonical copy). The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle. Aligned with the standalone `prose` plugin's rules, so cycle cleanup and the always-on style apply the same standard.
 
 ## Subagents (bundled)
 
