@@ -1,9 +1,6 @@
 {
   "name": "claude-plugins",
   "private": true,
-  "workspaces": [
-    "plugins/*"
-  ],
   "scripts": {
     "version": "bumpy version && node scripts/sync-plugin-versions.mjs",
     "sync-versions": "node scripts/sync-plugin-versions.mjs",
@@ -11,5 +8,6 @@
   },
   "devDependencies": {
     "@varlock/bumpy": "^1.18.1"
-  }
+  },
+  "packageManager": "pnpm@11.22.0"
 }
