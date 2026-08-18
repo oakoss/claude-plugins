@@ -276,3 +276,77 @@ commit -m x"
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
 }
+
+@test "allows runtime change when a staged bump file names the plugin" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/fix-foo.md <<'CS'
+---
+"foo": patch
+---
+
+Fix the thing.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/fix-foo.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "BLOCKS when the staged bump file names a different plugin" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/fix-bar.md <<'CS'
+---
+"bar": patch
+---
+
+Unrelated.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/fix-bar.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  [[ "$output" =~ "foo" ]]
+}
+
+@test "BLOCKS when the bump file exists but is not staged" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/fix-foo.md <<'CS'
+---
+"foo": patch
+---
+
+Fix the thing.
+CS
+  git add plugins/foo/hooks/runtime.sh
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "prose mention of the plugin in a bump file body does not satisfy the gate" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/other.md <<'CS'
+---
+"bar": patch
+---
+
+This mentions "foo" in prose but does not version it.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/other.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "no-op when only the plugin's package.json version anchor is staged" {
+  printf '{ "name": "foo", "version": "0.1.0", "private": true }\n' \
+    > plugins/foo/package.json
+  git add plugins/foo/package.json
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}

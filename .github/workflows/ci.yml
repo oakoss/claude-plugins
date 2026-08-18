@@ -17,6 +17,67 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  versions:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # Cross-file consistency the commit-time bump gate can't see: plugin.json,
+      # marketplace.json, package.json, and a CHANGELOG heading must agree per
+      # plugin. The script has no dependencies, so no npm install.
+      - name: Check version drift
+        run: node scripts/sync-plugin-versions.mjs --check
+
+  bump-files:
+    name: Bump files
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # CI-side twin of the local PreToolUse bump gate: fails the PR when a
+      # changed plugin has no bump file, and posts a release-plan comment.
+      # --strict matches the local gate's per-plugin coverage (the default only
+      # fails when no bump files exist at all). The version PR carries real
+      # bumps instead of bump files and passes.
+      - name: Check bump files
+        run: npx bumpy ci check --strict
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
@@ -38,7 +99,7 @@ jobs:
       - name: Lint shell scripts
         run: |
           mapfile -t files < <(
-            find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' | sort
+            find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -not -path './node_modules/*' | sort
           )
           files+=(bin/run-bats plugins/review-cycle/bin/review-sentinel)
           printf 'checking %d files\n' "${#files[@]}"
@@ -115,7 +176,7 @@ jobs:
               printf '::error::%s had %s failing test(s)\n' "$suite" "$failed"
               status=1
             fi
-          done < <(find . -type f -name '*.bats' -not -path './.git/*' | sort)
+          done < <(find . -type f -name '*.bats' -not -path './.git/*' -not -path './node_modules/*' | sort)
 
           printf '\n%d tests reported across all suites\n' "$total"
           exit "$status"

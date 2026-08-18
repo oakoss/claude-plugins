@@ -77,15 +77,19 @@ jq -n '{decision:"block", reason:"..."}' 2>/dev/null \
 - Embed any load-bearing policies (comment rules, deferral criteria, etc.) directly in the skill body. The skill should be self-contained.
 - If a policy could also apply outside the skill, provide a standalone snippet in `reference/` that users can copy into their `CLAUDE.md`.
 - Keep skill bodies under ~500 lines. Move detailed reference material to supporting files in the skill directory.
+- When a skill's prose tells the model to invoke another skill, write it as *invoke `/plugin:skill` via the Skill tool* — naming the tool fires more reliably than a bare slash command in prose. Never instruct model-invocation of a `disable-model-invocation: true` skill.
+- A skill or agent change is **done when**: `claude plugin validate ./plugins/<name> --strict` passes; `bin/run-bats` is green; every factual claim the new prose makes has been verified against the tool or code it describes; a bump file describes the change; and the body is still under the line budget.
 
 ## Versioning and changelog
 
+Releases are driven by [bumpy](https://bumpy.varlock.dev) bump files; each plugin has a private `package.json` as its version anchor, and `scripts/sync-plugin-versions.mjs` propagates that version into `plugin.json` and `marketplace.json` (CI runs its `--check` mode as a drift gate).
+
 - Use semver: `0.x.y` while pre-stable, `1.0.0` on first stable release.
-- Every user-visible change goes in `CHANGELOG.md` under `## [Unreleased]`.
-- On release, rename `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD` and add a fresh `[Unreleased]` heading above it.
-- Bump `version` in `plugin.json` and `marketplace.json` together.
+- **Every behavioral change ships with a bump file**: `.bumpy/<slug>.md` with `"<plugin>": patch|minor|major` frontmatter (`npx bumpy add` writes one). The description is the changelog entry — write it release-notes-grade: what changed, why, and what the user does differently. Do not hand-edit `CHANGELOG.md` for new work; bumpy generates entries when versioning. (Pre-bumpy history in each changelog stays as-is, Keep-a-Changelog format.)
+- On push to main with pending bump files, the Release workflow maintains a version PR (`bumpy/version-packages`) carrying the version bumps, changelog entries, and synced manifests. **Merging that PR is the release**; bumpy then tags it.
+- Direct releases remain valid for hand-cut cases: bump `plugin.json` + `marketplace.json` + changelog heading together (`npm run version` after writing a bump file does this locally).
 - Before releasing, run `claude plugin validate ./plugins/<name> --strict` — catches manifest/structure errors the bats suites don't cover.
-- **Runtime changes** (anything under `plugins/<name>/` except `README.md`, `LICENSE*`, `CHANGELOG.md`, `NOTICE`, and `tests/`) require a version bump in the same commit. A repo-local PreToolUse hook at `.claude/hooks/version-bump-gate.sh` (registered in `.claude/settings.json`) enforces this mechanically against any plugin marketplace repo. Touch `.claude/.no-version-gate` to opt a project out; tests live next to the hook at `.claude/hooks/version-bump-gate.bats`.
+- **Runtime changes** (anything under `plugins/<name>/` except `README.md`, `LICENSE*`, `CHANGELOG.md`, `NOTICE`, and `tests/`) require **either a staged bump file naming the plugin or a version bump in the same commit**. A repo-local PreToolUse hook at `.claude/hooks/version-bump-gate.sh` (registered in `.claude/settings.json`) enforces this mechanically; `bumpy ci check` enforces the same rule on PRs in CI. Touch `.claude/.no-version-gate` to opt a project out; tests live next to the hook at `.claude/hooks/version-bump-gate.bats`.
 
 ## Testing
 
