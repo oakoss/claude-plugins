@@ -3,11 +3,19 @@
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigestsToSemver",
-    "schedule:monthly",
-    ":maintainLockFilesMonthly",
     ":semanticCommits",
     ":semanticCommitTypeAll(chore)"
   ],
+  "timezone": "America/Chicago",
+  "schedule": ["before 6am on the first day of the month"],
+  "branchPrefix": "chore/deps-",
+  "rangeStrategy": "bump",
+  "labels": ["dependencies"],
+  "automerge": true,
+  "platformAutomerge": false,
+  "platformCommit": "enabled",
+  "prConcurrentLimit": 5,
+  "minimumReleaseAge": "3 days",
   "packageRules": [
     {
       "description": "Reimplements group:allNonMajor plus digest updates, since the preset's minor/patch match misses digests",
@@ -19,14 +27,30 @@
     {
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "separateMajorMinor": false
+    },
+    {
+      "matchPackageNames": ["node", "pnpm"],
+      "groupName": "toolchain"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
     }
   ],
-  "labels": ["dependencies"],
-  "automerge": true,
-  "platformAutomerge": false,
-  "platformCommit": "enabled",
-  "prConcurrentLimit": 5,
   "vulnerabilityAlerts": {
-    "labels": ["security"]
+    "labels": ["security"],
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on the first day of the month"],
+    "labels": ["lockfile"]
   }
 }
