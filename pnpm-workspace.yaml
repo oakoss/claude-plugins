@@ -3,3 +3,6 @@ packages:
 
 allowBuilds:
   lefthook: true
+
+patchedDependencies:
+  "@varlock/bumpy@1.18.1": patches/@varlock__bumpy@1.18.1.patch

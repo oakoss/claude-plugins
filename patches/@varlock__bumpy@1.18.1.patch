@@ -1,0 +1,17 @@
+diff --git a/dist/publish-DEk-3SMP.mjs b/dist/publish-DEk-3SMP.mjs
+index ef8da1a..4dbf983 100644
+--- a/dist/publish-DEk-3SMP.mjs
++++ b/dist/publish-DEk-3SMP.mjs
+@@ -602,9 +602,10 @@ async function findUnpublishedWithCache(rootDir, packages, config) {
+ async function findUnpublishedPackages(packages, _config) {
+ 	const unpublished = [];
+ 	for (const [name, pkg] of packages) {
+-		if (pkg.private && !pkg.bumpy?.publishCommand) continue;
++		const tagOnlyPrivate = pkg.private && !pkg.bumpy?.publishCommand;
++		if (tagOnlyPrivate && !_config.privatePackages.tag) continue;
+ 		if (pkg.version === "0.0.0") continue;
+-		if (!await checkIfPublished(name, pkg.version, pkg.bumpy)) unpublished.push({
++		if (!await checkIfPublished(name, pkg.version, tagOnlyPrivate ? { ...pkg.bumpy, skipNpmPublish: true } : pkg.bumpy)) unpublished.push({
+ 			name,
+ 			type: "patch",
+ 			oldVersion: pkg.version,
