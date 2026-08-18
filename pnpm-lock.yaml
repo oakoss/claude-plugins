@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@varlock/bumpy@1.18.1': 1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15
+
 importers:
 
   .:
@@ -13,7 +16,7 @@ importers:
         version: 21.2.2
       '@varlock/bumpy':
         specifier: ^1.18.1
-        version: 1.18.1
+        version: 1.18.1(patch_hash=1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15)
       commitlint:
         specifier: ^21.2.2
         version: 21.2.2(@types/node@26.2.0)(conventional-commits-parser@7.1.2)(typescript@7.0.2)
@@ -1219,7 +1222,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@varlock/bumpy@1.18.1': {}
+  '@varlock/bumpy@1.18.1(patch_hash=1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15)': {}
 
   ajv@8.20.0:
     dependencies:
