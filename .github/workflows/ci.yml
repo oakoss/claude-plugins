@@ -59,14 +59,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
       - name: Setup Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # CI-side twin of the local PreToolUse bump gate: fails the PR when a
       # changed plugin has no bump file, and posts a release-plan comment.
@@ -74,7 +77,7 @@ jobs:
       # fails when no bump files exist at all). The version PR carries real
       # bumps instead of bump files and passes.
       - name: Check bump files
-        run: npx bumpy ci check --strict
+        run: pnpm exec bumpy ci check --strict
         env:
           GH_TOKEN: ${{ github.token }}
 
