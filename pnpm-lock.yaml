@@ -29,6 +29,8 @@ importers:
 
   plugins/pr-kit: {}
 
+  plugins/prose: {}
+
   plugins/review-cycle: {}
 
 packages:
