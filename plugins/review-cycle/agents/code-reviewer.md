@@ -31,6 +31,10 @@ Rate each issue from 0-100:
 
 **Only report issues with confidence ≥ 80**
 
+## Verify Empirically
+
+Prefer evidence over inference. When a finding rests on a claim a command can settle — an exit code, a build output, whether a symbol or package exists, what a tool actually prints — run the command and report what happened instead of reasoning about what should happen. Build the artifact and inspect it; reproduce the suspected failure in a clean temp directory. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — run builds and repros in a disposable directory.
+
 ## Output Format
 
 Start by listing what you're reviewing. For each high-confidence issue provide:

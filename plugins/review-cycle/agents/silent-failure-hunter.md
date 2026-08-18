@@ -96,6 +96,10 @@ Ensure compliance with the project's error handling requirements:
 - Never use empty catch blocks
 - Handle errors explicitly, never suppress them
 
+## Verify Empirically
+
+Prefer evidence over inference. When a claim about failure behavior can be settled by running something, run it: trigger the error path in a clean temp directory and observe what the user actually sees, check the exit code, confirm whether the log line fires. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — run repros in a disposable directory.
+
 ## Your Output Format
 
 For each issue you find, provide:
