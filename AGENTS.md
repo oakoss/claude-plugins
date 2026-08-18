@@ -114,6 +114,6 @@ bin/run-bats path/to/one.bats               # a single file
 bin/run-bats -f "test name" path/to.bats    # filter, like bats -f
 ```
 
-**Known defect: multi-suite runs truncate.** Across more than one `.bats` file the wrapper's kill races the runner and reports a non-deterministic subset — observed at 330, 340, 344, 345, and 347 of 349 across consecutive runs, always with zero failures. A test that never ran is therefore indistinguishable from one that passed. Single-suite runs are exact. CI works around this by invoking one suite per run and comparing each TAP plan against its result count; do the same when a count has to be trusted, and prefer the per-directory or per-file forms while the wrapper is unfixed.
+The wrapper never reports a partial run as success: if it kills a stalled bats before every planned test has reported, it prints `only <n>/<total> tests reported` and exits 2. Treat that exit code as a failed run, not a flaky one — it means results are missing, not that tests failed.
 
 Plugin-local wrappers (e.g. `plugins/review-cycle/tests/run.sh`) are thin shims that delegate to `bin/run-bats` and can still be invoked from inside a plugin directory.

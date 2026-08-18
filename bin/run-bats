@@ -49,10 +49,18 @@ kill_tree() {
 bats --tap "${ARGS[@]}" > "$OUT" 2>&1 &
 BATS_PID=$!
 
-EXPECTED=""
-DEADLINE=$(($(date +%s) + 120))
+# Keyed on inactivity rather than total runtime. A wall-clock budget for the
+# whole run cannot tell a slow suite from a stuck one, so it kills whichever
+# run happens to be longer than the budget — the repo-wide run sat within
+# seconds of the old 120s limit and failed or passed on the coin flip. A hang
+# produces no further output by definition, so silence is the signal.
+IDLE_TIMEOUT=60
 
-while [ "$(date +%s)" -lt $DEADLINE ]; do
+EXPECTED=""
+LAST_COUNT=0
+LAST_PROGRESS=$(date +%s)
+
+while :; do
   if ! kill -0 $BATS_PID 2>/dev/null; then
     wait $BATS_PID 2>/dev/null
     break
@@ -65,27 +73,38 @@ while [ "$(date +%s)" -lt $DEADLINE ]; do
     fi
   fi
 
-  if [ -n "$EXPECTED" ]; then
-    RESULT_COUNT=$(grep -cE '^(ok|not ok) ' "$OUT" 2>/dev/null || true)
-    [ -z "$RESULT_COUNT" ] && RESULT_COUNT=0
-    if [ "$RESULT_COUNT" -ge "$EXPECTED" ]; then
+  RESULT_COUNT=$(grep -cE '^(ok|not ok) ' "$OUT" 2>/dev/null || true)
+  [ -z "$RESULT_COUNT" ] && RESULT_COUNT=0
+
+  NOW=$(date +%s)
+  if [ "$RESULT_COUNT" -gt "$LAST_COUNT" ]; then
+    LAST_COUNT="$RESULT_COUNT"
+    LAST_PROGRESS="$NOW"
+  fi
+
+  if [ -n "$EXPECTED" ] && [ "$RESULT_COUNT" -ge "$EXPECTED" ]; then
+    sleep 0.5
+    if kill -0 $BATS_PID 2>/dev/null; then
+      # Try graceful shutdown first; fall back to hard kill of the whole tree.
+      kill -TERM $BATS_PID 2>/dev/null
       sleep 0.5
-      if kill -0 $BATS_PID 2>/dev/null; then
-        # Try graceful shutdown first; fall back to hard kill of the whole tree.
-        kill -TERM $BATS_PID 2>/dev/null
-        sleep 0.5
-        kill_tree "$BATS_PID"
-      fi
-      wait $BATS_PID 2>/dev/null
-      break
+      kill_tree "$BATS_PID"
     fi
+    wait $BATS_PID 2>/dev/null
+    break
+  fi
+
+  # Stalled with results still outstanding. Fall through to the reaper below,
+  # which kills the tree and reports the shortfall.
+  if [ $((NOW - LAST_PROGRESS)) -ge "$IDLE_TIMEOUT" ]; then
+    break
   fi
 
   sleep 0.2
 done
 
-# Deadline expiry leaves bats alive — reap the tree here too, or the wrapper
-# leaks the exact orphans it exists to prevent.
+# A stall leaves bats alive — reap the tree here too, or the wrapper leaks the
+# exact orphans it exists to prevent.
 if kill -0 $BATS_PID 2>/dev/null; then
   kill_tree "$BATS_PID"
   wait $BATS_PID 2>/dev/null
