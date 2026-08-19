@@ -25,3 +25,9 @@ pnpm-debug.log
 
 # Local Claude Code overrides
 .claude/settings.local.json
+
+# Beads / Dolt
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
