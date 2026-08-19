@@ -5,7 +5,7 @@
     "version": "bumpy version && node scripts/sync-plugin-versions.mjs",
     "sync-versions": "node scripts/sync-plugin-versions.mjs",
     "check-versions": "node scripts/sync-plugin-versions.mjs --check",
-    "prepare": "lefthook install"
+    "setup": "bd bootstrap --yes"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^21.2.2",

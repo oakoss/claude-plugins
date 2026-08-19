@@ -28,24 +28,20 @@ fi
 
 PROJECT_ROOT=$(gate_should_run) || exit 0
 
-IN_PROGRESS="$PROJECT_ROOT/.claude/.review-in-progress"
 STOP_RECORD="$PROJECT_ROOT/.claude/.review-stop-block"
-# The 60-min contract is also documented in bin/review-sentinel's
-# cycle-start header and echoed by its status output — keep them in sync.
-IN_PROGRESS_TTL=3600
 
-if [ -f "$IN_PROGRESS" ]; then
-  STARTED=$(sed -n '1p' "$IN_PROGRESS" 2>/dev/null | tr -cd '0-9')
-  NOW=$(date +%s 2>/dev/null | tr -cd '0-9')
-  # No clock means no TTL decision: fail open rather than kill a live cycle.
-  [ -n "$NOW" ] || exit 0
-  if [ -n "$STARTED" ] \
-     && [ $((NOW - STARTED)) -ge 0 ] && [ $((NOW - STARTED)) -lt "$IN_PROGRESS_TTL" ]; then
-    exit 0
-  fi
+# Either cycle marker lets a turn end: /review's, and /review-pr's, which
+# reviews a PR head in a throwaway worktree. Only the former licenses `mark`
+# (see marker_for in bin/review-sentinel) — the Stop gate does not care which
+# tree is under review, but the sentinel does.
+for MARKER in .review-in-progress .review-pr-in-progress; do
+  [ -f "$PROJECT_ROOT/.claude/$MARKER" ] || continue
+  gate_marker_is_stale "$PROJECT_ROOT/.claude/$MARKER" || exit 0
   # Stale or unreadable marker: a crashed cycle must not hold the gate open.
-  /bin/rm -f "$IN_PROGRESS" 2>/dev/null
-fi
+  # A failed removal is deliberately ignored — this hook's stderr surfaces
+  # nowhere, and the check above re-reaps on the next stop regardless.
+  /bin/rm -f "$PROJECT_ROOT/.claude/$MARKER" 2>/dev/null
+done
 
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" check
 RC=$?

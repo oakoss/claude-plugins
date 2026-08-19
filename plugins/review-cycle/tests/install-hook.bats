@@ -224,7 +224,7 @@ make_drift() {
   echo "a" > "$TEST_REPO/a.txt"
   echo "b" > "$TEST_REPO/b.txt"
   git -C "$TEST_REPO" add a.txt b.txt
-  "$REVIEW_SENTINEL" --root "$TEST_REPO" mark
+  "$REVIEW_SENTINEL" --root "$TEST_REPO" accept-state
   export CLAUDECODE=1
   run git -C "$TEST_REPO" commit -m "partial" -- a.txt
   [ "$status" -eq 0 ]
@@ -266,10 +266,10 @@ make_drift() {
   [ "$status" -eq 0 ]
 }
 
-@test "agent commit after mark passes" {
+@test "agent commit after accept-state passes" {
   "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   make_drift
-  "$REVIEW_SENTINEL" --root "$TEST_REPO" mark
+  "$REVIEW_SENTINEL" --root "$TEST_REPO" accept-state
   export CLAUDECODE=1
   run git -C "$TEST_REPO" commit -m "reviewed"
   [ "$status" -eq 0 ]

@@ -57,7 +57,7 @@ run_session_init() {
   git add foo.txt
   git commit -q -m "init"
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   OLD_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
   git add foo.txt
   git commit -q -m "commit reviewed change"
@@ -72,7 +72,7 @@ run_session_init() {
 
 @test "session-init leaves 0.6.0 sentinel alone when it disagrees with current state" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   STORED_BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
   echo "v2" > foo.txt
   run_session_init
@@ -210,4 +210,77 @@ run_session_init() {
   printf 'pre-commit:\n  commands:\n    review-cycle:\n      run: sh .claude/review-cycle-pre-commit.sh\n' > "$TEST_REPO/lefthook.yml"
   run run_session_init
   [[ "$output" != *"commit-time git hook not installed"* ]]
+}
+
+# A startup event means any cycle that wrote the marker is gone. The branch
+# that deliberately skips re-seeding — sentinel present but mismatched, i.e.
+# the previous session left unreviewed work — is exactly where a surviving
+# marker would let `mark` clear the gate on that work.
+@test "session-init revokes a stale marker even when it does not re-seed" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  echo "v2" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  STORED_BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
+  run_session_init
+  [ "$(cat "$TEST_REPO/.claude/.review-mark")" = "$STORED_BEFORE" ]
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+}
+
+# `startup` also fires when a second session opens in a repo where the first is
+# mid-cycle. Revoking a fresh marker there would strand the running cycle's
+# Phase 8 with nothing it may legitimately do.
+@test "session-init leaves a fresh marker alone (a sibling session may own it)" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  echo "v2" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  run_session_init
+  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+}
+
+@test "session-init revokes a stale marker on the re-seed path too" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  run_session_init
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+}
+
+# The legacy-migration branch exits before the re-seed decision; the revocation
+# has to sit above it or this path keeps licensing mark.
+@test "session-init revokes a stale marker on the legacy-sentinel path" {
+  echo "v1" > foo.txt
+  mkdir -p "$TEST_REPO/.claude"
+  HASH=$(legacy_hash)
+  echo "sha256:$HASH" > "$TEST_REPO/.claude/.review-mark"
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  run_session_init
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+}
+
+# The re-seed path is the one that skipped the stale check before: seed itself
+# used to delete the marker, so a sibling's live cycle died the moment a second
+# session started on a matching or missing sentinel.
+@test "session-init leaves a fresh marker alone on the re-seed path" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  run_session_init
+  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+}
+
+@test "session-init leaves a fresh marker alone when no sentinel exists yet" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  run_session_init
+  [ -f "$TEST_REPO/.claude/.review-mark" ]
+  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
 }

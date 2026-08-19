@@ -64,3 +64,24 @@ gate_should_run() {
   echo "$root"
   return 0
 }
+
+# How long a .review-in-progress marker is honored: shared by the Stop gate
+# (which lets turns end while it is fresh) and SessionStart (which revokes it
+# once it is not). bin/review-sentinel is a standalone binary and cannot source
+# this lib, so its status output hardcodes the same number — change both.
+GATE_IN_PROGRESS_TTL=3600
+
+# 0 when the marker at $1 is absent, unreadable, or older than the TTL —
+# i.e. when no running cycle can still be claiming it. A future-dated marker
+# counts as stale: a clock that disagrees must not hold the gate open.
+gate_marker_is_stale() {
+  local marker="$1" started now
+  [ -f "$marker" ] || return 0
+  started=$(sed -n '1p' "$marker" 2>/dev/null | tr -cd '0-9')
+  now=$(date +%s 2>/dev/null | tr -cd '0-9')
+  # No clock means no TTL decision: treat as fresh rather than kill a live cycle.
+  [ -n "$now" ] || return 1
+  [ -n "$started" ] || return 0
+  [ $((now - started)) -ge 0 ] && [ $((now - started)) -lt "$GATE_IN_PROGRESS_TTL" ] && return 1
+  return 0
+}

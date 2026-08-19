@@ -14,6 +14,22 @@ Before editing files for a substantial task:
 
 Conventions for authoring plugins in this marketplace.
 
+## Task tracking
+
+Use `bd` (beads). Run `bd prime` for the command reference and session protocol.
+
+Run `pnpm run setup` after cloning. A fresh clone has no beads database — `.beads/embeddeddolt/` and `*.db` are gitignored — so until it runs, `bd` exits 3 in every `.beads/hooks/*` hook and each shim normalizes that to 0, skipping itself with one line on stderr. Setup runs `bd bootstrap`, which clones the task graph from `BD_SYNC_REMOTE` in `.beads/.env`; the graph lives on a Dolt remote, not in this repository. That file is gitignored because it names a private host, and without it bootstrap creates a fresh local database and everything still works.
+
+Prefer `bd bootstrap` to `bd init`. Bootstrap leaves `core.hooksPath` unset and `AGENTS.md` untouched; `bd init` sets the former — making git bypass lefthook silently — rewrites the latter, and commits with a message commitlint rejects. `bd hooks install --beads` sets `core.hooksPath` too, so if you ever regenerate the shims, unset it afterwards. `core.hooksPath` must stay unset: `lefthook.yml` calls `.beads/hooks/*` directly, and lefthook is what runs commitlint and the formatters.
+
+Do not run `bd setup codex`. This repository is worked in Claude Code; that command writes a `.codex/` directory and an `.agents/` skill nobody here reads. Both `bd init` and `bd setup codex` also append a managed block to this file — strip it and keep the pointer above.
+
+`bd dolt remote add` and `bd dolt push` write `sync.remote` into `.beads/config.yaml` and commit it themselves, with a `bd: update sync.remote` message that ignores commitlint. Two consequences, both verified on bd 1.2.2:
+
+- With no Dolt remote configured, `bd dolt push` invents one from `git origin` and pushes the task database to GitHub as `refs/dolt/data`. The remote must already point at the Dolt host before the first push.
+- `git push` does not sync the task graph. The beads `pre-push` hook does not push to the Dolt remote (verified both with and without git's ref list on stdin), so `bd dolt push` has to be run explicitly.
+- The committed `sync.remote` publishes the private host. Strip the `sync:` block from `config.yaml` after adding a remote and drop the commit; the Dolt-level remote lives in the gitignored database directory and survives on its own. Once a real remote exists, later pushes stop rewriting the file.
+
 ## Layout
 
 Every plugin lives under `plugins/<name>/` with the following minimum structure:
