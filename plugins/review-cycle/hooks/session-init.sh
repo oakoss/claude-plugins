@@ -28,6 +28,21 @@ PROJECT_ROOT=$(gate_should_run) || exit 0
 SENTINEL_FILE="$PROJECT_ROOT/.claude/.review-mark"
 REVIEW_SENTINEL="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
 
+# Revoke an abandoned cycle's marker. This sits above the re-seed decision
+# because that decision skips seeding exactly when the sentinel disagrees — the
+# unreviewed-drift case — and above the legacy branch's own exit for the same
+# reason. Stale-only: `startup` also fires when a second session opens while
+# the first is mid-cycle, and its Phase 8 still needs that marker.
+for STALE_MARKER in .review-in-progress .review-pr-in-progress; do
+  [ -f "$PROJECT_ROOT/.claude/$STALE_MARKER" ] || continue
+  gate_marker_is_stale "$PROJECT_ROOT/.claude/$STALE_MARKER" || continue
+  # The reason has to travel inline: this hook's stdout is what reaches the
+  # model, while rm writes to stderr, which nothing here reads.
+  RM_ERR=$(/bin/rm -f "$PROJECT_ROOT/.claude/$STALE_MARKER" 2>&1)
+  [ ! -e "$PROJECT_ROOT/.claude/$STALE_MARKER" ] \
+    || echo "review-cycle: a stale .claude/$STALE_MARKER could not be removed (${RM_ERR:-no error reported}). While it exists it holds the Stop gate open, and .review-in-progress additionally lets \`review-sentinel mark\` treat it as evidence of a review. Raise this only if the user hits an unexpected gate result this session."
+done
+
 # SessionStart stdout lands in the model's context, not in front of the
 # user, so this is capability information for the model — explicitly not a
 # nag to relay. "Installed" needs evidence of wiring, not just the helper
@@ -54,6 +69,14 @@ emit_install_hook_note() {
   if [ "$wired" -eq 0 ]; then
     echo "review-cycle: commit-time git hook not installed in this repo. If the user asks for deeper enforcement, \"\${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel\" install-hook adds an agent-only pre-commit check (humans are never gated). Do not suggest it unprompted."
   fi
+}
+
+# Report rather than swallow: a failed re-seed leaves the previous session's
+# mark in place, so the gate's verdict this session is not the one the rest of
+# the startup path assumes.
+run_seed() {
+  "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null && return 0
+  echo "review-cycle: re-seeding the sentinel failed (exit $?); the previous session's mark is unchanged. Diagnose with \"\${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel\" status. Raise this only if the user hits an unexpected gate result this session."
 }
 
 # Computes the 0.5.x-format hash (bare 64-hex, no prefix) for migration only.
@@ -107,7 +130,7 @@ if [ -f "$SENTINEL_FILE" ]; then
     if [ $? -ne 0 ] || [ -z "$CURRENT_BARE" ]; then
       echo "review-sentinel: legacy hash computation failed; skipping 0.5.x → 0.6.0 migration (no sha256sum/shasum?). Run /review-cycle:review or /review-cycle:accept to clear the gate." >&2
     elif [ "$CURRENT_BARE" = "$STORED_BARE" ]; then
-      "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
+      run_seed
     fi
     emit_install_hook_note
     exit 0
@@ -120,9 +143,9 @@ fi
 # Uses `match` rather than `check` to bypass the clean-tree fast-path; a
 # transient stash/checkout shouldn't absorb prior drift.
 if [ ! -f "$SENTINEL_FILE" ]; then
-  "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
+  run_seed
 elif "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" match >/dev/null 2>&1; then
-  "$REVIEW_SENTINEL" --root "$PROJECT_ROOT" seed >/dev/null || true
+  run_seed
 fi
 
 emit_install_hook_note

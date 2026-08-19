@@ -3,8 +3,14 @@
 #
 # Subcommands:
 #   seed         Write current state. Always overwrites. Used by SessionStart.
-#   mark         Write current state. Always overwrites. Used by /accept
-#                and /review Phase 8.
+#   mark         Write current state. Always overwrites. Used by /review
+#                Phase 8. Refuses with exit 3 unless a cycle-start marker
+#                exists, so the verb cannot be used to clear the gate on
+#                work no review looked at.
+#   accept-state Write current state, unguarded. The named escape hatch for
+#                a human who reviewed the changes themselves; used by
+#                /accept, and the only verb the commit gate's chained
+#                pass-through accepts.
 #   check        Exit 0 if clean tree OR sentinel matches; 1 if drifted; 2 on
 #                error (no git repo, no sha tool). Hooks should fail-open on 2.
 #   match        Exit 0 only if sentinel exists AND its hash equals current
@@ -14,10 +20,19 @@
 #                empty tree for unborn HEAD) to stdout.
 #   cycle-start  Write .claude/.review-in-progress (epoch seconds). While
 #                fresh (< 60 min), the Stop gate lets turns end so the
-#                review cycle can await background reviewers. Cleared by
-#                mark/seed/cycle-end; the Stop gate removes stale copies.
+#                review cycle can await background reviewers. Also the
+#                precondition `mark` checks for. Retired by mark (cycle done),
+#                accept-state (superseded), and cycle-end (abort); the Stop
+#                gate and SessionStart remove stale copies. `seed` leaves it
+#                alone — a sibling session's live cycle may own it.
 #   cycle-end    Remove the in-progress marker (abort path; a completed
 #                cycle's mark clears it anyway).
+#   pr-cycle-start / pr-cycle-end
+#                The same pair against .claude/.review-pr-in-progress, for
+#                /review-pr. It reviews a PR head in a throwaway worktree and
+#                never inspects the working tree, so its marker holds the Stop
+#                gate open without licensing `mark` over local changes no
+#                review looked at.
 #   status       Human-readable diagnostic: root, clean-tree verdict, stored
 #                mark, current hash from the stored anchor, and a one-line
 #                verdict mirroring check's decision. Exit codes match check.
@@ -69,12 +84,15 @@ usage: review-sentinel [--root <path>] <subcommand>
 
 subcommands:
   seed          write current state (used by SessionStart)
-  mark          write current state (used by /accept and /review)
+  mark          write current state; requires cycle-start (used by /review)
+  accept-state  write current state, unguarded (used by /accept)
   check         exit 0=clean/match, 1=drift, 2=error
   match         exit 0=exact match only (no clean-tree shortcut)
   current-hash  print current state
   cycle-start   write the review-in-progress marker (Stop gate passes)
   cycle-end     remove the review-in-progress marker
+  pr-cycle-start  same, for /review-pr; does not license mark
+  pr-cycle-end    remove the review-pr marker
   status        diagnostic dump; exit codes mirror check
   paths         print gitignore-relative paths
   install-hook  install commit-time git pre-commit enforcement
@@ -115,6 +133,7 @@ build_excludes() {
     ':(exclude).claude/.review-mark'
     ':(exclude).claude/.no-review-gate'
     ':(exclude).claude/.review-in-progress'
+    ':(exclude).claude/.review-pr-in-progress'
     ':(exclude).claude/.review-stop-block'
     ':(exclude,glob).beads/**'
     ':(exclude,glob)**/.beads/**'
@@ -138,6 +157,18 @@ build_excludes() {
     [ -z "$pattern" ] && continue
     EXCLUDES_LIST+=(":(exclude,glob)$pattern")
   done < <(jq -r '(.ignore // []) | .[]? | select(type == "string")' "$config_file" 2>/dev/null)
+}
+
+# Which in-progress marker a cycle verb operates on. `review-pr` reviews a PR
+# head in a throwaway worktree and deliberately never inspects the working
+# tree, so its marker must not be the one `mark` accepts as evidence —
+# otherwise reviewing someone else's PR licenses marking your own unreviewed
+# work. Both markers hold the Stop gate open; only this one licenses `mark`.
+marker_for() {
+  case "$1" in
+    pr-*) echo ".review-pr-in-progress" ;;
+    *) echo ".review-in-progress" ;;
+  esac
 }
 
 resolve_project_root() {
@@ -733,11 +764,22 @@ main() {
   shift
 
   case "$CMD" in
-  seed|mark)
+  seed|mark|accept-state)
     PROJECT_ROOT=$(resolve_project_root)
     if [ -z "$PROJECT_ROOT" ]; then
       echo "review-sentinel: not in a git repo" >&2
       exit 1
+    fi
+    # `mark` is the review cycle's own verb, so it must not double as a
+    # self-issued clearance. `seed` and `accept-state` stay unguarded by
+    # design: seed baselines a fresh session, and accept-state is the named
+    # human escape hatch. See the cycle-start entry in the header for the
+    # marker's lifecycle.
+    if [ "$CMD" = "mark" ] && [ ! -f "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
+      echo "review-sentinel: no review in progress; mark is valid only after cycle-start" >&2
+      echo "review-sentinel: if a cycle is running, it began without cycle-start, or the Stop gate or SessionStart reaped its marker after the 60-minute TTL — report that in the cycle summary rather than re-running cycle-start to recreate the evidence" >&2
+      echo "review-sentinel: to accept a state a human reviewed themselves, use: review-sentinel accept-state" >&2
+      exit 3
     fi
     ANCHOR=$(current_anchor "$PROJECT_ROOT")
     HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$ANCHOR")
@@ -751,14 +793,25 @@ $HASH" || {
       echo "review-sentinel: cannot write sentinel" >&2
       exit 2
     }
-    # A marked state moots both Stop-gate markers: any running cycle is
-    # done (or superseded), and the recorded blocked-state is resolved.
-    /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress" \
-               "$PROJECT_ROOT/.claude/.review-stop-block" 2>/dev/null
-    for f in .review-in-progress .review-stop-block; do
-      [ ! -e "$PROJECT_ROOT/.claude/$f" ] \
-        || echo "review-sentinel: warning: could not remove .claude/$f; Stop-gate behavior may be stale" >&2
-    done
+    # Any newly written state resolves the recorded blocked-state.
+    /bin/rm -f "$PROJECT_ROOT/.claude/.review-stop-block"
+    [ ! -e "$PROJECT_ROOT/.claude/.review-stop-block" ] \
+      || echo "review-sentinel: warning: could not remove .claude/.review-stop-block; Stop-gate behavior may be stale" >&2
+    # Only a verb that concludes a cycle retires its marker: mark completes one,
+    # accept-state supersedes it. `seed` does not — it baselines a fresh session
+    # and knows nothing about a cycle, and SessionStart may fire while another
+    # session in the same repo is mid-review, whose marker its Phase 8 still
+    # needs. Revoking an abandoned marker belongs to the TTL owners: the Stop
+    # gate and SessionStart's stale-only check.
+    if [ "$CMD" != "seed" ]; then
+      # Nonzero, not a warning: a written sentinel with the guard still
+      # disarmed is not success.
+      /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress"
+      if [ -e "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
+        echo "review-sentinel: sentinel written, but .claude/.review-in-progress survived; mark's precondition stays satisfied for unreviewed work until it is removed" >&2
+        exit 2
+      fi
+    fi
     exit 0
     ;;
 
@@ -805,35 +858,37 @@ $HASH" || {
     exit 0
     ;;
 
-  cycle-start)
+  cycle-start|pr-cycle-start)
     PROJECT_ROOT=$(resolve_project_root)
     if [ -z "$PROJECT_ROOT" ]; then
       echo "review-sentinel: not in a git repo" >&2
       exit 1
     fi
+    MARKER=$(marker_for "$CMD")
     mkdir -p "$PROJECT_ROOT/.claude" 2>/dev/null || {
       echo "review-sentinel: cannot create .claude dir" >&2
       exit 2
     }
-    date +%s > "$PROJECT_ROOT/.claude/.review-in-progress" || {
+    date +%s > "$PROJECT_ROOT/.claude/$MARKER" || {
       # The redirect may have created an empty file before failing; a
       # reported failure must leave no state behind.
-      /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress" 2>/dev/null
-      echo "review-sentinel: cannot write in-progress marker" >&2
+      /bin/rm -f "$PROJECT_ROOT/.claude/$MARKER" 2>/dev/null
+      echo "review-sentinel: cannot write $MARKER" >&2
       exit 2
     }
     exit 0
     ;;
 
-  cycle-end)
+  cycle-end|pr-cycle-end)
     PROJECT_ROOT=$(resolve_project_root)
     if [ -z "$PROJECT_ROOT" ]; then
       echo "review-sentinel: not in a git repo" >&2
       exit 1
     fi
-    /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress" 2>/dev/null
-    if [ -e "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
-      echo "review-sentinel: cannot remove in-progress marker; Stop gate stays open until its TTL" >&2
+    MARKER=$(marker_for "$CMD")
+    /bin/rm -f "$PROJECT_ROOT/.claude/$MARKER"
+    if [ -e "$PROJECT_ROOT/.claude/$MARKER" ]; then
+      echo "review-sentinel: cannot remove $MARKER (see the error above); Stop gate stays open until its TTL" >&2
       exit 2
     fi
     exit 0
@@ -867,6 +922,11 @@ $HASH" || {
       else
         echo "cycle:   in-progress marker present (unreadable timestamp; Stop gate will remove it)"
       fi
+    else
+      echo "cycle:   no in-progress marker (mark will refuse with exit 3; accept-state records a state you reviewed yourself)"
+    fi
+    if [ -f "$PROJECT_ROOT/.claude/.review-pr-in-progress" ]; then
+      echo "pr:      review-pr marker present (holds the Stop gate open; does not license mark)"
     fi
     if [ -f "$PROJECT_ROOT/.claude/.review-stop-block" ]; then
       echo "stop:    block-once record present (Stop gate soft-passes while this state is unchanged)"
@@ -909,6 +969,7 @@ $HASH" || {
     echo ".claude/.review-mark"
     echo ".claude/.no-review-gate"
     echo ".claude/.review-in-progress"
+    echo ".claude/.review-pr-in-progress"
     echo ".claude/.review-stop-block"
     exit 0
     ;;

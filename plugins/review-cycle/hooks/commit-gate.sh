@@ -4,14 +4,14 @@
 # Blocks `git commit` if uncommitted changes haven't been reviewed.
 # Pass-through for any non-commit Bash command. Fail-open when jq or grep
 # are unavailable or the parse lib is missing or unloadable; the
-# chained-mark pass-through itself fails closed — any tool failure inside
+# chained accept-state pass-through itself fails closed — any tool failure inside
 # it falls through to the sentinel check.
 #
 # All lexical analysis of the command text (what counts as a git commit
-# invocation, what makes a chained `review-sentinel mark && git commit`
-# sanctioned, cd/-C extraction) lives in lib/command-parse.sh — the policy
-# and its rationale are documented there, once, next to the code that
-# implements them.
+# invocation, what makes a chained `review-sentinel accept-state && git
+# commit` sanctioned, cd/-C extraction) lives in lib/command-parse.sh — the
+# policy and its rationale are documented there, once, next to the code
+# that implements them.
 
 source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh" 2>/dev/null || exit 0
 source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/command-parse.sh" 2>/dev/null || exit 0
@@ -23,12 +23,12 @@ INPUT_CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 
 parse_has_commit "$COMMAND" || exit 0
 
-# A chained `review-sentinel mark && git commit` writes the sentinel before
-# the commit runs, but this hook fires before the whole chain executes, so
-# checking the current (pre-mark) state would deny the flow /accept
-# prescribes. Pass through the sanctioned shape; see parse_mark_chain_ok
-# for what qualifies and why.
-if parse_mark_chain_ok "$COMMAND"; then
+# A chained `review-sentinel accept-state && git commit` writes the sentinel
+# before the commit runs, but this hook fires before the whole chain
+# executes, so checking the current (pre-write) state would deny the flow
+# /accept prescribes. Pass through the sanctioned shape; see
+# parse_accept_chain_ok for what qualifies and why.
+if parse_accept_chain_ok "$COMMAND"; then
   exit 0
 fi
 

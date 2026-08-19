@@ -64,47 +64,51 @@ commit -m x'
   [ "$(parse_commit_count "echo 'run git commit later'; git commit -m x")" = "2" ]
 }
 
-# --- parse_mark_chain_ok ---
+# --- parse_accept_chain_ok ---
 
-@test "mark chain: sanctioned shapes pass" {
-  parse_mark_chain_ok '"/p/review-sentinel" mark && git commit -m x'
-  parse_mark_chain_ok "'/p/review-sentinel' mark && git commit -m x"
-  parse_mark_chain_ok '/p/review-sentinel mark &&git commit -m x'
-  parse_mark_chain_ok 'cd /r && /p/review-sentinel mark && git commit -m x'
-  parse_mark_chain_ok 'git add -A && /p/review-sentinel mark && git commit -m x'
+@test "accept chain: sanctioned shapes pass" {
+  parse_accept_chain_ok '"/p/review-sentinel" accept-state && git commit -m x'
+  parse_accept_chain_ok "'/p/review-sentinel' accept-state && git commit -m x"
+  parse_accept_chain_ok '/p/review-sentinel accept-state &&git commit -m x'
+  parse_accept_chain_ok 'cd /r && /p/review-sentinel accept-state && git commit -m x'
+  parse_accept_chain_ok 'git add -A && /p/review-sentinel accept-state && git commit -m x'
 }
 
-@test "mark chain: continuation joins pass" {
-  parse_mark_chain_ok '/p/review-sentinel mark && \
+@test "accept chain: continuation joins pass" {
+  parse_accept_chain_ok '/p/review-sentinel accept-state && \
 git commit -m x'
-  parse_mark_chain_ok '/p/review-sentinel mark &&
-git commit -m x'
-}
-
-@test "mark chain: weak separators denied" {
-  ! parse_mark_chain_ok '/p/review-sentinel mark; git commit -m x'
-  ! parse_mark_chain_ok '/p/review-sentinel mark || git commit -m x'
-  ! parse_mark_chain_ok 'true || /p/review-sentinel mark && git commit -m x'
-  ! parse_mark_chain_ok '/p/review-sentinel mark
+  parse_accept_chain_ok '/p/review-sentinel accept-state &&
 git commit -m x'
 }
 
-@test "mark chain: commands or options near the pair denied" {
-  ! parse_mark_chain_ok '/p/review-sentinel mark && git add -A && git commit -m x'
-  ! parse_mark_chain_ok '/p/review-sentinel mark > /dev/null && git commit -m x'
-  ! parse_mark_chain_ok '/p/review-sentinel --root /r mark && git commit -m x'
-  ! parse_mark_chain_ok '/p/review-sentinel mark && git -c a=b commit -m x'
+@test "accept chain: weak separators denied" {
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state; git commit -m x'
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state || git commit -m x'
+  ! parse_accept_chain_ok 'true || /p/review-sentinel accept-state && git commit -m x'
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state
+git commit -m x'
 }
 
-@test "mark chain: textual spoofs denied" {
-  ! parse_mark_chain_ok 'echo review-sentinel mark && git commit -m x'
-  ! parse_mark_chain_ok 'my-review-sentinel mark && git commit -m x'
-  ! parse_mark_chain_ok 'git commit -m x && /p/review-sentinel mark'
-  ! parse_mark_chain_ok '/p/review-sentinel check && git commit -m x'
+@test "accept chain: commands or options near the pair denied" {
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state && git add -A && git commit -m x'
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state > /dev/null && git commit -m x'
+  ! parse_accept_chain_ok '/p/review-sentinel --root /r accept-state && git commit -m x'
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state && git -c a=b commit -m x'
 }
 
-@test "mark chain: multi-commit denied" {
-  ! parse_mark_chain_ok '/p/review-sentinel mark && git commit -m a && git commit -m b'
+@test "accept chain: textual spoofs denied" {
+  ! parse_accept_chain_ok 'echo review-sentinel accept-state && git commit -m x'
+  ! parse_accept_chain_ok 'my-review-sentinel accept-state && git commit -m x'
+  ! parse_accept_chain_ok 'git commit -m x && /p/review-sentinel accept-state'
+  ! parse_accept_chain_ok '/p/review-sentinel check && git commit -m x'
+}
+
+@test "accept chain: multi-commit denied" {
+  ! parse_accept_chain_ok '/p/review-sentinel accept-state && git commit -m a && git commit -m b'
+}
+
+@test "accept chain: the guarded mark verb is not a sanctioned chain" {
+  ! parse_accept_chain_ok '/p/review-sentinel mark && git commit -m x'
 }
 
 # --- parse_extract_cd / parse_extract_git_c ---

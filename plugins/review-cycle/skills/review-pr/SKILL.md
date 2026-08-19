@@ -76,10 +76,10 @@ echo "TMP=$TMP"
 Record `<WT>` in the report draft immediately, then mark a review as in progress so the Stop gate lets turns end while reviewers run in the background:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root <ROOT> cycle-start
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root <ROOT> pr-cycle-start
 ```
 
-`--root` is required on every sentinel call in this skill: the binary otherwise resolves the project from the current directory, and after Phase 3's `cd <WT>` that would be the disposable worktree. **If the skill aborts at any point after this — any reason, any phase — run the Phase 7 cleanup before stopping**, so the worktree is removed and the gate re-arms; if cleanup itself is impossible, tell the user the `<TMP>` path and that `cycle-end` still needs to run.
+`pr-cycle-start`, not `cycle-start`: this skill reviews a PR head and never inspects the working tree, so its marker holds the Stop gate open without licensing `mark` over the user's local changes. `--root` is required on every sentinel call here: the binary otherwise resolves the project from the current directory, and after Phase 3's `cd <WT>` that would be the disposable worktree. **If the skill aborts at any point after this — any reason, any phase — run the Phase 7 cleanup before stopping**, so the worktree is removed and the gate re-arms; if cleanup itself is impossible, tell the user the `<TMP>` path and that `pr-cycle-end` still needs to run.
 
 ## Phase 3: Brief and fan-out (parallel)
 
@@ -191,17 +191,17 @@ Runs on every exit path — posted, report-only, or aborted anywhere after Phase
 git -C <ROOT> worktree remove --force <WT>
 rm -rf <TMP>
 git -C <ROOT> worktree prune
-"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root <ROOT> cycle-end
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root <ROOT> pr-cycle-end
 ```
 
-`rm -rf <TMP>` also clears the mktemp parent and any payload file — `worktree remove` alone leaves both behind. `prune` runs last and ungated: it is the step that repairs a half-removed worktree, so it must not depend on `remove` succeeding. `cycle-end`, never `mark`: this skill reviewed a PR head, not the user's working tree, so the sentinel and commit gate must be exactly as it found them.
+`rm -rf <TMP>` also clears the mktemp parent and any payload file — `worktree remove` alone leaves both behind. `prune` runs last and ungated: it is the step that repairs a half-removed worktree, so it must not depend on `remove` succeeding. `pr-cycle-end`, never `mark`: this skill reviewed a PR head, not the user's working tree, so the sentinel and commit gate must be exactly as it found them.
 
 Then finish the report with its last line: `Worktree: removed` — or, if removal failed, `Worktree: left behind at <TMP> — remove with: git -C <ROOT> worktree remove --force <WT>; rm -rf <TMP>; git -C <ROOT> worktree prune`.
 
 ## Things to NOT do
 
 - Do NOT edit, fix, or reformat anything — in the worktree or the main checkout. Report-only means the tree hashes are identical before and after.
-- Do NOT run `review-sentinel mark` or `seed`. Only `cycle-start` and `cycle-end`, always with `--root <ROOT>`, as written above.
+- Do NOT run `review-sentinel mark`, `accept-state`, or `seed`. Only `pr-cycle-start` and `pr-cycle-end`, always with `--root <ROOT>`, as written above. The unprefixed `cycle-start` is the review cycle's own marker and would license a `mark` over changes this skill never read.
 - Do NOT run `gh pr checkout`, `git checkout`, or `git switch` in the user's working tree.
 - Do NOT reuse `$ROOT`/`$WT`-style shell variables across Bash calls — substitute the recorded literal values; each call is a fresh shell.
 - Do NOT post without an explicit ask, and never with event `APPROVE` or `REQUEST_CHANGES`.

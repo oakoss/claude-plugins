@@ -14,11 +14,13 @@ setup() {
   grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
 }
 
-@test "mark writes sentinel in fresh repo" {
+@test "accept-state writes sentinel in fresh repo" {
   echo "change" > foo.txt
-  run "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 0 ]
   [ -f "$TEST_REPO/.claude/.review-mark" ]
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
+  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
 }
 
 @test "seed always overwrites existing sentinel" {
@@ -31,12 +33,12 @@ setup() {
   [ "$V1" != "$V2" ]
 }
 
-@test "mark always overwrites existing sentinel" {
+@test "accept-state always overwrites existing sentinel" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   V1=$(cat "$TEST_REPO/.claude/.review-mark")
   echo "v2" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   V2=$(cat "$TEST_REPO/.claude/.review-mark")
   [ "$V1" != "$V2" ]
 }
@@ -48,7 +50,7 @@ setup() {
 
 @test "check exits 0 on clean tree even with stale sentinel" {
   echo "stale" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   rm foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -56,14 +58,14 @@ setup() {
 
 @test "check exits 0 when sentinel matches current state" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
 }
 
 @test "check exits 1 when state drifted from sentinel" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -89,10 +91,10 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "mark exits 1 outside git repo" {
+@test "accept-state exits 1 outside git repo" {
   cd "$BATS_TEST_TMPDIR"
   rm -rf "$TEST_REPO"
-  run "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 1 ]
 }
 
@@ -112,7 +114,7 @@ setup() {
 
 @test "--root flag overrides cwd" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   cd "$BATS_TEST_TMPDIR"
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" check
   [ "$status" -eq 0 ]
@@ -155,7 +157,7 @@ setup() {
 
 @test "CLAUDE_PROJECT_DIR honored when no --root and cwd is elsewhere" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   cd "$BATS_TEST_TMPDIR"
   CLAUDE_PROJECT_DIR="$TEST_REPO" run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -167,7 +169,7 @@ setup() {
   git add foo.txt
   git commit -q -m "add foo"
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -176,7 +178,7 @@ setup() {
 # G2: content-change drift on an untracked file
 @test "check exits 1 when untracked file content changes" {
   echo "u1" > new.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "u2" > new.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -195,7 +197,7 @@ setup() {
 # G4: the opt-out marker does not affect the hash
 @test "creating opt-out marker does not drift the hash" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   mkdir -p .claude
   touch .claude/.no-review-gate
   run "$REVIEW_SENTINEL" check
@@ -219,7 +221,7 @@ setup() {
   OTHER="$(cd "$BATS_TEST_TMPDIR/other" && pwd -P)"
   (cd "$OTHER" && git init -q && git config user.email t@t && git config user.name t && git commit --allow-empty -q -m init)
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   cd "$BATS_TEST_TMPDIR"
   CLAUDE_PROJECT_DIR="$OTHER" run "$REVIEW_SENTINEL" --root "$TEST_REPO" check
   [ "$status" -eq 0 ]
@@ -237,7 +239,7 @@ setup() {
   # No initial commit — HEAD does not exist.
   echo "v1" > a.txt
   git add a.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > a.txt
   git add a.txt
   run "$REVIEW_SENTINEL" check
@@ -245,7 +247,7 @@ setup() {
 }
 
 # Unborn repo: empty-tree anchor lets mark + check round-trip cleanly.
-@test "unborn HEAD: mark uses empty-tree anchor and check passes" {
+@test "unborn HEAD: accept-state uses empty-tree anchor and check passes" {
   UNBORN="$BATS_TEST_TMPDIR/unborn2"
   mkdir -p "$UNBORN"
   cd "$UNBORN"
@@ -254,7 +256,7 @@ setup() {
   git config user.name t
   echo "v1" > a.txt
   git add a.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   ANCHOR_LINE=$(sed -n '1p' "$UNBORN/.claude/.review-mark")
   [ "$ANCHOR_LINE" = "anchor:4b825dc642cb6eb9a060e54bf8d69288fbee4904" ]
   run "$REVIEW_SENTINEL" check
@@ -271,7 +273,7 @@ setup() {
   git commit -q -m "add foo and bar"
   echo "v1" > foo.txt
   echo "v1" > bar.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "edit foo"
   run "$REVIEW_SENTINEL" check
@@ -286,7 +288,7 @@ setup() {
   git commit -q -m "add foo"
   echo "v1" > foo.txt
   echo "u1" > new.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "edit foo"
   run "$REVIEW_SENTINEL" check
@@ -301,7 +303,7 @@ setup() {
   git commit -q -m "add foo and bar"
   echo "v1" > foo.txt
   echo "v1" > bar.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "edit foo"
   echo "v2" > bar.txt  # unreviewed edit
@@ -317,7 +319,7 @@ setup() {
   git commit -q -m "add foo"
   echo "v1" > foo.txt
   echo "u1" > new.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "edit foo"
   git commit --amend -q -m "edit foo (better message)"
@@ -333,7 +335,7 @@ setup() {
   git commit -q -m "add foo"
   echo "v1" > foo.txt
   echo "u1" > new.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "edit foo"
   echo "v1-modified" > foo.txt
@@ -351,7 +353,7 @@ setup() {
   git add foo.txt
   git commit -q -m "add foo"
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   # Stage v2 then restore wtree to v1 — wtree matches mark, index doesn't.
   echo "v2" > foo.txt
   git add foo.txt
@@ -370,7 +372,7 @@ setup() {
   git add foo.txt
   git commit -q -m "add foo"
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -382,7 +384,7 @@ setup() {
 # mark and commit read as drift and blocked the commit.
 @test "check stays 0 when a reviewed untracked file is then staged" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -392,7 +394,7 @@ setup() {
 # extends to files first reviewed while untracked).
 @test "check stays 0 after a reviewed untracked file is staged and committed" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "add foo"
   run "$REVIEW_SENTINEL" check
@@ -403,7 +405,7 @@ setup() {
 # intent-add path. Without -z/-0 the name would split into two bogus paths.
 @test "check stays 0 when a reviewed untracked file WITH SPACES is staged" {
   printf 'v1\n' > "my notes.md"
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add "my notes.md"
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -415,7 +417,7 @@ setup() {
   printf 'a\n' > a.txt
   printf 'b\n' > b.txt
   printf 'c\n' > c.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add -A
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -424,7 +426,7 @@ setup() {
 # Anchor unreachable (history rewrite that drops the marked commit) → drift.
 @test "check exits 1 when anchor is no longer reachable in the object db" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   # Manually corrupt the anchor line to point at an object that doesn't exist.
   printf 'anchor:%s\nsha256:%s\n' \
     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
@@ -437,7 +439,7 @@ setup() {
 # `match` is stricter than `check`: no clean-tree fast-path.
 @test "match exits 1 on clean tree with stale sentinel (no fast-path)" {
   echo "stale" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   rm foo.txt
   run "$REVIEW_SENTINEL" match
   [ "$status" -eq 1 ]
@@ -445,7 +447,7 @@ setup() {
 
 @test "match exits 0 when sentinel matches current state" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   run "$REVIEW_SENTINEL" match
   [ "$status" -eq 0 ]
 }
@@ -472,7 +474,7 @@ setup() {
   git config user.name t
   echo "v1" > a.txt
   git add a.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   run "$REVIEW_SENTINEL" match
   [ "$status" -eq 0 ]
   echo "v2" > a.txt
@@ -481,16 +483,16 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "mark exits 2 when .claude is blocked by a file (write_sentinel failure)" {
+@test "accept-state exits 2 when .claude is blocked by a file (write_sentinel failure)" {
   echo "v1" > foo.txt
   # Block mkdir -p by placing a non-directory at the .claude path.
   echo "blocking" > "$TEST_REPO/.claude"
-  run "$REVIEW_SENTINEL" mark
+  run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 2 ]
   [[ "$output" =~ "cannot write sentinel" || "$output" =~ "Not a directory" || "$output" =~ "File exists" ]]
 }
 
-@test "mark + check works in detached HEAD state" {
+@test "accept-state + check works in detached HEAD state" {
   echo "a" > foo.txt
   git add foo.txt
   git commit -q -m c1
@@ -499,7 +501,7 @@ setup() {
   git commit -q -m c2
   git checkout -q HEAD~1
   echo "wip" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
   echo "wip2" > foo.txt
@@ -512,7 +514,7 @@ setup() {
 # X1: beads state edits don't drift an existing sentinel.
 @test "check stays 0 when only .beads/ content changes after mark" {
   echo "code" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   mkdir -p .beads
   echo '{"id":"x-1","status":"closed"}' > .beads/issues.jsonl
   run "$REVIEW_SENTINEL" check
@@ -626,7 +628,7 @@ setup() {
   mkdir -p packages/api/.beads packages/web/.trekker
   echo '{"id":"x-1"}' > packages/api/.beads/issues.jsonl
   echo "state" > packages/web/.trekker/state
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   # bd re-export bumps the nested jsonl; code unchanged.
   printf '{"id":"x-1"}\n{"id":"x-hwm0"}\n' > packages/api/.beads/issues.jsonl
   run "$REVIEW_SENTINEL" check
@@ -703,7 +705,7 @@ setup() {
   echo "code" > foo.txt
   git add foo.txt packages/api/.beads/issues.jsonl
   git commit -q -m "add tracked nested beads file"
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > packages/api/.beads/issues.jsonl
   git add packages/api/.beads/issues.jsonl
   run "$REVIEW_SENTINEL" check
@@ -717,7 +719,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude generated
   printf '{"ignore":["generated/**"]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "machine output" > generated/bundle.js
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -728,7 +730,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf '{"ignore":["other/**"]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   mkdir -p .beads other
   echo "x" > .beads/issues.jsonl
   echo "y" > other/state
@@ -741,7 +743,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf '{"ignore":["scratch/**"]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -755,7 +757,7 @@ setup() {
 # X11 covers the "new config file appears after mark" case.
 @test "check exits 1 when review-cycle.json is added after mark" {
   echo "code" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   mkdir -p .claude
   printf '{"ignore":[]}\n' > .claude/review-cycle.json
   run "$REVIEW_SENTINEL" check
@@ -768,7 +770,7 @@ setup() {
   mkdir -p .claude
   printf '{"ignore":[]}\n' > .claude/review-cycle.json
   echo "code" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   printf '{"ignore":["**"]}\n' > .claude/review-cycle.json
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -779,7 +781,7 @@ setup() {
   mkdir -p .claude
   printf '{"ignore":[]}\n' > .claude/review-cycle.json
   echo "code" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   printf '{"ignore":[".claude/**"]}\n' > .claude/review-cycle.json
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -791,7 +793,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf 'not-json{{' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -802,7 +804,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude artifacts
   printf '{"ignore":["artifacts/**"]}' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "blob" > artifacts/output.bin
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -817,7 +819,7 @@ setup() {
   echo "code" > foo.txt
   git add foo.txt .beads/issues.jsonl
   git commit -q -m "add tracked beads file"
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > .beads/issues.jsonl
   git add .beads/issues.jsonl
   run "$REVIEW_SENTINEL" check
@@ -833,7 +835,7 @@ setup() {
   echo "v1" > foo.txt
   git add foo.txt
   git commit -q -m "add foo"
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   git add foo.txt
   echo "v1" > foo.txt
@@ -868,7 +870,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf '{"ignore":[":(badmagic)oops"]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -880,7 +882,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf '{"ignore":"foo/**"}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
@@ -893,7 +895,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude artifacts
   printf '{"ignore":[123, "artifacts/**", null]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "blob" > artifacts/output.bin
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -904,7 +906,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf '{"ignore":[]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   mkdir -p .beads
   echo "x" > .beads/issues.jsonl
   run "$REVIEW_SENTINEL" check
@@ -923,7 +925,7 @@ setup() {
   echo "code" > foo.txt
   mkdir -p .claude
   printf '{"ignore":[]}\n' > .claude/review-cycle.json
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   # Edit the gitignored config to exclude foo.txt, then change foo.txt.
   # Without the fix, neither change reaches the hash and the gate passes.
   printf '{"ignore":["foo.txt"]}\n' > .claude/review-cycle.json
@@ -961,7 +963,7 @@ setup() {
   git add foo.txt .claude/review-cycle.json
   git commit -q -m "init with tracked config"
   echo "v2" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add foo.txt
   git commit -q -m "commit reviewed change"
   # Working tree is clean post-commit. Fast-path should keep check at 0
@@ -978,7 +980,7 @@ setup() {
   git commit -q -m "add foo"
   ANCHOR_AT_MARK=$(git rev-parse HEAD)
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   STORED_ANCHOR_1=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
   [ "$STORED_ANCHOR_1" = "$ANCHOR_AT_MARK" ]
   git add foo.txt
@@ -1003,7 +1005,7 @@ setup() {
 
 @test "status: marked state exits 0 with match verdict" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
   [[ "$output" == *"verdict: match"* ]]
@@ -1012,7 +1014,7 @@ setup() {
 
 @test "status: drifted state exits 1 with drift verdict" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
@@ -1042,7 +1044,7 @@ setup() {
 
 @test "status: clean tree with a stale mismatched mark verdicts clean" {
   echo "v1" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   rm foo.txt
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
@@ -1061,7 +1063,7 @@ setup() {
 @test "status: agrees with check across staging (mark -> add -> status)" {
   echo "change" > foo.txt
   echo "new" > bar.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   git add -A
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
@@ -1073,4 +1075,157 @@ setup() {
   cd "$BATS_TEST_TMPDIR/notarepo"
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 2 ]
+}
+
+# --- mark requires a review cycle ---
+#
+# `mark` is the only verb the review cycle itself uses, so it must not double
+# as a self-issued clearance. Its precondition is the cycle-start marker.
+
+@test "mark refuses with no review in progress and leaves the sentinel alone" {
+  echo "change" > foo.txt
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [[ "$output" == *"no review in progress"* ]]
+  [[ "$output" == *"accept-state"* ]]
+}
+
+@test "mark refuses without clobbering a sentinel already on disk" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+  [ "$(cat "$TEST_REPO/.claude/.review-mark")" = "$BEFORE" ]
+}
+
+@test "mark succeeds after cycle-start and consumes the marker" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+  "$REVIEW_SENTINEL" check
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+}
+
+# Presence is the evidence a cycle started; freshness governs only whether the
+# Stop gate lets a turn end. A review that outran the TTL still ran.
+@test "mark accepts a stale in-progress marker" {
+  echo "change" > foo.txt
+  mkdir -p "$TEST_REPO/.claude"
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+  "$REVIEW_SENTINEL" check
+}
+
+@test "mark refuses again once its marker is consumed" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  "$REVIEW_SENTINEL" mark
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+}
+
+@test "cycle-end revokes the marker, so mark refuses" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  "$REVIEW_SENTINEL" cycle-end
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+}
+
+# seed baselines a fresh session and knows nothing about a cycle; another
+# session in the same repo may be mid-review and still need its marker.
+# Revocation belongs to the TTL owners, not to seed.
+@test "seed leaves the in-progress marker alone" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  "$REVIEW_SENTINEL" seed
+  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+}
+
+@test "accept-state retires the marker, superseding a running cycle" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  "$REVIEW_SENTINEL" accept-state
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+}
+
+@test "accept-state needs no marker and writes the sentinel" {
+  echo "change" > foo.txt
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  run "$REVIEW_SENTINEL" accept-state
+  [ "$status" -eq 0 ]
+  "$REVIEW_SENTINEL" check
+}
+
+@test "usage names accept-state" {
+  run "$REVIEW_SENTINEL" --help
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"accept-state"* ]]
+}
+
+# The guard must read the marker from the same root the sentinel is written to.
+# Without these, changing the lookup to $(pwd) passes the whole suite while
+# letting `--root A mark` run from repo B consult B's marker and clear A.
+
+@test "mark resolves the marker from --root, not the cwd" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  cd "$BATS_TEST_TMPDIR"
+  run "$REVIEW_SENTINEL" --root "$TEST_REPO" mark
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+@test "a marker in one repo does not license a mark in another" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  mkdir -p "$BATS_TEST_TMPDIR/other"
+  OTHER="$(cd "$BATS_TEST_TMPDIR/other" && pwd -P)"
+  git -C "$OTHER" init -q
+  git -C "$OTHER" config user.email "test@example.com"
+  git -C "$OTHER" config user.name "Test"
+  git -C "$OTHER" commit --allow-empty -q -m "init"
+  echo "drift" > "$OTHER/bar.txt"
+  run "$REVIEW_SENTINEL" --root "$OTHER" mark
+  [ "$status" -eq 3 ]
+  [ ! -f "$OTHER/.claude/.review-mark" ]
+}
+
+@test "mark resolves the marker from CLAUDE_PROJECT_DIR" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  cd "$BATS_TEST_TMPDIR"
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+# mark's sibling exit codes: the guard must not swallow either. Both paths lost
+# their coverage when the original tests moved to accept-state.
+
+@test "mark exits 1 outside a git repo, not 3" {
+  cd "$BATS_TEST_TMPDIR"
+  rm -rf "$TEST_REPO"
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 1 ]
+}
+
+@test "mark exits 2 on write failure and leaves the marker for a retry" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  chmod 500 "$TEST_REPO/.claude"
+  run "$REVIEW_SENTINEL" mark
+  chmod 700 "$TEST_REPO/.claude"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot write sentinel"* ]]
+  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
 }

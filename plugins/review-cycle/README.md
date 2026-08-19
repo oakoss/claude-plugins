@@ -80,6 +80,17 @@ Nothing is fixed and nothing is posted by default. Say `and post` (or ask after 
 
 Marks the current uncommitted state as reviewed by updating the review sentinel. Use when you've manually reviewed the substance of your changes and want to commit without running the full cycle. Per-state escape hatch (lighter than the project-wide `disabled: true` opt-out).
 
+#### Which verb writes the sentinel
+
+Two subcommands write the sentinel, and they are not interchangeable:
+
+- `review-sentinel mark` is what the review cycle runs at Phase 8. It refuses with exit 3 unless `.claude/.review-in-progress` exists, and only `cycle-start` — the first step of a real cycle — writes that marker. So `mark` cannot be used without first declaring a cycle, and it is not a shape the commit gate's chained pass-through accepts. `/review-cycle:review-pr` deliberately uses a *different* marker (`pr-cycle-start`), because it reviews a PR head in a throwaway worktree and never looks at your working tree — its marker holds the Stop gate open without vouching for local changes. The Stop gate and SessionStart both delete markers older than 60 minutes, so a cycle that outruns the TTL also lands on exit 3.
+- `review-sentinel accept-state` is what `/review-cycle:accept` runs. It has no precondition. It is the escape hatch for a human who reviewed the changes themselves.
+
+The split exists because a hook that trusts a file the gated party can write cannot tell a review from a claim of one. The two used to be one verb, so the routine-looking `mark` cleared the gate by itself — and running it in one Bash call, then `git commit` in the next, sidestepped the gate entirely, since the PreToolUse matcher only ever sees one command at a time.
+
+This raises the bar rather than closing the hole. Any verb of a local binary is invocable by whoever holds the shell: `accept-state` is there for the taking, and `cycle-start` is unguarded too, so `cycle-start` followed by `mark` clears the gate while reading like a normal cycle. Nothing a local binary checks can distinguish a review from a claim of one. What changed is that the shortest path is no longer the one that looks like routine plumbing — `accept-state` names itself, and a self-declared cycle that marks without reviewing is a claim someone can check against the transcript.
+
 ### `/review-cycle:de-slopify`
 
 Bundled de-slopify skill — methodology for removing AI writing artifacts from prose, maintained here as part of the plugin (originally imported from oakoss/agent-skills, which no longer carries the canonical copy). The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle. Aligned with the standalone `prose` plugin's rules, so cycle cleanup and the always-on style apply the same standard.
@@ -111,14 +122,14 @@ Side effect: dependency bumps or IDE edits between Claude sessions (after a clea
 
 Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:review`. Fail-open on any error. Two release valves keep the block from becoming ceremony:
 
-- **A running cycle doesn't re-trigger the gate.** The review cycle writes `.claude/.review-in-progress` at fan-out, letting turns end while background reviewers run (their completion notifications re-wake the agent — no sleep-loop workarounds). The marker is cleared when the cycle marks the sentinel; a stale marker from a crashed cycle (over 60 minutes old) is removed and ignored.
+- **A running cycle doesn't re-trigger the gate.** The review cycle writes `.claude/.review-in-progress` at fan-out, letting turns end while background reviewers run (their completion notifications re-wake the agent — no sleep-loop workarounds). The marker is retired by the verbs that conclude a cycle — `mark`, `accept-state`, and `cycle-end` — and a stale one from a crashed cycle (over 60 minutes old) is removed and ignored by both the Stop gate and the next SessionStart. `/review-cycle:review-pr` writes `.claude/.review-pr-in-progress` instead, which the Stop gate honors identically but the sentinel does not accept as evidence.
 - **Blocks once per drift state.** The gate records the state hash it blocked on; a later stop on the identical state passes with a warning instead of re-blocking, so a user-directed "keep going, review at the end" batches naturally instead of hard-looping. This relaxes only *when* review happens — the commit gate still makes review non-optional before any commit.
 
 ### PreToolUse (Bash matcher)
 
 Fires before any Bash command. If the command is `git commit` and the sentinel doesn't match the current state, blocks the commit. This is the deterministic enforcement layer — Claude cannot bypass it with a CLAUDE.md rule or memory.
 
-A chained `review-sentinel mark && git commit` (the `/accept` flow) passes when it is exactly that shape: one `git commit` in the call, bare `mark` immediately `&&`-joined to it. The lexical rules and their rationale live in `hooks/lib/command-parse.sh`.
+A chained `review-sentinel accept-state && git commit` (the `/accept` flow) passes when it is exactly that shape: one `git commit` in the call, bare `accept-state` immediately `&&`-joined to it. `mark` does not qualify — see below. The lexical rules and their rationale live in `hooks/lib/command-parse.sh`.
 
 ### PostToolUse (Write|Edit|MultiEdit matcher)
 
@@ -223,7 +234,7 @@ The gate skips paths that are state or preferences rather than reviewable code, 
 
 - Agent task trackers: `.beads/`, `.trekker/`
 - IDE state: `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`
-- Gate's own state: `.claude/.review-mark`, `.claude/.review-in-progress`, `.claude/.review-stop-block`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
+- Gate's own state: `.claude/.review-mark`, `.claude/.review-in-progress`, `.claude/.review-pr-in-progress`, `.claude/.review-stop-block`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
 
 These directories are excluded at any depth, so a monorepo `subproject/.beads/` is skipped too. `/review-cycle:review` still works manually against excluded paths if you want a pass.
 
@@ -254,6 +265,7 @@ The sentinel and the Stop gate's markers are per-project state, not source. Add 
 ```text
 .claude/.review-mark
 .claude/.review-in-progress
+.claude/.review-pr-in-progress
 .claude/.review-stop-block
 ```
 
@@ -265,6 +277,7 @@ The config file (`.claude/review-cycle.json`) is meant to be committed so the te
 ${PROJECT}/.claude/.review-mark           two-line sentinel (anchor + sha256)
 ${PROJECT}/.claude/review-cycle.json      per-project config (disabled, ignore)
 ${PROJECT}/.claude/.review-in-progress    cycle-running marker (Stop gate passes while fresh)
+${PROJECT}/.claude/.review-pr-in-progress review-pr marker (Stop gate only; never licenses mark)
 ${PROJECT}/.claude/.review-stop-block     state hash the Stop gate last blocked on
 ${PROJECT}/.claude/.no-review-gate        legacy opt-out marker (still honored)
 ~/.claude/.disable-review-gate            global kill-switch (user-touched)

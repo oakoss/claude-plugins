@@ -128,13 +128,13 @@ Fail-open: a missing tool or a check that errors out is noted and skipped, never
 
 ### Phase 3: Fan-out (parallel)
 
-First, on the loop's first iteration only, mark the cycle as in progress:
+First, at the top of every iteration, mark the cycle as in progress:
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-start
 ```
 
-While this marker is fresh, the Stop gate lets your turns end — so after spawning the reviewers you may simply end the turn and let their completion notifications re-wake you. Never busy-wait with sleep loops. The marker is cleared automatically by Phase 8's `mark`; if the cycle aborts before Phase 8 for any reason, run `"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-end` so the gate re-arms. Print an abbreviated status alongside it — tier, leg status, which reviewers had reported — because Phase 9 is the only thing that reports coverage, and an abort skips it entirely.
+This marker is also what licenses Phase 8's `mark`, so it is not optional — skip it and the cycle cannot record its own result. Re-running it each iteration is deliberate: the marker carries a timestamp, both reapers retire it after 60 minutes, and a cycle that reviews for longer than that would otherwise outlive its own license and fail Phase 8. Refreshing it on each pass keeps a cycle that is still working licensed while one that died still expires on schedule. This is not the same as re-running it *after* `mark` has already refused — that recreates evidence for a cycle that is over, and Phase 8 says not to. **If `cycle-start` exits nonzero, report it and stop before spawning reviewers**: it can only fail on a filesystem problem (exit 2: `.claude` uncreatable or unwritable), and running the full cycle anyway means burning it to reach a Phase 8 that cannot record anything, where the exit-3 message reads as a TTL reap rather than the disk error it is. While it is fresh, the Stop gate lets your turns end, so after spawning the reviewers you may simply end the turn and let their completion notifications re-wake you. Never busy-wait with sleep loops. The marker is cleared automatically by Phase 8's `mark`; if the cycle aborts before Phase 8 for any reason, run `"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-end` so the gate re-arms. Print an abbreviated status alongside it — tier, leg status, which reviewers had reported — because Phase 9 is the only thing that reports coverage, and an abort skips it entirely.
 
 **Compose an intent brief first** — 2–4 sentences on what the change is trying to accomplish and why, plus the changed-file list. Source it from the conversation that produced the changes, or from the commit messages in `<ref>..HEAD` when reviewing against a base. Every reviewer gets it: a reviewer that knows the intent flags real deviations instead of guessing at purpose, and its findings need less relitigating. Do not editorialize about expected findings — state intent, not hoped-for verdicts.
 
@@ -310,7 +310,9 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark
 ```
 
-This is what allows the Stop hook and commit-gate to let the user commit. `mark` also clears the in-progress marker from Phase 3 and the Stop gate's blocked-state record. If the CLI exits nonzero (not in a git repo, sha256 tool missing), surface the error in the final summary — do not silently succeed, and run `cycle-end` so the Stop gate re-arms.
+This is what allows the Stop hook and commit-gate to let the user commit. `mark` also clears the in-progress marker from Phase 3 and the Stop gate's blocked-state record.
+
+If the CLI exits nonzero, surface the error in the final summary — do not silently succeed — and run `cycle-end` so the Stop gate re-arms. The one exception is an exit 2 reporting that the marker survived: `cycle-end` removes the same file and fails the same way, so report it and leave it to the TTL. Exit 3 means the Phase 3 marker is gone: either Phase 3 never ran, or the cycle outran the 60-minute TTL and a reaper — the Stop gate, or the next session's SessionStart — removed it. Do not re-run `cycle-start` to get past this — that fakes the evidence the guard exists to check. Report to the user what the reviewers found and that the sentinel could not be marked; accepting the state anyway is theirs to decide with `/review-cycle:accept`.
 
 ### Phase 9: Final summary
 

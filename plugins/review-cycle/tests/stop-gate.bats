@@ -70,19 +70,19 @@ RECORD=".claude/.review-stop-block"
   [ "$status" -eq 2 ]
 }
 
-@test "seed clears both the marker and the stop record" {
+@test "seed clears the stop record but leaves the marker" {
   "$REVIEW_SENTINEL" cycle-start
   mkdir -p "$TEST_REPO/.claude"
   echo "stale-record" > "$TEST_REPO/$RECORD"
   run "$REVIEW_SENTINEL" seed
   [ "$status" -eq 0 ]
-  [ ! -f "$TEST_REPO/$MARKER" ]
+  [ -f "$TEST_REPO/$MARKER" ]
   [ ! -f "$TEST_REPO/$RECORD" ]
 }
 
 @test "marker and record files do not drift the sentinel hash" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   "$REVIEW_SENTINEL" cycle-start
   echo "whatever" > "$TEST_REPO/$RECORD"
   run "$REVIEW_SENTINEL" check
@@ -114,7 +114,7 @@ RECORD=".claude/.review-stop-block"
 
 @test "stop-gate passes on reviewed (marked) drift" {
   echo "change" > foo.txt
-  "$REVIEW_SENTINEL" mark
+  "$REVIEW_SENTINEL" accept-state
   run run_stop_gate
   [ "$status" -eq 0 ]
   [[ "$output" != *'"block"'* ]]
@@ -235,4 +235,87 @@ RECORD=".claude/.review-stop-block"
   echo "change again" > foo.txt
   run run_stop_gate
   [[ "$output" == *'"block"'* ]]
+}
+
+# The sentinel accepts a stale marker, but the Stop gate deletes one past the
+# TTL — so a cycle that outruns it reaches Phase 8 with no marker at all. This
+# pins the combination; testing the sentinel alone reports the opposite.
+@test "a cycle that outruns the TTL loses its marker and mark then refuses" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/$MARKER"
+  run run_stop_gate
+  [ ! -f "$TEST_REPO/$MARKER" ]
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+}
+
+# --- review-pr's separate marker ---
+#
+# /review-pr reviews a PR head in a throwaway worktree and never inspects the
+# working tree. Its marker must hold the Stop gate open without becoming
+# evidence that the working tree was reviewed.
+
+@test "pr-cycle-start writes its own marker, not the review marker" {
+  run "$REVIEW_SENTINEL" pr-cycle-start
+  [ "$status" -eq 0 ]
+  [ -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+  [ ! -f "$TEST_REPO/$MARKER" ]
+}
+
+@test "a review-pr marker does NOT license mark" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" pr-cycle-start
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 3 ]
+  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+}
+
+@test "a fresh review-pr marker still lets the turn end despite drift" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" pr-cycle-start
+  run run_stop_gate
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "a stale review-pr marker is reaped and the gate blocks" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" pr-cycle-start
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-pr-in-progress"
+  run run_stop_gate
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"block"'* ]]
+  [ ! -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+}
+
+@test "pr-cycle-end removes only the review-pr marker" {
+  "$REVIEW_SENTINEL" cycle-start
+  "$REVIEW_SENTINEL" pr-cycle-start
+  run "$REVIEW_SENTINEL" pr-cycle-end
+  [ "$status" -eq 0 ]
+  [ ! -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+  [ -f "$TEST_REPO/$MARKER" ]
+}
+
+@test "cycle-end removes only the review marker" {
+  "$REVIEW_SENTINEL" cycle-start
+  "$REVIEW_SENTINEL" pr-cycle-start
+  run "$REVIEW_SENTINEL" cycle-end
+  [ "$status" -eq 0 ]
+  [ ! -f "$TEST_REPO/$MARKER" ]
+  [ -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+}
+
+@test "the review-pr marker does not drift the sentinel hash" {
+  echo "change" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  "$REVIEW_SENTINEL" pr-cycle-start
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "paths lists the review-pr marker" {
+  run "$REVIEW_SENTINEL" paths
+  [[ "$output" == *".claude/.review-pr-in-progress"* ]]
 }

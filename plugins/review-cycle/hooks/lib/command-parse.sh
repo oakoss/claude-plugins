@@ -12,7 +12,8 @@
 #   parse_join_flat <cmd>       joined view with shell comments stripped
 #   parse_has_commit <cmd>      0 if the text contains a git-commit invocation
 #   parse_commit_count <cmd>    print the number of git-commit invocations
-#   parse_mark_chain_ok <cmd>   0 if the command is a sanctioned mark+commit
+#   parse_accept_chain_ok <cmd> 0 if the command is a sanctioned
+#                               accept-state+commit chain
 #   parse_extract_cd <cmd>      print leading `cd` argument, unquoted
 #   parse_extract_git_c <cmd>   print the commit's -C path, unquoted
 #   parse_abs <path> <base>     print path absolutized against base
@@ -63,32 +64,38 @@ parse_commit_count() {
 }
 
 # The sanctioned chained form: exactly one git commit in the command, and a
-# bare path-anchored `review-sentinel mark` at command position — start of
-# string or right after `;` `&` `|` `(` — immediately `&&`-joined to a
-# plain `git commit`.
+# bare path-anchored `review-sentinel accept-state` at command position —
+# start of string or right after `;` `&` `|` `(` — immediately `&&`-joined
+# to a plain `git commit`.
+#
+# `accept-state`, never `mark`: the chain exists to serve /accept, where a
+# human is vouching for the state. `mark` is the review cycle's internal
+# verb and refuses without a cycle-start marker; letting it chain here
+# would hand the guarded verb the one pass-through that skips the sentinel
+# check. A review that reached Phase 8 has no reason to &&-join a commit.
 #
 # Why each condition exists:
-#   - `&&` join: the commit runs only if the mark succeeded. `;`, `||`, and
-#     bare newlines give no such guarantee. A `||` anywhere before the
-#     commit is rejected outright — `true || mark && commit` skips the mark
-#     yet still commits; the safe `false || mark` shape is denied too
-#     (fail-closed; drop the `||`).
+#   - `&&` join: the commit runs only if accept-state succeeded. `;`, `||`,
+#     and bare newlines give no such guarantee. A `||` anywhere before the
+#     commit is rejected outright — `true || accept-state && commit` skips
+#     the write yet still commits; the safe `false || accept-state` shape is
+#     denied too (fail-closed; drop the `||`).
 #   - single commit: quoted or heredoc text containing the phrase cannot
 #     stand in for the real commit, and a second commit cannot ride through
 #     ungated behind a marked first one.
-#   - bare mark, plain commit: `--root` on the mark, like `-C` on the
-#     commit, could make mark and commit target different repos — both
+#   - bare accept-state, plain commit: `--root` on accept-state, like `-C`
+#     on the commit, could make the two target different repos — both
 #     option forms fall back to the sentinel check.
-#   - nothing between mark and commit: an intervening command could
-#     re-drift the tree after the mark.
-parse_mark_chain_ok() {
+#   - nothing in between: an intervening command could re-drift the tree
+#     after the sentinel was written.
+parse_accept_chain_ok() {
   local cmd="$1" pre
   [ "$(parse_commit_count "$cmd")" = "1" ] || return 1
   pre=$(parse_join_flat "$cmd" \
     | sed -E 's/(^|[;&|[:space:]])git[[:space:]]+commit([^[:alnum:]_].*)?$/\1/')
   printf '%s' "$pre" | grep -qF '||' && return 1
   printf '%s' "$pre" | grep -qE \
-    "(^|[;&|(])[[:space:]]*(\"([^\"]*/)?review-sentinel\"|'([^']*/)?review-sentinel'|([^[:space:];&|\"']*/)?review-sentinel)[[:space:]]+mark[[:space:]]*&&[[:space:]]*\$"
+    "(^|[;&|(])[[:space:]]*(\"([^\"]*/)?review-sentinel\"|'([^']*/)?review-sentinel'|([^[:space:];&|\"']*/)?review-sentinel)[[:space:]]+accept-state[[:space:]]*&&[[:space:]]*\$"
 }
 
 parse_extract_cd() {
