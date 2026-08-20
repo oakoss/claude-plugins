@@ -111,17 +111,30 @@ jobs:
       # every run. The version PR ends up with a single oakoss[bot] commit and
       # one CI cycle on the surviving head. The push rides the checkout's
       # app-token credential, so CI still triggers.
-      - name: Sync plugin manifests into the version PR
+      - name: Sync manifests and normalize the changelog in the version PR
         run: |
           git fetch origin bumpy/version-packages
           git checkout bumpy/version-packages
           node scripts/sync-plugin-versions.mjs
+          # bumpy writes the version heading and its <sub> date on adjacent
+          # lines, which trips MD022 in the Markdown job and fails the whole
+          # version PR. Normalizing before the diff check folds the fix into
+          # the same amend.
+          #
+          # The status is deferred rather than allowed to abort the step:
+          # --fix still exits nonzero on anything it cannot repair, and this
+          # body runs under bash -e, so a stray unfixable rule would skip the
+          # manifest sync entirely. The version PR would then fail Version
+          # consistency with the real cause buried in this job's log.
+          lint=0
+          pnpm exec markdownlint-cli2 --fix "plugins/*/CHANGELOG.md" || lint=$?
           if ! git diff --quiet; then
             git config user.name "oakoss[bot]"
             git config user.email "oakoss[bot]@users.noreply.github.com"
             git commit -a --amend --no-edit
             git push --force-with-lease origin bumpy/version-packages
           fi
+          exit "$lint"
 
   # "Publish" for this repo is tags only — every package is private, so bumpy
   # creates git tags and GitHub releases; nothing goes to npm and no publish
