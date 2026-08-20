@@ -9,6 +9,13 @@ REVIEW_SENTINEL="$PLUGIN_ROOT/bin/review-sentinel"
 GATE_LIB="$PLUGIN_ROOT/hooks/lib/gate.sh"
 
 setup_repo() {
+  # Isolate HOME before any git call. It keeps kill-switch tests off the real
+  # ~/.claude, and it keeps every git call here off the developer's
+  # ~/.gitconfig — a global commit.gpgsign signs every fixture commit, which
+  # measured 166ms against 21ms unsigned.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude"
+
   # Canonicalize: on macOS BATS_TEST_TMPDIR is under /var/folders which is a
   # symlink to /private/var/folders. `git rev-parse --show-toplevel` returns
   # the canonical path, so tests must compare against the canonical form.
@@ -19,10 +26,6 @@ setup_repo() {
   git config user.email "test@example.com"
   git config user.name "Test"
   git commit --allow-empty -q -m "init"
-
-  # Isolate HOME so kill-switch tests don't touch the real ~/.claude.
-  export HOME="$BATS_TEST_TMPDIR/home"
-  mkdir -p "$HOME/.claude"
 
   # Don't inherit a parent CLAUDE_PROJECT_DIR.
   unset CLAUDE_PROJECT_DIR
