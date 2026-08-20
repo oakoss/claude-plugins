@@ -45,7 +45,7 @@ GIT_C_CANDIDATE=$(parse_abs "$GIT_C_CANDIDATE" "${CD_CANDIDATE:-$INPUT_CWD}")
 
 PROJECT_ROOT=$(gate_should_run "$GIT_C_CANDIDATE" "$CD_CANDIDATE" "$INPUT_CWD") || exit 0
 
-"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" check
+GATE_ERR=$("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" check 2>&1 >/dev/null)
 RC=$?
 [ "$RC" -eq 0 ] && exit 0  # clean tree or sentinel matches
 [ "$RC" -eq 2 ] && exit 0  # error: fail-open
@@ -57,6 +57,21 @@ RC=$?
 # the mark": an agent whose review DID happen reads a bare "run review first"
 # as the review having failed, when the real cause is post-mark drift.
 RS_BIN="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
+# A git failure blocks the same way ordinary drift does, but the remedies differ:
+# /review-cycle:accept cannot clear it, because the write verbs fail on the same
+# fault.
+if [ -n "$GATE_ERR" ]; then
+  jq -n --arg rs "$RS_BIN" --arg err "$GATE_ERR" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: ("Commit blocked: the review gate could not read the working tree, so it cannot confirm this state was reviewed. " + $err + " Fix the underlying problem (most often an unreadable file — check its permissions) and retry. /review-cycle:accept will NOT clear this: it fails on the same fault. Diagnose with: \"" + $rs + "\" status. The user can opt this project out entirely with {\"disabled\": true} in .claude/review-cycle.json.")
+    }
+  }' 2>/dev/null \
+    || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Commit blocked: the review gate could not read the working tree. Fix the unreadable path and retry; /review-cycle:accept will not clear this."}}\n'
+  exit 0
+fi
+
 jq -n --arg rs "$RS_BIN" '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",

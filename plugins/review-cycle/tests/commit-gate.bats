@@ -473,3 +473,46 @@ commit -am "msg"'
   run run_hook_from "$other" "cd \"$BATS_TEST_TMPDIR\" && git -C repo commit -am 'msg'"
   assert_deny
 }
+
+@test "the block names the failing path, not just the anchor" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nEDIT\n' > f.txt
+  printf 'secret\n' > locked.txt
+  chmod 000 locked.txt
+  run "$REVIEW_SENTINEL" check
+  chmod 644 locked.txt
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF "locked.txt"
+  echo "$output" | grep -qF "working tree"
+}
+
+@test "the commit gate's deny reason carries the sentinel diagnostic" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nEDIT\n' > f.txt
+  printf 'secret\n' > locked.txt
+  chmod 000 locked.txt
+  run bash -c "printf '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$TEST_REPO\"}' | CLAUDECODE=1 CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/commit-gate.sh'"
+  chmod 644 locked.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '"permissionDecision": *"deny"'
+  echo "$output" | grep -qF "locked.txt"
+  echo "$output" | grep -qF "will NOT clear this"
+}
+
+@test "ordinary drift still gets the ordinary deny reason" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nEDIT\n' > f.txt
+  run bash -c "printf '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$TEST_REPO\"}' | CLAUDECODE=1 CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/commit-gate.sh'"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qF "does not match the last reviewed mark"
+  ! echo "$output" | grep -qF "could not read the working tree" || false
+}

@@ -200,16 +200,17 @@ current_anchor() {
 # already exist as a non-empty file — git rejects a 0-byte index as corrupt.
 # Runs `cd "$root"`, so callers invoke it in a subshell to contain that.
 build_scratch_index() {
-  local root="$1" scratch="$2" realidx
+  local root="$1" scratch="$2" realidx others
   cd "$root" || return 1
-  realidx=$(git rev-parse --git-path index)
+  realidx=$(git rev-parse --git-path index) || return 1
   if [ -f "$realidx" ]; then cp "$realidx" "$scratch" || return 1; fi
   # Only intent-add when there are untracked files: GNU xargs (unlike BSD)
   # runs the command once even on empty input, so an unguarded pipe would
   # invoke `git add -N --` with no paths and fail on a clean or tracked-only
   # tree. The guard skips xargs entirely in that common case. `xargs -0`
   # propagates a `git add` failure (e.g. a path that vanished mid-run).
-  if [ -n "$(git ls-files --others --exclude-standard -- "${EXCLUDES_LIST[@]}")" ]; then
+  others=$(git ls-files --others --exclude-standard -- "${EXCLUDES_LIST[@]}") || return 1
+  if [ -n "$others" ]; then
     git ls-files --others --exclude-standard -z -- "${EXCLUDES_LIST[@]}" \
       | GIT_INDEX_FILE="$scratch" xargs -0 git add -N -- 2>/dev/null || return 1
   fi
@@ -221,13 +222,25 @@ build_scratch_index() {
      && ! git ls-files --error-unmatch -- "$CONFIG_PATH" >/dev/null 2>&1; then
     GIT_INDEX_FILE="$scratch" git add -Nf -- "$CONFIG_PATH" 2>/dev/null || return 1
   fi
+  [ -f "$scratch" ] || GIT_INDEX_FILE="$scratch" git read-tree --empty || return 1
 }
 
 # Compute the sha256 of the diff from anchor to the current effective state
 # (anchor→index AND index→working-tree, per path, sorted by path). Returns 0
 # with hash on stdout; 1 on unrecoverable error (no work tree, no sha tool,
 # pipeline failure); 2 if the anchor is not reachable as a commit or tree in
-# the object database.
+# the object database, or if any git invocation in the hash stream fails.
+#
+# Why a git failure is drift rather than an error: a failed diff cannot be
+# distinguished from "nothing differs" by its output. Left unchecked, a failure
+# hashes to sha256("") — the exact value a mark taken on a clean tree stores —
+# and the gate reports "match" on an unreviewed tree. Every git call therefore
+# signals with exit 9, which maps to 2 (block).
+#
+# The stream is generated into a file and hashed separately rather than piped
+# straight into the sha tool: pipefail reports the RIGHTMOST nonzero status, so
+# in one pipeline a concurrent sha or cut failure masks the 9, and the git
+# failure degrades to an ordinary tool error that hooks fail open on.
 #
 # Per-path iteration with sorted ordering is what makes the hash invariant
 # under four different transformations of the same content:
@@ -262,7 +275,7 @@ build_scratch_index() {
 # streams per path keeps the output order stable regardless of which stream
 # a particular file's diff lives in.
 compute_hash_from_anchor() {
-  local root="$1" anchor="$2" sha h kind paths scratch rc=0
+  local root="$1" anchor="$2" sha h kind paths scratch stream errlog detail gitmsg rc=0
   git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "review-sentinel: not inside a git work tree" >&2
     return 1
@@ -299,26 +312,52 @@ compute_hash_from_anchor() {
     return 2
   fi
 
-  h=$(cd "$root" && {
-        paths=$({
-                  git diff --cached --name-only "$anchor" -- "${EXCLUDES_LIST[@]}"
-                  GIT_INDEX_FILE="$scratch" git diff --name-only -- "${EXCLUDES_LIST[@]}"
-                  # Force-include the config file: user `ignore` patterns
-                  # must not hide config edits from the hash.
-                  git diff --cached --name-only "$anchor" -- "$CONFIG_PATH"
-                  GIT_INDEX_FILE="$scratch" git diff --name-only -- "$CONFIG_PATH"
-                } | LC_ALL=C sort -u)
-        if [ -n "$paths" ]; then
-          while IFS= read -r p; do
-            git diff --cached --binary --no-prefix "$anchor" -- "$p"
-            GIT_INDEX_FILE="$scratch" git diff --binary --no-prefix -- "$p"
-          done <<< "$paths"
-        fi
-      } 2>/dev/null | $sha 2>/dev/null | cut -d' ' -f1)
-  for s in "${PIPESTATUS[@]}"; do
-    [ "$s" -eq 0 ] || rc=1
-  done
+  stream=$(mktemp) || { /bin/rm -f "$scratch"; return 1; }
+  errlog=$(mktemp) || { /bin/rm -f "$scratch" "$stream"; return 1; }
+  # Each failure names what it was doing before exiting, so the block can point
+  # at a file rather than an anchor SHA. git's own message lands here too.
+  ( cd "$root" || { echo "entering the project root" >&2; exit 9; }
+    paths=$({
+              git diff --cached --name-only "$anchor" -- "${EXCLUDES_LIST[@]}" \
+                || { echo "listing staged changes" >&2; exit 9; }
+              GIT_INDEX_FILE="$scratch" git diff --name-only -- "${EXCLUDES_LIST[@]}" \
+                || { echo "listing working-tree changes" >&2; exit 9; }
+              # Force-include the config file: user `ignore` patterns
+              # must not hide config edits from the hash.
+              git diff --cached --name-only "$anchor" -- "$CONFIG_PATH" \
+                || { echo "listing staged changes to $CONFIG_PATH" >&2; exit 9; }
+              GIT_INDEX_FILE="$scratch" git diff --name-only -- "$CONFIG_PATH" \
+                || { echo "listing working-tree changes to $CONFIG_PATH" >&2; exit 9; }
+            } | LC_ALL=C sort -u) || exit 9
+    if [ -n "$paths" ]; then
+      while IFS= read -r p; do
+        git diff --cached --binary --no-prefix "$anchor" -- "$p" \
+          || { echo "diffing $p (staged)" >&2; exit 9; }
+        GIT_INDEX_FILE="$scratch" git diff --binary --no-prefix -- "$p" \
+          || { echo "diffing $p (working tree)" >&2; exit 9; }
+      done <<< "$paths"
+    fi
+  ) >"$stream" 2>"$errlog"
+  rc=$?
   /bin/rm -f "$scratch"
+  if [ "$rc" -eq 9 ]; then
+    # The marker is written after git's own message, so it lands last. Both
+    # matter — the marker says which operation, git says why it failed.
+    detail=$(grep -v '^[[:space:]]*$' "$errlog" 2>/dev/null | tail -1)
+    gitmsg=$(grep -v '^[[:space:]]*$' "$errlog" 2>/dev/null | tail -2 | head -1)
+    [ "$gitmsg" = "$detail" ] && gitmsg=""
+    echo "review-sentinel: git failed while ${detail:-diffing}${gitmsg:+ — $gitmsg} (anchor $anchor); treating as drift" >&2
+    /bin/rm -f "$stream" "$errlog"
+    return 2
+  fi
+  /bin/rm -f "$errlog"
+  if [ "$rc" -ne 0 ]; then
+    /bin/rm -f "$stream"
+    return 1
+  fi
+  h=$($sha < "$stream" 2>/dev/null | cut -d' ' -f1)
+  rc=$?
+  /bin/rm -f "$stream"
   [ $rc -eq 0 ] || return 1
   [ -n "$h" ] || return 1
   echo "sha256:$h"
@@ -944,7 +983,7 @@ $HASH" || {
       HASH_RC=$?
       case $HASH_RC in
         0) echo "current: $CURRENT_HASH" ;;
-        2) echo "current: (stored anchor unreachable — treated as drift)" ;;
+        2) echo "current: (anchor unreachable or a git failure while diffing — treated as drift)" ;;
         *) echo "current: (hash computation failed — gates fail open)" ;;
       esac
     fi

@@ -1229,3 +1229,216 @@ setup() {
   [[ "$output" == *"cannot write sentinel"* ]]
   [ -f "$TEST_REPO/.claude/.review-in-progress" ]
 }
+
+# A git failure inside the hash stream must never hash as "nothing differs".
+# An empty stream hashes to sha256("") — exactly what a mark taken on a clean
+# tree stores — so an unchecked failure reports a match on an unreviewed tree.
+# cpl-55l.
+
+@test "an unreadable file blocks instead of hashing to the empty-stream value" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+  chmod 000 f.txt
+  run "$REVIEW_SENTINEL" check
+  chmod 644 f.txt
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF "review-sentinel: git failed while"
+}
+
+@test "a failed path enumeration blocks instead of reporting a match" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+
+  # Fail only the worktree-side enumeration; every other git call is real.
+  # That call sits inside a nested command substitution, so its status never
+  # reaches PIPESTATUS — the route that used to reach the sha tool empty.
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  REAL_GIT="$(command -v git)"
+  cat > "$BATS_TEST_TMPDIR/shim/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = "--name-only" ]; then
+    case " \$* " in
+      *" --cached "*) : ;;
+      *) exit 128 ;;
+    esac
+  fi
+done
+exec "$REAL_GIT" "\$@"
+SHIM
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF "review-sentinel: git failed while"
+
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" status
+  [ "$status" -eq 1 ]
+  ! echo "$output" | grep -qF "verdict: match" || false
+}
+
+@test "a failing diff driver blocks rather than failing open" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+  printf '#!/bin/sh\nexit 4\n' > ext.sh
+  chmod +x ext.sh
+  git config diff.external "$TEST_REPO/ext.sh"
+  run "$REVIEW_SENTINEL" check
+  git config --unset diff.external
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -qF "review-sentinel: git failed while"
+}
+
+# pipefail reports the rightmost nonzero status. Hashing in the same pipeline
+# that generates the stream let a sha failure overwrite the git failure, and the
+# git failure then read as an ordinary tool error, which hooks fail open on.
+@test "a git failure is not masked by a concurrent hash-tool failure" {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  REAL_GIT="$(command -v git)"
+  cat > "$BATS_TEST_TMPDIR/shim/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = "--name-only" ]; then
+    case " \$* " in
+      *" --cached "*) : ;;
+      *) exit 128 ;;
+    esac
+  fi
+done
+exec "$REAL_GIT" "\$@"
+SHIM
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/shim/shasum"
+  printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/shim/sha256sum"
+  chmod +x "$BATS_TEST_TMPDIR/shim/shasum" "$BATS_TEST_TMPDIR/shim/sha256sum"
+
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# Writes a `git` shim OUTSIDE the repo (a shim inside it would itself drift the
+# hash) that fails exactly the invocations matching $1 and passes the rest.
+shim_git() {
+  local dir="$BATS_TEST_TMPDIR/gitshim" real
+  real="$(command -v git)"
+  mkdir -p "$dir"
+  {
+    echo '#!/usr/bin/env bash'
+    cat
+    echo "exec \"$real\" \"\$@\""
+  } > "$dir/git"
+  chmod +x "$dir/git"
+  PATH="$dir:$PATH"
+  export PATH
+}
+
+baseline() {
+  printf 'reviewed\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+}
+
+@test "A: a failed STAGED enumeration blocks instead of reporting a match" {
+  baseline
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+  git add f.txt   # drift lives only on the anchor->index side
+  shim_git <<'SH'
+case " $* " in
+  *" --cached "*) case " $* " in
+    *" --name-only "*) case " $* " in *"review-cycle.json"*) : ;; *) exit 128 ;; esac ;;
+  esac ;;
+esac
+SH
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "B: a failed WORKING-TREE enumeration blocks even when the config leg still works" {
+  baseline
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+  shim_git <<'SH'
+case " $* " in
+  *" --name-only "*) case " $* " in
+    *" --cached "*) : ;;
+    *"review-cycle.json"*) : ;;
+    *) exit 128 ;;
+  esac ;;
+esac
+SH
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "C: a failed config enumeration cannot hide an ignored config edit" {
+  mkdir -p .claude
+  printf '{"ignore":[".claude/**"]}\n' > .claude/review-cycle.json
+  git add -A -f
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf '{"ignore":[".claude/**"],"disabled":true}\n' > .claude/review-cycle.json
+  git add -f .claude/review-cycle.json
+  shim_git <<'SH'
+case " $* " in
+  *"review-cycle.json"*) case " $* " in
+    *" --name-only "*) case " $* " in *" --cached "*) exit 128 ;; esac ;;
+  esac ;;
+esac
+SH
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "D: a failing diff driver blocks on STAGED content too" {
+  baseline
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+  git add f.txt
+  printf '#!/bin/sh\nexit 4\n' > "$BATS_TEST_TMPDIR/ext.sh"
+  chmod +x "$BATS_TEST_TMPDIR/ext.sh"
+  git config diff.external "$BATS_TEST_TMPDIR/ext.sh"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "E: a failed scratch-index build blocks rather than hashing an empty index" {
+  baseline
+  printf 'reviewed\nUNREVIEWED\n' > f.txt
+  shim_git <<'SH'
+case " $* " in
+  *" rev-parse "*) case " $* " in *" --git-path "*) exit 128 ;; esac ;;
+esac
+SH
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "F: a failed untracked-file scan blocks rather than dropping a new file" {
+  baseline
+  printf 'UNREVIEWED NEW FILE\n' > new.txt
+  shim_git <<'SH'
+case " $* " in
+  *" ls-files "*) case " $* " in
+    *" --others "*) case " $* " in *" -z "*) : ;; *) exit 128 ;; esac ;;
+  esac ;;
+esac
+SH
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
