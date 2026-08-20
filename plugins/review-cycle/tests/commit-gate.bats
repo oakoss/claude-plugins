@@ -485,8 +485,8 @@ commit -am "msg"'
   run "$REVIEW_SENTINEL" check
   chmod 644 locked.txt
   [ "$status" -eq 1 ]
-  [[ "$output" == *"locked.txt"* ]]
-  [[ "$output" == *"working tree"* ]]
+  echo "$output" | grep -qF "locked.txt"
+  echo "$output" | grep -qF "working tree"
 }
 
 @test "the commit gate's deny reason carries the sentinel diagnostic" {
@@ -500,9 +500,9 @@ commit -am "msg"'
   run bash -c "printf '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$TEST_REPO\"}' | CLAUDECODE=1 CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/commit-gate.sh'"
   chmod 644 locked.txt
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"permissionDecision":"deny"'* ]]
-  [[ "$output" == *"locked.txt"* ]]
-  [[ "$output" == *"will NOT clear this"* ]]
+  echo "$output" | grep -q '"permissionDecision": *"deny"'
+  echo "$output" | grep -qF "locked.txt"
+  echo "$output" | grep -qF "will NOT clear this"
 }
 
 @test "ordinary drift still gets the ordinary deny reason" {
@@ -513,6 +513,6 @@ commit -am "msg"'
   printf 'reviewed\nEDIT\n' > f.txt
   run bash -c "printf '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m x\"},\"cwd\":\"$TEST_REPO\"}' | CLAUDECODE=1 CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/commit-gate.sh'"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"does not match the last reviewed mark"* ]]
-  [[ "$output" != *"could not read the working tree"* ]]
+  echo "$output" | grep -qF "does not match the last reviewed mark"
+  ! echo "$output" | grep -qF "could not read the working tree" || false
 }
