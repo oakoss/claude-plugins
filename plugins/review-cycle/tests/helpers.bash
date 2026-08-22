@@ -45,6 +45,33 @@ assert_matches() {
   return 1
 }
 
+# `! cmd` is exempt from `set -e` in every bash per POSIX, so a bare `! cmd`
+# assertion is inert even on bash 5. Only exit 1 is a clean false; other
+# nonzero statuses mean the command never ran its check (grep on an unreadable
+# file exits 2, a missing binary 127). `set -e` is suppressed inside a called
+# function, so this proves the return status, not a clean body.
+refute() {
+  if [ "$#" -eq 0 ]; then
+    printf 'refute: no command given\n' >&2
+    return 1
+  fi
+  local rc=0
+  "$@" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'expected failure, but succeeded: %s\n' "$*" >&2
+    return 1
+  fi
+  if [ "$rc" -ne 1 ]; then
+    if [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then
+      printf 'refute: command could not be run (exit %s): %s\n' "$rc" "$*" >&2
+    else
+      printf 'refute: %s exited %s, not a clean false\n' "$1" "$rc" >&2
+    fi
+    return 1
+  fi
+  return 0
+}
+
 # Consumed by the .bats suites that `load 'helpers'`; shellcheck can't see them.
 # shellcheck disable=SC2034
 REVIEW_SENTINEL="$PLUGIN_ROOT/bin/review-sentinel"

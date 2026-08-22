@@ -4,7 +4,7 @@
 # suite pins the lexical layer cheaply.
 
 setup() {
-  PLUGIN_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
+  load 'helpers'
   source "$PLUGIN_ROOT/hooks/lib/command-parse.sh"
 }
 
@@ -37,15 +37,15 @@ commit -m x'
 }
 
 @test "has_commit: rejects non-commit git commands" {
-  ! parse_has_commit "git log -p something" || false
-  ! parse_has_commit "git checkout -b commit-fix" || false
-  ! parse_has_commit "git stash push -m commit" || false
-  ! parse_has_commit "echo commit" || false
+  refute parse_has_commit "git log -p something"
+  refute parse_has_commit "git checkout -b commit-fix"
+  refute parse_has_commit "git stash push -m commit"
+  refute parse_has_commit "echo commit"
 }
 
 @test "has_commit: rejects lookalike binary names" {
-  ! parse_has_commit "mygit commit -m x" || false
-  ! parse_has_commit "legit commit -m x" || false
+  refute parse_has_commit "mygit commit -m x"
+  refute parse_has_commit "legit commit -m x"
 }
 
 # --- parse_commit_count ---
@@ -82,33 +82,33 @@ git commit -m x'
 }
 
 @test "accept chain: weak separators denied" {
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state; git commit -m x' || false
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state || git commit -m x' || false
-  ! parse_accept_chain_ok 'true || /p/review-sentinel accept-state && git commit -m x' || false
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state
-git commit -m x' || false
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state; git commit -m x'
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state || git commit -m x'
+  refute parse_accept_chain_ok 'true || /p/review-sentinel accept-state && git commit -m x'
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state
+git commit -m x'
 }
 
 @test "accept chain: commands or options near the pair denied" {
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state && git add -A && git commit -m x' || false
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state > /dev/null && git commit -m x' || false
-  ! parse_accept_chain_ok '/p/review-sentinel --root /r accept-state && git commit -m x' || false
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state && git -c a=b commit -m x' || false
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state && git add -A && git commit -m x'
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state > /dev/null && git commit -m x'
+  refute parse_accept_chain_ok '/p/review-sentinel --root /r accept-state && git commit -m x'
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state && git -c a=b commit -m x'
 }
 
 @test "accept chain: textual spoofs denied" {
-  ! parse_accept_chain_ok 'echo review-sentinel accept-state && git commit -m x' || false
-  ! parse_accept_chain_ok 'my-review-sentinel accept-state && git commit -m x' || false
-  ! parse_accept_chain_ok 'git commit -m x && /p/review-sentinel accept-state' || false
-  ! parse_accept_chain_ok '/p/review-sentinel check && git commit -m x' || false
+  refute parse_accept_chain_ok 'echo review-sentinel accept-state && git commit -m x'
+  refute parse_accept_chain_ok 'my-review-sentinel accept-state && git commit -m x'
+  refute parse_accept_chain_ok 'git commit -m x && /p/review-sentinel accept-state'
+  refute parse_accept_chain_ok '/p/review-sentinel check && git commit -m x'
 }
 
 @test "accept chain: multi-commit denied" {
-  ! parse_accept_chain_ok '/p/review-sentinel accept-state && git commit -m a && git commit -m b' || false
+  refute parse_accept_chain_ok '/p/review-sentinel accept-state && git commit -m a && git commit -m b'
 }
 
 @test "accept chain: the guarded mark verb is not a sanctioned chain" {
-  ! parse_accept_chain_ok '/p/review-sentinel mark && git commit -m x' || false
+  refute parse_accept_chain_ok '/p/review-sentinel mark && git commit -m x'
 }
 
 # --- parse_extract_cd / parse_extract_git_c ---

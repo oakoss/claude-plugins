@@ -1244,7 +1244,7 @@ setup() {
   run "$REVIEW_SENTINEL" check
   chmod 644 f.txt
   [ "$status" -eq 1 ]
-  echo "$output" | grep -qF "review-sentinel: git failed while"
+  assert_contains "$output" "review-sentinel: git failed while"
 }
 
 @test "a failed path enumeration blocks instead of reporting a match" {
@@ -1275,11 +1275,11 @@ SHIM
 
   PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
-  echo "$output" | grep -qF "review-sentinel: git failed while"
+  assert_contains "$output" "review-sentinel: git failed while"
 
   PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
-  ! echo "$output" | grep -qF "verdict: match" || false
+  refute_contains "$output" "verdict: match"
 }
 
 @test "a failing diff driver blocks rather than failing open" {
@@ -1294,7 +1294,7 @@ SHIM
   run "$REVIEW_SENTINEL" check
   git config --unset diff.external
   [ "$status" -eq 1 ]
-  echo "$output" | grep -qF "review-sentinel: git failed while"
+  assert_contains "$output" "review-sentinel: git failed while"
 }
 
 # pipefail reports the rightmost nonzero status. Hashing in the same pipeline
