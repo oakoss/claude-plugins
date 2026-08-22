@@ -41,7 +41,7 @@ setup() {
   ( build_scratch_index "$TEST_REPO" "$scratch" )
   names=$(GIT_INDEX_FILE="$scratch" git diff --name-only)
   /bin/rm -f "$scratch"
-  [[ "$names" == *"my notes.md"* ]]
+  assert_contains "$names" "my notes.md"
 }
 
 # Tracked-only / clean trees have no untracked files; the helper must skip the
@@ -56,7 +56,7 @@ setup() {
   names=$(GIT_INDEX_FILE="$scratch" git diff --name-only)
   /bin/rm -f "$scratch"
   [ "$rc" -eq 0 ]
-  [[ "$names" == *"foo.txt"* ]]
+  assert_contains "$names" "foo.txt"
 }
 
 # A scratch index that cannot be written (cp fails on an unwritable target)
@@ -79,6 +79,6 @@ setup() {
   ( build_scratch_index "$TEST_REPO" "$scratch" )
   names=$(GIT_INDEX_FILE="$scratch" git diff --name-only)
   /bin/rm -f "$scratch"
-  [[ "$names" == *"src.txt"* ]]
-  [[ "$names" != *".beads"* ]]
+  assert_contains "$names" "src.txt"
+  refute_contains "$names" ".beads"
 }

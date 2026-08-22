@@ -2,6 +2,24 @@
 # Tests for .claude/hooks/version-bump-gate.sh.
 # Run with `bats .claude/hooks/version-bump-gate.bats`.
 
+# Copy of the plugin suites' helper (tests/helpers.bash): bash 3.2 does not
+# honor `set -e` for a failing bare [[ ]], so assertions must return nonzero.
+assert_contains() {
+  if [ "$#" -ne 2 ] || [ -z "$2" ]; then
+    printf 'assert_contains: empty or missing needle\n' >&2
+    return 1
+  fi
+  [[ "$1" == *"$2"* ]] && return 0
+  printf 'expected to contain: %s\nactual:\n%s\n' "$2" "$1" >&2
+  return 1
+}
+
+@test "assert_contains copy is load-bearing: mismatch returns nonzero" {
+  run assert_contains "actual" "absent"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "expected to contain"
+}
+
 setup() {
   HOOK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME}")" && pwd)"
   GATE="$HOOK_DIR/version-bump-gate.sh"
@@ -79,8 +97,8 @@ gate_decision() {
   run run_gate
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
-  [[ "$output" =~ "foo" ]]
-  [[ "$output" =~ "version bump" ]]
+  assert_contains "$output" "foo"
+  assert_contains "$output" "version bump"
 }
 
 @test "BLOCKS when only plugin.json is bumped, marketplace.json is not" {
@@ -91,7 +109,7 @@ gate_decision() {
   run run_gate
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
-  [[ "$output" =~ "marketplace.json bumped: 0" ]]
+  assert_contains "$output" "marketplace.json bumped: 0"
 }
 
 @test "BLOCKS when only marketplace.json is bumped, plugin.json is not" {
@@ -102,7 +120,7 @@ gate_decision() {
   run run_gate
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
-  [[ "$output" =~ "plugin.json bumped: 0" ]]
+  assert_contains "$output" "plugin.json bumped: 0"
 }
 
 @test "PASSES when both plugin.json and marketplace.json are bumped" {
@@ -156,8 +174,8 @@ EOF
   run run_gate
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
-  [[ "$output" =~ "foo" ]]
-  [[ "$output" =~ "bar" ]]
+  assert_contains "$output" "foo"
+  assert_contains "$output" "bar"
 }
 
 @test "manifest-only change passes through (no associated runtime change)" {
@@ -307,7 +325,7 @@ CS
   run run_gate
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
-  [[ "$output" =~ "foo" ]]
+  assert_contains "$output" "foo"
 }
 
 @test "BLOCKS when the bump file exists but is not staged" {

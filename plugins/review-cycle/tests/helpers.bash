@@ -2,6 +2,49 @@
 # Shared setup for sentinel.bats and gate.bats. Loaded via `load 'helpers'`.
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# bash 3.2 does not honor `set -e` for a failing bare [[ ]], so a mid-body
+# [[ ]] assertion is inert on macOS while live on bash 5 (cpl-lan). These
+# helpers return nonzero — which every bash enforces — and print the mismatch.
+# The needle/pattern guard exists because an empty or unset second argument
+# would otherwise pass vacuously (and `=~ ''` diverges between the two bashes).
+assert_contains() {
+  if [ "$#" -ne 2 ] || [ -z "$2" ]; then
+    printf 'assert_contains: empty or missing needle\n' >&2
+    return 1
+  fi
+  [[ "$1" == *"$2"* ]] && return 0
+  printf 'expected to contain: %s\nactual:\n%s\n' "$2" "$1" >&2
+  return 1
+}
+
+refute_contains() {
+  if [ "$#" -ne 2 ] || [ -z "$2" ]; then
+    printf 'refute_contains: empty or missing needle\n' >&2
+    return 1
+  fi
+  [[ "$1" != *"$2"* ]] && return 0
+  printf 'expected NOT to contain: %s\nactual:\n%s\n' "$2" "$1" >&2
+  return 1
+}
+
+assert_matches() {
+  if [ "$#" -ne 2 ] || [ -z "$2" ]; then
+    printf 'assert_matches: empty or missing pattern\n' >&2
+    return 1
+  fi
+  local rc=0
+  # shellcheck disable=SC2319  # the condition's $? is the value being captured
+  [[ "$1" =~ $2 ]] || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -ge 2 ]; then
+    printf 'assert_matches: invalid regex: %s\n' "$2" >&2
+    return 1
+  fi
+  printf 'expected to match: %s\nactual:\n%s\n' "$2" "$1" >&2
+  return 1
+}
+
 # Consumed by the .bats suites that `load 'helpers'`; shellcheck can't see them.
 # shellcheck disable=SC2034
 REVIEW_SENTINEL="$PLUGIN_ROOT/bin/review-sentinel"

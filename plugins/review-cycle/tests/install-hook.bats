@@ -80,7 +80,7 @@ make_drift() {
   "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   run git -C "$TEST_REPO" commit --allow-empty -m x
   [ "$status" -ne 0 ]
-  [[ "$output" == *"lint-failed"* ]]
+  assert_contains "$output" "lint-failed"
 }
 
 @test "non-shell foreign hook is preserved and executed via its interpreter" {
@@ -109,7 +109,7 @@ make_drift() {
   [ "$status" -eq 0 ]
   [ -f "$hp.local" ]
   grep -q "appended-era-foreign" "$hp.local"
-  ! grep -q "appended-era-foreign" "$hp"
+  ! grep -q "appended-era-foreign" "$hp" || false
   [ "$(grep -cF '>>> review-cycle gate >>>' "$hp")" -eq 1 ]
   git -C "$TEST_REPO" commit --allow-empty -m x
   [ -f "$TEST_REPO/hook-log" ]
@@ -128,7 +128,7 @@ make_drift() {
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_REPO/.husky/pre-commit")" = "$before" ]
   [ ! -f "$TEST_REPO/.husky/pre-commit.local" ]
-  [[ "$output" == *"tracked by git"* ]]
+  assert_contains "$output" "tracked by git"
   [ -x "$TEST_REPO/.claude/review-cycle-pre-commit.sh" ]
 }
 
@@ -140,7 +140,7 @@ make_drift() {
   chmod -x "$hp"
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   [ "$status" -eq 0 ]
-  [[ "$output" == *"not executable"* ]]
+  assert_contains "$output" "not executable"
 }
 
 @test "install refuses when both a foreign hook and .local already exist" {
@@ -151,7 +151,7 @@ make_drift() {
   printf '#!/bin/sh\ntrue\n' > "$hp.local"
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   [ "$status" -ne 0 ]
-  [[ "$output" == *"resolve manually"* ]]
+  assert_contains "$output" "resolve manually"
 }
 
 @test "install lands in a core.hooksPath dir (husky-style)" {
@@ -168,7 +168,7 @@ make_drift() {
   export CLAUDECODE=1
   run git -C "$TEST_REPO" commit -m "unreviewed"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"review-cycle: unreviewed changes"* ]]
+  assert_contains "$output" "review-cycle: unreviewed changes"
 }
 
 @test "CLAUDE_CODE_ENTRYPOINT alone triggers gating" {
@@ -333,7 +333,7 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_REPO/lefthook.yml")" = "$before" ]
-  [[ "$output" == *"add this job"* ]]
+  assert_contains "$output" "add this job"
   [ -x "$TEST_REPO/.claude/review-cycle-pre-commit.sh" ]
 }
 
@@ -342,7 +342,7 @@ EOF
   "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already present"* ]]
+  assert_contains "$output" "already present"
   [ "$(grep -c 'review-cycle-pre-commit.sh' "$TEST_REPO/lefthook.yml")" -eq 1 ]
 }
 
@@ -360,7 +360,7 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_REPO/.pre-commit-config.yaml")" = "repos: []" ]
-  [[ "$output" == *"repo: local"* ]]
+  assert_contains "$output" "repo: local"
   [ -x "$TEST_REPO/.claude/review-cycle-pre-commit.sh" ]
   [ ! -f "$(hook_path)" ]
 }
@@ -372,7 +372,7 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   [ "$status" -eq 0 ]
   [ "$(cat "$TEST_REPO/package.json")" = "$before" ]
-  [[ "$output" == *"simple-git-hooks"* ]]
+  assert_contains "$output" "simple-git-hooks"
   [ -x "$TEST_REPO/.claude/review-cycle-pre-commit.sh" ]
 }
 
@@ -389,8 +389,8 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" install-hook
   chmod u+w "$TEST_REPO/lefthook.yml"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"cannot append"* ]]
-  [[ "$output" != *"job appended"* ]]
+  assert_contains "$output" "cannot append"
+  refute_contains "$output" "job appended"
 }
 
 # --- uninstall-hook ---
@@ -405,7 +405,7 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" uninstall-hook
   [ "$status" -eq 0 ]
   grep -q "echo original" "$hp"
-  ! grep -qF ">>> review-cycle gate >>>" "$hp"
+  ! grep -qF ">>> review-cycle gate >>>" "$hp" || false
   [ ! -f "$hp.local" ]
 }
 
@@ -428,7 +428,7 @@ EOF
 @test "uninstall with nothing installed reports and exits 0" {
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" uninstall-hook
   [ "$status" -eq 0 ]
-  [[ "$output" == *"nothing to uninstall"* ]]
+  assert_contains "$output" "nothing to uninstall"
 }
 
 @test "uninstall fails loudly when the hook cannot be removed" {
@@ -439,7 +439,7 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" uninstall-hook
   chmod u+w "$hd"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"cannot"* ]]
+  assert_contains "$output" "cannot"
 }
 
 @test "uninstall keeps non-managed content that lives outside the markers" {
@@ -454,10 +454,10 @@ EOF
   chmod +x "$hp"
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" uninstall-hook
   [ "$status" -eq 0 ]
-  [[ "$output" == *"non-managed hook content kept"* ]]
+  assert_contains "$output" "non-managed hook content kept"
   [ -f "$hp" ]
   grep -q "user-added" "$hp"
-  ! grep -qF ">>> review-cycle gate >>>" "$hp"
+  ! grep -qF ">>> review-cycle gate >>>" "$hp" || false
 }
 
 @test "uninstall warns when a relocated .local hook is stranded" {
@@ -468,5 +468,5 @@ EOF
   printf '#!/bin/sh\necho original\n' > "$hp.local"
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" uninstall-hook
   [ "$status" -eq 0 ]
-  [[ "$output" == *"NOT running"* ]]
+  assert_contains "$output" "NOT running"
 }
