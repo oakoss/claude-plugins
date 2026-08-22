@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 
 
+
+## 0.15.0
+
+<sub>2026-08-22</sub>
+
+- [#25](https://github.com/oakoss/claude-plugins/pull/25)  *(minor)*
+  `review-sentinel mark` now refuses with exit 3 unless a review cycle is actually running, and the unguarded write moves to a new `accept-state` verb. The old shared verb let any agent declare its own work reviewed: `mark` in one Bash call and `git commit` in the next sailed through, because the PreToolUse gate exits on any command containing no `git commit` and so never saw the pair. `mark` now requires `.claude/.review-in-progress`, which only `cycle-start` writes and only a real cycle runs. The test is presence rather than freshness, but the Stop gate deletes markers past its 60-minute TTL, so a cycle that outruns it reaches Phase 8 with no marker and exits 3; the summary should say so rather than the cycle re-running `cycle-start` to recreate its own evidence. The commit gate's chained pass-through accepts `accept-state && git commit` only — the guarded verb cannot ride the one path that skips the sentinel check. `/review-cycle:review-pr` gets its own marker via new `pr-cycle-start` and `pr-cycle-end` verbs: it reviews a PR head in a throwaway worktree and never reads the working tree, so its marker holds the Stop gate open without licensing a `mark` over local changes nothing reviewed. Re-run `/review-cycle:init`, or add `.claude/.review-pr-in-progress` to `.gitignore` yourself.
+
+  SessionStart now revokes an in-progress marker once it passes the same 60-minute TTL the Stop gate applies, on every startup path including the legacy-sentinel migration. Without that, a session that died mid-review left a marker that licensed the next `mark` over exactly the unreviewed work the gate exists for — the re-seed that used to clear it is skipped in that case by design. The revocation is deliberately stale-only, and `seed` no longer retires the marker at all: `startup` also fires when a second session opens in a repo where the first is mid-cycle, and deleting a live cycle's fresh marker would strand its Phase 8. Retiring a marker now belongs to the verbs that conclude a cycle — `mark`, `accept-state`, and `cycle-end` — plus the two TTL owners, the Stop gate and SessionStart.
+
+  What you do differently: `/review-cycle:accept` and any script that wrote the sentinel by hand must call `accept-state` instead of `mark`. `/review-cycle:review` is unchanged, since Phase 3 already runs `cycle-start`. This raises the bar rather than closing it. `cycle-start` is itself unguarded, so `cycle-start` followed by `mark` still clears the gate, as does `accept-state`. What changes is that the shortest path no longer looks like routine plumbing: `accept-state` names itself in a transcript, and a cycle that declares itself started and then marks without reviewing is a claim someone can check.
+- [#27](https://github.com/oakoss/claude-plugins/pull/27)  *(minor)*
+  A git failure while computing the state hash now blocks the commit instead of being mistaken for "nothing differs". Every git call in `review-sentinel`'s hash stream reports failure explicitly, and `check`, `match`, and `status` treat that as drift.
+
+  The failure that mattered: the path enumeration runs inside a nested command substitution, so its exit status never reached the surrounding pipeline's status check. A failure there produced an empty diff stream, and an empty stream hashes to `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` — the exact value a mark taken on a clean tree stores. The gate reported `verdict: match — this exact state was marked reviewed` on a tree holding unreviewed content.
+
+  Two smaller holes closed alongside it. A per-path `git diff` failure previously blocked or was waved through depending on where the failing path sorted, because nothing guarded the loop and the last iteration's status decided; an unreadable file was a coin flip, not a policy. And the stream is now generated into a file and hashed separately: as a single pipeline, `pipefail` reports the rightmost nonzero status, so a concurrent `shasum` or `cut` failure overwrote the git failure and it read as an ordinary tool error, which hooks fail open on.
+
+  Reproduced in tests four ways — an unreadable file, a shimmed enumeration, a failing `diff.external` driver, and a git failure concurrent with a hash-tool failure — each verified to fail against the previous release.
+
+  The block also tells you what to do about it. The sentinel now reports which operation failed and on which path, with git's own message attached, and the commit gate carries that into its deny reason instead of the generic drift text:
+
+  ```text
+  Commit blocked: the review gate could not read the working tree, so it cannot confirm
+  this state was reviewed. review-sentinel: git failed while diffing locked.txt (working
+  tree) — fatal: cannot hash locked.txt (anchor 3b00f9f8…); treating as drift. Fix the
+  underlying problem (most often an unreadable file — check its permissions) and retry.
+  /review-cycle:accept will NOT clear this: it fails on the same fault.
+  ```
+
+  What you do differently: if your repository can make git fail mid-diff, expect a block where you previously got a coin flip or silence, naming the file. One limitation to know about: `/review-cycle:accept` cannot clear this state, because the write verbs fail on the same fault. Fix the file, or use a gate opt-out. Ordinary drift is unaffected and still gets the ordinary message.
+- [#30](https://github.com/oakoss/claude-plugins/pull/30)  *(minor)*
+  The review cycle's Phase 6 now has a third fix classification between mechanical and substantive: the verified message fix. A fix whose entire diff is human-facing message text (plus at most a small tested pure helper feeding it) no longer forces a full reviewer re-fan-out — instead the fixing agent must reproduce the state the message addresses, run the printed remedy verbatim, and confirm it clears, recording the reproduction in the cycle summary. Message claims the local environment cannot exercise (another OS or shell, a remote service) get one Codex-only low-effort pass per cycle instead of the full fan-out. Machine-readable output (`--json`, exit codes, parseable formats), check verdicts, and unverified remedies still classify substantive. On the cycle that motivated this change, four full iterations would have been two plus one Codex-only pass; nothing changes for logic fixes.
+
 ## 0.14.0
 
 <sub>2026-08-18</sub>
