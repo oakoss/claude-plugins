@@ -1,0 +1,11 @@
+---
+"review-cycle": minor
+---
+
+Every leg of the review cycle's Phase 3 fan-out — the four fix-loop agents and the Codex leg — now carries one falsifiable question. Phase 3 composes a specific claim per leg before spawning ("which of these new assertions still pass when the code under them is broken?" rather than "review this") and the spawn prompt requires the answer to cite what was run. The four agents also gained the technique that answers it: mutation testing in the test analyzer, fault injection in the silent-failure hunter, differential comparison and oracle sweeps in the code reviewer, and constructing the invalid value in the type-design analyzer. These perturb the system to find defects nobody suspected, which is a different job from the existing empirical-verification rule that settles a claim you already suspect.
+
+All four techniques require editing code, which the standing rule forbids in the review target. Each agent carries a short behavioral rule — perturb only a copy outside the repository, which needs no version control — and the cycle verifies the target itself rather than asking each agent to vouch for its own cleanliness. Phase 3 snapshots `review-sentinel current-hash` plus `git config --local --list` before spawning and Phase 4 compares before aggregating; Phase 8 refuses to mark a tree that came back contaminated. The hash is what makes this work: an empty commit leaves a `git status` comparison byte-identical and moves only the anchor line, so a status-based check cannot detect the commit clause of the rule it enforces. Phase 7 runs after the comparison and includes an agent that edits by design, so it is not covered — the summary says so rather than implying otherwise.
+
+`/review-cycle:review-pr` changes too, though it keeps its existing prompts: its report-only instruction now names the worktree and the main checkout specifically, so it forbids edits to the code under review without forbidding the scratch work these techniques need. Extending falsifiable questions to that path is tracked separately.
+
+Phase 9 gained two lines, so the mechanism can be judged by its own standard: how many questions were asked versus answered by measurement, and whether the target came back unchanged.

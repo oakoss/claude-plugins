@@ -136,13 +136,28 @@ First, at the top of every iteration, mark the cycle as in progress:
 
 This marker is also what licenses Phase 8's `mark`, so it is not optional — skip it and the cycle cannot record its own result. Re-running it each iteration is deliberate: the marker carries a timestamp, both reapers retire it after 60 minutes, and a cycle that reviews for longer than that would otherwise outlive its own license and fail Phase 8. Refreshing it on each pass keeps a cycle that is still working licensed while one that died still expires on schedule. This is not the same as re-running it *after* `mark` has already refused — that recreates evidence for a cycle that is over, and Phase 8 says not to. **If `cycle-start` exits nonzero, report it and stop before spawning reviewers**: it can only fail on a filesystem problem (exit 2: `.claude` uncreatable or unwritable), and running the full cycle anyway means burning it to reach a Phase 8 that cannot record anything, where the exit-3 message reads as a TTL reap rather than the disk error it is. While it is fresh, the Stop gate lets your turns end, so after spawning the reviewers you may simply end the turn and let their completion notifications re-wake you. Never busy-wait with sleep loops. The marker is cleared automatically by Phase 8's `mark`; if the cycle aborts before Phase 8 for any reason, run `"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" cycle-end` so the gate re-arms. Print an abbreviated status alongside it — tier, leg status, which reviewers had reported — because Phase 9 is the only thing that reports coverage, and an abort skips it entirely.
 
+**Snapshot the target before spawning anything.** The reviewers run techniques that perturb code — on a copy, per their own rule — and an agent that contaminated the target is the worst available witness that it didn't. Capture the state here, once, rather than asking each leg to attest to itself:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" current-hash
+git config --local --list
+```
+
+Record both outputs verbatim into the Phase 9 summary draft as you take them — the loop ends turns between here and Phase 4, and a baseline you have to remember is one you will compare against badly. Write any snapshot file outside the repository; a scratch file inside it reads as unreviewed drift and changes the hash you are trying to hold still.
+
+Re-run both in Phase 4 before aggregating and compare. `current-hash` covers content, staging, and commits; a `git status` comparison does not, since an empty commit leaves porcelain identical and only the anchor line moves. The config listing covers a repository-local identity, which the hash never reads and which mis-authors every later commit. What escapes both: anything in the sentinel's exclude list (`.beads/**`, `.trekker/**`, editor directories, the user's `ignore` patterns) and anything under `.git/` other than HEAD — a worktree registration, a written hook, the stash. That residual is why reviewers work outside the repository rather than in a subdirectory of it.
+
+If either differs, name the leg if you can identify it, report it in the summary, and do not mark the sentinel — a contaminated tree stamped as reviewed is worse than no review at all.
+
+This covers the Phase 3 fan-out, including the Codex CLI, which carries no containment rule of its own. It does **not** cover Phase 7: that runs after the Phase 4 comparison, and one of its agents edits the target by design, so a snapshot there could not tell sanctioned cleanup from contamination. Phase 7 is uncovered, and the summary says so rather than implying otherwise.
+
 **Compose an intent brief first** — 2–4 sentences on what the change is trying to accomplish and why, plus the changed-file list. Source it from the conversation that produced the changes, or from the commit messages in `<ref>..HEAD` when reviewing against a base. Every reviewer gets it: a reviewer that knows the intent flags real deviations instead of guessing at purpose, and its findings need less relitigating. Do not editorialize about expected findings — state intent, not hoped-for verdicts.
 
 In a single conversation turn, invoke ALL of the following:
 
 1. **Codex review (background)** — only when Phase 1 recorded the leg as `eligible`; skip this step entirely otherwise and fan out to the subagents alone. Direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief rides a config override instead: `-c "developer_instructions=\"<brief>\""`.
 
-   **Reshape the brief for the flag.** The `-c` value is parsed as TOML and the argument passes through one layer of shell quoting, so flatten the Phase 3 brief into a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare rather than quoting them; the changed-file list stays, comma-separated.
+   **Reshape the brief for the flag.** The brief carries this leg's falsifiable question too (see step 2), under the same constraints. The `-c` value is parsed as TOML and the argument passes through one layer of shell quoting, so flatten the Phase 3 brief into a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare rather than quoting them; the changed-file list stays, comma-separated.
 
    **Match the review's depth to the tier.** On the **full** tier pass no override at all and let the user's `~/.codex/config.toml` decide. The adjustment is one-directional by design — lower the effort on a trivial diff, never raise it on a large one. A user who set `medium` globally chose that.
 
@@ -195,6 +210,19 @@ In a single conversation turn, invoke ALL of the following:
 
    The **report-only** reviewers — `review-cycle:spec-conformance-analyzer` and `review-cycle:maintainability-auditor` — are deliberately **not** in this loop fan-out. They run once after the loop converges (Phase 7), against the final post-fix state. That keeps the expensive opus maintainability pass and the spec-discovery step from re-running on every iteration, and means their findings reflect exactly the code you'll commit rather than an intermediate state.
 
+   **Give each leg a falsifiable question — the Codex leg included.** Compose all of them before step 1 assembles the Codex invocation, and append that leg's question to its `<brief>`; `developer_instructions` is additive, so it carries the question the same way it carries the intent. The question rides the same single-line, no-double-quotes constraint as the brief itself — a question containing `"` breaks the `-c` argument's quoting.
+
+   A reviewer told to "review this" returns prose; a reviewer told to settle one specific claim about this diff runs something. Compose one question per leg before spawning — a claim this change depends on that a command could refute, not a topic. "Are the tests thorough?" is a topic. "Which of these new assertions still pass when the code under them is broken?" is a question, and answering it requires a mutation run.
+
+   Derive it from the diff, not from the agent's job description. The shapes that pay:
+
+   - `code-reviewer` — do the old path and the new path agree on the same inputs, or does some behavioral claim the change rests on survive being run?
+   - `pr-test-analyzer` — which changed output paths survive being broken?
+   - `silent-failure-hunter` — which of these error paths still reports success when the dependency genuinely fails?
+   - `type-design-analyzer` — can an invalid value of this type be constructed through a public route?
+
+   A question with no command behind it is still a topic. If you cannot name what would answer it, omit the question for that leg — send the prompt below with the `Settle this first...` sentence dropped — rather than manufacture one that only sounds specific.
+
    Each spawn pattern:
 
    ```js
@@ -202,7 +230,7 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
      run_in_background: true,
-     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Output findings as file:line — severity — issue — suggested fix."
+     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a scratch directory outside it. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix."
    })
    ```
 
@@ -231,6 +259,13 @@ Continue on the subagent findings either way, and report the leg in Phase 9 dist
 Proceed to Phase 4 when every reviewer has reported or been dropped under this policy.
 
 ### Phase 4: Aggregate findings
+
+Re-run the Phase 3 snapshot and compare before reading a single finding:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" current-hash
+git config --local --list
+```
 
 Collect findings from every reviewer:
 
@@ -312,6 +347,8 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" mark
 ```
 
+**Do not run it if Phase 4 found the target contaminated, or if the Phase 3 baseline was lost.** Marking is what tells every downstream gate this state was reviewed; doing it over a tree a reviewer altered, or one whose integrity you cannot speak to, is the failure this check exists to prevent. Report what happened, run `cycle-end` instead, and leave the decision to the user with `/review-cycle:accept`.
+
 This is what allows the Stop hook and commit-gate to let the user commit. `mark` also clears the in-progress marker from Phase 3 and the Stop gate's blocked-state record.
 
 If the CLI exits nonzero, surface the error in the final summary — do not silently succeed — and run `cycle-end` so the Stop gate re-arms. The one exception is an exit 2 reporting that the marker survived: `cycle-end` removes the same file and fails the same way, so report it and leave it to the TTL. Exit 3 means the Phase 3 marker is gone: either Phase 3 never ran, or the cycle outran the 60-minute TTL and a reaper — the Stop gate, or the next session's SessionStart — removed it. Do not re-run `cycle-start` to get past this — that fakes the evidence the guard exists to check. Report to the user what the reviewers found and that the sentinel could not be marked; accepting the state anyway is theirs to decide with `/review-cycle:accept`.
@@ -325,6 +362,8 @@ Review cycle complete.
 
 Tier: light | full
 Iterations: N / max
+Falsifiable questions: N asked / N answered by measurement / N fell back to reading
+Target integrity: unchanged (Phase 3 fan-out; Phase 7 not covered) | CONTAMINATED (<leg>, <what differed>) | not checked (<reason>)
 Message fixes verified: N (one verification line per fix) | none
   valve: 1 Codex-only pass (effort: low | inherited) | not needed
 Codex leg: participated (effort: low | inherited) | skipped (<reason>) | failed (<error>)

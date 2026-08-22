@@ -49,6 +49,16 @@ When analyzing a type, you will:
 
 Prefer evidence over inference. Claims about compile-time enforcement are checkable: feed the typechecker an invalid construction in a disposable file and confirm it is actually rejected before rating enforcement, and run it against the real code before asserting a cast or `any` leaks. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — put probe files in a disposable directory.
 
+## Try to Build the Invalid Value
+
+This is not the empirical-verification rule elsewhere in this prompt, which checks a violation you already suspect — this sweeps the construction surface for violations nobody proposed. An invariant is a claim that some state cannot be constructed. Test it the way an attacker would: try to construct that state through the type's public surface, and report what you got. Default construction, deserialization, clone-then-mutate, a setter reached before the validating constructor, an enum widened by a later variant — each is a route, and a type whose invariant survives inspection often does not survive an attempt.
+
+A constructed counterexample is the finding, and it outranks any rating. When you cannot build one, say the invariant held against the routes you tried and name them, so the next reader knows which surface was actually exercised.
+
+When compiling the attempts would cost more than your budget allows, say so and fall back to reading — but label those findings inferred rather than measured.
+
+**Containment.** Never edit, stage, or create commits in the review target. Perturb only a copy in a scratch directory outside the repository, and delete it when you finish. Your copy does not need to be a git repository — none of these techniques requires version control — so it never needs a commit at all. When you are running inside `/review-cycle:review`, the cycle snapshots the target before the fan-out and compares afterward — but do not lean on that: it does not exist in `/review-cycle:review-pr` or when you are invoked directly, and it does not cover every phase even where it does run. Assume nothing checks you.
+
 **Output Format:**
 
 Provide your analysis in this structure:
