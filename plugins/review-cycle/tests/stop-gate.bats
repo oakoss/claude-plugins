@@ -92,8 +92,8 @@ RECORD=".claude/.review-stop-block"
 @test "paths lists the marker and record files" {
   run "$REVIEW_SENTINEL" paths
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$MARKER"* ]]
-  [[ "$output" == *"$RECORD"* ]]
+  assert_contains "$output" "$MARKER"
+  assert_contains "$output" "$RECORD"
 }
 
 # --- stop-gate: baseline ---
@@ -102,14 +102,14 @@ RECORD=".claude/.review-stop-block"
   echo "change" > foo.txt
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"decision"'* ]]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"decision"'
+  assert_contains "$output" '"block"'
 }
 
 @test "stop-gate passes on clean tree" {
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"block"'* ]]
+  refute_contains "$output" '"block"'
 }
 
 @test "stop-gate passes on reviewed (marked) drift" {
@@ -117,7 +117,7 @@ RECORD=".claude/.review-stop-block"
   "$REVIEW_SENTINEL" accept-state
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"block"'* ]]
+  refute_contains "$output" '"block"'
 }
 
 @test "stop-gate passes when stop_hook_active" {
@@ -152,7 +152,7 @@ RECORD=".claude/.review-stop-block"
   echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/$MARKER"
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
   [ ! -f "$TEST_REPO/$MARKER" ]
 }
 
@@ -162,7 +162,7 @@ RECORD=".claude/.review-stop-block"
   echo "not-a-timestamp" > "$TEST_REPO/$MARKER"
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
   [ ! -f "$TEST_REPO/$MARKER" ]
 }
 
@@ -172,7 +172,7 @@ RECORD=".claude/.review-stop-block"
   : > "$TEST_REPO/$MARKER"
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
   [ ! -f "$TEST_REPO/$MARKER" ]
 }
 
@@ -182,7 +182,7 @@ RECORD=".claude/.review-stop-block"
   echo "$(( $(date +%s) + 7200 ))" > "$TEST_REPO/$MARKER"
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
 }
 
 # --- stop-gate: block once per drift state ---
@@ -190,7 +190,7 @@ RECORD=".claude/.review-stop-block"
 @test "first stop on a drift state blocks and records the state" {
   echo "change" > foo.txt
   run run_stop_gate
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
   [ -f "$TEST_REPO/$RECORD" ]
 }
 
@@ -199,8 +199,8 @@ RECORD=".claude/.review-stop-block"
   run_stop_gate >/dev/null
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" != *'"block"'* ]]
-  [[ "$output" == *'"systemMessage"'* ]]
+  refute_contains "$output" '"block"'
+  assert_contains "$output" '"systemMessage"'
 }
 
 @test "new drift after a soft-pass blocks again" {
@@ -210,7 +210,7 @@ RECORD=".claude/.review-stop-block"
   echo "v2" > foo.txt
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
 }
 
 @test "reverting to an earlier blocked state blocks again (record holds last state only)" {
@@ -221,7 +221,7 @@ RECORD=".claude/.review-stop-block"
   echo "v1" > foo.txt
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
 }
 
 @test "clean pass clears the stop record so the next drift blocks fresh" {
@@ -234,7 +234,7 @@ RECORD=".claude/.review-stop-block"
   [ ! -f "$TEST_REPO/$RECORD" ]
   echo "change again" > foo.txt
   run run_stop_gate
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
 }
 
 # The sentinel accepts a stale marker, but the Stop gate deletes one past the
@@ -285,7 +285,7 @@ RECORD=".claude/.review-stop-block"
   echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-pr-in-progress"
   run run_stop_gate
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"block"'* ]]
+  assert_contains "$output" '"block"'
   [ ! -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
 }
 
@@ -317,5 +317,5 @@ RECORD=".claude/.review-stop-block"
 
 @test "paths lists the review-pr marker" {
   run "$REVIEW_SENTINEL" paths
-  [[ "$output" == *".claude/.review-pr-in-progress"* ]]
+  assert_contains "$output" ".claude/.review-pr-in-progress"
 }

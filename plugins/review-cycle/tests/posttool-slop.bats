@@ -83,49 +83,49 @@ write_lines() {
 @test "flags section-marker comments" {
   write_lines f.ts "// ===== HELPERS =====" "const a = 1;"
   run run_slop_hook "$TEST_REPO/f.ts"
-  [[ "$output" == *"Section-marker"* ]]
+  assert_contains "$output" "Section-marker"
 }
 
 @test "flags restate-the-code comments" {
   write_lines f.ts "// fetches the user record" "const u = get();"
   run run_slop_hook "$TEST_REPO/f.ts"
-  [[ "$output" == *"restate-the-code"* ]]
+  assert_contains "$output" "restate-the-code"
 }
 
 @test "flags AI-flavored phrasings" {
   write_lines f.ts "// Here we set up the listener" "listen();"
   run run_slop_hook "$TEST_REPO/f.ts"
-  [[ "$output" == *"AI-flavored"* ]]
+  assert_contains "$output" "AI-flavored"
 }
 
 @test "flags Note:-prefix comments" {
   write_lines f.ts "// Note: this is called twice" "f();"
   run run_slop_hook "$TEST_REPO/f.ts"
-  [[ "$output" == *"Hedge-prefix"* ]]
+  assert_contains "$output" "Hedge-prefix"
 }
 
 @test "flags ticketless TODOs but not ticketed ones" {
   write_lines f.ts "// TODO: tighten this later" "const a = 1;"
   run run_slop_hook "$TEST_REPO/f.ts"
-  [[ "$output" == *"TODO/FIXME without ticket"* ]]
+  assert_contains "$output" "TODO/FIXME without ticket"
   write_lines g.ts "// TODO(ABC-123): tighten this later" "const a = 1;"
   run run_slop_hook "$TEST_REPO/g.ts"
-  [[ "$output" != *"TODO/FIXME without ticket"* ]]
+  refute_contains "$output" "TODO/FIXME without ticket"
 }
 
 @test "flags history-flavored comments, capitalized included" {
   write_lines f.ts "// failing loudly as it did while the value was sensitive" "const a = 1;"
   run run_slop_hook "$TEST_REPO/f.ts"
-  [[ "$output" == *"History-flavored"* ]]
+  assert_contains "$output" "History-flavored"
   write_lines g.ts "// this field is no longer read by the client" "const a = 1;"
   run run_slop_hook "$TEST_REPO/g.ts"
-  [[ "$output" == *"History-flavored"* ]]
+  assert_contains "$output" "History-flavored"
   write_lines h.ts "// Previously this used a lock." "const a = 1;"
   run run_slop_hook "$TEST_REPO/h.ts"
-  [[ "$output" == *"History-flavored"* ]]
+  assert_contains "$output" "History-flavored"
   write_lines i.ts "// This map is used to store open handles" "const a = 1;"
   run run_slop_hook "$TEST_REPO/i.ts"
-  [[ "$output" != *"History-flavored"* ]]
+  refute_contains "$output" "History-flavored"
 }
 
 # --- density check ---
@@ -139,8 +139,8 @@ write_lines() {
     "// eta theta" "const h = 7;" "const i = 8;"
   run run_slop_hook "$TEST_REPO/f.ts"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"High comment density"* ]]
-  [[ "$output" == *"4 of 12"* ]]
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 12"
 }
 
 @test "a leading header comment block on a Write does not trigger density" {
@@ -172,8 +172,8 @@ write_lines() {
   NEW=$'// alpha\n// beta\n// gamma\n// delta\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;'
   PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg ns "$NEW" '{tool_input:{file_path:$fp, new_string:$ns}}')
   run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  [[ "$output" == *"High comment density"* ]]
-  [[ "$output" == *"4 of 8"* ]]
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
 }
 
 @test "density aggregates MultiEdit edits[].new_string" {
@@ -183,8 +183,8 @@ write_lines() {
     {new_string:"// gamma\n// delta\nconst c = 3;\nconst d = 4;"}
   ]}}')
   run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  [[ "$output" == *"High comment density"* ]]
-  [[ "$output" == *"4 of 8"* ]]
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
 }
 
 @test "density does not count pointer-dereference lines as comments" {
@@ -197,15 +197,15 @@ write_lines() {
 @test "density counts block-comment continuation lines when not a leading header" {
   write_lines f.c "int x;" "/* doc" " * alpha" " * beta" " */" "int a;" "int b;" "int c;"
   run run_slop_hook "$TEST_REPO/f.c"
-  [[ "$output" == *"High comment density"* ]]
-  [[ "$output" == *"4 of 8"* ]]
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
 }
 
 @test "density counts hash comments; shebang and directives do not count" {
   write_lines f.sh '#!/bin/sh' "cmd0" "# alpha" "# beta" "# gamma" "# delta" "cmd1" "cmd2" "cmd3"
   run run_slop_hook "$TEST_REPO/f.sh"
-  [[ "$output" == *"High comment density"* ]]
-  [[ "$output" == *"4 of 8"* ]]
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
 }
 
 @test "header exemption strips comments only, never preprocessor directives" {
@@ -241,6 +241,6 @@ write_lines() {
   run run_slop_hook "$TEST_REPO/f.ts"
   CTX=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext')
   [ -n "$CTX" ]
-  [[ "$CTX" == *"Fix it NOW"* ]]
+  assert_contains "$CTX" "Fix it NOW"
   [ "$(echo "$output" | jq -r '.hookSpecificOutput.hookEventName')" = "PostToolUse" ]
 }

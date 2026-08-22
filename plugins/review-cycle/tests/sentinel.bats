@@ -124,8 +124,8 @@ setup() {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" current-hash
   [ "$status" -eq 0 ]
-  [[ "${lines[0]}" =~ ^anchor:[a-f0-9]{40}$ ]]
-  [[ "${lines[1]}" =~ ^sha256:[a-f0-9]{64}$ ]]
+  assert_matches "${lines[0]}" '^anchor:[a-f0-9]{40}$'
+  assert_matches "${lines[1]}" '^sha256:[a-f0-9]{64}$'
 }
 
 @test "check treats malformed sentinel as missing" {
@@ -489,7 +489,7 @@ setup() {
   echo "blocking" > "$TEST_REPO/.claude"
   run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 2 ]
-  [[ "$output" =~ "cannot write sentinel" || "$output" =~ "Not a directory" || "$output" =~ "File exists" ]]
+  assert_matches "$output" 'cannot write sentinel|Not a directory|File exists'
 }
 
 @test "accept-state + check works in detached HEAD state" {
@@ -843,13 +843,10 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-# X17: independent is_clean_tree coverage. `match` doesn't call
-# is_clean_tree, so it can't disambiguate the fast-path from a coincidental
-# hash collision. To pin is_clean_tree specifically: with no sentinel,
-# create a non-excluded untracked file AND an excluded-dir change. The
-# clean-tree fast-path must report "not clean" (because of the non-excluded
-# file), forcing the sentinel-lookup path. With no sentinel present, that
-# returns drift.
+# X17: pins is_clean_tree specifically — `match` doesn't call it, so a
+# non-excluded untracked file alongside an excluded-dir change forces the
+# fast-path to report not-clean and drop to the sentinel-lookup path, which
+# drifts because no sentinel exists.
 @test "is_clean_tree returns not-clean when non-excluded file is present alongside excluded changes" {
   mkdir -p .beads
   echo "real code" > app.ts
@@ -1000,7 +997,7 @@ setup() {
 @test "status: clean tree exits 0 with clean verdict" {
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict: clean"* ]]
+  assert_contains "$output" "verdict: clean"
 }
 
 @test "status: marked state exits 0 with match verdict" {
@@ -1008,8 +1005,8 @@ setup() {
   "$REVIEW_SENTINEL" accept-state
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict: match"* ]]
-  [[ "$output" == *"anchor="* ]]
+  assert_contains "$output" "verdict: match"
+  assert_contains "$output" "anchor="
 }
 
 @test "status: drifted state exits 1 with drift verdict" {
@@ -1018,15 +1015,15 @@ setup() {
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
-  [[ "$output" == *"verdict: drift"* ]]
+  assert_contains "$output" "verdict: drift"
 }
 
 @test "status: dirty tree with no mark exits 1 and says mark is missing" {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
-  [[ "$output" == *"mark:    missing"* ]]
-  [[ "$output" == *"verdict: drift"* ]]
+  assert_contains "$output" "mark:    missing"
+  assert_contains "$output" "verdict: drift"
 }
 
 @test "status: unreachable stored anchor reads as drift (parity with check)" {
@@ -1038,8 +1035,8 @@ setup() {
     > "$TEST_REPO/.claude/.review-mark"
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
-  [[ "$output" == *"unreachable"* ]]
-  [[ "$output" == *"verdict: drift"* ]]
+  assert_contains "$output" "unreachable"
+  assert_contains "$output" "verdict: drift"
 }
 
 @test "status: clean tree with a stale mismatched mark verdicts clean" {
@@ -1048,7 +1045,7 @@ setup() {
   rm foo.txt
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict: clean"* ]]
+  assert_contains "$output" "verdict: clean"
 }
 
 @test "status: malformed mark on dirty tree reads as drift" {
@@ -1057,7 +1054,7 @@ setup() {
   echo "garbage" > "$TEST_REPO/.claude/.review-mark"
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
-  [[ "$output" == *"malformed"* ]]
+  assert_contains "$output" "malformed"
 }
 
 @test "status: agrees with check across staging (mark -> add -> status)" {
@@ -1067,7 +1064,7 @@ setup() {
   git add -A
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verdict: match"* ]]
+  assert_contains "$output" "verdict: match"
 }
 
 @test "status: exits 2 outside git repo" {
@@ -1087,8 +1084,8 @@ setup() {
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 3 ]
   [ ! -f "$TEST_REPO/.claude/.review-mark" ]
-  [[ "$output" == *"no review in progress"* ]]
-  [[ "$output" == *"accept-state"* ]]
+  assert_contains "$output" "no review in progress"
+  assert_contains "$output" "accept-state"
 }
 
 @test "mark refuses without clobbering a sentinel already on disk" {
@@ -1168,7 +1165,7 @@ setup() {
 @test "usage names accept-state" {
   run "$REVIEW_SENTINEL" --help
   [ "$status" -eq 2 ]
-  [[ "$output" == *"accept-state"* ]]
+  assert_contains "$output" "accept-state"
 }
 
 # The guard must read the marker from the same root the sentinel is written to.
@@ -1226,7 +1223,7 @@ setup() {
   run "$REVIEW_SENTINEL" mark
   chmod 700 "$TEST_REPO/.claude"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cannot write sentinel"* ]]
+  assert_contains "$output" "cannot write sentinel"
   [ -f "$TEST_REPO/.claude/.review-in-progress" ]
 }
 
