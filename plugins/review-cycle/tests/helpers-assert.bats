@@ -85,3 +85,80 @@ setup() {
   refute_contains "$output" "REACHED"
   assert_contains "$output" "expected to contain"
 }
+
+@test "refute passes when the command fails, as expected" {
+  refute false
+}
+
+@test "refute returns nonzero and names the input when the command succeeds" {
+  run refute true unexpected-arg
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "expected failure, but succeeded"
+  assert_contains "$output" "unexpected-arg"
+}
+
+@test "refute fails loudly when the command could not be run at all" {
+  run refute definitely_not_a_command_xyz
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "could not be run"
+}
+
+@test "a failing refute mid-body fails the test under /bin/bash" {
+  run /bin/bash -c "
+    source '$BATS_TEST_DIRNAME/helpers.bash'
+    set -e
+    refute true
+    echo REACHED
+  "
+  [ "$status" -eq 1 ]
+  refute_contains "$output" "REACHED"
+  assert_contains "$output" "expected failure, but succeeded"
+}
+
+# If Apple ever ships a newer /bin/bash, the macOS leg silently stops covering
+# bash 3.2; this fails instead. On Linux /bin/bash is 5.x, covered directly.
+@test "on macOS, /bin/bash is still the bash 3.2 the proof tests assume" {
+  [ "$(uname -s)" = "Darwin" ] || skip "not macOS — /bin/bash here is bash 5"
+  run /bin/bash -c 'echo "${BASH_VERSINFO[0]}"'
+  [ "$status" -eq 0 ]
+  [ "$output" = "3" ]
+}
+
+@test "refute fails loudly when the command exists but is not executable" {
+  printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/noexec"
+  chmod 644 "$BATS_TEST_TMPDIR/noexec"
+  run refute "$BATS_TEST_TMPDIR/noexec"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "could not be run"
+  assert_contains "$output" "(exit 126)"
+}
+
+# grep exits 2 when it cannot read its operand. Accepting that as the expected
+# failure would let `refute grep -q x missing-file` pass while proving nothing.
+@test "refute rejects a nonzero exit that is not a clean false" {
+  run refute grep -q pattern "$BATS_TEST_TMPDIR/definitely-absent"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "not a clean false"
+}
+
+@test "refute still passes on a genuine no-match from grep" {
+  printf 'alpha\n' > "$BATS_TEST_TMPDIR/haystack"
+  refute grep -q "absent-needle" "$BATS_TEST_TMPDIR/haystack"
+}
+
+@test "refute rejects a call with no command" {
+  run refute
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "no command given"
+}
+
+# A refute that word-split its arguments would still "pass" at every call
+# site, since the command would fail for the wrong reason.
+@test "refute passes arguments through without splitting or globbing" {
+  probe() {
+    [ "$#" -eq 1 ] || return 0
+    [ "$1" = 'a b *' ] || return 0
+    return 1
+  }
+  refute probe 'a b *'
+}

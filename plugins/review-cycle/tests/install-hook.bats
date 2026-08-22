@@ -109,7 +109,7 @@ make_drift() {
   [ "$status" -eq 0 ]
   [ -f "$hp.local" ]
   grep -q "appended-era-foreign" "$hp.local"
-  ! grep -q "appended-era-foreign" "$hp" || false
+  refute grep -q "appended-era-foreign" "$hp"
   [ "$(grep -cF '>>> review-cycle gate >>>' "$hp")" -eq 1 ]
   git -C "$TEST_REPO" commit --allow-empty -m x
   [ -f "$TEST_REPO/hook-log" ]
@@ -405,7 +405,7 @@ EOF
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" uninstall-hook
   [ "$status" -eq 0 ]
   grep -q "echo original" "$hp"
-  ! grep -qF ">>> review-cycle gate >>>" "$hp" || false
+  refute grep -qF ">>> review-cycle gate >>>" "$hp"
   [ ! -f "$hp.local" ]
 }
 
@@ -457,7 +457,7 @@ EOF
   assert_contains "$output" "non-managed hook content kept"
   [ -f "$hp" ]
   grep -q "user-added" "$hp"
-  ! grep -qF ">>> review-cycle gate >>>" "$hp" || false
+  refute grep -qF ">>> review-cycle gate >>>" "$hp"
 }
 
 @test "uninstall warns when a relocated .local hook is stranded" {
