@@ -240,3 +240,40 @@ setup() {
   run gate_should_run
   [ -z "$output" ]
 }
+
+# Both are listed, never ranked: a CLAUDE_PROJECT_DIR that outranked the cwd
+# would disarm the gate in the repo the session sits in.
+@test "gate_project_roots reports the payload cwd and CLAUDE_PROJECT_DIR both" {
+  local other
+  mkdir -p "$BATS_TEST_TMPDIR/other"
+  other="$(cd "$BATS_TEST_TMPDIR/other" && pwd -P)"
+  git -C "$other" init -q
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run gate_project_roots "$other"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "$other"
+  assert_contains "$output" "$TEST_REPO"
+}
+
+@test "gate_project_roots falls back to the payload cwd" {
+  unset CLAUDE_PROJECT_DIR
+  run gate_project_roots "$TEST_REPO"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$TEST_REPO" ]
+}
+
+@test "gate_project_roots reports unknown rather than guessing" {
+  unset CLAUDE_PROJECT_DIR
+  mkdir -p "$BATS_TEST_TMPDIR/notarepo"
+  run gate_project_roots "$BATS_TEST_TMPDIR/notarepo"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "gate_project_roots skips a CLAUDE_PROJECT_DIR that is not a repo" {
+  mkdir -p "$BATS_TEST_TMPDIR/notarepo"
+  export CLAUDE_PROJECT_DIR="$BATS_TEST_TMPDIR/notarepo"
+  run gate_project_roots "$TEST_REPO"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$TEST_REPO" ]
+}

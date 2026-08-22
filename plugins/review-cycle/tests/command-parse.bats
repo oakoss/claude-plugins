@@ -48,6 +48,113 @@ commit -m x'
   refute parse_has_commit "legit commit -m x"
 }
 
+@test "has_commit: rejects the hyphenated plumbing verbs" {
+  refute parse_has_commit "git commit-tree \$TREE -m x"
+  refute parse_has_commit "git commit-graph write"
+}
+
+# The gate blocked `bd create --description='...git commit...'` because the
+# text a tool carries is not a command it runs.
+@test "has_commit: rejects the phrase inside a non-git command's argument" {
+  refute parse_has_commit 'bd create --description="run git commit first"'
+  refute parse_has_commit "bd create --description='then; git commit -m x'"
+  refute parse_has_commit "echo 'run git commit later'"
+  refute parse_has_commit 'grep -r "git commit" .'
+}
+
+@test "has_commit: rejects a heredoc body being written to a file" {
+  refute parse_has_commit "cat <<'EOF' > setup.sh
+git commit -m x
+EOF"
+  refute parse_has_commit "cat <<-'EOF' > setup.sh
+	git commit -m x
+	EOF"
+}
+
+# An unquoted delimiter expands its body, but only the substitutions run. A
+# plain line there is still data, and blocking it would refuse the ordinary
+# act of writing a script that happens to mention the verb.
+@test "has_commit: an unquoted heredoc body runs its substitutions, not its text" {
+  parse_has_commit "cat <<EOF > f
+\$(git commit -m x)
+EOF"
+  refute parse_has_commit "cat <<EOF > f
+git commit -m x
+EOF"
+}
+
+# The trailing slash is what separates git from a binary whose name merely
+# ends in those three letters.
+@test "has_commit: a path-qualified git is still git" {
+  parse_has_commit "/usr/bin/git commit -m x"
+  parse_has_commit "./git commit -m x"
+  refute parse_has_commit "mygit commit -m x"
+  refute parse_has_commit "legit commit -m x"
+}
+
+@test "has_commit: a substitution inside double quotes still runs" {
+  parse_has_commit 'echo "$(git commit -m x)"'
+  parse_has_commit 'FOO="$(git commit -m x)"'
+  parse_has_commit 'echo "`git commit -m x`"'
+}
+
+# A lexer that lost track of where quoting ends cannot say what is data, so
+# the raw view decides — which blocks rather than passes.
+@test "has_commit: a desynchronized lexer falls back instead of missing" {
+  run parse_strip_text "echo 'unterminated"
+  [ "$status" -eq 3 ]
+  parse_has_commit "echo \$'it\\'s' ; git commit -m x"
+  parse_has_commit "cat <<E\"O\"F > f
+body
+EOF
+git commit -m x"
+}
+
+@test "has_commit: input past the lexer's size cap falls back to the raw view" {
+  local big
+  big=$(printf 'x%.0s' $(seq 1 40000))
+  run parse_strip_text "echo $big"
+  [ "$status" -eq 3 ]
+  parse_has_commit "echo $big; git commit -m x"
+}
+
+@test "has_commit: detects a quoted commit in the shapes that hand it to a shell" {
+  parse_has_commit 'bash -lc "git commit -m x"'
+  parse_has_commit "echo 'git commit -m x' | sh"
+  parse_has_commit "printf '%s' 'git commit -m x' | bash"
+}
+
+@test "has_commit: rejects a mention inside a shell comment" {
+  refute parse_has_commit "# git commit the fix
+git status"
+  refute parse_has_commit "git status  # then git commit"
+}
+
+# Blanked text still runs when a shell is handed it, so those shapes fall
+# back to the unfiltered view.
+@test "has_commit: detects a quoted commit handed to a shell" {
+  parse_has_commit 'bash -c "git commit -m x"'
+  parse_has_commit "sh -c 'git commit -m x'"
+  parse_has_commit 'eval "git commit -m x"'
+  parse_has_commit 'ssh host "git commit -m x"'
+}
+
+@test "has_commit: detects a heredoc body piped into a shell" {
+  parse_has_commit "bash <<'EOF'
+git commit -m x
+EOF"
+}
+
+@test "has_commit: a herestring is not a heredoc opener" {
+  parse_has_commit "git commit -m x <<< input"
+}
+
+@test "has_commit: quoting that spans lines stays blanked to its end" {
+  refute parse_has_commit "bd create --description='line one
+git commit -m x
+line three'"
+}
+
 # --- parse_commit_count ---
 
 @test "count: zero, one, two" {
@@ -62,6 +169,84 @@ commit -m x'
 
 @test "count: prose mention counts too (fail-closed)" {
   [ "$(parse_commit_count "echo 'run git commit later'; git commit -m x")" = "2" ]
+}
+
+# A match tail that consumed the separator would leave the second invocation
+# without the `;` its own match needs, and two commits would count as one.
+@test "count: adjacent commits with no spaces around the separator count 2" {
+  [ "$(parse_commit_count "git commit -m a;git commit -m b")" = "2" ]
+  [ "$(parse_commit_count "git commit -m a&&git commit -m b")" = "2" ]
+}
+
+@test "count: the hyphenated plumbing verb still counts (fail-closed)" {
+  [ "$(parse_commit_count "git commit-tree abc")" = "1" ]
+}
+
+# --- parse_cd_chain ---
+
+@test "cd_chain: reports each hop in order" {
+  [ -z "$(parse_cd_chain "git commit -m x")" ]
+  [ "$(parse_cd_chain "cd /a && git commit -m x")" = "/a" ]
+  [ "$(parse_cd_chain "cd /a && cd b && git commit -m x")" = "/a
+b" ]
+  [ "$(parse_cd_chain "cd /a
+cd /b
+git commit -m x")" = "/a
+/b" ]
+}
+
+@test "cd_chain: quoted and subshell hops" {
+  [ "$(parse_cd_chain 'cd "/a b" && git commit -m x')" = "/a b" ]
+  [ "$(parse_cd_chain "cd '/a b' && git commit -m x")" = "/a b" ]
+  [ "$(parse_cd_chain '(cd /a && git commit -m x)')" = "/a" ]
+}
+
+# A hop after the commit cannot move it, and following it would route the
+# gate at a directory the commit never saw.
+@test "cd_chain: hops after the commit are dropped" {
+  [ "$(parse_cd_chain "cd /a && git commit -m x && cd /b")" = "/a" ]
+  [ -z "$(parse_cd_chain "git commit -m x; cd /b")" ]
+}
+
+# Hops are read from the raw text so a quoted path is not lost with its
+# quotes. A hop carried as data shows up as the two counts disagreeing: the
+# skeleton has no `cd` where quoted text or a heredoc body merely mentions one.
+@test "cd_count: carried text is visible as a disagreement with the skeleton" {
+  local carried='echo "setup; cd /elsewhere" && git commit -m x'
+  [ "$(parse_cd_count "$carried")" = "1" ]
+  [ "$(parse_cd_count "$(parse_strip_text "$carried")")" = "0" ]
+
+  local real='cd "/a b" && git commit -m x'
+  [ "$(parse_cd_count "$real")" = "$(parse_cd_count "$(parse_strip_text "$real")")" ]
+}
+
+@test "cd_count: a hop in a heredoc body does not count" {
+  local hd="cat <<'EOF' > f
+cd /elsewhere
+EOF
+git commit -m x"
+  [ "$(parse_cd_count "$hd")" = "1" ]
+  [ "$(parse_cd_count "$(parse_strip_text "$hd")")" = "0" ]
+}
+
+# --- parse_prefix_seps ---
+
+# A hop only moves the commit if bash both reaches it and keeps it, so the
+# separators decide whether the fold means anything.
+@test "prefix_seps: reports what joins the commands ahead of the commit" {
+  [ -z "$(parse_prefix_seps 'git commit -m x')" ]
+  [ "$(parse_prefix_seps 'cd /a && git commit -m x')" = "&&" ]
+  [ "$(parse_prefix_seps 'cd /a
+git commit -m x')" = ";" ]
+  [ "$(parse_prefix_seps 'false && cd /a; git commit -m x')" = "&&
+;" ]
+  [ "$(parse_prefix_seps '(cd /a); git commit -m x')" = "(
+)
+;" ]
+}
+
+@test "prefix_seps: separators after the commit are not counted" {
+  [ "$(parse_prefix_seps 'cd /a && git commit -m x; cd /b || true')" = "&&" ]
 }
 
 # --- parse_accept_chain_ok ---
@@ -136,6 +321,12 @@ git commit -m x'
 
 @test "extract_git_c: message text after commit never reaches it" {
   [ -z "$(parse_extract_git_c 'git commit -m "see git -C /steer"')" ]
+}
+
+# The count that gates extraction treats the plumbing verb as a candidate, so
+# this shape is ambiguous and yields nothing rather than /a — the wrong repo.
+@test "extract_git_c: a preceding commit-tree makes the path ambiguous, not wrong" {
+  [ -z "$(parse_extract_git_c 'git -C /a commit-tree abc && git -C /b commit -m x')" ]
 }
 
 # --- parse_abs ---
