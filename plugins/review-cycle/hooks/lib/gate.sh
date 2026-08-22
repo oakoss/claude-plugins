@@ -5,6 +5,8 @@
 #   gate_disabled                          0 if global kill-switch active
 #   gate_project_opted_out <root>          0 if per-project marker present
 #   gate_in_git_repo <root>                0 if path is inside a git work tree
+#   gate_project_roots <cwd>               print the session's project roots
+#   gate_target_root <dir>                 print the repo a path belongs to
 #   gate_resolve_project_root [cand]...    print resolved root, nonzero if none
 #   gate_should_run [cand]...              composite: print root if hook should
 #                                          proceed, nonzero otherwise
@@ -53,6 +55,46 @@ gate_resolve_project_root() {
   done
   root=$(git rev-parse --show-toplevel 2>/dev/null) || return 1
   [ -n "$root" ] && echo "$root"
+}
+
+# Every repository the session may be working in — the payload cwd's and the
+# one CLAUDE_PROJECT_DIR names — one per line. Both are listed rather than
+# ranked: this repo's own AGENTS.md calls CLAUDE_PROJECT_DIR unreliable in
+# plugin hooks, and letting a wrong value outrank the cwd would disarm the
+# gate everywhere except the repository it names. Nonzero when neither
+# resolves, which callers must read as "unknown", never as "no project".
+gate_project_roots() {
+  local candidate root found=1
+  for candidate in "$1" "${CLAUDE_PROJECT_DIR:-}"; do
+    [ -n "$candidate" ] || continue
+    [ -d "$candidate" ] || continue
+    root=$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null) || continue
+    [ -n "$root" ] || continue
+    echo "$root"
+    found=0
+  done
+  return "$found"
+}
+
+# The repository a path belongs to, resolved through its nearest existing
+# ancestor. The hook runs before the command does, so a directory the command
+# is about to create is not yet on disk — and a not-yet-created directory
+# inside the project is still the project, since git walks up to find it.
+# Nonzero means the walk itself could not proceed. Success with empty output
+# is an answer, not a failure: no repository lies above the path, so a commit
+# there reaches none. A relative path is refused rather than resolved, since
+# it would resolve against the hook process's own directory.
+gate_target_root() {
+  local dir="$1" parent
+  case "$dir" in /*) ;; *) return 1 ;; esac
+  while [ ! -d "$dir" ]; do
+    parent="${dir%/*}"
+    [ -n "$parent" ] || parent="/"
+    [ "$parent" != "$dir" ] || return 1
+    dir="$parent"
+  done
+  git -C "$dir" rev-parse --show-toplevel 2>/dev/null
+  return 0
 }
 
 gate_should_run() {

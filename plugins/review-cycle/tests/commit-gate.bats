@@ -324,6 +324,391 @@ git commit -am 'actual'"
   assert_deny
 }
 
+# --- the gate is scoped to the project, not to every repo in reach ---
+#
+# Reviewer agents build scratch repos to perturb a copy of the target: a
+# worktree at the base revision to diff against, a fixture with real history.
+# Blocking those taught agents to route around the gate instead.
+
+@test "a commit in a scratch repo passes while the project has drift" {
+  make_drift
+  local scratch
+  scratch=$(make_other_repo "scratch")
+  echo "wip" > "$scratch/f.txt"
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "git -C \"$scratch\" commit -am 'fixture'"
+  assert_pass
+}
+
+@test "cd into a scratch repo then commit passes while the project has drift" {
+  make_drift
+  local scratch
+  scratch=$(make_other_repo "scratch")
+  echo "wip" > "$scratch/f.txt"
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$scratch\" && git commit -am 'fixture'"
+  assert_pass
+}
+
+# The hook runs before the command does, so the repo the command is about to
+# build is not on disk yet. Resolving that miss to the project would block
+# exactly the setup step reviewers need.
+@test "a commit in a repo the command has not created yet passes" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$BATS_TEST_TMPDIR\" && mkdir fixture && cd fixture && git init -q && git commit --allow-empty -m base"
+  assert_pass
+}
+
+@test "the project root still blocks when a scratch repo is also in play" {
+  make_drift
+  local scratch
+  scratch=$(make_other_repo "scratch")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$scratch\" && ls; cd \"$TEST_REPO\" && git commit -am 'msg'"
+  assert_deny
+}
+
+# Routing on the first cd would read this as a scratch commit and wave it past.
+@test "a later cd back into the project is where the commit lands" {
+  make_drift
+  local scratch
+  scratch=$(make_other_repo "scratch")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$scratch\" && cd \"$TEST_REPO\" && git commit -am 'msg'"
+  assert_deny
+}
+
+@test "relative hops compose, as they do in bash" {
+  make_drift
+  mkdir -p "$BATS_TEST_TMPDIR/nest"
+  local nest
+  nest="$(cd "$BATS_TEST_TMPDIR/nest" && pwd -P)"
+  git -C "$nest" init -q
+  git -C "$nest" -c user.email=t@e.x -c user.name=T commit --allow-empty -q -m init
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook_from "$BATS_TEST_TMPDIR" "cd nest && git commit --allow-empty -m x"
+  assert_pass
+}
+
+# The hop only exists inside a quoted argument, so it cannot move the commit.
+# The separator matters: with a `;` the quoted text puts `cd` at what looks
+# like command position, which is the case the skeleton comparison is for.
+@test "a cd mentioned in carried text does not route the gate away" {
+  make_drift
+  local scratch
+  scratch=$(make_other_repo "scratch")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "echo \"setup: cd $scratch\" > notes.txt && git commit -am 'msg'"
+  assert_deny
+  run run_hook "echo \"setup; cd $scratch\" > notes.txt && git commit -am 'msg'"
+  assert_deny
+  run run_hook "bd create --description='then; cd $scratch' && git commit -am 'msg'"
+  assert_deny
+  # This one reads as a perfectly clean hop — the quote falls outside the
+  # token, so only the skeleton knows no `cd` was ever written.
+  run run_hook "echo \"; cd $scratch \" > notes.txt && git commit -am 'msg'"
+  assert_deny
+}
+
+@test "an unknown project root still gates the repo the commit targets" {
+  make_drift
+  unset CLAUDE_PROJECT_DIR
+  run run_hook_from "$BATS_TEST_TMPDIR" "git -C \"$TEST_REPO\" commit -am 'msg'"
+  assert_deny
+}
+
+# --- the escape hatches the deny message points users at ---
+#
+# gate_should_run is the only place this hook honors either one, and deleting
+# that call left every other test green.
+
+@test "the global kill-switch passes a commit through" {
+  make_drift
+  touch "$HOME/.claude/.disable-review-gate"
+  run run_hook "git commit -am 'msg'"
+  assert_pass
+}
+
+@test "a project opted out with review-cycle.json passes a commit through" {
+  make_drift
+  mkdir -p "$TEST_REPO/.claude"
+  printf '{"disabled": true}\n' > "$TEST_REPO/.claude/review-cycle.json"
+  run run_hook "git commit -am 'msg'"
+  assert_pass
+}
+
+# --- fail-closed table: the commit lands in the project, so the gate holds ---
+#
+# Every shape here reached the project under an earlier cut of the scoping
+# change. Reading text is not running it, and each of these is a place where
+# the difference shows: bash expands, short-circuits, or fails a `cd` in a way
+# the text alone does not say. Deciding "elsewhere" on any of them waves an
+# unreviewed commit through, so an unproven answer must gate instead.
+
+@test "a substitution inside double quotes still runs the commit" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook 'echo "$(git commit -m x)"'
+  assert_deny
+  run run_hook 'FOO="`git commit -m x`"'
+  assert_deny
+}
+
+# The lexer tracks substitution nesting so a quoted `$( )` survives blanking.
+# Without that, the redirect guard reads a skeleton where GIT_DIR has vanished
+# and routing walks off to the scratch repo — while every other test stays
+# green, which is why these two shapes are pinned here by name.
+@test "a substitution inside quotes is still code after a cd" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$other\"; echo \"\$(git commit -m x)\""
+  assert_deny
+  run run_hook "cd \"$other\"; echo \"\$(GIT_DIR=$TEST_REPO/.git git commit -m x)\""
+  assert_deny
+}
+
+@test "an unquoted heredoc expands its body" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cat <<EOF > f
+\$(git commit -m x)
+EOF"
+  assert_deny
+}
+
+@test "a shell reading the body off a pipe still runs it" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "echo 'git commit -m x' | sh"
+  assert_deny
+  run run_hook "bash -lc \"git commit -m x\""
+  assert_deny
+}
+
+@test "a cd bash may never reach does not move the commit" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "false && cd \"$other\"; git commit -m x"
+  assert_deny
+  run run_hook "(cd \"$other\" && true); git commit -m x"
+  assert_deny
+  run run_hook "f() { cd \"$other\" ; } ; git commit -m x"
+  assert_deny
+}
+
+# A hop inside a substitution runs in a subshell the parent never leaves, and
+# one inside a branch may never run at all. Neither shows up in the separators.
+@test "a cd in a subshell or a branch does not move the commit" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "echo \`cd \"$other\"\` && git commit -m x"
+  assert_deny
+  run run_hook "echo \$(cd \"$other\") && git commit -m x"
+  assert_deny
+  run run_hook "if false; then cd \"$other\"; fi; git commit -m x"
+  assert_deny
+  run run_hook "for d in \"$other\"; do cd \"\$d\"; done; git commit -m x"
+  assert_deny
+}
+
+# `cd -` goes wherever OLDPWD points, which the text does not say — including
+# back into the project, even when the session is sitting somewhere else.
+@test "a cd the gate cannot resolve gates even from another repo" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook_from "$other" "cd - && git commit -m x"
+  assert_deny
+  run run_hook_from "$other" "cd -P && git commit -m x"
+  assert_deny
+}
+
+# `;` does not short-circuit, so a cd that fails leaves bash where it started.
+@test "a cd that fails leaves the commit in the payload cwd" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$BATS_TEST_TMPDIR/absent\" ; git commit -m x"
+  assert_deny
+}
+
+@test "a path the gate never expanded is not a path" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook 'cd $SCRATCH && git commit -m x'
+  assert_deny
+  run run_hook "cd \"$BATS_TEST_TMPDIR\"/re* && git commit -m x"
+  assert_deny
+  run run_hook "cd -- && git commit -m x"
+  assert_deny
+  run run_hook "cd ~+ && git commit -m x"
+  assert_deny
+  run run_hook 'cd $(pwd) && git commit -m x'
+  assert_deny
+  run run_hook 'git -C "$PWD" commit -m x'
+  assert_deny
+  run run_hook "cd -P \"$TEST_REPO\" && git commit -m x"
+  assert_deny
+  run run_hook "cd - && git commit -m x"
+  assert_deny
+}
+
+@test "a lexer that lost track of quoting gates rather than misses" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "echo \$'it\\'s' ; git commit -m x"
+  assert_deny
+}
+
+# git obeys these over the path the gate resolved, so the path proves nothing.
+@test "a redirected git dir makes the target unresolvable" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "GIT_DIR=$TEST_REPO/.git GIT_WORK_TREE=$TEST_REPO git -C \"$other\" commit -m x"
+  assert_deny
+  run run_hook "git --git-dir=\"$TEST_REPO/.git\" --work-tree=\"$TEST_REPO\" -C \"$other\" commit -m x"
+  assert_deny
+  run run_hook "CDPATH=$BATS_TEST_TMPDIR cd elsewhere && git commit -m x"
+  assert_deny
+}
+
+# A second commit is a second landing place, and everything the router reads
+# stops at the first one.
+@test "a command holding two commits routes on neither" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "cd \"$other\" && git commit -m a && cd \"$TEST_REPO\" && git commit -m b"
+  assert_deny
+  run run_hook "cd \"$other\" && git commit -m a; cd \"$TEST_REPO\"; git commit -m b"
+  assert_deny
+}
+
+@test "a path-qualified git is still gated" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook "/usr/bin/git commit -am 'msg'"
+  assert_deny
+}
+
+# Every root the session owns is checked. Picking one would leave the other
+# ungated exactly when the two disagree.
+@test "an unresolvable target gates the project even when the cwd is elsewhere" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run run_hook_from "$other" 'cd $SCRATCH && git commit -m x'
+  assert_deny
+  run run_hook_from "$other" "false || cd \"$TEST_REPO\"; git commit -m x"
+  assert_deny
+}
+
+# A wrong CLAUDE_PROJECT_DIR must not be able to switch the gate off in the
+# repository the session sits in.
+@test "CLAUDE_PROJECT_DIR naming another repo does not disarm the cwd's gate" {
+  make_drift
+  local other
+  other=$(make_other_repo "elsewhere")
+  export CLAUDE_PROJECT_DIR="$other"
+  run run_hook "git commit -m x"
+  assert_deny
+}
+
+# A broken tool has not read the command, and unread text is not "no commit".
+break_tool() {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/bin/sh\nexit %s\n' "${2:-127}" > "$BATS_TEST_TMPDIR/shim/$1"
+  chmod +x "$BATS_TEST_TMPDIR/shim/$1"
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH"
+}
+
+@test "a dead awk does not switch the gate off" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  break_tool awk 127
+  run run_hook "git commit -am 'msg'"
+  assert_deny
+}
+
+@test "an awk that exits cleanly with no output does not switch the gate off" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  break_tool awk 0
+  run run_hook "git commit -am 'msg'"
+  assert_deny
+}
+
+@test "a grep that errors is not read as a clean miss" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  break_tool grep 2
+  run run_hook "git commit -am 'msg'"
+  assert_deny
+}
+
+# A relative cwd would otherwise resolve against the hook process's own
+# directory, gating whichever repository the hook happened to start in.
+@test "a relative payload cwd names nothing" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run bash -c "jq -n '{tool_input:{command:\"git commit -am x\"},cwd:\"relative/path\"}' | CLAUDE_PROJECT_DIR='$TEST_REPO' CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/commit-gate.sh'"
+  assert_deny
+}
+
+@test "a payload with no cwd gates rather than resolving somewhere arbitrary" {
+  make_drift
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
+  run bash -c "printf '{\"tool_input\":{\"command\":\"git commit -m x\"}}' | CLAUDE_PROJECT_DIR='$TEST_REPO' CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/commit-gate.sh'"
+  assert_deny
+}
+
+# --- text a command carries is not a command it runs ---
+
+@test "commit-tree passes: it writes an object and moves no ref" {
+  make_drift
+  run run_hook "git commit-tree \$(git write-tree) -p HEAD -m x"
+  assert_pass
+}
+
+@test "a tracker description quoting the phrase passes" {
+  make_drift
+  run run_hook "bd create --title=t --description=\"blocked on git commit gating\""
+  assert_pass
+}
+
+@test "a heredoc writing a script that commits passes" {
+  make_drift
+  run run_hook "cat <<'EOF' > setup.sh
+git commit -m x
+EOF"
+  assert_pass
+}
+
+@test "a heredoc piped into a shell is still denied" {
+  make_drift
+  run run_hook "bash <<'EOF'
+git commit -m x
+EOF"
+  assert_deny
+}
+
+@test "a quoted commit handed to bash -c is still denied" {
+  make_drift
+  run run_hook "bash -c \"git commit -m x\""
+  assert_deny
+}
+
 # --- git global-option forms reach the gate ---
 
 @test "git -C <repo> commit is denied under drift (from outside the repo)" {
@@ -365,10 +750,13 @@ git commit -am 'actual'"
   assert_deny
 }
 
+# Both repos here are real, so the payload cwd would otherwise name the wrong
+# one as the project and the scope check would skip before precedence matters.
 @test "cd into a clean repo does not outrank the commit's -C repo" {
   make_drift
   local other
   other=$(make_other_repo "cleanrepo")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
   run run_hook_from "$other" "cd \"$other\" && git -C \"$TEST_REPO\" commit -am 'msg'"
   assert_deny
 }
@@ -470,6 +858,7 @@ commit -am "msg"'
   make_drift
   local other
   other=$(make_other_repo "cleanrepo")
+  export CLAUDE_PROJECT_DIR="$TEST_REPO"
   run run_hook_from "$other" "cd \"$BATS_TEST_TMPDIR\" && git -C repo commit -am 'msg'"
   assert_deny
 }
