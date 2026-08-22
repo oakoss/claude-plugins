@@ -124,7 +124,7 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "PR review",
      run_in_background: true,
-     prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file. Output findings as file:line — severity — issue — suggested fix."
+     prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file in <WT> or in the main checkout — verification that has to run or perturb code goes in a scratch directory outside both, under the containment rule in your own prompt. Output findings as file:line — severity — issue — suggested fix."
    })
    ```
 

@@ -109,6 +109,18 @@ Ensure compliance with the project's error handling requirements:
 
 Prefer evidence over inference. When a claim about failure behavior can be settled by running something, run it: trigger the error path in a clean temp directory and observe what the user actually sees, check the exit code, confirm whether the log line fires. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — run repros in a disposable directory.
 
+## Inject the Fault
+
+This is not the empirical-verification rule elsewhere in this prompt, which reproduces a failure you already suspect — injection asks which failures nothing reports at all. Reading an error path tells you what it would do if the dependency failed. Making the dependency fail tells you what it does. Prefer the second — a handler that swallows its error looks careful on the page, and the difference only shows when something actually breaks.
+
+Make the failure real rather than hypothetical, and inject it inside the copy so it stays contained: point the code at a path that does not exist, `chmod` a file it reads, shadow a binary on `PATH` with one that exits nonzero or dies by signal, run it against a small filesystem image so writes hit ENOSPC, return a malformed payload. A fault you cannot contain in the copy — anything that would perturb the machine the review target lives on — is one to describe rather than perform. Then ask: did anything upstream notice? A path that reports success, logs nothing, or returns a plausible-looking default under a real fault is the finding, and the injected fault is the evidence.
+
+Pay particular attention to failures that write nothing to stderr. A process killed by a signal, a redirect that could not be opened, and a partial walk that warns without a nonzero exit all defeat error detection that keys on stderr alone, so a handler can look thorough and still be blind to them.
+
+When the build is too slow to inject inside your budget, say so and fall back to reading — but label those findings inferred rather than measured.
+
+**Containment.** Never edit, stage, or create commits in the review target. Perturb only a copy in a scratch directory outside the repository, and delete it when you finish. Your copy does not need to be a git repository — none of these techniques requires version control — so it never needs a commit at all. When you are running inside `/review-cycle:review`, the cycle snapshots the target before the fan-out and compares afterward — but do not lean on that: it does not exist in `/review-cycle:review-pr` or when you are invoked directly, and it does not cover every phase even where it does run. Assume nothing checks you.
+
 ## Your Output Format
 
 For each issue you find, provide:
