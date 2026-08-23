@@ -182,3 +182,61 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUMPY_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      # bumpy files private packages under `skipped` rather than `published`,
+      # so it never calls `finalizeRelease` (the release stays a draft) and
+      # never runs its tag push (gated on `published.length > 0`). Publishing
+      # the draft does both. It also only warns when creating a release fails,
+      # so a package this commit released that has no release at all is a
+      # silent miss rather than one that has never shipped.
+      #
+      # Ownership comes from the versions in the tree, since bumpy tags
+      # `<name>@<version>`. Every other draft is left alone: publishing one
+      # would create its tag and make it public.
+      - name: Publish the releases bumpy left as drafts
+        if: ${{ !cancelled() && steps.app-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT
+          released=$(git show --name-only --format= HEAD \
+            | grep -E '^plugins/[^/]+/package\.json$' || true)
+          rc=0
+          seen=0
+          for manifest in plugins/*/package.json; do
+            [ -f "$manifest" ] || continue
+            seen=$((seen + 1))
+            if ! meta=$(jq -er 'if (.name|type) == "string" and (.name|length) > 0
+                and (.version|type) == "string" and (.version|length) > 0
+              then "\(.private == true) \(.name)@\(.version)" else halt_error(1) end' \
+              "$manifest" 2>/dev/null); then
+              echo "::error::$manifest is not readable as a package with a name and version"
+              rc=1
+              continue
+            fi
+            [ "${meta%% *}" = "true" ] || continue
+            tag=${meta#* }
+            if draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>"$err"); then
+              [ "$draft" = "true" ] || continue
+              echo "publishing $tag"
+              gh release edit "$tag" --draft=false \
+                || { echo "::error::failed to publish $tag"; rc=1; }
+              continue
+            fi
+            case "$(cat "$err")" in
+              *'release not found'*|*'HTTP 404'*|*'Not Found'*)
+                if printf '%s\n' "$released" | grep -qxF "$manifest"; then
+                  echo "::error::$tag was released by this commit but has no GitHub release"
+                  rc=1
+                fi
+                ;;
+              *) echo "::error::gh release view $tag: $(cat "$err")"; rc=1 ;;
+            esac
+          done
+          if [ "$seen" -eq 0 ]; then
+            echo "::error::no plugin manifests found under plugins/*/package.json"
+            rc=1
+          fi
+          exit "$rc"
