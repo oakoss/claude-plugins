@@ -53,7 +53,7 @@ You review the diff and commit yourself
 One-time setup helper. Run after installing the plugin to:
 
 - Check for the optional Codex CLI, verify `multi_agent = true` in `~/.codex/config.toml`, and report stored-login state (advisory — auth doesn't gate the leg)
-- Optionally append the comment and fix-vs-defer policies to your global or project `CLAUDE.md`
+- Optionally append the comment, fix-vs-defer, and evidence policies to your global or project `CLAUDE.md`
 - Update project `.gitignore` to exclude `.claude/.review-mark` (auto-managed state)
 
 Idempotent — safe to run multiple times. Replaces the manual setup steps below.
@@ -106,7 +106,7 @@ Migrated verbatim from Anthropic's pr-review-toolkit (Apache 2.0; see `LICENSE-p
 
 New (this plugin):
 
-- `review-cycle:cleanup` — comment policy + de-slopify in one pass
+- `review-cycle:cleanup` — comment policy + de-slopify in one pass, correcting prose whose claims a run contradicts
 - `review-cycle:maintainability-auditor` — ambitious structural lens (code-judo moves, file-size sprawl, spaghetti branches, weak seams). Runs in `review` on substantial-code diffs, **report-only** — its speculative restructurings are surfaced for you to action, never auto-applied.
 - `review-cycle:spec-conformance-analyzer` — spec axis: does the diff implement what the originating issue/task/PRD asked for? Reported separately from quality findings, when a spec source is discoverable.
 
@@ -204,7 +204,7 @@ Effort is the tuning axis rather than model name on purpose: `codex review` expo
 
 ### Add the policies to your global CLAUDE.md
 
-The skills embed the comment and fix-vs-defer policies, so the cycle itself works without setup. But if you want the same policies active outside the cycle (when Claude is implementing code or addressing a single PR comment), copy the snippets from `reference/policies.md` into `~/.claude/CLAUDE.md`.
+The skills embed the comment, fix-vs-defer, and evidence policies, so the cycle itself works without setup. But if you want the same policies active outside the cycle (when Claude is implementing code or addressing a single PR comment), copy the snippets from `reference/policies.md` into `~/.claude/CLAUDE.md`.
 
 ### Per-project config: `.claude/review-cycle.json`
 

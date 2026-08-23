@@ -1,6 +1,6 @@
 ---
 name: init
-description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, optionally appends comment + fix-vs-defer policies to CLAUDE.md (global or project), and updates .gitignore to exclude per-project sentinel files. Idempotent — safe to run multiple times.
+description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, optionally appends the comment, fix-vs-defer, and evidence policies to CLAUDE.md (global or project), and updates .gitignore to exclude per-project sentinel files. Idempotent — safe to run multiple times.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 ---
@@ -17,7 +17,7 @@ Six named checks, each idempotent:
 2. **Codex CLI** (optional) — verifies `codex --version` works
 3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
 4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
-5. **CLAUDE.md policies** — offers to append comment + fix-vs-defer policies (global or project scope)
+5. **CLAUDE.md policies** — offers to append the comment, fix-vs-defer, and evidence policies (global or project scope)
 6. **Project `.gitignore`** — adds the sentinel and opt-out marker entries if inside a git repo
 
 Each step checks state first. If something is already configured, it reports "✓ already done" and continues.
@@ -121,11 +121,14 @@ If `PROJECT_ROOT` is not set, default to global without asking.
 
 For each chosen target file:
 
-1. Check if it already contains a heading "Comment policy" or "Fix-vs-defer policy". If both present, mark ✓ already done and continue.
+1. Check which of the headings "Comment policy", "Fix-vs-defer policy", and "Evidence policy" it already contains. If all three are present, mark ✓ already done and continue; if some are, append only the missing ones, so re-running after an upgrade adds what is new without duplicating what is there.
+
+   **Follow `@` imports before deciding.** A `CLAUDE.md` whose body is mostly `@path` lines keeps its real content elsewhere — a common setup is a one-line `CLAUDE.md` importing a shared `AGENTS.md`. Testing only the importing file reports every policy absent and appends duplicates of ones already active. Read the imported file, test its headings too, and append into whichever file already holds the others.
 2. If file exists: back it up to `${file}.bak`.
-3. Append the policy snippets from `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`. Specifically:
+3. Append the missing policy snippets from `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`. Test each heading with grep rather than skimming for it — `grep -qi '^#\+ *Evidence policy' "$file"` and the same for the other two — and append only the blocks that test absent. Whichever of these step 1 found missing:
    - The "Comment policy" markdown block
    - The "Fix-vs-defer policy" markdown block
+   - The "Evidence policy" markdown block
    - Skip the meta/header content from `policies.md` — only the actual policy text in the code blocks gets appended.
 4. Use `MultiEdit` or `Edit` to append. Create the file if it doesn't exist.
 
@@ -192,7 +195,7 @@ Keep each line short. Avoid bracketed status fields (`[✓]`) that widen the lay
 ## Edge cases
 
 - **CLAUDE.md exists but is empty or only contains imports**: backup, then append policies. Safe.
-- **CLAUDE.md has different policy text already**: don't clobber. Match on heading "# Comment policy" or "# Fix-vs-defer policy". If either exists, mark ✓ and skip (assume the user has their own version).
+- **CLAUDE.md has different policy text already**: don't clobber, and decide per policy rather than for the file as a whole. A heading that is present is the user's version — leave it alone; a heading that is absent gets appended. Skipping the whole file because one heading matched would mean an upgrade that adds a policy never installs it.
 - **~/.codex/config.toml doesn't exist**: create with `[features]\nmulti_agent = true\n` if user opts in.
 - **~/.codex/config.toml exists but no `[features]` section**: append `[features]\nmulti_agent = true\n` at the end.
 - **`[features]` section exists with other entries**: insert `multi_agent = true` line within that section.

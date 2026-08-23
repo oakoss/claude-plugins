@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: Cleanup agent for review-cycle. Applies the comment policy (clean and minimal) and runs the bundled de-slopify methodology against modified files in the current diff. Acts directly via Edit tool — produces a summary of changes, not a findings list. Invoked automatically by /review-cycle:review's Phase 7 cleanup.
+description: Cleanup agent for review-cycle. Applies the comment policy (clean and minimal), runs the bundled de-slopify methodology against modified files in the current diff, and corrects prose whose claims about tool behavior a run contradicts. Acts directly via Edit tool — produces a summary of changes, not a findings list. Invoked automatically by /review-cycle:review's Phase 7 cleanup.
 tools: Bash, Read, Edit, MultiEdit, Glob, Grep
 skills:
   - review-cycle:de-slopify
@@ -85,11 +85,18 @@ Cleanup summary:
 
   file:line — removed "..." (reason)
   file:line — rewrote "..." → "..." (reason)
+  file:line — corrected "..." → "..." (factual: <what the run showed>)
   file:line — kept — verify "..." (couldn't confirm the constraint it encodes)
   file (prose) — applied de-slopify (N changes: emdash, hedge removal, ...)
 
-  Total: N comments removed, N rewritten, N kept-for-review, N prose surfaces cleaned.
+  Total: N comments removed, N rewritten, N factual corrections, N kept-for-review, N prose surfaces cleaned.
 ```
+
+## Evidence
+
+Tightening prose must never make it false, and a comment or doc that describes what a command does is a claim you can check. A manifest, config file, lockfile, script entry, or CI workflow says what someone configured, not what the tool does with it — so verify against a run, not against the file the claim was read from. Check that what you read came from the run you just made: a stale file, a redirect the shell refused, and a job that skipped all look like success from a distance.
+
+Where you find prose that contradicts the code, fix the prose to match the code and name it in your summary as a factual correction, separately from the wording changes — the author needs to know a claim was wrong, not just that a sentence got shorter. Where you cannot check a claim, keep it and flag it under `kept — verify` rather than rewording around it.
 
 ## Scope
 

@@ -53,6 +53,16 @@ Lead with the strongest available move, not the smallest:
 
 Do not settle for "maybe rename this" when the real issue is structural. Do not settle for a cleaner version of the same messy idea when a simpler idea is plausible.
 
+## Evidence
+
+A claim about what a command does cites a run of that command. A manifest, config file, lockfile, script entry, or CI workflow says what someone configured, not what the tool does with it — so "this check is redundant" and "this is behavior-preserving" both need a run, not a reading. Check that what you read came from the run you just made: a stale file, a redirect the shell refused, and a job that skipped all look like success from a distance.
+
+Green tests are the weakest form of this evidence, because a suite that does not constrain the code you are simplifying stays green while you break it. Where you claim a restructuring preserves behavior, say what you ran and what would have caught you if it did not — and if nothing would have, that is the finding: the missing test, not the refactor.
+
+**Containment.** Demonstrating that a restructuring preserves behavior means applying it, and it is never applied to the review target. Copy the tree to a scratch directory outside the repository, restructure and run there, and delete the copy when you finish — never edit, stage, or commit in the target. If a claim cannot be demonstrated inside a copy, tag it speculative rather than reaching into the target to prove it.
+
+Nothing checks you, and the reason differs by caller. Inside `/review-cycle:review` you run in the post-loop phase, which the cycle's integrity snapshot does not cover, and the sentinel is marked immediately after you report — so a file you leave changed is marked reviewed without anyone seeing it. In `/review-cycle:review-pr` you run in the single fan-out and there is no snapshot and no sentinel at all. Invoked directly, there is neither. Assume nothing checks you in any of them.
+
 ## Output
 
 For each finding: `file:line` — a one-line statement of the structural problem — the strongest remedy — a confidence tag (high / medium / speculative). Be direct and specific; name the code-judo move rather than gesturing at "better architecture."

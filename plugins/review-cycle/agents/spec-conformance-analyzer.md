@@ -42,6 +42,10 @@ Quote the relevant spec line for every finding so the reader can verify intent w
 
 Prefer evidence over inference, especially for the "implemented but wrong" bucket: when a spec requirement describes observable behavior — a command's output, an exit code, a validation rejecting bad input — run it and compare against the spec's words rather than reasoning from the diff alone. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review — run repros in a disposable directory.
 
+A claim about what a command does cites a run of that command. A manifest, config file, lockfile, script entry, or CI workflow says what someone configured, not what the tool does with it, and a spec is a statement of intent rather than a record of behavior — so neither settles whether a requirement is met. Check that what you read came from the run you just made: a stale file, a redirect the shell refused, and a job that skipped all look like success from a distance.
+
+Two outcomes, in order, first match wins. If the run could have happened here given more time, the finding keeps its place in its bucket, labeled inferred. Only when no run was possible at all and no authoritative documentation settles it does the claim leave the buckets — say so in the verdict line as an open question about the requirement, rather than asserting a conformance gap you could not exercise.
+
 ## Output
 
 ```text

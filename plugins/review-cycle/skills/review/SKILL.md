@@ -11,7 +11,28 @@ Automated multi-agent review cycle on uncommitted changes. Invoke manually with 
 
 ## Embedded policies
 
-The following two policies apply throughout this cycle. Standalone copies live in `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` if you want them active outside this cycle (paste into `~/.claude/CLAUDE.md` for global scope or `./CLAUDE.md` for project scope).
+The following three policies apply throughout this cycle. Standalone copies live in `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` if you want them active outside this cycle (paste into `~/.claude/CLAUDE.md` for global scope or `./CLAUDE.md` for project scope).
+
+### Evidence policy
+
+**A claim about what a command does cites a run of that command.** This binds everyone in the cycle — reviewers writing findings, and you writing fixes, prose, comments, and commit messages.
+
+A manifest, config file, lockfile, script entry, CI workflow, or flag in documentation says what someone *configured* or *intended*. It does not say what the tool does with it, and the two disagree often enough that the gap is where wrong findings come from. `doctest = false` in a Cargo manifest does not stop `cargo test --doc` from running the doctests — cargo compiles the crate and runs them anyway, and the flag only removes them from plain `cargo test`. A `skip` in a workflow does not prove the job was skipped on this run, and a `package.json` script does not prove what the script does when invoked. **A declaration is never evidence for behavior.**
+
+Three rules follow:
+
+- **Run it, then quote what it printed.** Name the command and the observed output, not the file you read it from. Quote what the tool actually emits: "the test command printed `1..512` and 512 `ok` lines, no `not ok`" is evidence; "the suite covers this" is not, and neither is a tidy summary line the tool never printed.
+- **A run you did not observe is not a run.** Read the output the command actually produced this time. A stale file, a redirect the shell refused, a cached artifact, or a job that skipped all look like success from a distance — check that what you are reading came from the invocation you just made.
+- **When you cannot run it, say so in the finding.** A claim the environment cannot exercise — another OS, another shell, a remote service, a build past your budget — is labeled inferred rather than measured, or verified against authoritative documentation. Never state it flatly.
+
+Two outcomes, decided in this order — the first that applies wins, so no claim qualifies for both:
+
+1. **Could the run have happened here, given more time, a longer build, or a bigger sample?** Then the finding **keeps its place, labeled inferred**, and still reaches Phase 4. Budget is the reason you did not measure, not a reason to drop the finding.
+2. **Otherwise — no run was possible at all and no authoritative documentation settles it** — the claim is not a low-confidence finding: it is a **question**, and belongs in the summary as one rather than in the findings list.
+
+Rule 1 has priority. A claim you skipped for budget stays a finding even when nothing documents it; only a claim that was never runnable *here* reaches rule 2.
+
+Withdrawing is not a way to be quiet. A leg that could not build and therefore withdrew everything reports no findings, which the summary would otherwise read as clean — so a leg in that position says it could not build, in the summary, by name.
 
 ### Comment policy
 
@@ -153,6 +174,8 @@ This covers the Phase 3 fan-out, including the Codex CLI, which carries no conta
 
 **Compose an intent brief first** — 2–4 sentences on what the change is trying to accomplish and why, plus the changed-file list. Source it from the conversation that produced the changes, or from the commit messages in `<ref>..HEAD` when reviewing against a base. Every reviewer gets it: a reviewer that knows the intent flags real deviations instead of guessing at purpose, and its findings need less relitigating. Do not editorialize about expected findings — state intent, not hoped-for verdicts.
 
+**Carry the evidence policy into the brief**, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. The bundled subagents carry this in their own bodies; Codex does not, and the brief is the only channel that reaches it.
+
 In a single conversation turn, invoke ALL of the following:
 
 1. **Codex review (background)** — only when Phase 1 recorded the leg as `eligible`; skip this step entirely otherwise and fan out to the subagents alone. Direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief rides a config override instead: `-c "developer_instructions=\"<brief>\""`.
@@ -230,7 +253,7 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
      run_in_background: true,
-     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a scratch directory outside it. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix."
+     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a scratch directory outside it. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix. List separately, under Questions, any claim about tool behavior you could neither exercise here nor settle against authoritative documentation."
    })
    ```
 
@@ -272,6 +295,8 @@ Collect findings from every reviewer:
 - Codex output is structured: `verdict`, `summary`, `findings[]` each with `severity` (critical/high/medium/low), `file`, `line_start`, `line_end`, `confidence`, `recommendation`
 - pr-review-toolkit output is markdown organized as Critical / Important / Suggestions / Strengths
 
+**Collect questions too, and keep them out of the findings list.** A reviewer that could neither run a check nor settle it against authoritative documentation reports the claim under Questions rather than asserting it. Those do not enter Phase 5 — nothing is fixed on the strength of a claim nobody exercised — and they carry through verbatim to the Phase 9 field, where the user decides whether to chase them. An `inferred` label a reviewer attached survives aggregation with the finding; do not quietly promote it by dropping the word.
+
 Attribute each finding to its source. Group by file when presenting. Do not aggressively dedupe — if two reviewers flag the same line, merge them into one bullet with both sources listed.
 
 This phase covers only the loop's auto-fix reviewers. The report-only reviewers (spec conformance, maintainability) run post-loop and are aggregated in Phase 7.
@@ -295,7 +320,7 @@ Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (s
 A full reviewer re-fan-out is only worth its wall-clock when this iteration's fixes could themselves have introduced problems. Verify cheaply first:
 
 1. **Self-check every fix against the findings list.** Re-read each fixed site and confirm the finding is actually addressed — not merely edited near. Anything unaddressed gets fixed now, within this iteration.
-2. **Verify facts introduced by fixes.** A fix that adds or rewords a factual claim — in prose, a comment, a doc, or a commit-message draft — gets the claim itself checked before proceeding: run the command it describes, read the code it characterizes, confirm the name or version it cites. Step 1 confirms the finding was addressed; this step confirms the fix didn't trade the finding for a false statement, which otherwise survives until the next fan-out catches it — or ships.
+2. **Verify facts introduced by fixes.** A fix that adds or rewords a factual claim — in prose, a comment, a doc, or a commit-message draft — gets the claim itself checked before proceeding, under the evidence policy above: run the command it describes and read what that run printed, read the code it characterizes, confirm the name or version it cites against the file that defines it. A manifest is not evidence for what a command does. Step 1 confirms the finding was addressed; this step confirms the fix didn't trade the finding for a false statement, which otherwise survives until the next fan-out catches it — or ships.
 3. **Classify the iteration's fix churn:**
    - **Mechanical** — strictly non-semantic fixes confined to the flagged lines: typo/wording corrections, renames, removing dead code or a redundant comment, doc corrections. Message text that prescribes a remedy or states a factual claim is never mechanical — it classifies as a verified message fix below, so its verification cannot be skipped. The self-check is sufficient verification.
    - **Verified message fix** — a fix whose entire diff is (a) human-facing message text (error/diagnostic strings, log lines, help text, comments, docs), (b) a new or changed **pure** helper — output depends only on its arguments: no I/O, no process spawning, no environment or global reads — of ≤ ~15 added-plus-changed lines whose only consumers are such strings and which is covered by a unit test, and/or (c) the unit tests covering that helper. Every changed output path a user can trigger needs a test or a reproduction. Eligible **only after empirical verification** — step 2 above made load-bearing, split by text kind: text that prescribes a remedy — reproduce the state the message addresses, execute the remedy exactly as printed (copy-paste it), and confirm the condition clears; text that only states a fact — check the claim per step 2 (run the command it describes, read the code it characterizes). A claim the local environment cannot exercise (another OS, another shell, a remote service) must be verified against authoritative documentation or explicitly flagged — never assumed — and routes through the valve in the decision list below. Write the verification line — the reproduction, or the factual-claim check — into the Phase 9 summary draft at verification time, as with the Codex facts in Phase 1: the loop ends turns, and evidence from an early iteration is not re-derivable later. Treated as mechanical for the loop decision. Not eligible, always substantive: anything touching machine-readable output (`--json`, exit codes, parseable formats another tool consumes), the verdict or control flow of a check, or a remedy whose claims were neither verified (locally or against authoritative documentation) nor explicitly flagged for the valve.
@@ -321,6 +346,8 @@ The loop has converged. Run the report-only reviewers **once** here — against 
 
 Running them here, once, is the whole point: the opus maintainability pass and the spec-discovery step execute a single time against the code you'll actually commit, instead of re-running on every loop iteration.
 
+**Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Use the same sentence Phase 3 uses: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a scratch directory outside it, and delete it when you finish.* Phase 3's snapshot does not cover this phase and Phase 8 marks the sentinel immediately after, so a file a report-only agent leaves changed is marked reviewed without anyone having seen it. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
+
 **Both reviewers are report-only.** Nothing they find is auto-applied and they do not re-open the loop:
 
 - **maintainability-auditor** — speculative structural restructurings (delete a layer, split a file, reframe a state model): high-blast-radius, low-precision, never auto-apply. Surface them in the summary's "Structural suggestions" section; act on the ones you want by prompting afterward.
@@ -328,7 +355,7 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 
 **Cleanup.** A separate agent spawn only earns its place on a diff big enough that loading the de-slopify methodology into your own context would be the greater cost:
 
-- **diffs under ~150 changed lines, whatever the tier** — clean inline, yourself. Apply the embedded comment policy to comments you touched, and invoke `/review-cycle:de-slopify` via the Skill tool for the prose methodology, applying it to modified `.md` files and commit-message drafts. Same exclusions as the agent: never touch algorithm logic, type definitions, or test assertions.
+- **diffs under ~150 changed lines, whatever the tier** — clean inline, yourself. Apply the embedded comment policy to comments you touched, and invoke `/review-cycle:de-slopify` via the Skill tool for the prose methodology, applying it to modified `.md` files and commit-message drafts. Tightening prose must never make it false: under the evidence policy, treat any claim about a command in the prose you touch as checkable, correct it against a run, and report the correction separately from the wording changes — the author needs to know a claim was wrong, not just that a sentence got shorter. Same exclusions as the agent: never touch algorithm logic, type definitions, or test assertions.
 - **~150 changed lines or more** — spawn the cleanup subagent (it has de-slopify preloaded via its `skills` frontmatter). Size, not tier, decides: a large docs-only diff is light-tier for fan-out but is exactly the prose volume the agent spawn is for:
 
   ```js
@@ -363,6 +390,8 @@ Review cycle complete.
 Tier: light | full
 Iterations: N / max
 Falsifiable questions: N asked / N answered by measurement / N fell back to reading
+Factual corrections (cleanup): N — <the claim that was wrong, and what the run showed> | none
+Unexercised claims raised as questions: N — <each one> | none
 Target integrity: unchanged (Phase 3 fan-out; Phase 7 not covered) | CONTAMINATED (<leg>, <what differed>) | not checked (<reason>)
 Message fixes verified: N (one verification line per fix) | none
   valve: 1 Codex-only pass (effort: low | inherited) | not needed

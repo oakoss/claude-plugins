@@ -9,6 +9,18 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Agent, SendMessage, AskUserQuestio
 
 Single-pass, report-only review of a GitHub PR, run locally. It shares the review cycle's reviewer agents and tiering but none of its loop: no fixes, no iterations, no sentinel update. The deliverable is a findings report with explicit coverage — and, only when asked, a posted PR review.
 
+## Embedded policy
+
+The review cycle's **evidence policy** binds you here too, and binds you more tightly than it does there: what you write can be posted as a public comment on someone else's PR, with no fix loop and no author turn between your sentence and their inbox.
+
+A claim about what a command does cites a run of that command. A manifest, config file, lockfile, script entry, CI workflow, or a project's own README says what someone configured or intended — never what the tool does with it. `doctest = false` in a Cargo manifest does not stop `cargo test --doc` from running the doctests — cargo compiles the crate and runs them anyway; the flag only removes them from plain `cargo test`. Quote what the command printed, not the file you read it from, and check that what you read came from the invocation you just made: a stale file, a redirect the shell refused, and a job that skipped all look like success from a distance.
+
+The tool vendor's own documentation is the one exception, and the same one the working-tree cycle makes: where a command cannot run here but authoritative documentation specifies its behavior, that settles it — cite the documentation as the evidence. A project describing how it *uses* a tool is not the tool's documentation.
+
+This applies to your own prose as much as to the reviewers' findings — the severity you assign, the summary you write, and every line you post. A claim you could exercise neither by running nor against authoritative documentation is asked as a question; it is never stated flatly on someone else's PR.
+
+The cycle's comment and fix-vs-defer policies do not apply: this skill changes no code.
+
 ## Argument parsing
 
 `$ARGUMENTS` is free-form natural language — no flags. Read intent from it:
@@ -85,6 +97,8 @@ Record `<WT>` in the report draft immediately, then mark a review as in progress
 
 **Compose the intent brief** — 2–4 sentences on what the PR is trying to accomplish and why, from its title, body, and commit subjects, plus the changed-file list. State intent, not hoped-for verdicts. Every reviewer gets it.
 
+Carry the evidence rule into the brief, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. It matters more here than in the working-tree cycle — the PR head sits in a disposable worktree whose dependencies may not be installed, so a reviewer that cannot build has every reason to reason from manifests and no fix loop downstream to catch it.
+
 **The review scope is the merge-base diff**: `git diff <REMOTE>/<baseRefName>...HEAD` (three dots), matching what GitHub shows as the PR diff. A two-dot diff against the base *tip* would also show the inverse of everything merged since the PR branched, and reviewers would flag files the PR never touched.
 
 For the Codex flag, **reshape the brief**: the `-c` value is parsed as TOML and passes through one layer of shell quoting, so flatten it to a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare.
@@ -137,6 +151,8 @@ A Codex leg that dies after launch is a **failure**, not a skip — read the exi
 Collect findings from every reviewer. Attribute each to its source, group by file, and do not aggressively dedupe — two reviewers flagging the same line merge into one bullet with both sources listed. Apply the review cycle's severity framing (critical/high/medium/low) when a source doesn't provide its own.
 
 **The coverage floor is the point of this phase.** Every dispatched reviewer appears in the report with an outcome: `reported`, `skipped (<reason>)`, `failed (<error>)`, or `dropped (stalled, nudged once)`. "No findings" and "nobody looked" must never read the same: if any dispatched leg is `failed` or `dropped`, the verdict says `partial coverage` and never `clean`, regardless of how few findings arrived.
+
+**Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file.
 
 ## Phase 5: Report
 
