@@ -41,6 +41,19 @@ When the suite is too slow or the build too heavy to mutate inside your budget, 
 
 **Evidence.** A claim about what a command does cites a run of that command. A manifest, config file, lockfile, script entry, or CI workflow says what someone configured, not what the tool does with it — `doctest = false` in a Cargo manifest does not stop `cargo test --doc` from running the doctests — cargo compiles the crate and runs them anyway; the flag only removes them from plain `cargo test`, and a test file's presence is not proof the suite runs it. Name the command and quote what it printed, and check that what you read came from the run you just made: a stale file, a redirect the shell refused, and a job that skipped all look like success from a distance. Two outcomes, in order, first match wins. If the run could have happened here given more time or a bigger sample, the finding keeps its place, labeled inferred rather than measured — budget is why you did not measure, not a reason to drop it. Only when no run was possible at all and no authoritative documentation settles it is the claim a question rather than a finding. Withdrawing is not a way to be quiet: if you could not run anything, say so plainly in your report rather than returning no findings.
 
+**Open your report with the execution receipt**, above anything your Output section specifies:
+
+```text
+execution: <the heaviest verification that SUCCEEDED — build, test suite, typecheck, or the repro your findings rest on> — <its first output line> | none
+attempted-but-failed: <every verification that would not run, each with the first line of its failure; and the project's own build or test suite when you did not attempt it at all> | none
+```
+
+**Both lines are required**, and each must say `none` rather than be omitted. An omitted line grades your leg `unknown`, which tells a reader nothing about what you verified — write the honest `none` instead.
+
+`execution:` names what worked, not what you tried: if your build failed but the unit tests passed, the tests go on line one and the build on line two. An unattempted check is not a passed one — if you never ran this project's own suite, that belongs on line two too. Orientation commands — `git status`, `ls`, `cat`, `find`, `grep` — never belong on line one: they succeed on a machine where nothing else does, so naming one is graded the same as `none`. Report a compound command whole; what matters is the verification it shows succeeding, not the other tokens in it.
+
+Both land the same label when nothing succeeded, so the distinction lives in what you write on line two: name the command and its failure, so a reader can tell a broken build from one you never ran.
+
 **Containment.** Never edit, stage, or create commits in the review target. Perturb only a copy in a scratch directory outside the repository, and delete it when you finish. Your copy does not need to be a git repository — none of these techniques requires version control — so it never needs a commit at all. When you are running inside `/review-cycle:review`, the cycle snapshots the target before the fan-out and compares afterward — but do not lean on that: it does not exist in `/review-cycle:review-pr` or when you are invoked directly, and it does not cover every phase even where it does run. Assume nothing checks you.
 
 A mutant you left behind is a defect you introduced.
@@ -67,6 +80,8 @@ A mutant you left behind is a defect you introduced.
 Prefer evidence over inference. Run the tests rather than assuming what they cover: execute the relevant suite (or the affected subset) and read the actual pass/fail output before claiming a path is tested or untested. A verified finding states what you ran; a finding you could not check is labeled as inferred from reading. Verification must never disturb the review target: no edits, staging, or commits in the repository under review.
 
 **Output Format:**
+
+Emit the execution receipt above this, as the first two lines of your report.
 
 Structure your analysis as:
 

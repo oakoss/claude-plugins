@@ -176,6 +176,8 @@ This covers the Phase 3 fan-out, including the Codex CLI, which carries no conta
 
 **Carry the evidence policy into the brief**, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. The bundled subagents carry this in their own bodies; Codex does not, and the brief is the only channel that reaches it.
 
+**Ask for the execution receipt in the brief too.** Every leg opens its report with two lines: `execution:` naming the heaviest verification that *succeeded* — build, test suite, typecheck, or the repro its findings rest on — with that command's first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. Phase 4 grades the leg from those two lines. The subagents carry this in their bodies; Codex does not, so the brief is again the only channel that reaches it.
+
 In a single conversation turn, invoke ALL of the following:
 
 1. **Codex review (background)** — only when Phase 1 recorded the leg as `eligible`; skip this step entirely otherwise and fan out to the subagents alone. Direct CLI invocation, not the `/codex:review` slash command. Scope must match the subagents': `--uncommitted` for the default working-tree review, `--base <ref>` when the user gave a base. The scope flags reject a prompt argument (`error: the argument '--uncommitted' cannot be used with '[PROMPT]'`), so the intent brief rides a config override instead: `-c "developer_instructions=\"<brief>\""`.
@@ -295,6 +297,32 @@ Collect findings from every reviewer:
 - Codex output is structured: `verdict`, `summary`, `findings[]` each with `severity` (critical/high/medium/low), `file`, `line_start`, `line_end`, `confidence`, `recommendation`
 - pr-review-toolkit output is markdown organized as Critical / Important / Suggestions / Strengths
 
+**Label each leg by what it could actually run.** Read the two receipt lines before weighting a single finding.
+
+A *verification* is a command that exercises this project — its build, test suite, typecheck, linter, schema or manifest validator, or a repro the leg's findings rest on. Reading commands (`git status`, `git diff`, `ls`, `cat`, `find`, `grep`, `rg`) are not verifications: they succeed on a machine where nothing else does.
+
+If either receipt line is absent, or present with nothing after it, the leg is `unknown`. Otherwise read two facts off the receipt:
+
+| line one names a verification that succeeded | `attempted-but-failed:` | label |
+| --- | --- | --- |
+| yes | `none` | `executed` |
+| yes | anything else | `partial (<what was unreachable>)` |
+| no | — | `static-analysis-only` |
+
+`execution: none`, a line one naming no verification, and one naming a verification that failed are the same row — a receipt quoting a compile error is `static-analysis-only`, never `executed`. A category the leg says it could not exercise at all also makes it `partial`; a claim it labelled `inferred` does not, since that reflects a budget spent elsewhere and naming what you inferred must never cost the grade a silent leg keeps.
+
+**The receipt narrows what a leg can quietly omit; it does not verify.** Nothing checks the quoted output against a real run, and `partial` rests entirely on the leg volunteering what it could not reach — so treat an unqualified `executed` from a leg making external-tool claims as unconfirmed rather than settled. What the receipt does buy is a shape where silence is visible: a leg that names only an orientation command, or leaves `attempted-but-failed:` off, has told you something.
+
+Corroborate rather than trust. Phase 2 already recorded which of the project's own checks exist and whether they ran, so an `executed` claim whose receipt names no command from that set is worth a second look — you know what this project can run, and the leg is claiming less than that.
+
+**Demotion keys on the claim's evidence, not the leg's grade.** Demote one narrow class wherever it appears: **a claim about how an external tool, framework, or service behaves whose only support is a manifest, config file, lockfile, or CI file.** That is the failure this exists for — a leg read `doctest = false` in a Cargo manifest and asserted it stops `cargo test --doc` from compiling the crate, which it does not. Gating that on the leg's label would miss it: a leg that got any one unrelated check to pass grades `executed` or `partial`, and real legs almost always get something to pass. Claims about what the changed code itself does — control flow, error propagation, what a caller observes — are read from the source and stand, whatever the leg could run.
+
+The label is what the demotion means, not whether it fires. `static-analysis-only` says the leg could not have verified the claim; `executed` says it could have and did not, which deserves less benefit of the doubt rather than more. A `partial` leg's claims about the very category it named unreachable are demoted too — that category is the one thing `partial` uniquely knows, and it is otherwise never read.
+
+**An `unknown` leg is not demoted for the missing receipt alone.** A formatting miss is not evidence of incapacity, and the errors are asymmetric: an ungraded finding you can still read costs nothing, while a real finding demoted for a slip disappears unseen. But omission must not beat candour — if anything else in the report says the leg could not run the project's checks, demote it exactly as `static-analysis-only`, because an honest `execution: none` would have been.
+
+A finding the leg labeled `inferred` keeps that label and stays a finding. The leg had the capability and spent it elsewhere; that is budget, not incapacity, and the agent bodies promise it survives. Demotion applies only to claims a leg could not have exercised at all.
+
 **Collect questions too, and keep them out of the findings list.** A reviewer that could neither run a check nor settle it against authoritative documentation reports the claim under Questions rather than asserting it. Those do not enter Phase 5 — nothing is fixed on the strength of a claim nobody exercised — and they carry through verbatim to the Phase 9 field, where the user decides whether to chase them. An `inferred` label a reviewer attached survives aggregation with the finding; do not quietly promote it by dropping the word.
 
 Attribute each finding to its source. Group by file when presenting. Do not aggressively dedupe — if two reviewers flag the same line, merge them into one bullet with both sources listed.
@@ -330,7 +358,7 @@ Then decide:
 
 - NO inline fixes applied (everything clean or correctly deferred) → exit loop.
 - Only mechanical and verified message fixes, none carrying a claim local verification could not reach → exit loop. Do NOT re-fan-out just to confirm fixes landed — that confirmation is exactly what the self-check (and the message fix's reproduction) provided.
-- Only mechanical and verified message fixes, at least one carrying a claim local verification could not reach (cross-platform shell behavior, remote-service semantics) → **one** lightweight re-review across the whole cycle: the Codex leg alone at `low` — apply Phase 3's root-table check, passing no override when the configured effort is already `low`, `minimal`, or `none`; unlike Phase 3, this reduction is not tier-gated — with no subagent fan-out, and the pass does not count against max-iter. Its findings feed Phase 5 normally; return here afterward. A second such pass is never spawned, and a valve pass that dies counts as spawned without consuming the Codex leg's one retry. When the valve has already run this cycle, the Codex leg is not eligible, or it has already failed its retry, skip the valve, exit the loop, and name the unverifiable claim in the summary.
+- Only mechanical and verified message fixes, at least one carrying a claim local verification could not reach (cross-platform shell behavior, remote-service semantics) → **one** lightweight re-review across the whole cycle: the Codex leg alone at `low` — apply Phase 3's root-table check, passing no override when the configured effort is already `low`, `minimal`, or `none`; unlike Phase 3, this reduction is not tier-gated — with no subagent fan-out, and the pass does not count against max-iter. Its findings feed Phase 5 normally — carrying the Phase 3 brief including the receipt ask, and graded by Phase 4's labels before any fix is applied, since a `static-analysis-only` valve pass contributes questions rather than fixes. Return here afterward. A second such pass is never spawned, and a valve pass that dies counts as spawned without consuming the Codex leg's one retry. When the valve has already run this cycle, the Codex leg is not eligible, or it has already failed its retry, skip the valve, exit the loop, and name the unverifiable claim in the summary.
 - At least one substantive fix AND iteration count < max-iter → GOTO Phase 3, scoped: re-run Codex (when its leg is eligible) plus only the subagents whose domain the substantive fixes touched. A Codex leg that failed gets exactly one retry across the whole cycle; after a second failure stop launching it, since repeated attempts against a rate limit or a revoked session buy nothing. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)` rather than a bare `participated` — the iteration Codex missed is usually the one that had the findings.
 - Iteration count == max-iter → exit loop with summary of remaining findings.
 
@@ -347,6 +375,8 @@ The loop has converged. Run the report-only reviewers **once** here — against 
 Running them here, once, is the whole point: the opus maintainability pass and the spec-discovery step execute a single time against the code you'll actually commit, instead of re-running on every loop iteration.
 
 **Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Use the same sentence Phase 3 uses: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a scratch directory outside it, and delete it when you finish.* Phase 3's snapshot does not cover this phase and Phase 8 marks the sentinel immediately after, so a file a report-only agent leaves changed is marked reviewed without anyone having seen it. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
+
+**Grade these two legs as well.** Phase 4's labelling covers only the loop's auto-fix reviewers, so apply it here from each report's two receipt lines and carry the label into Phase 9 — including the demotion rule, which applies to a structural or conformance claim about an external tool exactly as it does in the loop.
 
 **Both reviewers are report-only.** Nothing they find is auto-applied and they do not re-open the loop:
 
@@ -397,6 +427,7 @@ Message fixes verified: N (one verification line per fix) | none
   valve: 1 Codex-only pass (effort: low | inherited) | not needed
 Codex leg: participated (effort: low | inherited) | skipped (<reason>) | failed (<error>)
   auth: confirmed | no stored session | unknown (probe unsupported)
+Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
 Canonicalization: ran (<commands>) | partial (<tool> unavailable) | no project checks found
 Reviewers dropped (stalled): none | <names, each nudged once before dropping>
 Findings fixed inline: X
