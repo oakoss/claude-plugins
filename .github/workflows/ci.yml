@@ -59,7 +59,10 @@ jobs:
           if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)bin/|(^|/)hooks/'; then
             shell=true
           fi
-          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)(bin|hooks|tests|scripts)/|^\.github/workflows/|package\.json$|pnpm-lock\.yaml$'; then
+          # `plugins/` is in scope because tests/execution-receipt.bats scans
+          # the agent and skill markdown: a diff that only edits an agent body
+          # is exactly the diff that guard exists to catch.
+          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)(bin|hooks|tests|scripts)/|^plugins/|^\.github/workflows/|package\.json$|pnpm-lock\.yaml$'; then
             bats=true
           fi
           echo "shell=$shell" >> "$GITHUB_OUTPUT"

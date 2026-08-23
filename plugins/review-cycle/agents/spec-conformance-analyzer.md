@@ -46,7 +46,22 @@ A claim about what a command does cites a run of that command. A manifest, confi
 
 Two outcomes, in order, first match wins. If the run could have happened here given more time, the finding keeps its place in its bucket, labeled inferred. Only when no run was possible at all and no authoritative documentation settles it does the claim leave the buckets — say so in the verdict line as an open question about the requirement, rather than asserting a conformance gap you could not exercise.
 
+**Open your report with the execution receipt**, above anything your Output section specifies:
+
+```text
+execution: <the heaviest verification that SUCCEEDED — build, test suite, typecheck, or the repro your findings rest on> — <its first output line> | none
+attempted-but-failed: <every verification that would not run, each with the first line of its failure; and the project's own build or test suite when you did not attempt it at all> | none
+```
+
+**Both lines are required**, and each must say `none` rather than be omitted. An omitted line grades your leg `unknown`, which tells a reader nothing about what you verified — write the honest `none` instead.
+
+`execution:` names what worked, not what you tried: if your build failed but the unit tests passed, the tests go on line one and the build on line two. An unattempted check is not a passed one — if you never ran this project's own suite, that belongs on line two too. Orientation commands — `git status`, `ls`, `cat`, `find`, `grep` — never belong on line one: they succeed on a machine where nothing else does, so naming one is graded the same as `none`. Report a compound command whole; what matters is the verification it shows succeeding, not the other tokens in it.
+
+Both land the same label when nothing succeeded, so the distinction lives in what you write on line two: name the command and its failure, so a reader can tell a broken build from one you never ran.
+
 ## Output
+
+Emit the execution receipt above this, as the first two lines of your report.
 
 ```text
 ## Spec conformance

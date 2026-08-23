@@ -59,11 +59,26 @@ A claim about what a command does cites a run of that command. A manifest, confi
 
 Green tests are the weakest form of this evidence, because a suite that does not constrain the code you are simplifying stays green while you break it. Where you claim a restructuring preserves behavior, say what you ran and what would have caught you if it did not — and if nothing would have, that is the finding: the missing test, not the refactor.
 
+**Open your report with the execution receipt**, above anything your Output section specifies:
+
+```text
+execution: <the heaviest verification that SUCCEEDED — build, test suite, typecheck, or the repro your findings rest on> — <its first output line> | none
+attempted-but-failed: <every verification that would not run, each with the first line of its failure; and the project's own build or test suite when you did not attempt it at all> | none
+```
+
+**Both lines are required**, and each must say `none` rather than be omitted. An omitted line grades your leg `unknown`, which tells a reader nothing about what you verified — write the honest `none` instead.
+
+`execution:` names what worked, not what you tried: if your build failed but the unit tests passed, the tests go on line one and the build on line two. An unattempted check is not a passed one — if you never ran this project's own suite, that belongs on line two too. Orientation commands — `git status`, `ls`, `cat`, `find`, `grep` — never belong on line one: they succeed on a machine where nothing else does, so naming one is graded the same as `none`. Report a compound command whole; what matters is the verification it shows succeeding, not the other tokens in it.
+
+Both land the same label when nothing succeeded, so the distinction lives in what you write on line two: name the command and its failure, so a reader can tell a broken build from one you never ran.
+
 **Containment.** Demonstrating that a restructuring preserves behavior means applying it, and it is never applied to the review target. Copy the tree to a scratch directory outside the repository, restructure and run there, and delete the copy when you finish — never edit, stage, or commit in the target. If a claim cannot be demonstrated inside a copy, tag it speculative rather than reaching into the target to prove it.
 
 Nothing checks you, and the reason differs by caller. Inside `/review-cycle:review` you run in the post-loop phase, which the cycle's integrity snapshot does not cover, and the sentinel is marked immediately after you report — so a file you leave changed is marked reviewed without anyone seeing it. In `/review-cycle:review-pr` you run in the single fan-out and there is no snapshot and no sentinel at all. Invoked directly, there is neither. Assume nothing checks you in any of them.
 
 ## Output
+
+Emit the execution receipt above this, as the first two lines of your report.
 
 For each finding: `file:line` — a one-line statement of the structural problem — the strongest remedy — a confidence tag (high / medium / speculative). Be direct and specific; name the code-judo move rather than gesturing at "better architecture."
 

@@ -99,6 +99,8 @@ Record `<WT>` in the report draft immediately, then mark a review as in progress
 
 Carry the evidence rule into the brief, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. It matters more here than in the working-tree cycle — the PR head sits in a disposable worktree whose dependencies may not be installed, so a reviewer that cannot build has every reason to reason from manifests and no fix loop downstream to catch it.
 
+Ask for the execution receipt in the same breath: every leg opens its report with two lines — `execution:` naming the heaviest verification that *succeeded* against this checkout with its first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. The subagents carry this in their bodies; Codex does not, so the brief is the only channel that reaches it.
+
 **The review scope is the merge-base diff**: `git diff <REMOTE>/<baseRefName>...HEAD` (three dots), matching what GitHub shows as the PR diff. A two-dot diff against the base *tip* would also show the inverse of everything merged since the PR branched, and reviewers would flag files the PR never touched.
 
 For the Codex flag, **reshape the brief**: the `-c` value is parsed as TOML and passes through one layer of shell quoting, so flatten it to a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare.
@@ -152,7 +154,25 @@ Collect findings from every reviewer. Attribute each to its source, group by fil
 
 **The coverage floor is the point of this phase.** Every dispatched reviewer appears in the report with an outcome: `reported`, `skipped (<reason>)`, `failed (<error>)`, or `dropped (stalled, nudged once)`. "No findings" and "nobody looked" must never read the same: if any dispatched leg is `failed` or `dropped`, the verdict says `partial coverage` and never `clean`, regardless of how few findings arrived.
 
-**Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file.
+**Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. This is deliberately broader than the working-tree cycle, and the difference is the class of claim rather than the leg: there, demotion covers claims about external tool behavior; here it covers any finding whose only support is a declaration, because the finding leaves as a public comment with no fix loop and no author turn behind it. Neither is gated on the leg's grade. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file.
+
+**Grade each leg that reported, from its two receipt lines.**
+
+A *verification* is a command that exercises this project — its build, test suite, typecheck, linter, schema or manifest validator, or a repro the leg's findings rest on. Reading commands (`git status`, `git diff`, `ls`, `cat`, `find`, `grep`, `rg`) are not verifications: they succeed on a machine where nothing else does.
+
+If either receipt line is absent, or present with nothing after it, the leg is `unknown`. Otherwise read two facts off the receipt:
+
+| line one names a verification that succeeded | `attempted-but-failed:` | label |
+| --- | --- | --- |
+| yes | `none` | `executed` |
+| yes | anything else | `partial (<what was unreachable>)` |
+| no | — | `static-analysis-only` |
+
+`execution: none`, a line one naming no verification, and one naming a verification that failed are the same row — a receipt quoting a compile error is `static-analysis-only`, never `executed`. A category the leg says it could not exercise at all also makes it `partial`; a claim it labelled `inferred` does not, since that reflects a budget spent elsewhere and naming what you inferred must never cost the grade a silent leg keeps.
+
+A leg that was skipped, failed, or dropped carries no execution label — its coverage outcome already says why, and calling it `unknown` would blur "we cannot tell what it did" into "it never ran".
+
+The receipt narrows what a leg can quietly omit; it does not verify. Nothing checks the quoted output against a real run, and `partial` rests on the leg volunteering what it could not reach — which matters more here than in the working-tree cycle, since a finding leaves this skill as a public comment with no fix loop behind it. Demote one narrow class to questions, keyed on the claim's evidence rather than the leg's grade: a claim about how an external tool, framework, or service behaves whose only support is a manifest, config file, lockfile, or CI file. A leg that got one unrelated check to pass is not thereby a witness to this one. A `partial` leg's claims about the category it named unreachable are demoted too. An `unknown` leg is not demoted for the missing receipt alone — a formatting miss is not evidence of incapacity — but omission must not beat candour: if anything else in the report says the leg could not run the checks, demote it exactly as `static-analysis-only`. Claims about what the changed code itself does are read from the source and stand, whatever the leg could run.
 
 ## Phase 5: Report
 
@@ -167,6 +187,7 @@ Coverage:
     auth: confirmed | no stored session | unknown (probe unsupported)
   code-reviewer — reported | dropped (stalled, nudged once)
   <each other dispatched reviewer — reported | skipped (<reason>) | failed | dropped>
+Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
 
 Findings: <count>
   - file:line — severity — issue — suggested fix (source)
