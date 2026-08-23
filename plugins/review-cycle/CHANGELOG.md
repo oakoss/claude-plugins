@@ -6,6 +6,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 
 
+
+## 0.15.0
+
+<sub>2026-08-23</sub>
+
+- [#25](https://github.com/oakoss/claude-plugins/pull/25)  *(minor)*
+  `review-sentinel mark` now refuses with exit 3 unless a review cycle is actually running, and the unguarded write moves to a new `accept-state` verb. The old shared verb let any agent declare its own work reviewed: `mark` in one Bash call and `git commit` in the next sailed through, because the PreToolUse gate exits on any command containing no `git commit` and so never saw the pair. `mark` now requires `.claude/.review-in-progress`, which only `cycle-start` writes and only a real cycle runs. The test is presence rather than freshness, but the Stop gate deletes markers past its 60-minute TTL, so a cycle that outruns it reaches Phase 8 with no marker and exits 3; the summary should say so rather than the cycle re-running `cycle-start` to recreate its own evidence. The commit gate's chained pass-through accepts `accept-state && git commit` only — the guarded verb cannot ride the one path that skips the sentinel check. `/review-cycle:review-pr` gets its own marker via new `pr-cycle-start` and `pr-cycle-end` verbs: it reviews a PR head in a throwaway worktree and never reads the working tree, so its marker holds the Stop gate open without licensing a `mark` over local changes nothing reviewed. Re-run `/review-cycle:init`, or add `.claude/.review-pr-in-progress` to `.gitignore` yourself.
+
+  SessionStart now revokes an in-progress marker once it passes the same 60-minute TTL the Stop gate applies, on every startup path including the legacy-sentinel migration. Without that, a session that died mid-review left a marker that licensed the next `mark` over exactly the unreviewed work the gate exists for — the re-seed that used to clear it is skipped in that case by design. The revocation is deliberately stale-only, and `seed` no longer retires the marker at all: `startup` also fires when a second session opens in a repo where the first is mid-cycle, and deleting a live cycle's fresh marker would strand its Phase 8. Retiring a marker now belongs to the verbs that conclude a cycle — `mark`, `accept-state`, and `cycle-end` — plus the two TTL owners, the Stop gate and SessionStart.
+
+  What you do differently: `/review-cycle:accept` and any script that wrote the sentinel by hand must call `accept-state` instead of `mark`. `/review-cycle:review` is unchanged, since Phase 3 already runs `cycle-start`. This raises the bar rather than closing it. `cycle-start` is itself unguarded, so `cycle-start` followed by `mark` still clears the gate, as does `accept-state`. What changes is that the shortest path no longer looks like routine plumbing: `accept-state` names itself in a transcript, and a cycle that declares itself started and then marks without reviewing is a claim someone can check.
+- [#27](https://github.com/oakoss/claude-plugins/pull/27)  *(minor)*
+  A git failure while computing the state hash now blocks the commit instead of being mistaken for "nothing differs". Every git call in `review-sentinel`'s hash stream reports failure explicitly, and `check`, `match`, and `status` treat that as drift.
+
+  The failure that mattered: the path enumeration runs inside a nested command substitution, so its exit status never reached the surrounding pipeline's status check. A failure there produced an empty diff stream, and an empty stream hashes to `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` — the exact value a mark taken on a clean tree stores. The gate reported `verdict: match — this exact state was marked reviewed` on a tree holding unreviewed content.
+
+  Two smaller holes closed alongside it. A per-path `git diff` failure previously blocked or was waved through depending on where the failing path sorted, because nothing guarded the loop and the last iteration's status decided; an unreadable file was a coin flip, not a policy. And the stream is now generated into a file and hashed separately: as a single pipeline, `pipefail` reports the rightmost nonzero status, so a concurrent `shasum` or `cut` failure overwrote the git failure and it read as an ordinary tool error, which hooks fail open on.
+
+  Reproduced in tests four ways — an unreadable file, a shimmed enumeration, a failing `diff.external` driver, and a git failure concurrent with a hash-tool failure — each verified to fail against the previous release.
+
+  The block also tells you what to do about it. The sentinel now reports which operation failed and on which path, with git's own message attached, and the commit gate carries that into its deny reason instead of the generic drift text:
+
+  ```text
+  Commit blocked: the review gate could not read the working tree, so it cannot confirm
+  this state was reviewed. review-sentinel: git failed while diffing locked.txt (working
+  tree) — fatal: cannot hash locked.txt (anchor 3b00f9f8…); treating as drift. Fix the
+  underlying problem (most often an unreadable file — check its permissions) and retry.
+  /review-cycle:accept will NOT clear this: it fails on the same fault.
+  ```
+
+  What you do differently: if your repository can make git fail mid-diff, expect a block where you previously got a coin flip or silence, naming the file. One limitation to know about: `/review-cycle:accept` cannot clear this state, because the write verbs fail on the same fault. Fix the file, or use a gate opt-out. Ordinary drift is unaffected and still gets the ordinary message.
+- [#30](https://github.com/oakoss/claude-plugins/pull/30)  *(minor)*
+  The review cycle's Phase 6 now has a third fix classification between mechanical and substantive: the verified message fix. A fix whose entire diff is human-facing message text (plus at most a small tested pure helper feeding it) no longer forces a full reviewer re-fan-out — instead the fixing agent must reproduce the state the message addresses, run the printed remedy verbatim, and confirm it clears, recording the reproduction in the cycle summary. Message claims the local environment cannot exercise (another OS or shell, a remote service) get one Codex-only low-effort pass per cycle instead of the full fan-out. Machine-readable output (`--json`, exit codes, parseable formats), check verdicts, and unverified remedies still classify substantive. On the cycle that motivated this change, four full iterations would have been two plus one Codex-only pass; nothing changes for logic fixes.
+- [#32](https://github.com/oakoss/claude-plugins/pull/32)  *(minor)*
+  Every leg of the review cycle's Phase 3 fan-out — the four fix-loop agents and the Codex leg — now carries one falsifiable question. Phase 3 composes a specific claim per leg before spawning ("which of these new assertions still pass when the code under them is broken?" rather than "review this") and the spawn prompt requires the answer to cite what was run. The four agents also gained the technique that answers it: mutation testing in the test analyzer, fault injection in the silent-failure hunter, differential comparison and oracle sweeps in the code reviewer, and constructing the invalid value in the type-design analyzer. These perturb the system to find defects nobody suspected, which is a different job from the existing empirical-verification rule that settles a claim you already suspect.
+
+  All four techniques require editing code, which the standing rule forbids in the review target. Each agent carries a short behavioral rule — perturb only a copy outside the repository, which needs no version control — and the cycle verifies the target itself rather than asking each agent to vouch for its own cleanliness. Phase 3 snapshots `review-sentinel current-hash` plus `git config --local --list` before spawning and Phase 4 compares before aggregating; Phase 8 refuses to mark a tree that came back contaminated. The hash is what makes this work: an empty commit leaves a `git status` comparison byte-identical and moves only the anchor line, so a status-based check cannot detect the commit clause of the rule it enforces. Phase 7 runs after the comparison and includes an agent that edits by design, so it is not covered — the summary says so rather than implying otherwise.
+
+  `/review-cycle:review-pr` changes too, though it keeps its existing prompts: its report-only instruction now names the worktree and the main checkout specifically, so it forbids edits to the code under review without forbidding the scratch work these techniques need. Extending falsifiable questions to that path is tracked separately.
+
+  Phase 9 gained two lines, so the mechanism can be judged by its own standard: how many questions were asked versus answered by measurement, and whether the target came back unchanged.
+- [#34](https://github.com/oakoss/claude-plugins/pull/34)  *(minor)*
+  Require a run, not a manifest, behind any claim about what a command does.
+
+  A new evidence policy joins the comment and fix-vs-defer policies, and binds everyone in the cycle rather than only the author applying fixes. A manifest, config file, lockfile, script entry, CI workflow, or flag in documentation says what someone configured or intended; it does not say what the tool does with it. A real finding in the field report was reasoned from a manifest and was wrong: `doctest = false` does not stop `cargo test --doc` from running the doctests. Cargo compiles the crate and runs them anyway; the flag only removes them from plain `cargo test`.
+
+  Three rules follow: name the command and quote what it printed rather than the file you read it from; treat a run you did not observe as no run at all, since a stale file, a redirect the shell refused, a cached artifact, and a skipped job all look like success from a distance; and when the environment cannot exercise a claim, label it inferred or verify it against authoritative documentation instead of stating it flatly. A finding that rests entirely on behavior nobody could exercise is withdrawn and raised as a question.
+
+  The policy reaches every leg. The seven bundled agents carry it in their bodies, so it applies when they are invoked directly as well as inside the cycle. Codex has no body, so both `/review-cycle:review` and `/review-cycle:review-pr` now carry the rule into the intent brief that reaches it — and `review-pr` says why it matters more there, since the PR head sits in a disposable worktree whose dependencies may not be installed and there is no fix loop downstream to catch a manifest-only claim.
+
+  Two agents get the rule in the form their job takes. The maintainability auditor is told that green tests are the weakest form of this evidence, because a suite that does not constrain the code being simplified stays green while the simplification breaks it — so a behavior-preserving claim must say what would have caught it, and when nothing would have, the missing test is the finding. The cleanup agent is told that tightening prose must never make it false, and that a factual correction is reported separately from a wording change, because the author needs to know a claim was wrong rather than merely shorter.
+
+  `/review-cycle:init` now installs all three policies and appends only the ones a `CLAUDE.md` is missing, so re-running it after this upgrade adds the new policy without duplicating the two already there.
+- [#33](https://github.com/oakoss/claude-plugins/pull/33)  *(patch)*
+  Scope the commit gate to the project and stop matching text the command carries.
+
+  The gate blocked the commit verb in any repository a session touched, not only the project it guards. That collided with the reviewer techniques in this same release: agents building a scratch fixture with real history — a copy at the base revision to diff against — were blocked while building it, and worked around it instead. The gate now stands aside only when the command *proves* the commit lands elsewhere, and gates the project whenever it cannot tell.
+
+  Proving it means reading a leading `cd` chain and the commit's own `-C`, then resolving the result through its nearest existing ancestor, so a fixture that does not exist when the hook runs still resolves — while a not-yet-created subdirectory *of the project* still resolves to the project. `cd` hops compose the way bash composes them when the command is `&&`-joined throughout, or plainly sequenced with every directory already on disk.
+
+  Everything else gates. A hop inside a subshell, a backtick, or an `if` branch may never run; a second commit in the same command lands somewhere the router never read, since everything it reads stops at the first; a path holding a variable, a glob, a `cd` option, a `~+`, a `..` segment, or only partial quoting was never expanded; `--git-dir`, `GIT_DIR`, and `CDPATH` move git or `cd` off the computed path; a payload cwd that is missing or relative names nothing. Both the payload cwd's repository and the one `CLAUDE_PROJECT_DIR` names count as the project, and an unresolvable target is checked against every one of them, so a stale `CLAUDE_PROJECT_DIR` can no longer switch the gate off where you are working.
+
+  Detection runs on the command skeleton rather than the raw text. Quoted arguments, comments, and heredoc bodies are data, so an issue description quoting the phrase or a heredoc writing a setup script no longer counts as an invocation. Command substitutions stay code wherever bash expands them, double quotes and unquoted heredoc bodies included; a quoted command handed to `bash -c`, a cluster like `bash -lc`, `eval`, `ssh`, a heredoc into a shell, or a pipe into one still blocks, as does a path-qualified `/usr/bin/git`. `git commit-tree` and the other hyphenated plumbing verbs are no longer treated as the gated verb — they write an object and move no ref.
+
+  Failures are no longer read as answers. A `grep` that errored, an `awk` that died or produced nothing, and a lexer that lost track of quoting each mean the text was not read, and unread text blocks rather than passes.
+
+  Two limits are deliberate. Commands over 32 KB skip the skeleton and let the raw text decide, because the lexer is quadratic and a hook that takes seconds is its own defect. And the shapes that hand a string to a shell are a named list, so a runner it does not cover — `python3 -c`, a task runner — is missed, and the commit it hides passes; the gate has never claimed to be an adversarial boundary.
+
+  If your project relied on the gate firing in a second repository under the same session, set `CLAUDE_PROJECT_DIR` to that repository, or opt the project out with `{"disabled": true}` in `.claude/review-cycle.json`.
+
 ## 0.14.0
 
 <sub>2026-08-18</sub>
