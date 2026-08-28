@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 
 
+
+## 0.16.2
+
+<sub>2026-08-28</sub>
+
+- [#42](https://github.com/oakoss/claude-plugins/pull/42)  *(patch)*
+  Stopped the comment-density hook re-firing on comment-only edits.
+
+  The density heuristic counts comment lines in the text an edit writes, so an edit that rewrites an existing comment block — usually to fix the hook's own earlier finding — measured near 100% comments and fired again, twice in a row in the observed case. The check now skips an edit only when the replaced text and the written text are both entirely comment lines: rewriting comments is comment-editing, and density carries no signal there, while a one-line comment anchor no longer waves a large narrated block through. Whitespace-only lines inside a comment block do not break the skip; a MultiEdit insertion (empty old_string) disqualifies it; edits that touch any code line still fire; Write payloads are unchanged; and the pattern greps still scan the whole file either way.
+- [#42](https://github.com/oakoss/claude-plugins/pull/42)  *(patch)*
+  Tier agent and skill markdown as runtime, not prose.
+
+  The light-tier rule classified every .md path as prose, so a diff rewriting agent bodies or SKILL.md — the plugin's actual behavior — got the reduced fan-out and a 2-iteration cap while the version-bump gate correctly called the same paths runtime. Markdown a tool loads as instructions now tiers as code wherever it lives: agent bodies, SKILL.md, commands, hook-owned markdown, reference/ files a skill loads, and instruction files like AGENTS.md and CLAUDE.md — so the rule reaches .claude/agents in any repo, not only plugin directories. Under a plugin directory that leaves only README, LICENSE, CHANGELOG, NOTICE, and tests/ as prose, the same runtime split the version-bump gate draws. Two downstream consequences of the same root cause are fixed with it: Phase 7 now sequences cleanup after the report-only reviewers when the diff contains runtime markdown (a rewording mid-read would change what those legs are evaluating), and the cleanup agent's exclusion list names templates, decision tables, thresholds, and rule definitions in runtime markdown as logic it must not de-slopify.
+
 ## 0.16.1
 
 <sub>2026-08-28</sub>
