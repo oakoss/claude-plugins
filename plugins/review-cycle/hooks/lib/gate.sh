@@ -107,7 +107,13 @@ gate_should_run() {
   return 0
 }
 
-# How long a .review-in-progress marker is honored: shared by the Stop gate
+# Machine-written state directory; mirrors bin/review-sentinel's STATE_DIR,
+# which cannot source this lib — change both together. Consumed by the
+# sourcing hooks; shellcheck can't see them.
+# shellcheck disable=SC2034
+GATE_STATE_DIR=".claude/review-cycle"
+
+# How long an in-progress marker is honored: shared by the Stop gate
 # (which lets turns end while it is fresh) and SessionStart (which revokes it
 # once it is not). bin/review-sentinel is a standalone binary and cannot source
 # this lib, so its status output hardcodes the same number — change both.

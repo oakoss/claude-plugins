@@ -54,7 +54,7 @@ One-time setup helper. Run after installing the plugin to:
 
 - Check for the optional Codex CLI, verify `multi_agent = true` in `~/.codex/config.toml`, and report stored-login state (advisory — auth doesn't gate the leg)
 - Optionally append the comment, fix-vs-defer, and evidence policies to your global or project `CLAUDE.md`
-- Update project `.gitignore` to exclude `.claude/.review-mark` (auto-managed state)
+- Update project `.gitignore` to exclude `.claude/review-cycle/` (auto-managed state)
 
 Idempotent — safe to run multiple times. Replaces the manual setup steps below.
 
@@ -63,6 +63,8 @@ Idempotent — safe to run multiple times. Replaces the manual setup steps below
 The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until clean, surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and updates the sentinel.
 
 The apparatus scales to the diff: light diffs (docs-only, or ~25 changed lines or fewer of anything) get the code reviewer with a 2-iteration cap; everything else gets the full conditional fan-out (max 4 iterations). The Codex leg joins either tier when it's available. Cleanup is a separate, size-only decision — inline under ~150 changed lines, the cleanup agent above that, whatever the tier. Iterations whose fixes were mechanical are verified by self-check against the findings list instead of a fresh reviewer fan-out; message-only fixes likewise skip the fan-out once the agent has reproduced the state the message addresses and confirmed the printed remedy clears it. Claims local verification can't reach (another OS or shell, a remote service) get at most one Codex-only reduced-effort pass per cycle. A reviewer that stalls is nudged once, then dropped and named in the summary rather than holding the cycle hostage. Every reviewer opens its report with a two-line receipt — the heaviest verification that succeeded, then every verification that did not succeed plus any project check it never attempted — and the summary grades each leg from both lines as `executed`, `partial` with the part it couldn't reach, `static-analysis-only`, or `unknown` when a line is missing. A leg that could not run the project's checks keeps the findings it saw by reading; claims about an external tool's behavior drawn only from a manifest or config become questions instead of fixes, wherever they come from — the label says whether the leg could have checked, not whether the rule applies. A leg that omitted the receipt is labelled but not demoted for that alone, unless something else in its report shows it could not run the checks — a formatting miss should not cost you a finding, but omitting one should not beat admitting it.
+
+Since 0.16, a completed review also stores a git tree of the exact reviewed content. The next cycle diffs against it and scopes itself to the unreviewed delta — a 20-line follow-up to a converged review gets a small review at the delta's tier, not a full re-run of the whole diff, and the summary names which scope ran. The first review, or one after a pre-0.16 mark, has no stored tree and reviews the full diff as before. The gates use the same tree: committing part of a reviewed file no longer re-arms them (content equality replaces hunk-sensitive hashing where a tree is stored — a single check measured 1.47s to 0.03s on a 100-dirty-file fixture), while staging content that is in neither the working tree nor HEAD routes to the precise hash comparison — staged unreviewed content still drifts, and a partial stage the mark saw still passes.
 
 Arguments are natural language — no flags:
 
@@ -85,7 +87,7 @@ Marks the current uncommitted state as reviewed by updating the review sentinel.
 
 Two subcommands write the sentinel, and they are not interchangeable:
 
-- `review-sentinel mark` is what the review cycle runs at Phase 8. It refuses with exit 3 unless `.claude/.review-in-progress` exists, and only `cycle-start` — the first step of a real cycle — writes that marker. So `mark` cannot be used without first declaring a cycle, and it is not a shape the commit gate's chained pass-through accepts. `/review-cycle:review-pr` deliberately uses a *different* marker (`pr-cycle-start`), because it reviews a PR head in a throwaway worktree and never looks at your working tree — its marker holds the Stop gate open without vouching for local changes. The Stop gate and SessionStart both delete markers older than 60 minutes, so a cycle that outruns the TTL also lands on exit 3.
+- `review-sentinel mark` is what the review cycle runs at Phase 8. It refuses with exit 3 unless `.claude/review-cycle/in-progress` exists, and only `cycle-start` — the first step of a real cycle — writes that marker. So `mark` cannot be used without first declaring a cycle, and it is not a shape the commit gate's chained pass-through accepts. `/review-cycle:review-pr` deliberately uses a *different* marker (`pr-cycle-start`), because it reviews a PR head in a throwaway worktree and never looks at your working tree — its marker holds the Stop gate open without vouching for local changes. The Stop gate and SessionStart both delete markers older than 60 minutes, so a cycle that outruns the TTL also lands on exit 3.
 - `review-sentinel accept-state` is what `/review-cycle:accept` runs. It has no precondition. It is the escape hatch for a human who reviewed the changes themselves.
 
 The split exists because a hook that trusts a file the gated party can write cannot tell a review from a claim of one. The two used to be one verb, so the routine-looking `mark` cleared the gate by itself — and running it in one Bash call, then `git commit` in the next, sidestepped the gate entirely, since the PreToolUse matcher only ever sees one command at a time.
@@ -123,7 +125,7 @@ Side effect: dependency bumps or IDE edits between Claude sessions (after a clea
 
 Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:review`. Fail-open on any error. Two release valves keep the block from becoming ceremony:
 
-- **A running cycle doesn't re-trigger the gate.** The review cycle writes `.claude/.review-in-progress` at fan-out, letting turns end while background reviewers run (their completion notifications re-wake the agent — no sleep-loop workarounds). The marker is retired by the verbs that conclude a cycle — `mark`, `accept-state`, and `cycle-end` — and a stale one from a crashed cycle (over 60 minutes old) is removed and ignored by both the Stop gate and the next SessionStart. `/review-cycle:review-pr` writes `.claude/.review-pr-in-progress` instead, which the Stop gate honors identically but the sentinel does not accept as evidence.
+- **A running cycle doesn't re-trigger the gate.** The review cycle writes `.claude/review-cycle/in-progress` at fan-out, letting turns end while background reviewers run (their completion notifications re-wake the agent — no sleep-loop workarounds). The marker is retired by the verbs that conclude a cycle — `mark`, `accept-state`, and `cycle-end` — and a stale one from a crashed cycle (over 60 minutes old) is removed and ignored by both the Stop gate and the next SessionStart. `/review-cycle:review-pr` writes `.claude/review-cycle/pr-in-progress` instead, which the Stop gate honors identically but the sentinel does not accept as evidence.
 - **Blocks once per drift state.** The gate records the state hash it blocked on; a later stop on the identical state passes with a warning instead of re-blocking, so a user-directed "keep going, review at the end" batches naturally instead of hard-looping. This relaxes only *when* review happens — the commit gate still makes review non-optional before any commit.
 
 ### PreToolUse (Bash matcher)
@@ -245,7 +247,7 @@ The gate skips paths that are state or preferences rather than reviewable code, 
 
 - Agent task trackers: `.beads/`, `.trekker/`
 - IDE state: `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`
-- Gate's own state: `.claude/.review-mark`, `.claude/.review-in-progress`, `.claude/.review-pr-in-progress`, `.claude/.review-stop-block`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
+- Gate's own state: `.claude/review-cycle/mark`, `.claude/review-cycle/in-progress`, `.claude/review-cycle/pr-in-progress`, `.claude/review-cycle/stop-block`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
 
 These directories are excluded at any depth, so a monorepo `subproject/.beads/` is skipped too. `/review-cycle:review` still works manually against excluded paths if you want a pass.
 
@@ -271,13 +273,10 @@ Remove the file to re-enable.
 
 ### Gitignore the sentinel
 
-The sentinel and the Stop gate's markers are per-project state, not source. Add to your project's `.gitignore` (`/review-cycle:init` does this, sourcing the list from `review-sentinel paths`; installs that ran init before 0.10.0 should re-run it once to pick up the marker paths):
+The sentinel and the Stop gate's markers are per-project state, not source. Add to your project's `.gitignore` (`/review-cycle:init` does this, sourcing the list from `review-sentinel paths`; installs that ran init before 0.16.0 should re-run it once to pick up the state directory — the old per-file entries are harmless leftovers):
 
 ```text
-.claude/.review-mark
-.claude/.review-in-progress
-.claude/.review-pr-in-progress
-.claude/.review-stop-block
+.claude/review-cycle/
 ```
 
 The config file (`.claude/review-cycle.json`) is meant to be committed so the team gets consistent gate behavior. Don't gitignore it.
@@ -285,14 +284,16 @@ The config file (`.claude/review-cycle.json`) is meant to be committed so the te
 ## State files
 
 ```text
-${PROJECT}/.claude/.review-mark           two-line sentinel (anchor + sha256)
-${PROJECT}/.claude/review-cycle.json      per-project config (disabled, ignore)
-${PROJECT}/.claude/.review-in-progress    cycle-running marker (Stop gate passes while fresh)
-${PROJECT}/.claude/.review-pr-in-progress review-pr marker (Stop gate only; never licenses mark)
-${PROJECT}/.claude/.review-stop-block     state hash the Stop gate last blocked on
-${PROJECT}/.claude/.no-review-gate        legacy opt-out marker (still honored)
-~/.claude/.disable-review-gate            global kill-switch (user-touched)
+${PROJECT}/.claude/review-cycle/mark            sentinel (anchor + sha256, plus a tree line since 0.16)
+${PROJECT}/.claude/review-cycle/in-progress     cycle-running marker (Stop gate passes while fresh)
+${PROJECT}/.claude/review-cycle/pr-in-progress  review-pr marker (Stop gate only; never licenses mark)
+${PROJECT}/.claude/review-cycle/stop-block      state hash the Stop gate last blocked on
+${PROJECT}/.claude/review-cycle.json            per-project config (disabled, ignore) — committed, not state
+${PROJECT}/.claude/.no-review-gate              legacy opt-out marker (still honored)
+~/.claude/.disable-review-gate                  global kill-switch (user-touched)
 ```
+
+Pre-0.16 installs kept these as loose dotfiles directly under `.claude/`; the SessionStart hook moves them into `.claude/review-cycle/` once, on the first startup after upgrading. If hooks never fire (disabled, or a host without them), the gate sees a missing sentinel at the new path and blocks once — one `/review-cycle:review` or `/review-cycle:accept` re-establishes it. The reviewed-tree snapshot the sentinel's `tree:` line names is kept alive by a per-worktree ref under `refs/review-cycle/trees/`, which no git porcelain lists (linked worktrees each keep their own; ordinary pushes never carry it). Comparing trees means the gate writes unreferenced blobs into `.git/objects` as you work — growth is bounded by content you wrote, and git's regular gc expires them.
 
 ## Troubleshooting
 
@@ -303,7 +304,7 @@ Run `/reload-plugins`. If still nothing, check `claude --debug` for hook registr
 Touch the global kill-switch immediately: `touch ~/.claude/.disable-review-gate`. Then file an issue with hook output. The sentinel-based gate should prevent this, but the kill-switch is the safety net.
 
 **Stop hook fires on every turn even after running the cycle.**
-The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/.review-mark` exists and contains a `sha256:<hex>` line. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
+The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/review-cycle/mark` exists and contains a `sha256:<hex>` line. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
 
 **Commit blocked even though the changes were just reviewed.**
 The gate compares the current state against the last mark; a block after a real review means the state changed *after* marking, not that the review didn't count. Diagnose first:

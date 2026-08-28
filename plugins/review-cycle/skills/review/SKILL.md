@@ -110,7 +110,15 @@ If empty, report "nothing to review" and stop.
 
 The tier decides fan-out, iteration cap, and whether Codex's effort is capped. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
 
-The tier is decided once, here, and named in the final summary — do not re-derive it per phase.
+**Scope to the unreviewed delta when one is known.** Before settling the tier, run:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" delta
+```
+
+Exit 0 prints a name-status list, `--`, and a `delta: N files, +A -D` summary — exactly what changed since the last marked tree, untracked files included, unaffected by commits. Decide the tier from THAT (light when the delta is prose-only or ~25 lines or fewer), hand reviewers the delta's files as the changed-file list, and say in the brief that the rest of the diff matches the last reviewed state. Exit 3 means no marked tree exists (first review, or a pre-0.16 mark): scope to the full diff as above. Any other nonzero: full diff, and name the error in the summary. The delta is why a 20-line follow-up to a converged review gets a small review instead of a full re-run.
+
+The tier and scope are decided once, here, and named in the final summary — do not re-derive them per phase.
 
 **Probe the Codex leg.** Codex is one of two review legs, not a prerequisite. Where it is available the cycle uses it; where it isn't (CI, a teammate without it) the cycle runs Claude-only rather than stopping.
 
@@ -424,6 +432,7 @@ Print a structured summary:
 Review cycle complete.
 
 Tier: light | full
+Scope: delta (N files, +A -D vs the marked tree) | full (<no marked tree | delta error: reason>)
 Iterations: N / max
 Falsifiable questions: N asked / N answered by measurement / N fell back to reading
 Factual corrections (cleanup): N — <the claim that was wrong, and what the run showed> | none

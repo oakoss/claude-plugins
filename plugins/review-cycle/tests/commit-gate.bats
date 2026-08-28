@@ -227,7 +227,7 @@ git commit -am 'msg'"
   make_drift
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" mark
   [ "$status" -eq 3 ]
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
   run run_hook "git commit -am 'msg'"
   assert_deny
 }

@@ -11,8 +11,8 @@ run_stop_gate() {
   CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$PLUGIN_ROOT/hooks/stop-gate.sh" <<< "${1:-\{\}}"
 }
 
-MARKER=".claude/.review-in-progress"
-RECORD=".claude/.review-stop-block"
+MARKER=".claude/review-cycle/in-progress"
+RECORD=".claude/review-cycle/stop-block"
 
 # --- sentinel subcommands ---
 
@@ -54,19 +54,18 @@ RECORD=".claude/.review-stop-block"
 }
 
 @test "cycle-start failure leaves no marker behind" {
-  mkdir -p "$TEST_REPO/.claude"
-  chmod 555 "$TEST_REPO/.claude"
+  chmod 555 "$TEST_REPO/.claude/review-cycle"
   run "$REVIEW_SENTINEL" cycle-start
-  chmod 755 "$TEST_REPO/.claude"
+  chmod 755 "$TEST_REPO/.claude/review-cycle"
   [ "$status" -eq 2 ]
   [ ! -f "$TEST_REPO/$MARKER" ]
 }
 
 @test "cycle-end reports failure when the marker cannot be removed" {
   "$REVIEW_SENTINEL" cycle-start
-  chmod 555 "$TEST_REPO/.claude"
+  chmod 555 "$TEST_REPO/.claude/review-cycle"
   run "$REVIEW_SENTINEL" cycle-end
-  chmod 755 "$TEST_REPO/.claude"
+  chmod 755 "$TEST_REPO/.claude/review-cycle"
   [ "$status" -eq 2 ]
 }
 
@@ -89,11 +88,12 @@ RECORD=".claude/.review-stop-block"
   [ "$status" -eq 0 ]
 }
 
-@test "paths lists the marker and record files" {
+@test "paths covers the marker and record files via the state directory" {
   run "$REVIEW_SENTINEL" paths
   [ "$status" -eq 0 ]
-  assert_contains "$output" "$MARKER"
-  assert_contains "$output" "$RECORD"
+  assert_contains "$output" ".claude/review-cycle/"
+  case "$MARKER" in .claude/review-cycle/*) ;; *) return 1 ;; esac
+  case "$RECORD" in .claude/review-cycle/*) ;; *) return 1 ;; esac
 }
 
 # --- stop-gate: baseline ---
@@ -259,7 +259,7 @@ RECORD=".claude/.review-stop-block"
 @test "pr-cycle-start writes its own marker, not the review marker" {
   run "$REVIEW_SENTINEL" pr-cycle-start
   [ "$status" -eq 0 ]
-  [ -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/pr-in-progress" ]
   [ ! -f "$TEST_REPO/$MARKER" ]
 }
 
@@ -268,7 +268,7 @@ RECORD=".claude/.review-stop-block"
   "$REVIEW_SENTINEL" pr-cycle-start
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 3 ]
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "a fresh review-pr marker still lets the turn end despite drift" {
@@ -282,11 +282,11 @@ RECORD=".claude/.review-stop-block"
 @test "a stale review-pr marker is reaped and the gate blocks" {
   echo "change" > foo.txt
   "$REVIEW_SENTINEL" pr-cycle-start
-  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-pr-in-progress"
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/review-cycle/pr-in-progress"
   run run_stop_gate
   [ "$status" -eq 0 ]
   assert_contains "$output" '"block"'
-  [ ! -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/pr-in-progress" ]
 }
 
 @test "pr-cycle-end removes only the review-pr marker" {
@@ -294,7 +294,7 @@ RECORD=".claude/.review-stop-block"
   "$REVIEW_SENTINEL" pr-cycle-start
   run "$REVIEW_SENTINEL" pr-cycle-end
   [ "$status" -eq 0 ]
-  [ ! -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/pr-in-progress" ]
   [ -f "$TEST_REPO/$MARKER" ]
 }
 
@@ -304,7 +304,7 @@ RECORD=".claude/.review-stop-block"
   run "$REVIEW_SENTINEL" cycle-end
   [ "$status" -eq 0 ]
   [ ! -f "$TEST_REPO/$MARKER" ]
-  [ -f "$TEST_REPO/.claude/.review-pr-in-progress" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/pr-in-progress" ]
 }
 
 @test "the review-pr marker does not drift the sentinel hash" {
@@ -315,7 +315,7 @@ RECORD=".claude/.review-stop-block"
   [ "$status" -eq 0 ]
 }
 
-@test "paths lists the review-pr marker" {
+@test "paths covers the review-pr marker via the state directory" {
   run "$REVIEW_SENTINEL" paths
-  assert_contains "$output" ".claude/.review-pr-in-progress"
+  assert_contains "$output" ".claude/review-cycle/"
 }
