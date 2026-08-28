@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 
 
+
+## 0.17.0
+
+<sub>2026-08-28</sub>
+
+- [#45](https://github.com/oakoss/claude-plugins/pull/45)  *(minor)*
+  A fix that adds a guard is now exercised against valid input too, not only against the case it was written for.
+
+  Testing a new check against the thing it should catch is instinctive; testing it against input that must still pass is not, and only the second finds a guard that rejects correct work. A guard added during one of this plugin's own review cycles caught its intended attack and was verified doing so, then turned out to fire on an accurate sentence describing the very step it protected — which would have made that section unwriteable and the guard the first thing a later author deleted rather than repaired. Phase 6's self-check now requires both directions whenever a fix adds a check, guard, assertion, or validation.
+- [#45](https://github.com/oakoss/claude-plugins/pull/45)  *(minor)*
+  Report-only now means the kind of finding, not the leg that found it.
+
+  The post-loop reviewers were treated as advisory wholesale, so a spec-conformance finding that quoted a requirement and showed the implementation plainly contradicting it had to be surfaced and handed back rather than fixed, and a measured fault in code the cycle had written minutes earlier arrived under the same heading. Both are defects, and treating them as opinions cost a round trip apiece. What those two legs genuinely own is judgment the cycle cannot supply — whether a restructuring is worth its blast radius, whether the scope was right — so the surface-only treatment now applies to proposals and scope questions, while a contradicted spec line or a measured fault goes through the fix-vs-defer policy like any other finding.
+- [#45](https://github.com/oakoss/claude-plugins/pull/45)  *(minor)*
+  Later iterations now tell reviewers what earlier ones already settled.
+
+  Each iteration's legs started with no memory of the passes before them, so they re-raised decisions the cycle had already made — measured twice in one day: a Codex leg re-raised a rule an earlier iteration had deliberately documented, and another re-raised a claim an earlier iteration had rebutted by measurement. Only the operator's recall stopped both from being re-litigated, and re-litigating costs a full leg's effort. From iteration 2 on, every brief now carries a short block naming what was fixed, what was deferred and why, what was rebutted and on what basis — a measurement, the documentation, or a deliberate design decision — and what was examined and left alone on purpose, all stated as settled and not to be re-reported. That last category earns its place: a judgment that something is fine reads as an unmade decision to the next leg, and comes back as a finding. A leg that thinks one is wrong is told to say so with new evidence rather than restate the original finding. The Codex leg gets the block too, since it carries no memory of its own.
+- [#45](https://github.com/oakoss/claude-plugins/pull/45)  *(minor)*
+  Phase 7 now checks a diff's release-note file against the diff.
+
+  A changeset or bump file describes the change in the author's words, and release tooling publishes that text verbatim — so a description written before review is a claim about code that review then went on to alter. Nothing checked it: the evidence policy binds claims about what a command does, while here the claim and the code that settles it are both inside the diff. A description that had drifted this way shipped into a version PR and cost a separate branch, review, merge, and release regeneration to correct, after a cleanup pass reported that its claims matched the code without having compared them. Phase 7 now reads every release-note file in play — those the diff adds or modifies, plus any already staged before the cycle began, since a delta-scoped review narrows the diff — against the final post-fix state and corrects it in either cleanup mode, running last so that cleanup — which edits `.md` files itself — cannot rewrite the text after it was verified. The summary reports those corrections separately from wording changes, and the cleanup agent is told never to report that prose matches code it did not actually compare.
+
 ## 0.16.2
 
 <sub>2026-08-28</sub>
