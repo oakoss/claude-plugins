@@ -1566,6 +1566,66 @@ SH
   [ "$status" -eq 1 ]
 }
 
+@test "tree capture succeeds when the state dir is gitignored (init'd-repo shape)" {
+  printf '.claude/review-cycle/\n.claude/.no-review-gate\n' > .gitignore
+  echo "v1" > foo.txt
+  git add -A
+  git commit -q -m base
+  echo "v2" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  TREE_LINE=$(sed -n '3p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^tree:[a-f0-9]{40}$' <<< "$TREE_LINE"
+  run git ls-tree -r --name-only "${TREE_LINE#tree:}"
+  refute_contains "$output" ".claude/review-cycle"
+  assert_contains "$output" "foo.txt"
+  run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+}
+
+@test "a committed excluded file stays out of the captured tree" {
+  mkdir -p .beads
+  printf 'audit-v1\n' > .beads/interactions.jsonl
+  echo "v1" > foo.txt
+  git add -A
+  git commit -q -m base
+  printf 'audit-v2\n' > .beads/interactions.jsonl
+  echo "v2" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  TREE_LINE=$(sed -n '3p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^tree:[a-f0-9]{40}$' <<< "$TREE_LINE"
+  run git ls-tree -r --name-only "${TREE_LINE#tree:}"
+  refute_contains "$output" ".beads/interactions.jsonl"
+  assert_contains "$output" "foo.txt"
+}
+
+@test "tree capture survives a tracked file inside a gitignored excluded dir" {
+  printf '.beads/\n' > .gitignore
+  mkdir -p .beads
+  printf 'audit-v1\n' > .beads/interactions.jsonl
+  echo "v1" > foo.txt
+  git add -A
+  git add -f .beads/interactions.jsonl
+  git commit -q -m base
+  echo "v2" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  TREE_LINE=$(sed -n '3p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^tree:[a-f0-9]{40}$' <<< "$TREE_LINE"
+  run git ls-tree -r --name-only "${TREE_LINE#tree:}"
+  refute_contains "$output" ".beads/interactions.jsonl"
+  assert_contains "$output" "foo.txt"
+}
+
+@test "tree capture survives an allowlist gitignore that ignores every exclude" {
+  printf '/*\n!/src\n!/.gitignore\n' > .gitignore
+  mkdir -p src
+  echo "v1" > src/foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  TREE_LINE=$(sed -n '3p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^tree:[a-f0-9]{40}$' <<< "$TREE_LINE"
+  run git ls-tree -r --name-only "${TREE_LINE#tree:}"
+  assert_contains "$output" "src/foo.txt"
+}
+
 @test "an excluded write does not drift the tree check" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" accept-state
