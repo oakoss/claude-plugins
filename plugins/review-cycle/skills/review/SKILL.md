@@ -1,7 +1,7 @@
 ---
 name: review
 description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — docs-only or ~25 changed lines or fewer — get code-reviewer and a 2-iteration cap; the rest get the full conditional fan-out, max 4). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies, self-verifies mechanical and empirically-verified message fixes instead of re-fanning-out, then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state. Updates the review sentinel on completion. Does NOT commit.
-argument-hint: "[against <ref>] [max <n>]"
+argument-hint: "[against <ref>] [max <n>] [effort <level>]"
 allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
 
@@ -75,7 +75,8 @@ If you can describe the fix in one sentence, just do the fix.
 
 - **A base ref to scope against** — phrases like `against main`, `since v1.2`, or a bare ref / branch / tag / SHA → review `git diff <ref>..HEAD` instead of the default `git diff HEAD`.
 - **An iteration cap** — `max 6`, `6 iterations`, or a bare integer → use it as the max iteration count, overriding the tier default (4 for the full tier, 2 for light; see Phase 1).
-- **Empty** → defaults: the uncommitted working tree, tier-default iteration cap.
+- **A Codex effort** — `effort medium`, `codex effort high` → the Codex leg runs at exactly that effort on either tier, raising included (see Phase 3). Valid values are the seven literals `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Anything else → name the invalid value, list the valid set, and stop before the cycle starts — a silent fallback would run a long review at the wrong depth.
+- **Empty** → defaults: the uncommitted working tree, tier-default iteration cap, tier-decided Codex effort.
 
 If a token is ambiguous, treat a ref-like string as the base and a bare integer as the iteration cap. Parse before starting the cycle.
 
@@ -134,7 +135,7 @@ The third is not the second. Telling someone to run `codex login` when the probe
 
 **Write all of this into the Phase 9 summary draft now, not at Phase 9.** Open the draft here with the tier, the leg status, and the auth state — and add the Codex effort once Phase 3 decides it — updating the draft as the cycle proceeds. The loop ends turns and re-wakes across up to four iterations, and none of these facts is re-derivable later without re-running the probe.
 
-Never stop the cycle over an absent Codex, and never let its absence go unmentioned — a review at half coverage must be visible in the summary.
+Never stop the cycle over an absent Codex, and never let its absence go unmentioned — a review at half coverage must be visible in the summary. When an explicit `effort` argument was parsed and the leg resolves to `skipped`, say so before the fan-out and record `effort <level> requested, unused (codex skipped)` in the draft: the argument affects only the Codex leg, so a skipped leg silently drops a request the user made deliberately.
 
 ### Phase 2: Canonicalize the working tree
 
@@ -174,7 +175,7 @@ This covers the Phase 3 fan-out, including the Codex CLI, which carries no conta
 
 **Compose an intent brief first** — 2–4 sentences on what the change is trying to accomplish and why, plus the changed-file list. Source it from the conversation that produced the changes, or from the commit messages in `<ref>..HEAD` when reviewing against a base. Every reviewer gets it: a reviewer that knows the intent flags real deviations instead of guessing at purpose, and its findings need less relitigating. Do not editorialize about expected findings — state intent, not hoped-for verdicts.
 
-**Carry the evidence policy into the brief**, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. The bundled subagents carry this in their own bodies; Codex does not, and the brief is the only channel that reaches it.
+**Carry the evidence policy into the brief**, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. The bundled subagents carry this in their own bodies; Codex does not, and the brief is the only channel that reaches it. Carry the never-evade rule into the brief the same way: never reshape a command to slip past a guard — an opt-out is visible and reviewable, an evasion is neither.
 
 **Ask for the execution receipt in the brief too.** Every leg opens its report with two lines: `execution:` naming the heaviest verification that *succeeded* — build, test suite, typecheck, or the repro its findings rest on — with that command's first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. Phase 4 grades the leg from those two lines. The subagents carry this in their bodies; Codex does not, so the brief is again the only channel that reaches it.
 
@@ -184,7 +185,9 @@ In a single conversation turn, invoke ALL of the following:
 
    **Reshape the brief for the flag.** The brief carries this leg's falsifiable question too (see step 2), under the same constraints. The `-c` value is parsed as TOML and the argument passes through one layer of shell quoting, so flatten the Phase 3 brief into a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare rather than quoting them; the changed-file list stays, comma-separated.
 
-   **Match the review's depth to the tier.** On the **full** tier pass no override at all and let the user's `~/.codex/config.toml` decide. The adjustment is one-directional by design — lower the effort on a trivial diff, never raise it on a large one. A user who set `medium` globally chose that.
+   **An explicit effort argument wins over the tier.** When Argument parsing validated one, append `-c model_reasoning_effort="<that literal>"` on either tier, raising included — an explicit per-invocation argument is the user's choice exactly as the global config is. Everything in the rest of this depth section applies only when no effort argument was given.
+
+   **Match the review's depth to the tier.** On the **full** tier pass no override at all and let the user's `~/.codex/config.toml` decide. The tier adjustment is one-directional by design — lower the effort on a trivial diff, never raise it on a large one. A user who set `medium` globally chose that; only an explicit effort argument outranks it.
 
    On the **light** tier, lower the effort *only when it would actually be lower*. Check what is configured first:
 
@@ -194,9 +197,9 @@ In a single conversation turn, invoke ALL of the following:
 
    Read the **root table only** — stop at the first `[section]` header. A plain grep also matches `model_reasoning_effort` keys inside `[profiles.*]`, so a root value of `minimal` alongside an unused profile value of `medium` would look like `medium` and get "lowered" to `low`, raising the effort the user is actually running at.
 
-   The effort scale, ascending, is `none` < `minimal` < `low` < `medium` < `high` < `xhigh` < `max` (the API rejects anything else, naming exactly this set). Append `-c model_reasoning_effort="low"` when the configured effort is above `low`, or when nothing is configured — the review model's own default sits at `low` or higher, so the override can only lower or no-op. When the configured value is already `low`, `minimal`, or `none`, **pass no override**: raising a user who deliberately chose `minimal` up to `low` would both break the one-directional rule and make a trivial diff cost more than a full-tier one.
+   The effort scale, ascending, is `none` < `minimal` < `low` < `medium` < `high` < `xhigh` < `max` (the API rejects anything else, naming exactly this set). The CLI offers no local way to enumerate it — no help text, completion, or shipped schema names the values (checked on codex-cli 0.149.1) — so this documented set is what an invalid `effort` argument is validated against and shown alongside. Append `-c model_reasoning_effort="low"` when the configured effort is above `low`, or when nothing is configured — the review model's own default sits at `low` or higher, so the override can only lower or no-op. When the configured value is already `low`, `minimal`, or `none`, **pass no override**: raising a user who deliberately chose `minimal` up to `low` would both break the one-directional rule and make a trivial diff cost more than a full-tier one.
 
-   Record the effort actually passed — `low` or `inherited` — into the summary draft at the moment of the spawn. It is not recoverable from the tier later: two light-tier runs report differently depending on what was configured.
+   Record the effort actually passed — `low`, `inherited`, or `<level> (explicit)` — into the summary draft at the moment of the spawn. It is not recoverable from the tier later: two light-tier runs report differently depending on what was configured.
 
    Assemble the invocation from these parts:
 
@@ -206,6 +209,7 @@ In a single conversation turn, invoke ALL of the following:
    cd "$(git rev-parse --show-toplevel)" && codex review --uncommitted -c "developer_instructions=\"<brief>\""
    # base scope: swap --uncommitted for --base <ref>
    # light tier: append -c model_reasoning_effort="low"
+   # explicit effort argument: append -c model_reasoning_effort="<validated literal>" on either tier
    ```
 
    ```js
@@ -222,7 +226,7 @@ In a single conversation turn, invoke ALL of the following:
    - With `multi_agent = true` in `~/.codex/config.toml`, Codex spawns parallel review agents internally during a single review call — the effort setting applies to those internal agents too, so the light-tier reduction compounds across them
    - `-c` is the only per-invocation lever available: `codex review` has no `--model` or `--profile` flag (both exist on the top-level command, not this subcommand)
    - Tier on effort, never on model name. Model names churn — Codex records its own migrations under `[notice.model_migrations]` — and a name pinned here would rot into an error or a silent downgrade, on top of overriding a model the user picked deliberately.
-   - For the effort override, emit the literal string `low` and nothing else. Codex does not validate `-c` values locally (a bogus effort passes straight into the session and fails at the API mid-review), so never interpolate an effort read from config, user input, or a model list.
+   - For the effort override, emit only a literal from the seven-value set, chosen by exact match: the tier path emits `low` and nothing else, and the argument path emits the validated argument. Codex does not validate `-c` values locally (a bogus effort passes straight into the session and fails at the API mid-review), so never pass a string that did not exact-match the set — not from config, free-form input, or a model list.
    - Returns immediately with a bash shell ID; output streams to the task output file
    - Save the shell ID; you'll read its output later when notified of completion
 
@@ -246,6 +250,8 @@ In a single conversation turn, invoke ALL of the following:
    - `silent-failure-hunter` — which of these error paths still reports success when the dependency genuinely fails?
    - `type-design-analyzer` — can an invalid value of this type be constructed through a public route?
 
+   **Shape the Codex leg's question for reading, not measurement.** `codex review` runs its sandbox read-only by default: read-only commands succeed, but builds, test suites, and temp-directory writes are denied (measured on codex-cli 0.149.1). A measurement-shaped question sends that leg into runs the sandbox refuses — it burns its effort failing and reports the finding as inferred anyway. Give Codex a question settleable by reading source, diff, or authoritative documentation (read-only commands included), and route every question that requires running or perturbing code to the subagents, which own writable scratch directories.
+
    A question with no command behind it is still a topic. If you cannot name what would answer it, omit the question for that leg — send the prompt below with the `Settle this first...` sentence dropped — rather than manufacture one that only sounds specific.
 
    Each spawn pattern:
@@ -255,7 +261,7 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
      run_in_background: true,
-     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a scratch directory outside it. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix. List separately, under Questions, any claim about tool behavior you could neither exercise here nor settle against authoritative documentation."
+     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a private mktemp -d directory, never a shared scratchpad, and never reshape a command to slip past a guard. Name that directory in your report, and write nowhere outside it. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix. List separately, under Questions, any claim about tool behavior you could neither exercise here nor settle against authoritative documentation."
    })
    ```
 
@@ -267,7 +273,7 @@ The post-loop pass (Phase 7) runs the report-only reviewers and cleanup; none of
 
 **Collecting results, with a stall watchdog.** Completion notifications arrive automatically — do not poll, and (with the in-progress marker set) end the turn rather than sleep while reviewers run. Background reviewers sometimes stall: they go idle without ever delivering a report. The watchdog is wake-driven — you cannot wait on a timer, so act on whatever wakes you (a completion, an idle notification, a user message):
 
-- On any wake where a reviewer has gone idle without delivering, or has stayed silent while the other reviewers all completed, send it ONE nudge via `SendMessage`: deliver findings now, even if incomplete. Address the nudge to the `agent_id` from that reviewer's spawn result.
+- On any wake where a reviewer has gone idle without delivering, or has stayed silent while the other reviewers all completed, send it ONE nudge via `SendMessage`: deliver findings now, even if incomplete, opening with the two receipt lines. Address the nudge to the `agent_id` from that reviewer's spawn result.
 - If a nudged reviewer still hasn't reported by the next wake **that carries information about it**, proceed to Phase 4 without it and list it under "reviewers dropped (stalled)" in the final summary. Evidence means an idle or completion notification naming that reviewer, or — only when other Claude-side reviewers exist — all of them having since reported. A wake triggered by unrelated agents is not evidence; dropping on it discards a reviewer that may be mid-reply.
 - **When it is the only Claude-side reviewer** (the light tier spawns `code-reviewer` alone), the set-relative test is vacuously true and must not be used: only that reviewer's own idle notification, or the user's next message, counts as evidence. Dropping it takes the entire Claude side of the review with it, so it gets the strictest reading.
 - Never nudge the same reviewer twice, and never hold the whole cycle for a single straggler that has already been nudged.
@@ -358,7 +364,7 @@ Then decide:
 
 - NO inline fixes applied (everything clean or correctly deferred) → exit loop.
 - Only mechanical and verified message fixes, none carrying a claim local verification could not reach → exit loop. Do NOT re-fan-out just to confirm fixes landed — that confirmation is exactly what the self-check (and the message fix's reproduction) provided.
-- Only mechanical and verified message fixes, at least one carrying a claim local verification could not reach (cross-platform shell behavior, remote-service semantics) → **one** lightweight re-review across the whole cycle: the Codex leg alone at `low` — apply Phase 3's root-table check, passing no override when the configured effort is already `low`, `minimal`, or `none`; unlike Phase 3, this reduction is not tier-gated — with no subagent fan-out, and the pass does not count against max-iter. Its findings feed Phase 5 normally — carrying the Phase 3 brief including the receipt ask, and graded by Phase 4's labels before any fix is applied, since a `static-analysis-only` valve pass contributes questions rather than fixes. Return here afterward. A second such pass is never spawned, and a valve pass that dies counts as spawned without consuming the Codex leg's one retry. When the valve has already run this cycle, the Codex leg is not eligible, or it has already failed its retry, skip the valve, exit the loop, and name the unverifiable claim in the summary.
+- Only mechanical and verified message fixes, at least one carrying a claim local verification could not reach (cross-platform shell behavior, remote-service semantics) → **one** lightweight re-review across the whole cycle: the Codex leg alone at `low` — or at the explicit effort argument when one was given; otherwise apply Phase 3's root-table check, passing no override when the configured effort is already `low`, `minimal`, or `none`; unlike Phase 3, this reduction is not tier-gated — with no subagent fan-out, and the pass does not count against max-iter. Its findings feed Phase 5 normally — carrying the Phase 3 brief including the receipt ask, and graded by Phase 4's labels before any fix is applied, since a `static-analysis-only` valve pass contributes questions rather than fixes. Return here afterward. A second such pass is never spawned, and a valve pass that dies counts as spawned without consuming the Codex leg's one retry. When the valve has already run this cycle, the Codex leg is not eligible, or it has already failed its retry, skip the valve, exit the loop, and name the unverifiable claim in the summary.
 - At least one substantive fix AND iteration count < max-iter → GOTO Phase 3, scoped: re-run Codex (when its leg is eligible) plus only the subagents whose domain the substantive fixes touched. A Codex leg that failed gets exactly one retry across the whole cycle; after a second failure stop launching it, since repeated attempts against a rate limit or a revoked session buy nothing. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)` rather than a bare `participated` — the iteration Codex missed is usually the one that had the findings.
 - Iteration count == max-iter → exit loop with summary of remaining findings.
 
@@ -374,7 +380,7 @@ The loop has converged. Run the report-only reviewers **once** here — against 
 
 Running them here, once, is the whole point: the opus maintainability pass and the spec-discovery step execute a single time against the code you'll actually commit, instead of re-running on every loop iteration.
 
-**Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Use the same sentence Phase 3 uses: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a scratch directory outside it, and delete it when you finish.* Phase 3's snapshot does not cover this phase and Phase 8 marks the sentinel immediately after, so a file a report-only agent leaves changed is marked reviewed without anyone having seen it. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
+**Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Carry the same containment clauses Phase 3's prompt carries: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a private `mktemp -d` directory, never a shared scratchpad, and delete it when you finish. Never reshape a command to slip past a guard; name that directory in your report, and write nowhere outside it.* Phase 3's snapshot does not cover this phase and Phase 8 marks the sentinel immediately after, so a file a report-only agent leaves changed is marked reviewed without anyone having seen it. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
 
 **Grade these two legs as well.** Phase 4's labelling covers only the loop's auto-fix reviewers, so apply it here from each report's two receipt lines and carry the label into Phase 9 — including the demotion rule, which applies to a structural or conformance claim about an external tool exactly as it does in the loop.
 
@@ -424,8 +430,8 @@ Factual corrections (cleanup): N — <the claim that was wrong, and what the run
 Unexercised claims raised as questions: N — <each one> | none
 Target integrity: unchanged (Phase 3 fan-out; Phase 7 not covered) | CONTAMINATED (<leg>, <what differed>) | not checked (<reason>)
 Message fixes verified: N (one verification line per fix) | none
-  valve: 1 Codex-only pass (effort: low | inherited) | not needed
-Codex leg: participated (effort: low | inherited) | skipped (<reason>) | failed (<error>)
+  valve: 1 Codex-only pass (effort: low | inherited | <level> (explicit)) | not needed
+Codex leg: participated (effort: low | inherited | <level> (explicit)) | skipped (<reason>[; effort <level> requested, unused]) | failed (<error>)
   auth: confirmed | no stored session | unknown (probe unsupported)
 Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
 Canonicalization: ran (<commands>) | partial (<tool> unavailable) | no project checks found

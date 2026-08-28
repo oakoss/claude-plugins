@@ -311,6 +311,22 @@ CS
   [ -z "$output" ]
 }
 
+@test "allows runtime change when the bump file's frontmatter name is unquoted" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/fix-foo-bare.md <<'CS'
+---
+foo: patch
+---
+
+Fix the thing, bare-name frontmatter as bumpy add emits it.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/fix-foo-bare.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "BLOCKS when the staged bump file names a different plugin" {
   echo "v2" > plugins/foo/hooks/runtime.sh
   mkdir -p .bumpy

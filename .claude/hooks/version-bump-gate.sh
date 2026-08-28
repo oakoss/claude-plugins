@@ -105,11 +105,11 @@ for plugin in "${AFFECTED[@]}"; do
     mp_bumped=1
   fi
   # A staged bump file naming the plugin is the other valid shape: the bump
-  # lands later in bumpy's version PR, which stages real bumps and passes on
-  # its own. Frontmatter lines look like `"foo": patch` or `'foo': patch`.
+  # lands later in bumpy's version PR. The frontmatter name may be bare,
+  # double-, or single-quoted — bumpy add emits the bare form.
   cs_covered=0
   if cd "$PROJECT_ROOT" && git diff --cached -- '.bumpy/*.md' 2>/dev/null \
-       | grep -qE "^\+[[:space:]]*[\"']${plugin}[\"'][[:space:]]*:"; then
+       | grep -qE "^\+[[:space:]]*[\"']?${plugin}[\"']?[[:space:]]*:"; then
     cs_covered=1
   fi
   if [ $cs_covered -eq 0 ] && { [ $pj_bumped -eq 0 ] || [ $mp_bumped -eq 0 ]; }; then

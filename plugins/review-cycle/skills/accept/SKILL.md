@@ -34,6 +34,7 @@ Report the exit code to the user:
 - **Not in a git repo**: CLI exits 1. Report to user; do not modify anything.
 - **Working tree clean (no changes)**: sentinel records the empty-state hash. The commit gate passes trivially. Safe.
 - **Sentinel already matches**: writing the same hash is idempotent.
+- **A review cycle is in flight**: the accept supersedes it. `accept-state` retires the cycle's in-progress marker itself, but the spawned reviewers keep running — stop each one (`TaskStop` on the Codex shell and every reviewer agent), report the abort with the cycle's abbreviated status, and do not wait for or apply reports that arrive after the accept.
 
 ## What this skill does NOT do
 

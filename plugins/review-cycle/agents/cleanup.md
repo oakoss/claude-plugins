@@ -108,4 +108,5 @@ You are invoked by `/review-cycle:review` Phase 7 with the diff scope described 
 - Do NOT delete a comment that might encode a constraint you cannot verify — keep it and flag it (Lens 1, case 4). But a comment that merely restates the code is not "ambiguous"; remove it.
 - Do NOT touch algorithm logic, type definitions, or test assertions.
 - Do NOT update the review sentinel. That's the job of `/review-cycle:review`'s Phase 8 or `/review-cycle:accept`.
+- Do NOT reshape a command to slip past a guard or hook: an opt-out is visible and reviewable, an evasion is neither.
 - Do NOT add comments while cleaning. The comment policy applies to your edits.
