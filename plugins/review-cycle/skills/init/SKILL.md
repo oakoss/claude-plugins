@@ -1,6 +1,6 @@
 ---
 name: init
-description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, optionally appends the comment, fix-vs-defer, and evidence policies to CLAUDE.md (global or project), and updates .gitignore to exclude per-project sentinel files. Idempotent — safe to run multiple times.
+description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, optionally appends the comment, fix-vs-defer, and evidence policies to CLAUDE.md (global or project), and updates .gitignore to exclude the per-project state directory. Idempotent — safe to run multiple times.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 ---
@@ -18,7 +18,7 @@ Six named checks, each idempotent:
 3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
 4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
 5. **CLAUDE.md policies** — offers to append the comment, fix-vs-defer, and evidence policies (global or project scope)
-6. **Project `.gitignore`** — adds the sentinel and opt-out marker entries if inside a git repo
+6. **Project `.gitignore`** — adds the state-directory and opt-out marker entries if inside a git repo
 
 Each step checks state first. If something is already configured, it reports "✓ already done" and continues.
 

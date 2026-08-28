@@ -6,7 +6,7 @@
 #
 # Two release valves keep the block from degrading into ceremony:
 #
-#   - A fresh .claude/.review-in-progress marker (written by the review
+#   - A fresh .claude/review-cycle/in-progress marker (written by the review
 #     cycle at fan-out) lets the turn end while background reviewers run,
 #     so their completion notifications can re-wake the agent instead of
 #     the agent burning wall-clock on sleep loops. A stale marker (crashed
@@ -28,19 +28,19 @@ fi
 
 PROJECT_ROOT=$(gate_should_run) || exit 0
 
-STOP_RECORD="$PROJECT_ROOT/.claude/.review-stop-block"
+STOP_RECORD="$PROJECT_ROOT/$GATE_STATE_DIR/stop-block"
 
 # Either cycle marker lets a turn end: /review's, and /review-pr's, which
 # reviews a PR head in a throwaway worktree. Only the former licenses `mark`
 # (see marker_for in bin/review-sentinel) — the Stop gate does not care which
 # tree is under review, but the sentinel does.
-for MARKER in .review-in-progress .review-pr-in-progress; do
-  [ -f "$PROJECT_ROOT/.claude/$MARKER" ] || continue
-  gate_marker_is_stale "$PROJECT_ROOT/.claude/$MARKER" || exit 0
+for MARKER in in-progress pr-in-progress; do
+  [ -f "$PROJECT_ROOT/$GATE_STATE_DIR/$MARKER" ] || continue
+  gate_marker_is_stale "$PROJECT_ROOT/$GATE_STATE_DIR/$MARKER" || exit 0
   # Stale or unreadable marker: a crashed cycle must not hold the gate open.
   # A failed removal is deliberately ignored — this hook's stderr surfaces
   # nowhere, and the check above re-reaps on the next stop regardless.
-  /bin/rm -f "$PROJECT_ROOT/.claude/$MARKER" 2>/dev/null
+  /bin/rm -f "$PROJECT_ROOT/$GATE_STATE_DIR/$MARKER" 2>/dev/null
 done
 
 "${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" check
@@ -66,8 +66,8 @@ if [ -f "$STOP_RECORD" ] && [ "$(cat "$STOP_RECORD" 2>/dev/null)" = "$CURRENT" ]
 fi
 
 # Record the state being blocked so the same state is not re-blocked. The
-# one path that still re-blocks every stop is an unwritable .claude dir.
-mkdir -p "$PROJECT_ROOT/.claude" 2>/dev/null
+# one path that still re-blocks every stop is an unwritable state dir.
+mkdir -p "$PROJECT_ROOT/$GATE_STATE_DIR" 2>/dev/null
 printf '%s\n' "$CURRENT" > "$STOP_RECORD" 2>/dev/null || true
 
 # Stop hook output schema does NOT support hookSpecificOutput — directive

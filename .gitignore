@@ -18,8 +18,10 @@ pnpm-debug.log
 .tmp/
 
 # review-cycle per-project state (this repo opts out of its own gate)
-.claude/.review-mark
+.claude/review-cycle/
 .claude/.no-review-gate
+# pre-0.16 layout, kept while sessions running the old plugin version remain
+.claude/.review-mark
 .claude/.review-in-progress
 .claude/.review-stop-block
 

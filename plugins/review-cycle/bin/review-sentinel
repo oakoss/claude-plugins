@@ -18,7 +18,15 @@
 #                Used by session-init to decide on idempotent re-seed.
 #   current-hash Print current hash computed from current HEAD (or the
 #                empty tree for unborn HEAD) to stdout.
-#   cycle-start  Write .claude/.review-in-progress (epoch seconds). While
+#   delta        Print the unreviewed delta against the marked tree: a
+#                name-status list, `--`, then one `delta: N files, +A -D`
+#                summary line. Exit 3 when the sentinel has no usable tree
+#                (pre-0.16 mark, or the object was pruned); exit 4 when the
+#                index stages content in neither the worktree nor HEAD,
+#                which the worktree delta cannot represent — callers scope
+#                to the full diff on either. Untracked files included;
+#                unaffected by commits moving HEAD.
+#   cycle-start  Write .claude/review-cycle/in-progress (epoch seconds). While
 #                fresh (< 60 min), the Stop gate lets turns end so the
 #                review cycle can await background reviewers. Also the
 #                precondition `mark` checks for. Retired by mark (cycle done),
@@ -28,7 +36,7 @@
 #   cycle-end    Remove the in-progress marker (abort path; a completed
 #                cycle's mark clears it anyway).
 #   pr-cycle-start / pr-cycle-end
-#                The same pair against .claude/.review-pr-in-progress, for
+#                The same pair against .claude/review-cycle/pr-in-progress, for
 #                /review-pr. It reviews a PR head in a throwaway worktree and
 #                never inspects the working tree, so its marker holds the Stop
 #                gate open without licensing `mark` over local changes no
@@ -54,13 +62,26 @@
 #   uninstall-hook  Remove the gate: restore a relocated .local hook and
 #                delete the helper script.
 #
-# Format on disk: two lines.
+# Format on disk: two or three lines.
 #   anchor:<40-hex-sha>     ← HEAD SHA at mark time, or the empty-tree SHA
 #                             (4b825dc6…) when HEAD is unborn
 #   sha256:<64-hex-chars>   ← hash of the anchor→index and index→working-tree
 #                             diffs (untracked files normalized via a scratch
 #                             intent-to-add index; see compute_hash_from_anchor)
-# Path: <project-root>/.claude/.review-mark
+#   tree:<40-hex-sha>       ← optional: git tree of the reviewed working-tree
+#                             content, kept alive by a per-worktree ref under
+#                             refs/review-cycle/trees/. check/match compare
+#                             against it (content equality — immune to
+#                             commit-split hunk drift, near-constant cost);
+#                             a divergent index routes to the hash, which
+#                             arbitrates index states the tree cannot see.
+#                             Absent or unreadable, the gate falls back to
+#                             the hash path. Capturing the comparison tree writes
+#                             unreferenced blobs into the object database on
+#                             every check — bounded by content the user
+#                             wrote; gc removes them on expiry.
+# Path: <project-root>/.claude/review-cycle/mark  (pre-0.16: .claude/.review-mark,
+# moved by session-init's one-time migration)
 #
 # Why anchor + diff-hash instead of one hash: each `git commit` advances HEAD
 # and shrinks `git diff HEAD`, so a HEAD-relative sentinel drifts the moment
@@ -89,6 +110,7 @@ subcommands:
   check         exit 0=clean/match, 1=drift, 2=error
   match         exit 0=exact match only (no clean-tree shortcut)
   current-hash  print current state
+  delta         print the unreviewed delta vs the marked tree (exit 3 = none stored)
   cycle-start   write the review-in-progress marker (Stop gate passes)
   cycle-end     remove the review-in-progress marker
   pr-cycle-start  same, for /review-pr; does not license mark
@@ -115,6 +137,34 @@ pick_sha() {
 # default excludes; see SECURITY note below.
 CONFIG_PATH=".claude/review-cycle.json"
 
+# Machine-written state only; user-facing paths (.no-review-gate, the config
+# — a sibling file the state glob cannot match — and the helper) stay put.
+STATE_DIR=".claude/review-cycle"
+SENTINEL_REL="$STATE_DIR/mark"
+
+# A shared-namespace ref with a per-worktree NAME keeps each marked tree
+# gc-reachable: linked worktrees share custom refs, so one name would let
+# worktree B's mark orphan worktree A's tree — and refs/worktree/ fails the
+# other way (measured on git 2.55.0: gc from one worktree prunes another's).
+marked_tree_ref() {
+  local gd wtid sha digest
+  gd=$(git -C "$1" rev-parse --git-dir 2>/dev/null) || return 1
+  case "$gd" in
+    */worktrees/*)
+      # The wt- prefix reserves the bare name for the primary (a linked
+      # worktree named main must not collide with it), and the git-dir
+      # digest separates linked worktrees whose names normalize alike.
+      wtid=$(printf 'wt-%s' "${gd##*/}" | tr -c 'A-Za-z0-9_-' '-')
+      if sha=$(pick_sha); then
+        digest=$(printf '%s' "$gd" | $sha 2>/dev/null | cut -c1-12)
+        [ -n "$digest" ] && wtid="$wtid-$digest"
+      fi
+      ;;
+    *) wtid="main" ;;
+  esac
+  printf 'refs/review-cycle/trees/%s\n' "$wtid"
+}
+
 # Declared here so `set -u` doesn't error before the first build_excludes call.
 EXCLUDES_LIST=()
 
@@ -130,8 +180,12 @@ build_excludes() {
   # older git pathspec parsers treat a leading `**/` as one-or-more dirs, not
   # zero-or-more.
   EXCLUDES_LIST=(
-    ':(exclude).claude/.review-mark'
+    ':(exclude,glob).claude/review-cycle/**'
     ':(exclude).claude/.no-review-gate'
+    # Pre-0.16.0 state paths. A repo that has not run the SessionStart
+    # migration (or runs with hooks disabled) still carries them, and where
+    # init never gitignored them they would read as drift.
+    ':(exclude).claude/.review-mark'
     ':(exclude).claude/.review-in-progress'
     ':(exclude).claude/.review-pr-in-progress'
     ':(exclude).claude/.review-stop-block'
@@ -166,8 +220,8 @@ build_excludes() {
 # work. Both markers hold the Stop gate open; only this one licenses `mark`.
 marker_for() {
   case "$1" in
-    pr-*) echo ".review-pr-in-progress" ;;
-    *) echo ".review-in-progress" ;;
+    pr-*) echo "pr-in-progress" ;;
+    *) echo "in-progress" ;;
   esac
 }
 
@@ -223,6 +277,97 @@ build_scratch_index() {
     GIT_INDEX_FILE="$scratch" git add -Nf -- "$CONFIG_PATH" 2>/dev/null || return 1
   fi
   [ -f "$scratch" ] || GIT_INDEX_FILE="$scratch" git read-tree --empty || return 1
+}
+
+# Write a tree object of the working tree's content. Stages for real, not
+# intent-to-add: write-tree silently omits ita entries (measured on git
+# 2.55.0 — no error, the file is absent from the tree). Blobs land in the
+# object database; the real index is never touched. Excluded paths are
+# removed from the tree outright — a .beads write between mark and check
+# must not drift it — and the config is force-added back per the SECURITY
+# note. Prints the tree id. cd's into $root; callers run it in a subshell.
+build_worktree_tree() {
+  local root="$1" scratch="$2" realidx p positives=()
+  cd "$root" || return 1
+  build_excludes "$root"
+  realidx=$(git rev-parse --git-path index) || return 1
+  if [ -f "$realidx" ]; then cp "$realidx" "$scratch" || return 1; fi
+  [ -f "$scratch" ] || GIT_INDEX_FILE="$scratch" git read-tree --empty || return 1
+  GIT_INDEX_FILE="$scratch" git add -A -- . "${EXCLUDES_LIST[@]}" 2>/dev/null || return 1
+  for p in "${EXCLUDES_LIST[@]}"; do
+    case "$p" in
+      ':(exclude,glob)'*) positives+=(":(glob)${p#':(exclude,glob)'}") ;;
+      ':(exclude)'*)      positives+=("${p#':(exclude)'}") ;;
+    esac
+  done
+  if [ "${#positives[@]}" -gt 0 ]; then
+    # -f: the scratch index is throwaway and these paths are being dropped
+    # from the tree by design; without it, git rm refuses on an entry whose
+    # staged content matches neither HEAD nor the file, and every later
+    # capture fails permanently once such a path is staged.
+    GIT_INDEX_FILE="$scratch" git rm -r -q -f --cached --ignore-unmatch -- "${positives[@]}" >/dev/null 2>&1 || return 1
+  fi
+  if [ -f "$CONFIG_PATH" ]; then
+    GIT_INDEX_FILE="$scratch" git add -f -- "$CONFIG_PATH" 2>/dev/null || return 1
+  fi
+  GIT_INDEX_FILE="$scratch" git write-tree 2>/dev/null
+}
+
+capture_worktree_tree() {
+  local root="$1" scratch tree rc=0
+  scratch=$(mktemp) || return 1
+  /bin/rm -f "$scratch"
+  tree=$( (build_worktree_tree "$root" "$scratch") ) || rc=1
+  /bin/rm -f "$scratch" 2>/dev/null
+  [ "$rc" -eq 0 ] || return 1
+  [[ "$tree" =~ ^[a-f0-9]{40}$ ]] || return 1
+  printf '%s\n' "$tree"
+}
+
+# Router, not verdict: a path whose index entry differs from BOTH the
+# worktree and HEAD means the index holds content the tree cannot vouch for
+# — staged unreviewed X with a restored worktree (the Codex P1 shape), but
+# equally a partial stage of reviewed content. Only the hash can tell those
+# apart, so callers route exit 1 to the hash path rather than reporting
+# drift. A false positive costs precision, not safety: a partial stage of
+# reviewed content made AFTER the mark falls to the hash, which cannot
+# represent the split and reports drift — one accept-state clears it. The
+# config is force-included as the hash does (an ignore matching it must not
+# skip the routing), and --no-renames keeps both lists on raw paths — a
+# staged rename otherwise pairs into names whose intersection can miss.
+# Exit 2 = probe error; callers must never read it as no-divergence.
+staged_divergence() {
+  local root="$1" base unstaged staged
+  cd "$root" || return 2
+  build_excludes "$root"
+  base=$(current_anchor "$root") || return 2
+  unstaged=$( { git diff --no-renames --name-only -- "${EXCLUDES_LIST[@]}" \
+                && git diff --no-renames --name-only -- "$CONFIG_PATH"; } 2>/dev/null) || return 2
+  [ -n "$unstaged" ] || return 0
+  staged=$( { git diff --no-renames --cached --name-only "$base" -- "${EXCLUDES_LIST[@]}" \
+              && git diff --no-renames --cached --name-only "$base" -- "$CONFIG_PATH"; } 2>/dev/null) || return 2
+  [ -n "$staged" ] || return 0
+  # No pipeline feeds the intersection: a dying producer — a sort, or the
+  # printf inside a process substitution — collapses into grep's benign
+  # exit 1 and reads as no-divergence (measured: a SIGKILLed producer made
+  # check pass on staged unreviewed content). Checked temp files leave the
+  # case with grep's own status alone, where any abnormal exit maps to 2.
+  local usf ssf rc
+  usf=$(mktemp) || return 2
+  ssf=$(mktemp) || { /bin/rm -f "$usf"; return 2; }
+  if ! printf '%s\n' "$unstaged" | sort -u > "$usf" 2>/dev/null \
+     || ! printf '%s\n' "$staged" | sort -u > "$ssf" 2>/dev/null; then
+    /bin/rm -f "$usf" "$ssf"
+    return 2
+  fi
+  grep -qFx -f "$ssf" "$usf"
+  rc=$?
+  /bin/rm -f "$usf" "$ssf"
+  case $rc in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return 2 ;;
+  esac
 }
 
 # Compute the sha256 of the diff from anchor to the current effective state
@@ -409,6 +554,17 @@ read_sentinel() {
   return 1
 }
 
+# Line 3 is read from the file directly: read_sentinel validates and re-emits
+# lines 1-2 only, so its return value never carries the tree. A two-line
+# (pre-0.16) sentinel returns nonzero — callers fall back to the hash path.
+read_sentinel_tree() {
+  local sentinel="$1" tree_line
+  [ -f "$sentinel" ] || return 1
+  tree_line=$(sed -n '3p' "$sentinel" 2>/dev/null | tr -d '[:space:]')
+  [[ "$tree_line" =~ ^tree:[a-f0-9]{40}$ ]] || return 1
+  printf '%s\n' "${tree_line#tree:}"
+}
+
 write_sentinel() {
   local sentinel="$1" content="$2" tmp err
   if ! err=$(mkdir -p "$(dirname "$sentinel")" 2>&1); then
@@ -501,9 +657,10 @@ EOF
 # Create or refresh hook file $1 with managed content $2. A pre-existing
 # foreign hook is relocated to $1.local and chained by the managed block —
 # appending shell text to a foreign hook could swallow its failure status
-# (its last fallible command no longer decides the exit), sit dead behind
-# an explicit `exit 0`, or corrupt a non-shell interpreter's script. When
-# the file carries our marker, the managed block is stripped first and any
+# (the appended text, not the hook's last fallible command, would decide the
+# exit), sit dead behind an explicit `exit 0`, or corrupt a non-shell
+# interpreter's script. When the file carries our marker, the managed block
+# is stripped first and any
 # nontrivial remainder (an append-era install, hand-added lines) is
 # relocated the same way rather than truncated.
 write_hook_file() {
@@ -814,7 +971,7 @@ main() {
     # design: seed baselines a fresh session, and accept-state is the named
     # human escape hatch. See the cycle-start entry in the header for the
     # marker's lifecycle.
-    if [ "$CMD" = "mark" ] && [ ! -f "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
+    if [ "$CMD" = "mark" ] && [ ! -f "$PROJECT_ROOT/$STATE_DIR/in-progress" ]; then
       echo "review-sentinel: no review in progress; mark is valid only after cycle-start" >&2
       echo "review-sentinel: if a cycle is running, it began without cycle-start, or the Stop gate or SessionStart reaped its marker after the 60-minute TTL — report that in the cycle summary rather than re-running cycle-start to recreate the evidence" >&2
       echo "review-sentinel: to accept a state a human reviewed themselves, use: review-sentinel accept-state" >&2
@@ -827,15 +984,52 @@ main() {
       echo "review-sentinel: cannot compute hash from anchor $ANCHOR" >&2
       exit 2
     fi
-    write_sentinel "$PROJECT_ROOT/.claude/.review-mark" "anchor:$ANCHOR
-$HASH" || {
+    # A capture failure falls back to the two-line format: the gate keeps
+    # working on the legacy hash, only delta scoping and the tree fast path
+    # are lost, and the summary-visible stderr line says so.
+    TREE=$(capture_worktree_tree "$PROJECT_ROOT") || TREE=""
+    # The hash and the tree must describe one state: an edit landing between
+    # the two captures would store a tree containing content the hash never
+    # vouched for, and check trusts the tree first. Verify the pairing and
+    # retry once; a state still moving falls back to hash-only.
+    if [ -n "$TREE" ]; then
+      HASH2=$(compute_hash_from_anchor "$PROJECT_ROOT" "$ANCHOR")
+      if [ $? -ne 0 ] || [ -z "$HASH2" ]; then
+        TREE=""
+      elif [ "$HASH2" != "$HASH" ]; then
+        HASH="$HASH2"
+        TREE=$(capture_worktree_tree "$PROJECT_ROOT") || TREE=""
+        if [ -n "$TREE" ]; then
+          HASH3=$(compute_hash_from_anchor "$PROJECT_ROOT" "$ANCHOR")
+          if [ $? -ne 0 ] || [ "$HASH3" != "$HASH" ]; then
+            TREE=""
+          fi
+        fi
+      fi
+    fi
+    if [ -n "$TREE" ]; then
+      TREE_REF=$(marked_tree_ref "$PROJECT_ROOT") || TREE_REF=""
+      if [ -n "$TREE_REF" ] && git -C "$PROJECT_ROOT" update-ref "$TREE_REF" "$TREE" 2>/dev/null; then
+        # The pre-worktree-aware single ref would otherwise pin one stale
+        # tree forever.
+        git -C "$PROJECT_ROOT" update-ref -d refs/review-cycle/marked-tree 2>/dev/null || true
+      else
+        TREE=""
+      fi
+    fi
+    [ -n "$TREE" ] || echo "review-sentinel: could not capture the reviewed tree; falling back to hash-only sentinel (no delta scoping until the next successful mark)" >&2
+    SENTINEL_CONTENT="anchor:$ANCHOR
+$HASH"
+    [ -z "$TREE" ] || SENTINEL_CONTENT="$SENTINEL_CONTENT
+tree:$TREE"
+    write_sentinel "$PROJECT_ROOT/$SENTINEL_REL" "$SENTINEL_CONTENT" || {
       echo "review-sentinel: cannot write sentinel" >&2
       exit 2
     }
     # Any newly written state resolves the recorded blocked-state.
-    /bin/rm -f "$PROJECT_ROOT/.claude/.review-stop-block"
-    [ ! -e "$PROJECT_ROOT/.claude/.review-stop-block" ] \
-      || echo "review-sentinel: warning: could not remove .claude/.review-stop-block; Stop-gate behavior may be stale" >&2
+    /bin/rm -f "$PROJECT_ROOT/$STATE_DIR/stop-block"
+    [ ! -e "$PROJECT_ROOT/$STATE_DIR/stop-block" ] \
+      || echo "review-sentinel: warning: could not remove $STATE_DIR/stop-block; Stop-gate behavior may be stale" >&2
     # Only a verb that concludes a cycle retires its marker: mark completes one,
     # accept-state supersedes it. `seed` does not — it baselines a fresh session
     # and knows nothing about a cycle, and SessionStart may fire while another
@@ -845,9 +1039,9 @@ $HASH" || {
     if [ "$CMD" != "seed" ]; then
       # Nonzero, not a warning: a written sentinel with the guard still
       # disarmed is not success.
-      /bin/rm -f "$PROJECT_ROOT/.claude/.review-in-progress"
-      if [ -e "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
-        echo "review-sentinel: sentinel written, but .claude/.review-in-progress survived; mark's precondition stays satisfied for unreviewed work until it is removed" >&2
+      /bin/rm -f "$PROJECT_ROOT/$STATE_DIR/in-progress"
+      if [ -e "$PROJECT_ROOT/$STATE_DIR/in-progress" ]; then
+        echo "review-sentinel: sentinel written, but $STATE_DIR/in-progress survived; mark's precondition stays satisfied for unreviewed work until it is removed" >&2
         exit 2
       fi
     fi
@@ -858,8 +1052,25 @@ $HASH" || {
     PROJECT_ROOT=$(resolve_project_root)
     [ -n "$PROJECT_ROOT" ] || exit 2
     is_clean_tree "$PROJECT_ROOT" && exit 0
-    STORED=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark") || exit 1
+    STORED=$(read_sentinel "$PROJECT_ROOT/$SENTINEL_REL") || exit 1
     [ -n "$STORED" ] || exit 1
+    # Tree comparison when the sentinel carries one: content equality is
+    # immune to the hunk-header drift that broke the hash when a file's
+    # changes were split across a commit (cpl-34d), and it is near-constant
+    # in git spawns where the hash is O(changed paths) — measured 0.03s vs
+    # 1.47s on 100 dirty files. Any tree-path failure falls back to the hash.
+    STORED_TREE=$(read_sentinel_tree "$PROJECT_ROOT/$SENTINEL_REL") || STORED_TREE=""
+    if [ -n "$STORED_TREE" ] && git -C "$PROJECT_ROOT" cat-file -e "$STORED_TREE" 2>/dev/null; then
+      CURRENT_TREE=$(capture_worktree_tree "$PROJECT_ROOT") || CURRENT_TREE=""
+      if [ -n "$CURRENT_TREE" ]; then
+        [ "$CURRENT_TREE" = "$STORED_TREE" ] || exit 1
+        # Divergent or erroring index state routes to the hash, which alone
+        # distinguishes a partial stage the mark saw from staged unreviewed
+        # content (measured: exiting 1 here made the former an unclearable
+        # false drift that three accept-state calls could not clear).
+        ( staged_divergence "$PROJECT_ROOT" ) && exit 0
+      fi
+    fi
     STORED_ANCHOR=$(echo "$STORED" | sed -n '1p' | sed 's/^anchor://')
     STORED_HASH=$(echo "$STORED" | sed -n '2p')
     CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR")
@@ -873,8 +1084,17 @@ $HASH" || {
   match)
     PROJECT_ROOT=$(resolve_project_root)
     [ -n "$PROJECT_ROOT" ] || exit 2
-    STORED=$(read_sentinel "$PROJECT_ROOT/.claude/.review-mark") || exit 1
+    STORED=$(read_sentinel "$PROJECT_ROOT/$SENTINEL_REL") || exit 1
     [ -n "$STORED" ] || exit 1
+    STORED_TREE=$(read_sentinel_tree "$PROJECT_ROOT/$SENTINEL_REL") || STORED_TREE=""
+    if [ -n "$STORED_TREE" ] && git -C "$PROJECT_ROOT" cat-file -e "$STORED_TREE" 2>/dev/null; then
+      CURRENT_TREE=$(capture_worktree_tree "$PROJECT_ROOT") || CURRENT_TREE=""
+      if [ -n "$CURRENT_TREE" ]; then
+        [ "$CURRENT_TREE" = "$STORED_TREE" ] || exit 1
+        # Same routing as check: the hash arbitrates divergent index states.
+        ( staged_divergence "$PROJECT_ROOT" ) && exit 0
+      fi
+    fi
     STORED_ANCHOR=$(echo "$STORED" | sed -n '1p' | sed 's/^anchor://')
     STORED_HASH=$(echo "$STORED" | sed -n '2p')
     CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR")
@@ -883,6 +1103,66 @@ $HASH" || {
     [ $RC -eq 2 ] && exit 1  # anchor unreachable: cannot match
     [ "$CURRENT_HASH" = "$STORED_HASH" ] && exit 0
     exit 1
+    ;;
+
+  delta)
+    PROJECT_ROOT=$(resolve_project_root)
+    if [ -z "$PROJECT_ROOT" ]; then
+      echo "review-sentinel: not in a git repo" >&2
+      exit 2
+    fi
+    STORED_TREE=$(read_sentinel_tree "$PROJECT_ROOT/$SENTINEL_REL") || {
+      echo "review-sentinel: no marked tree in the sentinel (pre-0.16 mark, or no mark yet); delta unavailable — scope to the full diff" >&2
+      exit 3
+    }
+    git -C "$PROJECT_ROOT" cat-file -e "$STORED_TREE" 2>/dev/null || {
+      echo "review-sentinel: marked tree $STORED_TREE is missing from the object database; delta unavailable — scope to the full diff" >&2
+      exit 3
+    }
+    # The worktree tree cannot see index-only content, so a divergent index
+    # would scope reviewers away from the one thing that needs review.
+    ( staged_divergence "$PROJECT_ROOT" )
+    case $? in
+      1)
+        echo "review-sentinel: the index stages content that is in neither the working tree nor HEAD; the delta cannot represent it — scope to the full diff" >&2
+        exit 4 ;;
+      2)
+        echo "review-sentinel: the divergence probe failed; cannot vouch for the index — scope to the full diff" >&2
+        exit 2 ;;
+    esac
+    SCRATCH=$(mktemp) || {
+      echo "review-sentinel: mktemp failed; delta unavailable" >&2
+      exit 2
+    }
+    /bin/rm -f "$SCRATCH"
+    ( build_worktree_tree "$PROJECT_ROOT" "$SCRATCH" >/dev/null ) || {
+      /bin/rm -f "$SCRATCH"
+      echo "review-sentinel: could not capture the current tree; delta unavailable" >&2
+      exit 2
+    }
+    NAMESTAT=$( cd "$PROJECT_ROOT" && GIT_INDEX_FILE="$SCRATCH" git diff --cached --name-status "$STORED_TREE" -- ) || {
+      /bin/rm -f "$SCRATCH"
+      echo "review-sentinel: diff against the marked tree failed" >&2
+      exit 2
+    }
+    NUMSTAT=$( cd "$PROJECT_ROOT" && GIT_INDEX_FILE="$SCRATCH" git diff --cached --numstat "$STORED_TREE" -- ) || {
+      /bin/rm -f "$SCRATCH"
+      echo "review-sentinel: numstat against the marked tree failed" >&2
+      exit 2
+    }
+    /bin/rm -f "$SCRATCH"
+    SUMMARY=$(printf '%s\n' "$NUMSTAT" | awk 'NF {f+=1; a+=$1; d+=$2} END {printf "delta: %d files, +%d -%d\n", f, a, d}') || {
+      echo "review-sentinel: delta summary generation failed" >&2
+      exit 2
+    }
+    # Buffered until everything succeeded, then written checked: a partial
+    # list with exit 0 would scope reviewers from incomplete output
+    # (measured against /dev/full: unchecked printf statuses vanish).
+    if [ -n "$NAMESTAT" ]; then
+      printf '%s\n' "$NAMESTAT" || { echo "review-sentinel: delta output write failed" >&2; exit 2; }
+    fi
+    printf '%s\n%s\n' "--" "$SUMMARY" || { echo "review-sentinel: delta output write failed" >&2; exit 2; }
+    exit 0
     ;;
 
   current-hash)
@@ -904,14 +1184,14 @@ $HASH" || {
       exit 1
     fi
     MARKER=$(marker_for "$CMD")
-    mkdir -p "$PROJECT_ROOT/.claude" 2>/dev/null || {
-      echo "review-sentinel: cannot create .claude dir" >&2
+    mkdir -p "$PROJECT_ROOT/$STATE_DIR" 2>/dev/null || {
+      echo "review-sentinel: cannot create $STATE_DIR dir" >&2
       exit 2
     }
-    date +%s > "$PROJECT_ROOT/.claude/$MARKER" || {
+    date +%s > "$PROJECT_ROOT/$STATE_DIR/$MARKER" || {
       # The redirect may have created an empty file before failing; a
       # reported failure must leave no state behind.
-      /bin/rm -f "$PROJECT_ROOT/.claude/$MARKER" 2>/dev/null
+      /bin/rm -f "$PROJECT_ROOT/$STATE_DIR/$MARKER" 2>/dev/null
       echo "review-sentinel: cannot write $MARKER" >&2
       exit 2
     }
@@ -925,8 +1205,8 @@ $HASH" || {
       exit 1
     fi
     MARKER=$(marker_for "$CMD")
-    /bin/rm -f "$PROJECT_ROOT/.claude/$MARKER"
-    if [ -e "$PROJECT_ROOT/.claude/$MARKER" ]; then
+    /bin/rm -f "$PROJECT_ROOT/$STATE_DIR/$MARKER"
+    if [ -e "$PROJECT_ROOT/$STATE_DIR/$MARKER" ]; then
       echo "review-sentinel: cannot remove $MARKER (see the error above); Stop gate stays open until its TTL" >&2
       exit 2
     fi
@@ -939,7 +1219,7 @@ $HASH" || {
       echo "review-sentinel: not in a git repo" >&2
       exit 2
     fi
-    SENTINEL="$PROJECT_ROOT/.claude/.review-mark"
+    SENTINEL="$PROJECT_ROOT/$SENTINEL_REL"
     STORED_HASH=""
     CURRENT_HASH=""
     HASH_RC=0
@@ -947,9 +1227,9 @@ $HASH" || {
     CLEAN=no
     is_clean_tree "$PROJECT_ROOT" && CLEAN=yes
     echo "clean:   $CLEAN"
-    if [ -f "$PROJECT_ROOT/.claude/.review-in-progress" ]; then
+    if [ -f "$PROJECT_ROOT/$STATE_DIR/in-progress" ]; then
       # Line 1 only, matching how the Stop gate reads it.
-      TS=$(sed -n '1p' "$PROJECT_ROOT/.claude/.review-in-progress" 2>/dev/null | tr -cd '0-9')
+      TS=$(sed -n '1p' "$PROJECT_ROOT/$STATE_DIR/in-progress" 2>/dev/null | tr -cd '0-9')
       NOWS=$(date +%s 2>/dev/null | tr -cd '0-9')
       if [ -n "$TS" ] && [ -n "$NOWS" ]; then
         AGE=$((NOWS - TS))
@@ -964,10 +1244,10 @@ $HASH" || {
     else
       echo "cycle:   no in-progress marker (mark will refuse with exit 3; accept-state records a state you reviewed yourself)"
     fi
-    if [ -f "$PROJECT_ROOT/.claude/.review-pr-in-progress" ]; then
+    if [ -f "$PROJECT_ROOT/$STATE_DIR/pr-in-progress" ]; then
       echo "pr:      review-pr marker present (holds the Stop gate open; does not license mark)"
     fi
-    if [ -f "$PROJECT_ROOT/.claude/.review-stop-block" ]; then
+    if [ -f "$PROJECT_ROOT/$STATE_DIR/stop-block" ]; then
       echo "stop:    block-once record present (Stop gate soft-passes while this state is unchanged)"
     fi
     if [ ! -f "$SENTINEL" ]; then
@@ -979,6 +1259,29 @@ $HASH" || {
       STORED_HASH=$(echo "$STORED" | sed -n '2p')
       echo "mark:    anchor=$STORED_ANCHOR"
       echo "         $STORED_HASH"
+      if STORED_TREE=$(read_sentinel_tree "$SENTINEL"); then
+        if git -C "$PROJECT_ROOT" cat-file -e "$STORED_TREE" 2>/dev/null; then
+          CURRENT_TREE=$(capture_worktree_tree "$PROJECT_ROOT") || CURRENT_TREE=""
+          if [ -z "$CURRENT_TREE" ]; then
+            echo "tree:    $STORED_TREE (capture failed this run; hash path in effect)"
+          else
+            echo "tree:    $STORED_TREE (delta scoping available)"
+            if [ "$CURRENT_TREE" = "$STORED_TREE" ]; then
+              # Divergent or erroring index state falls to the hash verdict,
+              # matching check's routing.
+              ( staged_divergence "$PROJECT_ROOT" ) && TREE_VERDICT="match"
+            else
+              TREE_VERDICT="drift"
+            fi
+          fi
+        else
+          echo "tree:    $STORED_TREE unreachable (object pruned; re-mark to restore delta scoping)"
+          STORED_TREE=""
+        fi
+      else
+        STORED_TREE=""
+        echo "tree:    none (pre-0.16 mark; delta scoping unavailable)"
+      fi
       CURRENT_HASH=$(compute_hash_from_anchor "$PROJECT_ROOT" "$STORED_ANCHOR")
       HASH_RC=$?
       case $HASH_RC in
@@ -987,11 +1290,19 @@ $HASH" || {
         *) echo "current: (hash computation failed — gates fail open)" ;;
       esac
     fi
-    # Verdict mirrors check: clean-tree fast-path first, then hash compare.
+    # Verdict mirrors check: clean tree, then tree comparison, then hash.
     if [ "$CLEAN" = yes ]; then
       echo "verdict: clean tree — gates pass"
       exit 0
     fi
+    case "${TREE_VERDICT:-}" in
+      match)
+        echo "verdict: match — working-tree content equals the marked tree; gates pass"
+        exit 0 ;;
+      drift)
+        echo "verdict: drift — working-tree content differs from the marked tree. Review (/review-cycle:review) or re-mark (/review-cycle:accept) if already reviewed. Run the delta verb to see exactly what changed since the mark."
+        exit 1 ;;
+    esac
     if [ "$HASH_RC" -eq 1 ]; then
       echo "verdict: error — cannot compute current hash; gates fail open"
       exit 2
@@ -1005,11 +1316,8 @@ $HASH" || {
     ;;
 
   paths)
-    echo ".claude/.review-mark"
+    echo ".claude/review-cycle/"
     echo ".claude/.no-review-gate"
-    echo ".claude/.review-in-progress"
-    echo ".claude/.review-pr-in-progress"
-    echo ".claude/.review-stop-block"
     exit 0
     ;;
 

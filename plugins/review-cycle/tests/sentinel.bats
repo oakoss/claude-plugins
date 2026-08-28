@@ -9,37 +9,37 @@ setup() {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" seed
   [ "$status" -eq 0 ]
-  [ -f "$TEST_REPO/.claude/.review-mark" ]
-  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
-  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/review-cycle/mark")
 }
 
 @test "accept-state writes sentinel in fresh repo" {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 0 ]
-  [ -f "$TEST_REPO/.claude/.review-mark" ]
-  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
-  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/review-cycle/mark")
 }
 
 @test "seed always overwrites existing sentinel" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" seed
-  V1=$(cat "$TEST_REPO/.claude/.review-mark")
+  V1=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   echo "v2" > foo.txt
   "$REVIEW_SENTINEL" seed
-  V2=$(cat "$TEST_REPO/.claude/.review-mark")
+  V2=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   [ "$V1" != "$V2" ]
 }
 
 @test "accept-state always overwrites existing sentinel" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" accept-state
-  V1=$(cat "$TEST_REPO/.claude/.review-mark")
+  V1=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   echo "v2" > foo.txt
   "$REVIEW_SENTINEL" accept-state
-  V2=$(cat "$TEST_REPO/.claude/.review-mark")
+  V2=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   [ "$V1" != "$V2" ]
 }
 
@@ -98,10 +98,10 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-@test "paths prints the sentinel and opt-out paths first" {
+@test "paths prints the state directory and opt-out path" {
   run "$REVIEW_SENTINEL" paths
   [ "$status" -eq 0 ]
-  [ "${lines[0]}" = ".claude/.review-mark" ]
+  [ "${lines[0]}" = ".claude/review-cycle/" ]
   [ "${lines[1]}" = ".claude/.no-review-gate" ]
 }
 
@@ -131,7 +131,7 @@ setup() {
 @test "check treats malformed sentinel as missing" {
   echo "change" > foo.txt
   mkdir -p .claude
-  echo "not-a-valid-hash" > .claude/.review-mark
+  echo "not-a-valid-hash" > .claude/review-cycle/mark
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
 }
@@ -140,7 +140,7 @@ setup() {
   echo "change" > foo.txt
   mkdir -p .claude
   # 64 hex chars but no sha256: prefix (the old format)
-  echo "0000000000000000000000000000000000000000000000000000000000000000" > .claude/.review-mark
+  echo "0000000000000000000000000000000000000000000000000000000000000000" > .claude/review-cycle/mark
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
 }
@@ -189,7 +189,7 @@ setup() {
   echo "change" > foo.txt
   H_NONE=$("$REVIEW_SENTINEL" current-hash)
   mkdir -p .claude
-  echo "sha256:0000000000000000000000000000000000000000000000000000000000000000" > .claude/.review-mark
+  echo "sha256:0000000000000000000000000000000000000000000000000000000000000000" > .claude/review-cycle/mark
   H_WITH=$("$REVIEW_SENTINEL" current-hash)
   [ "$H_NONE" = "$H_WITH" ]
 }
@@ -225,7 +225,7 @@ setup() {
   cd "$BATS_TEST_TMPDIR"
   CLAUDE_PROJECT_DIR="$OTHER" run "$REVIEW_SENTINEL" --root "$TEST_REPO" check
   [ "$status" -eq 0 ]
-  [ ! -f "$OTHER/.claude/.review-mark" ]
+  [ ! -f "$OTHER/.claude/review-cycle/mark" ]
 }
 
 # Unborn repo: staged content in initial commit is captured
@@ -257,7 +257,7 @@ setup() {
   echo "v1" > a.txt
   git add a.txt
   "$REVIEW_SENTINEL" accept-state
-  ANCHOR_LINE=$(sed -n '1p' "$UNBORN/.claude/.review-mark")
+  ANCHOR_LINE=$(sed -n '1p' "$UNBORN/.claude/review-cycle/mark")
   [ "$ANCHOR_LINE" = "anchor:4b825dc642cb6eb9a060e54bf8d69288fbee4904" ]
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
@@ -431,7 +431,7 @@ setup() {
   printf 'anchor:%s\nsha256:%s\n' \
     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
     "0000000000000000000000000000000000000000000000000000000000000000" \
-    > "$TEST_REPO/.claude/.review-mark"
+    > "$TEST_REPO/.claude/review-cycle/mark"
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
 }
@@ -486,6 +486,7 @@ setup() {
 @test "accept-state exits 2 when .claude is blocked by a file (write_sentinel failure)" {
   echo "v1" > foo.txt
   # Block mkdir -p by placing a non-directory at the .claude path.
+  /bin/rm -rf "$TEST_REPO/.claude"
   echo "blocking" > "$TEST_REPO/.claude"
   run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 2 ]
@@ -978,7 +979,7 @@ setup() {
   ANCHOR_AT_MARK=$(git rev-parse HEAD)
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" accept-state
-  STORED_ANCHOR_1=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  STORED_ANCHOR_1=$(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark" | sed 's/^anchor://')
   [ "$STORED_ANCHOR_1" = "$ANCHOR_AT_MARK" ]
   git add foo.txt
   git commit -q -m "edit foo"
@@ -988,7 +989,7 @@ setup() {
   [ "$status" -eq 0 ]
   # Idempotent re-seed should rewrite the anchor to NEW_HEAD.
   "$REVIEW_SENTINEL" seed
-  STORED_ANCHOR_2=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  STORED_ANCHOR_2=$(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark" | sed 's/^anchor://')
   [ "$STORED_ANCHOR_2" = "$NEW_HEAD" ]
 }
 
@@ -1032,7 +1033,7 @@ setup() {
   printf 'anchor:%s\nsha256:%s\n' \
     "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
     "0000000000000000000000000000000000000000000000000000000000000000" \
-    > "$TEST_REPO/.claude/.review-mark"
+    > "$TEST_REPO/.claude/review-cycle/mark"
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
   assert_contains "$output" "unreachable"
@@ -1051,7 +1052,7 @@ setup() {
 @test "status: malformed mark on dirty tree reads as drift" {
   echo "change" > foo.txt
   mkdir -p "$TEST_REPO/.claude"
-  echo "garbage" > "$TEST_REPO/.claude/.review-mark"
+  echo "garbage" > "$TEST_REPO/.claude/review-cycle/mark"
   run "$REVIEW_SENTINEL" status
   [ "$status" -eq 1 ]
   assert_contains "$output" "malformed"
@@ -1083,7 +1084,7 @@ setup() {
   echo "change" > foo.txt
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 3 ]
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
   assert_contains "$output" "no review in progress"
   assert_contains "$output" "accept-state"
 }
@@ -1091,11 +1092,11 @@ setup() {
 @test "mark refuses without clobbering a sentinel already on disk" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" accept-state
-  BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
+  BEFORE=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   echo "v2" > foo.txt
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 3 ]
-  [ "$(cat "$TEST_REPO/.claude/.review-mark")" = "$BEFORE" ]
+  [ "$(cat "$TEST_REPO/.claude/review-cycle/mark")" = "$BEFORE" ]
 }
 
 @test "mark succeeds after cycle-start and consumes the marker" {
@@ -1104,7 +1105,7 @@ setup() {
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 0 ]
   "$REVIEW_SENTINEL" check
-  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
 }
 
 # Presence is the evidence a cycle started; freshness governs only whether the
@@ -1112,7 +1113,7 @@ setup() {
 @test "mark accepts a stale in-progress marker" {
   echo "change" > foo.txt
   mkdir -p "$TEST_REPO/.claude"
-  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/review-cycle/in-progress"
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 0 ]
   "$REVIEW_SENTINEL" check
@@ -1142,7 +1143,7 @@ setup() {
   echo "change" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
   "$REVIEW_SENTINEL" seed
-  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 0 ]
 }
@@ -1151,12 +1152,12 @@ setup() {
   echo "change" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
   "$REVIEW_SENTINEL" accept-state
-  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
 }
 
 @test "accept-state needs no marker and writes the sentinel" {
   echo "change" > foo.txt
-  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
   run "$REVIEW_SENTINEL" accept-state
   [ "$status" -eq 0 ]
   "$REVIEW_SENTINEL" check
@@ -1178,7 +1179,7 @@ setup() {
   cd "$BATS_TEST_TMPDIR"
   run "$REVIEW_SENTINEL" --root "$TEST_REPO" mark
   [ "$status" -eq 0 ]
-  [ -f "$TEST_REPO/.claude/.review-mark" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "a marker in one repo does not license a mark in another" {
@@ -1193,7 +1194,7 @@ setup() {
   echo "drift" > "$OTHER/bar.txt"
   run "$REVIEW_SENTINEL" --root "$OTHER" mark
   [ "$status" -eq 3 ]
-  [ ! -f "$OTHER/.claude/.review-mark" ]
+  [ ! -f "$OTHER/.claude/review-cycle/mark" ]
 }
 
 @test "mark resolves the marker from CLAUDE_PROJECT_DIR" {
@@ -1203,7 +1204,7 @@ setup() {
   export CLAUDE_PROJECT_DIR="$TEST_REPO"
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 0 ]
-  [ -f "$TEST_REPO/.claude/.review-mark" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 # mark's sibling exit codes: the guard must not swallow either. Both paths lost
@@ -1219,12 +1220,12 @@ setup() {
 @test "mark exits 2 on write failure and leaves the marker for a retry" {
   echo "change" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
-  chmod 500 "$TEST_REPO/.claude"
+  chmod 500 "$TEST_REPO/.claude/review-cycle"
   run "$REVIEW_SENTINEL" mark
-  chmod 700 "$TEST_REPO/.claude"
+  chmod 700 "$TEST_REPO/.claude/review-cycle"
   [ "$status" -eq 2 ]
   assert_contains "$output" "cannot write sentinel"
-  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
 }
 
 # A git failure inside the hash stream must never hash as "nothing differs".
@@ -1252,6 +1253,9 @@ setup() {
   git add -A
   git commit -q -m base
   "$REVIEW_SENTINEL" accept-state
+  # The guard under test lives in the legacy hash path; a stored tree would
+  # answer first, so drop it the way a pre-0.16 sentinel arrives.
+  sed -i.bak '3d' "$TEST_REPO/.claude/review-cycle/mark" && rm -f "$TEST_REPO/.claude/review-cycle/mark.bak"
   printf 'reviewed\nUNREVIEWED\n' > f.txt
 
   # Fail only the worktree-side enumeration; every other git call is real.
@@ -1287,6 +1291,8 @@ SHIM
   git add -A
   git commit -q -m base
   "$REVIEW_SENTINEL" accept-state
+  # Legacy-hash guard: drop the tree line so the hash path answers.
+  sed -i.bak '3d' "$TEST_REPO/.claude/review-cycle/mark" && rm -f "$TEST_REPO/.claude/review-cycle/mark.bak"
   printf 'reviewed\nUNREVIEWED\n' > f.txt
   printf '#!/bin/sh\nexit 4\n' > ext.sh
   chmod +x ext.sh
@@ -1436,6 +1442,222 @@ case " $* " in
   esac ;;
 esac
 SH
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+# --- reviewed-tree snapshot, delta, and the tree-first gate ---
+
+@test "mark writes a three-line sentinel with a gc-protected tree" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" cycle-start
+  run "$REVIEW_SENTINEL" mark
+  [ "$status" -eq 0 ]
+  TREE_LINE=$(sed -n '3p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^tree:[a-f0-9]{40}$' <<< "$TREE_LINE"
+  TREE=${TREE_LINE#tree:}
+  [ "$(git rev-parse refs/review-cycle/trees/main)" = "$TREE" ]
+  git gc --prune=now -q 2>/dev/null || true
+  run git cat-file -t "$TREE"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "tree"
+}
+
+@test "check passes after committing part of a reviewed file (cpl-34d)" {
+  printf 'a1\na2\na3\na4\n' > f.txt
+  git add -A
+  git commit -q -m base
+  printf 'a1\nCHANGED\na3\na4\nnew-tail\n' > f.txt
+  "$REVIEW_SENTINEL" accept-state
+  BLOB=$(printf 'a1\nCHANGED\na3\na4\n' | git hash-object -w --stdin)
+  git update-index --cacheinfo "100644,$BLOB,f.txt"
+  git commit -q -m partial
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "staged content in neither worktree nor HEAD drifts (P1 bypass guard)" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'sneaky\n' > x.txt
+  git add x.txt
+  /bin/rm x.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+  git rm -q --cached x.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "delta lists exactly the unreviewed changes, untracked included" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'base\nmore\n' > f.txt
+  printf 'new\n' > brand.txt
+  run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "$(printf 'M\tf.txt')"
+  assert_contains "$output" "$(printf 'A\tbrand.txt')"
+  assert_contains "$output" "--"
+  assert_contains "$output" "delta: 2 files"
+}
+
+@test "delta refuses with exit 4 when the index diverges from worktree and HEAD" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'sneaky\n' > x.txt
+  git add x.txt
+  /bin/rm x.txt
+  run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 4 ]
+  assert_contains "$output" "scope to the full diff"
+}
+
+@test "a mark over a partially staged file stays clear (no unclearable drift)" {
+  printf 'a1\na2\na3\na4\n' > f.txt
+  git add -A
+  git commit -q -m base
+  printf 'a1\nCHANGED\na3\na4\nnew-tail\n' > f.txt
+  BLOB=$(printf 'a1\nCHANGED\na3\na4\n' | git hash-object -w --stdin)
+  git update-index --cacheinfo "100644,$BLOB,f.txt"
+  "$REVIEW_SENTINEL" accept-state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+  run "$REVIEW_SENTINEL" match
+  [ "$status" -eq 0 ]
+}
+
+@test "an unstaged config edit drifts the tree path under a constant ignore pattern" {
+  echo "v1" > foo.txt
+  printf '{"ignore":[".claude/**"]}\n' > .claude/review-cycle.json
+  "$REVIEW_SENTINEL" accept-state
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+  printf '{"ignore":[".claude/**"],"x":1}\n' > .claude/review-cycle.json
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "delta exits 3 on a pre-0.16 two-line sentinel" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  sed -i.bak '3d' "$TEST_REPO/.claude/review-cycle/mark"
+  /bin/rm -f "$TEST_REPO/.claude/review-cycle/mark.bak"
+  run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 3 ]
+  assert_contains "$output" "delta unavailable"
+}
+
+@test "a two-line sentinel still gates via the hash path" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  sed -i.bak '3d' "$TEST_REPO/.claude/review-cycle/mark"
+  /bin/rm -f "$TEST_REPO/.claude/review-cycle/mark.bak"
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+  echo "v2" > foo.txt
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "an excluded write does not drift the tree check" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  mkdir -p .beads
+  echo "audit-line" >> .beads/interactions.jsonl
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "each worktree keeps its own marked tree across gc" {
+  echo "base" > f.txt
+  git add -A
+  git commit -q -m base
+  git worktree add -q "$BATS_TEST_TMPDIR/wtb" -b wtb-branch
+  echo "a-change" > f.txt
+  "$REVIEW_SENTINEL" accept-state
+  ( cd "$BATS_TEST_TMPDIR/wtb" && echo "b-change" > f.txt \
+      && "$REVIEW_SENTINEL" --root "$BATS_TEST_TMPDIR/wtb" accept-state )
+  git gc --prune=now -q 2>/dev/null || true
+  run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+  run "$REVIEW_SENTINEL" --root "$BATS_TEST_TMPDIR/wtb" delta
+  [ "$status" -eq 0 ]
+}
+
+@test "a linked worktree named main gets a distinct tree ref" {
+  echo "base" > f.txt
+  git add -A
+  git commit -q -m base
+  git worktree add -q "$BATS_TEST_TMPDIR/main" -b main-twin
+  "$REVIEW_SENTINEL" accept-state
+  ( cd "$BATS_TEST_TMPDIR/main" && echo "linked" > f.txt \
+      && "$REVIEW_SENTINEL" --root "$BATS_TEST_TMPDIR/main" accept-state )
+  MAIN_TREE=$(sed -n '3p' "$TEST_REPO/.claude/review-cycle/mark")
+  git gc --prune=now -q 2>/dev/null || true
+  run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+  [ "$(git rev-parse refs/review-cycle/trees/main)" = "${MAIN_TREE#tree:}" ]
+}
+
+@test "a sort failure inside the divergence probe blocks instead of passing (P1 shape)" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'sneaky\n' > x.txt
+  git add x.txt
+  /bin/rm x.txt
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$BATS_TEST_TMPDIR/shim/sort"
+  chmod +x "$BATS_TEST_TMPDIR/shim/sort"
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "an awk failure makes delta refuse instead of reporting a summary-less success" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'base\nmore\n' > f.txt
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$BATS_TEST_TMPDIR/shim/awk"
+  chmod +x "$BATS_TEST_TMPDIR/shim/awk"
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "summary generation failed"
+}
+
+@test "a grep failure inside the divergence probe blocks instead of passing (P1 shape)" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'sneaky\n' > x.txt
+  git add x.txt
+  /bin/rm x.txt
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  REAL_GREP="$(command -v grep)"
+  printf '#!/usr/bin/env bash\nexit 2\n' > "$BATS_TEST_TMPDIR/shim/grep"
+  chmod +x "$BATS_TEST_TMPDIR/shim/grep"
+  PATH="$BATS_TEST_TMPDIR/shim:$PATH" run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 1 ]
+}
+
+@test "a staged rename of a reviewed file routes to the hash and drifts" {
+  printf 'content\n' > a.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  git mv a.txt b.txt
+  git checkout -q HEAD -- a.txt 2>/dev/null || git restore -q --source=HEAD -- a.txt
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 1 ]
 }

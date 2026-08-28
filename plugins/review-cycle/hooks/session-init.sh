@@ -25,27 +25,46 @@ SOURCE=$(echo "$INPUT" | jq -r '.source // "unknown"' 2>/dev/null || echo "unkno
 
 PROJECT_ROOT=$(gate_should_run) || exit 0
 
-SENTINEL_FILE="$PROJECT_ROOT/.claude/.review-mark"
+SENTINEL_FILE="$PROJECT_ROOT/$GATE_STATE_DIR/mark"
 REVIEW_SENTINEL="${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel"
+
+# One-time move of pre-0.16 state files into the state directory, ahead of
+# everything that reads them. When both layouts hold a file the directory
+# wins and the stray legacy copy stays behind — harmless, both layouts sit
+# in the sentinel's exclude list. Fail-open: a failed move leaves the gate
+# reading the new layout, and the message says so.
+for PAIR in ".review-mark:mark" ".review-in-progress:in-progress" \
+            ".review-pr-in-progress:pr-in-progress" ".review-stop-block:stop-block"; do
+  OLD="$PROJECT_ROOT/.claude/${PAIR%%:*}"
+  NEW="$PROJECT_ROOT/$GATE_STATE_DIR/${PAIR##*:}"
+  [ -f "$OLD" ] || continue
+  [ -e "$NEW" ] && continue
+  if ! mkdir -p "$PROJECT_ROOT/$GATE_STATE_DIR" 2>/dev/null; then
+    echo "review-cycle: cannot create $GATE_STATE_DIR; pre-0.16 state files were not migrated. The gates read the new layout, so run /review-cycle:review or /review-cycle:accept if a gate result surprises the user this session."
+    break
+  fi
+  mv "$OLD" "$NEW" 2>/dev/null \
+    || echo "review-cycle: could not migrate .claude/${PAIR%%:*} to $GATE_STATE_DIR/${PAIR##*:}; if a gate result surprises the user this session, this is why."
+done
 
 # Revoke an abandoned cycle's marker. This sits above the re-seed decision
 # because that decision skips seeding exactly when the sentinel disagrees — the
 # unreviewed-drift case — and above the legacy branch's own exit for the same
 # reason. Stale-only: `startup` also fires when a second session opens while
 # the first is mid-cycle, and its Phase 8 still needs that marker.
-for STALE_MARKER in .review-in-progress .review-pr-in-progress; do
-  [ -f "$PROJECT_ROOT/.claude/$STALE_MARKER" ] || continue
-  gate_marker_is_stale "$PROJECT_ROOT/.claude/$STALE_MARKER" || continue
+for STALE_MARKER in in-progress pr-in-progress; do
+  [ -f "$PROJECT_ROOT/$GATE_STATE_DIR/$STALE_MARKER" ] || continue
+  gate_marker_is_stale "$PROJECT_ROOT/$GATE_STATE_DIR/$STALE_MARKER" || continue
   # The reason has to travel inline: this hook's stdout is what reaches the
   # model, while rm writes to stderr, which nothing here reads.
-  RM_ERR=$(/bin/rm -f "$PROJECT_ROOT/.claude/$STALE_MARKER" 2>&1)
-  [ ! -e "$PROJECT_ROOT/.claude/$STALE_MARKER" ] \
-    || echo "review-cycle: a stale .claude/$STALE_MARKER could not be removed (${RM_ERR:-no error reported}). While it exists it holds the Stop gate open, and .review-in-progress additionally lets \`review-sentinel mark\` treat it as evidence of a review. Raise this only if the user hits an unexpected gate result this session."
+  RM_ERR=$(/bin/rm -f "$PROJECT_ROOT/$GATE_STATE_DIR/$STALE_MARKER" 2>&1)
+  [ ! -e "$PROJECT_ROOT/$GATE_STATE_DIR/$STALE_MARKER" ] \
+    || echo "review-cycle: a stale $GATE_STATE_DIR/$STALE_MARKER could not be removed (${RM_ERR:-no error reported}). While it exists it holds the Stop gate open, and in-progress additionally lets \`review-sentinel mark\` treat it as evidence of a review. Raise this only if the user hits an unexpected gate result this session."
 done
 
 # SessionStart stdout lands in the model's context, not in front of the
 # user, so this is capability information for the model — explicitly not a
-# nag to relay. "Installed" needs evidence of wiring, not just the helper
+# nag to relay. "Installed" needs evidence of wiring, not merely the helper
 # file: on the pre-commit/simple-git-hooks paths install-hook only prints a
 # snippet, so an un-referenced helper enforces nothing and must not silence
 # the note. Called on every startup exit path, including legacy-sentinel
@@ -92,15 +111,19 @@ compute_legacy_hash() {
   (cd "$root" && {
     git status --porcelain --untracked-files=all \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null
     git diff --cached --binary \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null
     git diff --binary \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null
     git ls-files --others --exclude-standard \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null \
       | while IFS= read -r f; do
           printf '\n--UNTRACKED:%s--\n' "$f"

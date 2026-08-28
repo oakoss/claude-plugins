@@ -1,0 +1,7 @@
+---
+review-cycle: patch
+---
+
+Fixed the gate wrongly re-arming after committing part of a reviewed file (cpl-34d), and made the hot-path check ~50x faster on wide diffs.
+
+check and match now compare the stored reviewed tree against a freshly captured one when the sentinel carries a tree line — content equality, immune to the hunk-header drift that broke the hash when one file's changes were split across a commit. A divergent index (an entry differing from both the working tree and HEAD) routes to the hash comparison rather than being judged by the tree: the hash alone distinguishes a partial stage the mark saw (passes) from staged unreviewed content (drifts) — measured during review, judging it at the tree turned the former into a false drift that three consecutive accepts could not clear. The routing force-includes the config, so an ignore pattern matching it cannot carry config edits past the gate. Each worktree's marked tree is kept gc-reachable by its own ref under refs/review-cycle/trees/ (linked worktrees share custom refs, so a single name would let one worktree's mark orphan another's tree). The legacy hash path still serves old two-line sentinels, and current-hash is untouched: the in-cycle contamination snapshot deliberately keeps anchor sensitivity so an empty commit stays visible. Measured on a 100-dirty-file repo: the per-path hash check took 1.47s, the tree comparison 0.03s.

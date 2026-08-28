@@ -17,15 +17,19 @@ legacy_hash() {
   {
     git status --porcelain --untracked-files=all \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null
     git diff --cached --binary \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null
     git diff --binary \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null
     git ls-files --others --exclude-standard \
       ':(exclude).claude/.review-mark' \
+      ':(exclude,glob).claude/review-cycle/**' \
       ':(exclude).claude/.no-review-gate' 2>/dev/null \
       | while IFS= read -r f; do
           printf '\n--UNTRACKED:%s--\n' "$f"
@@ -43,8 +47,8 @@ run_session_init() {
 @test "session-init seeds when sentinel is missing" {
   echo "v1" > foo.txt
   run_session_init
-  [ -f "$TEST_REPO/.claude/.review-mark" ]
-  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark")
 }
 
 # When the 0.6.0 sentinel matches current state, session-init must re-seed so
@@ -58,12 +62,12 @@ run_session_init() {
   git commit -q -m "init"
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" accept-state
-  OLD_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  OLD_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark" | sed 's/^anchor://')
   git add foo.txt
   git commit -q -m "commit reviewed change"
   NEW_HEAD=$(git rev-parse HEAD)
   run_session_init
-  NEW_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/.review-mark" | sed 's/^anchor://')
+  NEW_ANCHOR=$(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark" | sed 's/^anchor://')
   [ "$NEW_ANCHOR" = "$NEW_HEAD" ]
   [ "$NEW_ANCHOR" != "$OLD_ANCHOR" ]
   run "$REVIEW_SENTINEL" check
@@ -73,10 +77,10 @@ run_session_init() {
 @test "session-init leaves 0.6.0 sentinel alone when it disagrees with current state" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" accept-state
-  STORED_BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
+  STORED_BEFORE=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   echo "v2" > foo.txt
   run_session_init
-  STORED_AFTER=$(cat "$TEST_REPO/.claude/.review-mark")
+  STORED_AFTER=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   [ "$STORED_BEFORE" = "$STORED_AFTER" ]
 }
 
@@ -85,10 +89,13 @@ run_session_init() {
   echo "u1" > new.txt
   mkdir -p .claude
   HASH=$(legacy_hash)
+  # Planted at the pre-0.16 path: this exercises the directory migration and
+  # the 0.5.x format migration in one startup, the real upgrade shape.
+  /bin/rm -rf "$TEST_REPO/.claude/review-cycle"
   echo "sha256:$HASH" > "$TEST_REPO/.claude/.review-mark"
   run_session_init
-  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
-  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/review-cycle/mark")
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
   echo "v2" > foo.txt
@@ -100,10 +107,10 @@ run_session_init() {
   echo "v1" > foo.txt
   mkdir -p .claude
   HASH=$(legacy_hash)
-  echo "$HASH" > "$TEST_REPO/.claude/.review-mark"
+  echo "$HASH" > "$TEST_REPO/.claude/review-cycle/mark"
   run_session_init
-  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/.review-mark")
-  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/.review-mark")
+  grep -qE '^anchor:[a-f0-9]{40}$' <(sed -n '1p' "$TEST_REPO/.claude/review-cycle/mark")
+  grep -qE '^sha256:[a-f0-9]{64}$' <(sed -n '2p' "$TEST_REPO/.claude/review-cycle/mark")
   run "$REVIEW_SENTINEL" check
   [ "$status" -eq 0 ]
 }
@@ -112,11 +119,11 @@ run_session_init() {
   echo "v1" > foo.txt
   mkdir -p .claude
   HASH=$(legacy_hash)
-  echo "sha256:$HASH" > "$TEST_REPO/.claude/.review-mark"
-  STORED_BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
+  echo "sha256:$HASH" > "$TEST_REPO/.claude/review-cycle/mark"
+  STORED_BEFORE=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   echo "v2" > foo.txt
   run_session_init
-  STORED_AFTER=$(cat "$TEST_REPO/.claude/.review-mark")
+  STORED_AFTER=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   # Stale 0.5.x sentinel preserved so the gate fires as malformed → drift.
   [ "$STORED_BEFORE" = "$STORED_AFTER" ]
 }
@@ -124,26 +131,26 @@ run_session_init() {
 @test "session-init no-ops on resume source" {
   echo "v1" > foo.txt
   run_session_init "resume"
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "session-init no-ops on clear source" {
   echo "v1" > foo.txt
   run_session_init "clear"
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "session-init no-ops on compact source" {
   echo "v1" > foo.txt
   run_session_init "compact"
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "session-init no-ops when kill-switch is set" {
   touch "$HOME/.claude/.disable-review-gate"
   echo "v1" > foo.txt
   run_session_init
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "session-init no-ops when project opted out (legacy marker)" {
@@ -151,7 +158,7 @@ run_session_init() {
   touch "$TEST_REPO/.claude/.no-review-gate"
   echo "v1" > foo.txt
   run_session_init
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "session-init no-ops when review-cycle.json sets disabled:true" {
@@ -159,7 +166,7 @@ run_session_init() {
   printf '{"disabled":true}\n' > "$TEST_REPO/.claude/review-cycle.json"
   echo "v1" > foo.txt
   run_session_init
-  [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 # Legacy `.no-review-gate` is NOT auto-migrated. The old marker is
@@ -183,7 +190,7 @@ run_session_init() {
   printf '{"disabled":false}\n' > "$TEST_REPO/.claude/review-cycle.json"
   echo "v1" > foo.txt
   run_session_init
-  [ -f "$TEST_REPO/.claude/.review-mark" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
 }
 
 @test "session-init emits the install-hook context note when no commit-time hook exists" {
@@ -221,11 +228,11 @@ run_session_init() {
   "$REVIEW_SENTINEL" accept-state
   echo "v2" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
-  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
-  STORED_BEFORE=$(cat "$TEST_REPO/.claude/.review-mark")
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/review-cycle/in-progress"
+  STORED_BEFORE=$(cat "$TEST_REPO/.claude/review-cycle/mark")
   run_session_init
-  [ "$(cat "$TEST_REPO/.claude/.review-mark")" = "$STORED_BEFORE" ]
-  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ "$(cat "$TEST_REPO/.claude/review-cycle/mark")" = "$STORED_BEFORE" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 3 ]
 }
@@ -239,7 +246,7 @@ run_session_init() {
   echo "v2" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
   run_session_init
-  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 0 ]
 }
@@ -247,9 +254,9 @@ run_session_init() {
 @test "session-init revokes a stale marker on the re-seed path too" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
-  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/review-cycle/in-progress"
   run_session_init
-  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
 }
 
 # The legacy-migration branch exits before the re-seed decision; the revocation
@@ -258,10 +265,10 @@ run_session_init() {
   echo "v1" > foo.txt
   mkdir -p "$TEST_REPO/.claude"
   HASH=$(legacy_hash)
-  echo "sha256:$HASH" > "$TEST_REPO/.claude/.review-mark"
-  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/.review-in-progress"
+  echo "sha256:$HASH" > "$TEST_REPO/.claude/review-cycle/mark"
+  echo "$(( $(date +%s) - 7200 ))" > "$TEST_REPO/.claude/review-cycle/in-progress"
   run_session_init
-  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
 }
 
 # The re-seed path is the one that skipped the stale check before: seed itself
@@ -271,7 +278,7 @@ run_session_init() {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
   run_session_init
-  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
   run "$REVIEW_SENTINEL" mark
   [ "$status" -eq 0 ]
 }
@@ -279,8 +286,49 @@ run_session_init() {
 @test "session-init leaves a fresh marker alone when no sentinel exists yet" {
   echo "v1" > foo.txt
   "$REVIEW_SENTINEL" cycle-start
+  [ ! -f "$TEST_REPO/.claude/review-cycle/mark" ]
+  run_session_init
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
+}
+
+@test "session-init migrates pre-0.16 state files into the state directory" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  mv "$TEST_REPO/.claude/review-cycle/mark" "$TEST_REPO/.claude/.review-mark"
+  date +%s > "$TEST_REPO/.claude/.review-in-progress"
+  echo rec > "$TEST_REPO/.claude/.review-stop-block"
+  /bin/rm -rf "$TEST_REPO/.claude/review-cycle"
+  run_session_init
+  [ -f "$TEST_REPO/.claude/review-cycle/mark" ]
+  [ -f "$TEST_REPO/.claude/review-cycle/in-progress" ]
   [ ! -f "$TEST_REPO/.claude/.review-mark" ]
+  [ ! -f "$TEST_REPO/.claude/.review-in-progress" ]
+  # The stop-block migrates and is then resolved by the matching-state
+  # re-seed, so it must be gone from BOTH layouts.
+  [ ! -f "$TEST_REPO/.claude/.review-stop-block" ]
+  [ ! -f "$TEST_REPO/.claude/review-cycle/stop-block" ]
+  run "$REVIEW_SENTINEL" check
+  [ "$status" -eq 0 ]
+}
+
+@test "migration failure is reported and the hook stays fail-open" {
+  echo "v1" > foo.txt
+  date +%s > "$TEST_REPO/.claude/.review-in-progress"
+  /bin/rm -rf "$TEST_REPO/.claude/review-cycle"
+  chmod 555 "$TEST_REPO/.claude"
+  run run_session_init
+  chmod 755 "$TEST_REPO/.claude"
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "were not migrated"
+}
+
+@test "migration prefers an existing new-layout file over the legacy copy" {
+  echo "v1" > foo.txt
+  "$REVIEW_SENTINEL" accept-state
+  echo "stale-legacy" > "$TEST_REPO/.claude/.review-mark"
   run_session_init
   [ -f "$TEST_REPO/.claude/.review-mark" ]
-  [ -f "$TEST_REPO/.claude/.review-in-progress" ]
+  run grep -q "stale-legacy" "$TEST_REPO/.claude/review-cycle/mark"
+  [ "$status" -ne 0 ]
 }

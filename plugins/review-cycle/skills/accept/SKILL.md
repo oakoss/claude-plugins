@@ -7,7 +7,7 @@ allowed-tools: Bash
 
 # Accept current state as reviewed
 
-Updates the review sentinel so the Stop hook and commit-gate will pass for this exact state. The sentinel is `${PROJECT_ROOT}/.claude/.review-mark`, atomically written.
+Updates the review sentinel so the Stop hook and commit-gate will pass for this exact state. The sentinel is `${PROJECT_ROOT}/.claude/review-cycle/mark`, atomically written; a reviewed-tree snapshot is captured with it, so later cycles can scope to the delta since this accept.
 
 Use cases:
 
@@ -27,7 +27,7 @@ Report the exit code to the user:
 
 - Exit 0: sentinel updated. The commit gate will pass for this exact state. Any further edits will re-trigger the gate.
 - Exit 1: not inside a git repository.
-- Exit 2: no sha256 tool or an unwritable `.claude` (nothing was recorded), or the state was recorded but `.review-in-progress` survived. Relay the stderr line verbatim; it names which, and only the last case leaves a usable sentinel behind.
+- Exit 2: no sha256 tool or an unwritable `.claude/review-cycle` (nothing was recorded), or the state was recorded but the in-progress marker survived. Relay the stderr line verbatim; it names which, and only the last case leaves a usable sentinel behind.
 
 ## Edge cases
 

@@ -91,6 +91,9 @@ setup_repo() {
   # the canonical path, so tests must compare against the canonical form.
   mkdir -p "$BATS_TEST_TMPDIR/repo"
   TEST_REPO="$(cd "$BATS_TEST_TMPDIR/repo" && pwd -P)"
+  # Fixtures write state files directly, before any sentinel verb has had a
+  # chance to create the directory.
+  mkdir -p "$BATS_TEST_TMPDIR/repo/.claude/review-cycle"
   cd "$TEST_REPO" || return 1
   git init -q
   git config user.email "test@example.com"
