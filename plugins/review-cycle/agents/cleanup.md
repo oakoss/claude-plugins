@@ -68,6 +68,7 @@ Do NOT apply de-slopify patterns to:
 - Algorithm logic
 - Type definitions
 - Test assertions (their precision is intentional)
+- Load-bearing structures in runtime markdown — in agent bodies and `SKILL.md` files, templates, decision tables, literal thresholds, verbatim required lines, and rule or field definitions are algorithm logic that other agents parse; reword only the narration around them
 
 De-slopify's code-slop guidance (verbose naming, unnecessary abstractions, defensive over-engineering) targets code logic, which this pass does not modify — leave those to a reviewer.
 
