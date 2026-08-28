@@ -293,7 +293,45 @@ build_worktree_tree() {
   realidx=$(git rev-parse --git-path index) || return 1
   if [ -f "$realidx" ]; then cp "$realidx" "$scratch" || return 1; fi
   [ -f "$scratch" ] || GIT_INDEX_FILE="$scratch" git read-tree --empty || return 1
-  GIT_INDEX_FILE="$scratch" git add -A -- . "${EXCLUDES_LIST[@]}" 2>/dev/null || return 1
+  # git add refuses (exit 1, "paths are ignored by one of your .gitignore
+  # files") whenever an exclude pathspec names an existing gitignored path —
+  # a directory, a file, even an empty directory — and init gitignores both
+  # the state dir and the opt-out marker, so every init'd repo hit it. Drop
+  # only the pattern-ignored excludes from the add: git skips those
+  # paths anyway, so the tree is unchanged, while the excludes that remain
+  # keep the add out of directories it must not walk (an unreadable file
+  # there aborts the add at exit 128, and staging a large excluded tree
+  # costs seconds plus garbage blobs). The rm sweep still drops every
+  # excluded path from the tree either way. --no-index: tracked content in
+  # an ignored dir suppresses plain check-ignore while add still refuses.
+  local bares=() bare ignored="" add_ex=() i=0
+  for p in "${EXCLUDES_LIST[@]}"; do
+    case "$p" in
+      ':(exclude,glob)'*) bare="${p#':(exclude,glob)'}" ;;
+      ':(exclude)'*)      bare="${p#':(exclude)'}" ;;
+      *)                  bare="$p" ;;
+    esac
+    bare="${bare%%/\*\**}"
+    bare="${bare%/}"
+    bares+=("$bare")
+  done
+  if [ "${#bares[@]}" -gt 0 ]; then
+    ignored=$(printf '%s\n' "${bares[@]}" | git check-ignore --no-index --stdin 2>/dev/null)
+  fi
+  for p in "${EXCLUDES_LIST[@]}"; do
+    case $'\n'"$ignored"$'\n' in
+      *$'\n'"${bares[$i]}"$'\n'*) : ;;
+      *) add_ex+=("$p") ;;
+    esac
+    i=$((i+1))
+  done
+  # bash 3.2 errors on empty-array expansion under set -u; an allowlist
+  # .gitignore (/* with negations) empties add_ex.
+  if [ "${#add_ex[@]}" -gt 0 ]; then
+    GIT_INDEX_FILE="$scratch" git add -A -- . "${add_ex[@]}" 2>/dev/null || return 1
+  else
+    GIT_INDEX_FILE="$scratch" git add -A -- . 2>/dev/null || return 1
+  fi
   for p in "${EXCLUDES_LIST[@]}"; do
     case "$p" in
       ':(exclude,glob)'*) positives+=(":(glob)${p#':(exclude,glob)'}") ;;
@@ -301,10 +339,9 @@ build_worktree_tree() {
     esac
   done
   if [ "${#positives[@]}" -gt 0 ]; then
-    # -f: the scratch index is throwaway and these paths are being dropped
-    # from the tree by design; without it, git rm refuses on an entry whose
-    # staged content matches neither HEAD nor the file, and every later
-    # capture fails permanently once such a path is staged.
+    # -f is load-bearing: without it, a path excluded from the add whose
+    # index content matches neither HEAD nor the worktree makes git rm
+    # --cached refuse, and every capture fails until that entry clears.
     GIT_INDEX_FILE="$scratch" git rm -r -q -f --cached --ignore-unmatch -- "${positives[@]}" >/dev/null 2>&1 || return 1
   fi
   if [ -f "$CONFIG_PATH" ]; then
