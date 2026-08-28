@@ -45,7 +45,7 @@ gh pr diff <selector> --name-only
 - `state: CLOSED` → say so and ask before proceeding.
 - `isDraft: true` → proceed (the user pointed at it deliberately) and carry "draft" into the report header.
 
-**Classify the tier** from the changed files and `additions + deletions`, with the same rule as the review cycle: **light** when every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`) or the whole diff is ~25 changed lines or fewer; **full** otherwise. The tier decides the fan-out and whether Codex's effort is capped. Decide once, name it in the report.
+**Classify the tier** from the changed files and `additions + deletions`, with the same rule as the review cycle: **light** when every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`) or the whole diff is ~25 changed lines or fewer; **full** otherwise. Markdown a tool loads as instructions tiers as code, wherever it lives: agent bodies, `SKILL.md`, commands, hook-owned markdown, `reference/` files a skill loads, and instruction files like `AGENTS.md` and `CLAUDE.md`. Under a plugin directory that leaves only `README.md`, `LICENSE*`, `CHANGELOG*`, `NOTICE`, and `tests/` as prose. The tier decides the fan-out and whether Codex's effort is capped. Decide once, name it in the report.
 
 **Probe the Codex leg** — optional, exactly as in the review cycle:
 

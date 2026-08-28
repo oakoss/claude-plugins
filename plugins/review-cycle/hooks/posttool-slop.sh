@@ -59,7 +59,7 @@ add_finding() {
   fi
 }
 
-# Comment-density check on the text just written. Narrating WHAT-comments
+# Comment-density check on the written text. Narrating WHAT-comments
 # mostly dodge the pattern greps (any verb, any phrasing), but they can't
 # dodge arithmetic: a code edit where a third of the lines are comments is
 # slop with rare exceptions. Comment-carried config formats are exempt —
@@ -85,18 +85,45 @@ case "$FILE" in
                NR==1 && /^[[:space:]]*#!/ {next}
                $0 !~ /^[[:space:]]*(\/\/|#([[:space:]]|$)|--([[:space:]]|\[|$)|\/\*|\*([[:space:]]|\/|$))/ && NF {body=1; print}')
     fi
+    # The star, '#', and '--' alternatives require whitespace or EOL
+    # after them ('/' too for star, '[' too for Lua's --[[), so comments
+    # count but C dereferences (*p = 1;), #include directives,
+    # #[attributes], shebangs, and --i; statements do not.
+    COMMENT_RE='^[[:space:]]*(//|#([[:space:]]|$)|--([[:space:]]|\[|$)|/\*|\*([[:space:]]|/|$))'
+    # Replacing a pure comment block with a pure comment block is comment-
+    # editing (often fixing this hook's own earlier finding): density
+    # carries no signal there. BOTH sides must be all-comment — a one-line
+    # comment anchor must not wave a large narrated block through. Blank
+    # means no non-whitespace character; an indented separator line must
+    # not break the skip.
+    OLD_TEXT=$(echo "$INPUT" | jq -r '
+      .tool_input.old_string
+      // ((.tool_input.edits // []) | map(.old_string // "") | join("\n"))' 2>/dev/null | tr -d '\0')
+    OLD_TOTAL=$(printf '%s\n' "$OLD_TEXT" | grep -c '[^[:space:]]' 2>/dev/null | tr -cd '0-9')
+    OLD_COMMENTS=$(printf '%s\n' "$OLD_TEXT" | grep -cE "$COMMENT_RE" 2>/dev/null | tr -cd '0-9')
+    [ -n "$OLD_TOTAL" ] || OLD_TOTAL=0
+    [ -n "$OLD_COMMENTS" ] || OLD_COMMENTS=0
+    # A MultiEdit insertion (empty old_string) is new narration riding a
+    # comment anchor, not comment-editing; it disqualifies the skip. The
+    # string compare means a jq failure defaults toward the check running.
+    INS_EMPTY=$(echo "$INPUT" | jq -r '(.tool_input.edits // []) | map(.old_string // "" | gsub("\\s";"")) | any(. == "") | tostring' 2>/dev/null)
     if [ -n "$NEW_TEXT" ]; then
       # grep -c prints the 0 itself on no match (while exiting 1), so no
       # fallback echo; tr guards against a hard grep failure leaving junk.
       TOTAL_LINES=$(printf '%s\n' "$NEW_TEXT" | grep -c . 2>/dev/null | tr -cd '0-9')
-      # The star, '#', and '--' alternatives require whitespace or EOL
-      # after them ('/' too for star, '[' too for Lua's --[[), so comments
-      # count but C dereferences (*p = 1;), #include directives,
-      # #[attributes], shebangs, and --i; statements do not.
-      COMMENT_LINES=$(printf '%s\n' "$NEW_TEXT" | grep -cE '^[[:space:]]*(//|#([[:space:]]|$)|--([[:space:]]|\[|$)|/\*|\*([[:space:]]|/|$))' 2>/dev/null | tr -cd '0-9')
+      COMMENT_LINES=$(printf '%s\n' "$NEW_TEXT" | grep -cE "$COMMENT_RE" 2>/dev/null | tr -cd '0-9')
+      NEW_NONBLANK=$(printf '%s\n' "$NEW_TEXT" | grep -c '[^[:space:]]' 2>/dev/null | tr -cd '0-9')
       [ -n "$TOTAL_LINES" ] || TOTAL_LINES=0
       [ -n "$COMMENT_LINES" ] || COMMENT_LINES=0
-      if [ "$COMMENT_LINES" -ge 4 ] && [ "$TOTAL_LINES" -gt 0 ] \
+      [ -n "$NEW_NONBLANK" ] || NEW_NONBLANK=0
+      # -gt 0 is unreachable by input (COMMENT_RE needs a non-whitespace
+      # char); it guards a faulted count — a failed nonblank grep must not
+      # vacuously pass the new-side test while COMMENT_LINES stays healthy.
+      if [ "$OLD_TOTAL" -gt 0 ] && [ "$OLD_COMMENTS" -ge "$OLD_TOTAL" ] \
+         && [ "$NEW_NONBLANK" -gt 0 ] && [ "$COMMENT_LINES" -ge "$NEW_NONBLANK" ] \
+         && [ "$INS_EMPTY" = "false" ]; then
+        :
+      elif [ "$COMMENT_LINES" -ge 4 ] && [ "$TOTAL_LINES" -gt 0 ] \
          && [ $((COMMENT_LINES * 100 / TOTAL_LINES)) -ge 30 ]; then
         add_finding "High comment density in this edit" \
           "${COMMENT_LINES} of ${TOTAL_LINES} written lines are comments. Per the comment policy most WHAT-comments must be removed; keep only those stating a non-obvious WHY."

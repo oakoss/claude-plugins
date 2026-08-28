@@ -1,6 +1,6 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — docs-only or ~25 changed lines or fewer — get code-reviewer and a 2-iteration cap; the rest get the full conditional fan-out, max 4). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies, self-verifies mechanical and empirically-verified message fixes instead of re-fanning-out, then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state. Updates the review sentinel on completion. Does NOT commit.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer and a 2-iteration cap; the rest get the full conditional fan-out, max 4). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies, self-verifies mechanical and empirically-verified message fixes instead of re-fanning-out, then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state. Updates the review sentinel on completion. Does NOT commit.
 argument-hint: "[against <ref>] [max <n>] [effort <level>]"
 allowed-tools: Bash, Read, Edit, Write, MultiEdit, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
@@ -105,7 +105,7 @@ If empty, report "nothing to review" and stop.
 
 **Classify the diff into a tier.** List the changed paths in scope (the working tree by default, `<ref>..HEAD` when a base was given) and pick one:
 
-- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Reduced: fan-out is `code-reviewer` plus Codex when available, default iteration cap 2 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
+- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Markdown a tool loads as instructions tiers as code, wherever it lives: agent bodies, `SKILL.md`, commands, hook-owned markdown, `reference/` files a skill loads, and instruction files like `AGENTS.md` and `CLAUDE.md` — an agent body is a system prompt, not prose. Under a plugin directory that leaves only `README.md`, `LICENSE*`, `CHANGELOG*`, `NOTICE`, and `tests/` as prose — the same runtime split a version-bump gate draws. Reduced: fan-out is `code-reviewer` plus Codex when available, default iteration cap 2 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
 - **full** — anything else. Full conditional fan-out, default cap 4, Codex at the user's configured effort.
 
 The tier decides fan-out, iteration cap, and whether Codex's effort is capped. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
@@ -378,7 +378,7 @@ Then decide:
 
 ### Phase 7: Post-loop pass (report-only reviewers + cleanup)
 
-The loop has converged. Run the report-only reviewers **once** here — against the final post-fix state — together with cleanup. Spawn all applicable agents in a single turn; they don't conflict (the reviewers only read; cleanup only edits comments/prose, which doesn't change a structural or spec verdict):
+The loop has converged. Run the report-only reviewers **once** here — against the final post-fix state — together with cleanup. Spawn all applicable agents in a single turn when no changed path is runtime markdown (Phase 1's split): the reviewers only read, and on an ordinary code diff cleanup edits comments and prose, which doesn't change a structural or spec verdict. When the diff's prose IS runtime — agent bodies, skill bodies — a cleanup rewording changes exactly what the spec and maintainability legs are evaluating mid-read, so cleanup (inline or spawned) runs only after both reports land:
 
 1. **`review-cycle:maintainability-auditor`** — if the diff includes non-trivial source-code changes (new or substantially reworked functions, modules, types, or logic). Skip it when the diff is only docs, config, version bumps, or a handful of trivial lines — its ambitious suggestions are noise on small changes.
 
@@ -399,7 +399,7 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 
 **Cleanup.** A separate agent spawn only earns its place on a diff big enough that loading the de-slopify methodology into your own context would be the greater cost:
 
-- **diffs under ~150 changed lines, whatever the tier** — clean inline, yourself. Apply the embedded comment policy to comments you touched, and invoke `/review-cycle:de-slopify` via the Skill tool for the prose methodology, applying it to modified `.md` files and commit-message drafts. Tightening prose must never make it false: under the evidence policy, treat any claim about a command in the prose you touch as checkable, correct it against a run, and report the correction separately from the wording changes — the author needs to know a claim was wrong, not just that a sentence got shorter. Same exclusions as the agent: never touch algorithm logic, type definitions, or test assertions.
+- **diffs under ~150 changed lines, whatever the tier** — clean inline, yourself. Apply the embedded comment policy to comments you touched, and invoke `/review-cycle:de-slopify` via the Skill tool for the prose methodology, applying it to modified `.md` files and commit-message drafts. Tightening prose must never make it false: under the evidence policy, treat any claim about a command in the prose you touch as checkable, correct it against a run, and report the correction separately from the wording changes — the author needs to know a claim was wrong, not just that a sentence got shorter. Same exclusions as the agent: never touch algorithm logic, type definitions, or test assertions — and in runtime markdown, templates, decision tables, literal thresholds, and rule definitions are logic.
 - **~150 changed lines or more** — spawn the cleanup subagent (it has de-slopify preloaded via its `skills` frontmatter). Size, not tier, decides: a large docs-only diff is light-tier for fan-out but is exactly the prose volume the agent spawn is for:
 
   ```js
@@ -410,7 +410,7 @@ Running them here, once, is the whole point: the opus maintainability pass and t
   })
   ```
 
-  It edits files directly and returns a summary. Scope: comments in modified code, modified `.md` files, commit-message drafts. Excluded: algorithm logic, type definitions, test assertions.
+  It edits files directly and returns a summary. Scope: comments in modified code, modified `.md` files, commit-message drafts. Excluded: algorithm logic, type definitions, test assertions, and the load-bearing structures in runtime markdown its body names.
 
 ### Phase 8: Update sentinel
 

@@ -187,6 +187,122 @@ write_lines() {
   assert_contains "$output" "4 of 8"
 }
 
+@test "density skips an edit that replaces a pure comment block" {
+  write_lines f.ts "const a = 1;"
+  OLD=$'// one long changelog-style comment\n// spanning several lines\n// that a prior fire asked to tighten'
+  NEW=$'// tightened WHY line one\n// tightened WHY line two\n// tightened WHY line three\n// tightened WHY line four'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg os "$OLD" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:$os, new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "density still fires when the replaced text contains code" {
+  write_lines f.ts "const a = 1;"
+  OLD=$'const a = 1;\n// old note'
+  NEW=$'// alpha\n// beta\n// gamma\n// delta\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg os "$OLD" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:$os, new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
+}
+
+@test "density skips a MultiEdit whose combined old_strings are all comments" {
+  write_lines f.ts "const a = 1;"
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
+    {old_string:"// old one", new_string:"// new one\n// new two"},
+    {old_string:"// old two", new_string:"// new three\n// new four"}
+  ]}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "density fires on a MultiEdit when any old_string carries code" {
+  write_lines f.ts "const a = 1;"
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
+    {old_string:"// old one", new_string:"// alpha\n// beta\nconst a = 1;\nconst b = 2;"},
+    {old_string:"const x = 9;", new_string:"// gamma\n// delta\nconst c = 3;\nconst d = 4;"}
+  ]}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
+}
+
+@test "density skip survives a whitespace-only line inside the comment block" {
+  write_lines f.ts "const a = 1;"
+  OLD=$'// para one\n   \n// para two'
+  NEW=$'// new one\n// new two\n// new three\n// new four'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg os "$OLD" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:$os, new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "a one-line comment anchor does not suppress density on a large mixed block" {
+  write_lines f.ts "const a = 1;"
+  NEW=$'// alpha\n// beta\n// gamma\n// delta\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:"// old note", new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "4 of 8"
+}
+
+@test "a MultiEdit comment-only insertion riding a comment anchor still fires density" {
+  write_lines f.ts "const a = 1;"
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
+    {old_string:"// c", new_string:"// c2"},
+    {old_string:"", new_string:"// alpha\n// beta\n// gamma\n// delta"}
+  ]}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+}
+
+@test "a whitespace-only anchor does not reopen the insertion hole" {
+  write_lines f.ts "const a = 1;"
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
+    {old_string:"// c", new_string:"// c2"},
+    {old_string:"   ", new_string:"// alpha\n// beta\n// gamma\n// delta"}
+  ]}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+}
+
+@test "an empty old_string on an Edit leaves density active" {
+  write_lines f.ts "const a = 1;"
+  NEW=$'// alpha\n// beta\n// gamma\n// delta\n// epsilon'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:"", new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+  assert_contains "$output" "5 of 5"
+}
+
+@test "density fires when code is replaced by an all-comment block" {
+  write_lines f.ts "const a = 1;"
+  OLD=$'const a = 1;\nconst b = 2;'
+  NEW=$'// alpha\n// beta\n// gamma\n// delta\n// epsilon'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg os "$OLD" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:$os, new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  assert_contains "$output" "High comment density"
+}
+
+@test "density skip survives a whitespace-only line in the written comment block" {
+  write_lines f.ts "const a = 1;"
+  OLD=$'// old note'
+  NEW=$'// new one\n// new two\n   \n// new three\n// new four'
+  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg os "$OLD" --arg ns "$NEW" \
+    '{tool_input:{file_path:$fp, old_string:$os, new_string:$ns}}')
+  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 @test "density does not count pointer-dereference lines as comments" {
   write_lines f.c "*p = 1;" "*q = 2;" "*r = 3;" "*s = 4;" "int a = 1;" "int b = 2;" "int c = 3;" "int d = 4;"
   run run_slop_hook "$TEST_REPO/f.c"
