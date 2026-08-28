@@ -27,6 +27,9 @@ pnpm-debug.log
 
 # Local Claude Code overrides
 .claude/settings.local.json
+# Session plan artifacts. A local choice, not one the plugin's init imposes —
+# some projects commit their plans.
+.claude/plans/
 
 # Beads / Dolt
 .dolt/

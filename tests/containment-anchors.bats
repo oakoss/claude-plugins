@@ -1,8 +1,10 @@
 #!/usr/bin/env bats
-# Guard for the containment contract: every measuring reviewer works in a
-# private mktemp -d — never a shared session scratchpad — names that directory
-# in its report, and no agent the cycle spawns may reshape a command to slip
-# past a guard.
+# Prose anchors for the review cycle's contracts. The containment contract is
+# the largest: every measuring reviewer works in a private mktemp -d — never a
+# shared session scratchpad — names that directory in its report, and no agent
+# the cycle spawns may reshape a command to slip past a guard. Later tests
+# anchor the effort argument, the settled-findings brief, and release-note
+# verification the same way.
 #
 # Two measured incidents motivate the anchors: a reviewer's copy mutated
 # mid-run by a sibling agent sharing the session scratchpad, and a reviewer
@@ -226,6 +228,108 @@ list_all_agents() {
   run list_all_agents "$bare"
   [ "$status" -eq 2 ]
   assert_contains "$output" "could not enumerate"
+}
+
+@test "Phase 3 tells later iterations what earlier ones settled" {
+  local path="$REPO_ROOT/plugins/review-cycle/skills/review/SKILL.md"
+  local marker='already settled this cycle'
+  local missing="" section count line
+  [ -r "$path" ] || { printf 'review SKILL.md unreadable\n' >&2; return 1; }
+  section="$(awk '/^##+ Phase 3/{f=1} f{print} f && /^##+ Phase 4/{exit}' "$path")" || true
+  if [ -z "$section" ]; then
+    printf 'review: Phase 3 section not found\n' >&2; return 1
+  fi
+  printf '%s\n' "$section" | tail -1 | grep -Eq '^##+ Phase 4' || {
+    printf 'review: Phase 3 section unterminated\n' >&2; return 1
+  }
+  count="$(printf '%s\n' "$section" | grep -cF "$marker")" || true
+  if [ "$count" != 1 ]; then
+    missing+="  review: settled-findings block expected exactly once in Phase 3, found ${count:-unreadable}"$'\n'
+  else
+    # Anchors span enough words that a splice cutting THROUGH them breaks the
+    # match — measured: 'not to be re-reported' alone stayed green under
+    # "Nothing here says these are not to be re-reported"; the widened form
+    # fails. Residual: a negation wrapped around an intact span still passes,
+    # as does the paragraph relocated elsewhere within the same phase.
+    line="$(printf '%s\n' "$section" | grep -F "$marker")"
+    printf '%s' "$line" | grep -qF 'From iteration 2 on' || missing+="  review: settled block lost its iteration-2 trigger"$'\n'
+    printf '%s' "$line" | grep -qF 'listing four things: what was fixed; what was deferred and why; what was rebutted and on what basis, whether a measurement, the documentation, or a deliberate design decision' || missing+="  review: settled block lost the four-item enumeration"$'\n'
+    printf '%s' "$line" | grep -qF '; and what was examined and left alone on purpose. That last category is not optional' || missing+="  review: examined-and-left-alone demoted out of the mandated list"$'\n'
+    printf '%s' "$line" | grep -qF 'these are settled and are not to be re-reported' || missing+="  review: settled block lost its do-not-re-report rule"$'\n'
+    printf '%s' "$line" | grep -qF 'must say so with new evidence rather than restating' || missing+="  review: settled block lost the new-evidence escape"$'\n'
+    printf '%s' "$line" | grep -qF 'Every leg gets it, Codex included,' || missing+="  review: settled block lost its route to the Codex brief"$'\n'
+  fi
+  [ -z "$missing" ] || {
+    printf 'settled-findings contract drifted:\n%s' "$missing" >&2
+    return 1
+  }
+}
+
+@test "Phase 7 checks release-note files against the diff, and cleanup may not fake the check" {
+  local skill="$REPO_ROOT/plugins/review-cycle/skills/review/SKILL.md"
+  local agent="$REPO_ROOT/plugins/review-cycle/agents/cleanup.md"
+  local marker='Check every release-note file in play against the diff itself'
+  local missing="" section count line summary evidence
+  [ -r "$skill" ] || { printf 'review SKILL.md unreadable\n' >&2; return 1; }
+  [ -r "$agent" ] || { printf 'cleanup.md unreadable\n' >&2; return 1; }
+  section="$(awk '/^##+ Phase 7/{f=1} f{print} f && /^##+ Phase 8/{exit}' "$skill")" || true
+  if [ -z "$section" ]; then
+    printf 'review: Phase 7 section not found\n' >&2; return 1
+  fi
+  printf '%s\n' "$section" | tail -1 | grep -Eq '^##+ Phase 8' || {
+    printf 'review: Phase 7 section unterminated\n' >&2; return 1
+  }
+  count="$(printf '%s\n' "$section" | grep -cF "$marker")" || true
+  if [ "$count" != 1 ]; then
+    missing+="  review: release-note check expected exactly once in Phase 7, found ${count:-unreadable}"$'\n'
+  else
+    # Bound to the marker's own line: a clause parked in an unrelated Phase 7
+    # bullet satisfied a section-wide grep (measured). Residuals, as in the
+    # Phase 3 test: a negation wrapped around an intact span, and the
+    # paragraph relocated within the section, both still pass.
+    line="$(printf '%s\n' "$section" | grep -F "$marker")"
+    printf '%s' "$line" | grep -qF 'plus any already staged before the cycle began' \
+      || missing+="  review: release-note check no longer covers files staged in an earlier pass"$'\n'
+    printf '%s' "$line" | grep -qF 'against the final post-fix state and correct it' \
+      || missing+="  review: release-note check lost its final-state correct-or-report rule"$'\n'
+    printf '%s' "$line" | grep -qF 'last, after cleanup has finished editing' \
+      || missing+="  review: release-note check no longer runs after cleanup"$'\n'
+    printf '%s' "$line" | grep -qF 'Do this yourself, whichever cleanup mode runs' \
+      || missing+="  review: release-note check no longer binds both cleanup modes"$'\n'
+    printf '%s' "$line" | grep -qF "the summary's release-note field, separately from wording changes" \
+      || missing+="  review: release-note check lost its route to the Phase 9 field"$'\n'
+    # A second directive elsewhere in Phase 7 restores the pre-fix order while
+    # every anchor above still matches. Bold-lead lines only: an unscoped
+    # count also fires on prose describing the step; bullet and indented
+    # directives count too, being the form Phase 7 already uses. Residual:
+    # splitting the
+    # instruction into two bold directives trips this legitimately.
+    [ "$(printf '%s\n' "$section" | grep -E '^[[:space:]]*(- )?\*\*' | grep -icE 'release[- ]note|changeset|bump file')" = 1 ] \
+      || missing+="  review: Phase 7 mentions release notes off the marker line — a second, earlier check would undo the ordering"$'\n'
+  fi
+  summary="$(awk '/^##+ Phase 9/{f=1} f{print} f && /^##+ Phase 10/{exit}' "$skill")" || true
+  if [ -z "$summary" ]; then
+    printf 'review: Phase 9 section not found\n' >&2; return 1
+  fi
+  printf '%s\n' "$summary" | tail -1 | grep -Eq '^##+ Phase 10' || {
+    printf 'review: Phase 9 section unterminated\n' >&2; return 1
+  }
+  # Whole line, not the label: 'Release-note corrections: N — <ignore; always
+  # print none>' satisfied a label-only anchor.
+  printf '%s\n' "$summary" | grep -qF 'Release-note corrections: N — <file, the claim that no longer matched the diff> | none | not checked (<reason>) | no release-note file in this diff' \
+    || missing+="  review: Phase 9 lost the release-note corrections field"$'\n'
+  evidence="$(awk '/^## Evidence/{f=1; next} f && /^## /{exit} f{print}' "$agent")" || true
+  if [ -z "$evidence" ]; then
+    printf 'cleanup: Evidence section not found\n' >&2; return 1
+  fi
+  printf '%s\n' "$evidence" | grep -qF 'Never report that prose matches the code unless you compared them line by line.' \
+    || missing+="  cleanup: lost the ban on asserting an unverified match"$'\n'
+  printf '%s\n' "$evidence" | grep -qF 'Either compare and say what you compared, or say you did not check' \
+    || missing+="  cleanup: lost the sanctioned alternative to the ban"$'\n'
+  [ -z "$missing" ] || {
+    printf 'release-note verification drifted:\n%s' "$missing" >&2
+    return 1
+  }
 }
 
 @test "a planted agent without the contract is named" {

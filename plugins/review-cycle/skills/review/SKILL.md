@@ -185,6 +185,8 @@ This covers the Phase 3 fan-out, including the Codex CLI, which carries no conta
 
 **Carry the evidence policy into the brief**, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. The bundled subagents carry this in their own bodies; Codex does not, and the brief is the only channel that reaches it. Carry the never-evade rule into the brief the same way: never reshape a command to slip past a guard — an opt-out is visible and reviewable, an evasion is neither.
 
+**From iteration 2 on, the brief carries what earlier iterations settled.** A leg has no memory of the passes before it, so without this it re-raises what the cycle already decided — measured twice: a Codex leg re-raised a rule a previous iteration had deliberately documented, and another re-raised a claim an earlier iteration had rebutted by measurement. Append a short `already settled this cycle` block, findings only rather than a transcript, listing four things: what was fixed; what was deferred and why; what was rebutted and on what basis, whether a measurement, the documentation, or a deliberate design decision; and what was examined and left alone on purpose. That last category is not optional bookkeeping: a judgment that something is fine reads as an unmade decision to the next leg, and gets re-raised exactly like an unfixed finding. Say plainly that these are settled and are not to be re-reported, and that a leg which believes one is wrong must say so with new evidence rather than restating the original finding. Every leg gets it, Codex included, on the same single-line no-double-quotes terms as the rest of its brief.
+
 **Ask for the execution receipt in the brief too.** Every leg opens its report with two lines: `execution:` naming the heaviest verification that *succeeded* — build, test suite, typecheck, or the repro its findings rest on — with that command's first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. Phase 4 grades the leg from those two lines. The subagents carry this in their bodies; Codex does not, so the brief is again the only channel that reaches it.
 
 In a single conversation turn, invoke ALL of the following:
@@ -355,13 +357,13 @@ When fixing, follow the comment policy — do not add comments that restate the 
 
 Track fixed items and deferred items separately for the final summary. Do not auto-create beads or trekker tickets for deferred findings — just list them in the summary; the user decides.
 
-Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (spec conformance, maintainability) run after the loop (Phase 7); nothing they find is auto-applied.
+Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (spec conformance, maintainability) run after the loop, and Phase 7 decides which of their findings are fixed there and which are surfaced.
 
 ### Phase 6: Verify fixes (self-check), then loop check
 
 A full reviewer re-fan-out is only worth its wall-clock when this iteration's fixes could themselves have introduced problems. Verify cheaply first:
 
-1. **Self-check every fix against the findings list.** Re-read each fixed site and confirm the finding is actually addressed — not merely edited near. Anything unaddressed gets fixed now, within this iteration.
+1. **Self-check every fix against the findings list.** Re-read each fixed site and confirm the finding is actually addressed — not merely edited near. Anything unaddressed gets fixed now, within this iteration. A fix that adds a check, guard, assertion, or validation gets exercised twice: once against the case it was written for, and once against input that must still pass. Only the first is instinctive, and a guard that rejects valid input is worse than no guard — it fires on correct work, so the next person deletes it rather than repairing it.
 2. **Verify facts introduced by fixes.** A fix that adds or rewords a factual claim — in prose, a comment, a doc, or a commit-message draft — gets the claim itself checked before proceeding, under the evidence policy above: run the command it describes and read what that run printed, read the code it characterizes, confirm the name or version it cites against the file that defines it. A manifest is not evidence for what a command does. Step 1 confirms the finding was addressed; this step confirms the fix didn't trade the finding for a false statement, which otherwise survives until the next fan-out catches it — or ships.
 3. **Classify the iteration's fix churn:**
    - **Mechanical** — strictly non-semantic fixes confined to the flagged lines: typo/wording corrections, renames, removing dead code or a redundant comment, doc corrections. Message text that prescribes a remedy or states a factual claim is never mechanical — it classifies as a verified message fix below, so its verification cannot be skipped. The self-check is sufficient verification.
@@ -392,10 +394,12 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 
 **Grade these two legs as well.** Phase 4's labelling covers only the loop's auto-fix reviewers, so apply it here from each report's two receipt lines and carry the label into Phase 9 — including the demotion rule, which applies to a structural or conformance claim about an external tool exactly as it does in the loop.
 
-**Both reviewers are report-only.** Nothing they find is auto-applied and they do not re-open the loop:
+**Neither reviewer re-opens the loop.** Their proposals and scope questions are not auto-applied:
 
 - **maintainability-auditor** — speculative structural restructurings (delete a layer, split a file, reframe a state model): high-blast-radius, low-precision, never auto-apply. Surface them in the summary's "Structural suggestions" section; act on the ones you want by prompting afterward.
-- **spec-conformance-analyzer** — missing/partial requirements, scope creep, and implemented-but-wrong: all surfaced for you to decide, quoting the spec line. "Did we build the right thing" is your call, so report rather than fix.
+- **spec-conformance-analyzer** — missing/partial requirements, scope creep, and implemented-but-wrong: surfaced for you to decide, quoting the spec line. "Did we build the right thing" is your call, so report rather than fix — except where the finding is a defect, per the paragraph below.
+
+**Report-only is about the kind of finding, not about which leg found it.** What these two legs own is judgment you do not have: whether a restructuring is worth its blast radius, whether the scope was right, what the change should have been. A finding that quotes a spec line and shows the implementation plainly contradicting it is not that — it is a defect, and so is a measured fault in code this cycle wrote, whichever leg reports it. Those go through the fix-vs-defer policy like any other finding. Reserve the surface-only treatment for what it exists for: proposals and scope questions, where fixing would substitute your judgment for the user's. A fix applied here gets Phase 6's self-check and fact verification before Phase 8, including the both-directions check on any guard it adds — the loop has closed, so nothing else will catch it, and Phase 8 stamps the sentinel immediately after.
 
 **Cleanup.** A separate agent spawn only earns its place on a diff big enough that loading the de-slopify methodology into your own context would be the greater cost:
 
@@ -411,6 +415,8 @@ Running them here, once, is the whole point: the opus maintainability pass and t
   ```
 
   It edits files directly and returns a summary. Scope: comments in modified code, modified `.md` files, commit-message drafts. Excluded: algorithm logic, type definitions, test assertions, and the load-bearing structures in runtime markdown its body names.
+
+**Check every release-note file in play against the diff itself — last, after cleanup has finished editing.** A changeset or bump file (`.changeset/*.md`, `.bumpy/*.md`, or whatever this project uses) describes the change in the author's words, and release tooling usually publishes that text verbatim — so a description written before review is a claim about code that review then altered, and cleanup counts as review: it edits `.md` files, so a check run before it verifies text that is no longer what ships. In play means any the diff adds or modifies, plus any already staged before the cycle began — a delta-scoped review narrows the diff, so a bump file staged in an earlier pass is exactly the one describing code this cycle went on to change. Read each one against the final post-fix state and correct it, or say in the summary that you could not. This is not covered by the evidence policy above, which binds claims about commands: here the claim and the code that settles it are both inside the diff. Do this yourself, whichever cleanup mode runs — a description that has drifted from its own diff is a factual error, not a wording preference, and it becomes permanent the moment the release is tagged. Report the corrections in the summary's release-note field, separately from wording changes.
 
 ### Phase 8: Update sentinel
 
@@ -436,6 +442,7 @@ Scope: delta (N files, +A -D vs the marked tree) | full (<no marked tree | delta
 Iterations: N / max
 Falsifiable questions: N asked / N answered by measurement / N fell back to reading
 Factual corrections (cleanup): N — <the claim that was wrong, and what the run showed> | none
+Release-note corrections: N — <file, the claim that no longer matched the diff> | none | not checked (<reason>) | no release-note file in this diff
 Unexercised claims raised as questions: N — <each one> | none
 Target integrity: unchanged (Phase 3 fan-out; Phase 7 not covered) | CONTAMINATED (<leg>, <what differed>) | not checked (<reason>)
 Message fixes verified: N (one verification line per fix) | none
@@ -454,8 +461,8 @@ Findings deferred: Y
     reason: <criterion from fix-vs-defer policy>
   - ...
 
-Spec conformance (report-only): <spec source / no spec source found>
-  - implemented but wrong: ...
+Spec conformance (defects appear above under findings; the rest is report-only): <spec source / no spec source found>
+  - implemented but wrong (contradicts a quoted spec line — fixed or deferred above): ...
   - missing/partial requirements: ...
   - scope creep (confirm intended): ...
 
