@@ -1,7 +1,7 @@
 ---
 name: review-pr
 description: Review a GitHub pull request from your machine — report-only, single pass. Fetches the PR head into a disposable worktree (your checkout is never touched), runs the review cycle's reviewer fan-out in one pass (report-only reviewers included on the full tier) — Codex leg joining when the CLI is installed — with the intent brief sourced from the PR itself, and reports findings in the conversation with explicit coverage. Posts to the PR only when asked, as one COMMENT review with fingerprint-deduplicated comments. Never fixes code, never approves, never touches the review sentinel.
-argument-hint: "<number | url | branch> [and post]"
+argument-hint: "<number | url | branch> [effort <level>] [and post]"
 allowed-tools: Bash, Read, Write, Glob, Grep, Agent, SendMessage, AskUserQuestion
 ---
 
@@ -27,6 +27,9 @@ The cycle's comment and fix-vs-defer policies do not apply: this skill changes n
 
 - **Which PR** — a number (`42`), a full PR URL, or a head branch name; each is a valid selector for `gh pr view`. Empty → the PR associated with the current branch (`gh pr view` with no selector); if there is none, say so and stop.
 - **Whether to post** — phrases like `and post`, `post the findings`, `comment on the PR` → post mode ON. Anything else → report in conversation only. Posting is the one outward-facing action here; it never happens by default.
+- **A Codex effort** — `effort medium`, `codex effort high` → the Codex leg runs at exactly that effort on either tier, raising included. Valid values are the seven literals `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; anything else → name the invalid value, list the valid set, and stop.
+
+`effort` and the seven level literals are never PR selectors, even though each is a plausible branch name: when they are the only tokens, the selector is empty (the current branch's PR). When an effort argument was parsed and the Codex leg resolves to `skipped`, say so before the fan-out and record `effort <level> requested, unused (codex skipped)` in the report — the argument affects only that leg, so a skip silently drops it.
 
 ## Phase 1: Resolve the PR and plan
 
@@ -97,7 +100,7 @@ Record `<WT>` in the report draft immediately, then mark a review as in progress
 
 **Compose the intent brief** — 2–4 sentences on what the PR is trying to accomplish and why, from its title, body, and commit subjects, plus the changed-file list. State intent, not hoped-for verdicts. Every reviewer gets it.
 
-Carry the evidence rule into the brief, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. It matters more here than in the working-tree cycle — the PR head sits in a disposable worktree whose dependencies may not be installed, so a reviewer that cannot build has every reason to reason from manifests and no fix loop downstream to catch it.
+Carry the evidence rule into the brief, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. Carry the never-evade rule into the brief the same way: never reshape a command to slip past a guard — an opt-out is visible and reviewable, an evasion is neither. It matters more here than in the working-tree cycle — the PR head sits in a disposable worktree whose dependencies may not be installed, so a reviewer that cannot build has every reason to reason from manifests and no fix loop downstream to catch it.
 
 Ask for the execution receipt in the same breath: every leg opens its report with two lines — `execution:` naming the heaviest verification that *succeeded* against this checkout with its first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. The subagents carry this in their bodies; Codex does not, so the brief is the only channel that reaches it.
 
@@ -112,14 +115,17 @@ In a single conversation turn, invoke ALL of the following:
    ```bash
    # full tier:
    cd <WT> && codex review --base "<REMOTE>/<baseRefName>" -c "developer_instructions=\"<brief>\""
+   # explicit effort argument: append -c model_reasoning_effort="<validated literal>" on
+   # either tier, raising included, and skip the tier logic below.
    # light tier: append -c model_reasoning_effort="low" — but only when that is actually
    # lower than the configured value; check the root table of ~/.codex/config.toml first:
    #   awk '/^[[:space:]]*\[/{exit} /^[[:space:]]*model_reasoning_effort/{print}' ~/.codex/config.toml 2>/dev/null
    # The ladder is none < minimal < low < medium < high < xhigh < max. Append the override
    # when the configured effort is above low OR nothing is configured; pass NO override at
-   # all (not the value none) when it is already low, minimal, or none — the adjustment
-   # lowers, never raises. Emit the literal string low, never an interpolated value.
-   # Record low or inherited in the report draft at spawn time.
+   # all (not the value none) when it is already low, minimal, or none — the tier
+   # adjustment lowers, never raises; only the explicit effort argument outranks it.
+   # Emit only exact-match literals from that ladder, never an unvalidated value.
+   # Record low, inherited, or <level> (explicit) in the report draft at spawn time.
    ```
 
    Spawn via `Bash` with `run_in_background: true`; save the shell ID. The remote-tracking ref works as the base from a detached worktree, and `developer_instructions` is additive — Codex still discovers the repo's `AGENTS.md` (both verified on v0.147.0). Unrecognized `-c` keys are ignored without error, so a Codex that drops the key runs unbriefed instead of breaking; never add `--strict-config` to this invocation.
@@ -140,11 +146,11 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "PR review",
      run_in_background: true,
-     prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file in <WT> or in the main checkout — verification that has to run or perturb code goes in a scratch directory outside both, under the containment rule in your own prompt. Output findings as file:line — severity — issue — suggested fix."
+     prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file in <WT> or in the main checkout — verification that has to run or perturb code goes in a private mktemp -d directory outside both, never a shared scratchpad, under the containment rule in your own prompt — and never reshape a command to slip past a guard. Name that directory in your report, and write nowhere outside it. Output findings as file:line — severity — issue — suggested fix."
    })
    ```
 
-**Collecting results — wake-driven, single pass.** Completion notifications arrive automatically; do not poll, and end the turn while reviewers run. On any wake where a reviewer has gone idle without delivering — or stayed silent while every other reviewer completed — send it ONE `SendMessage` nudge (to the `agent_id` from its spawn result): deliver findings now, even if incomplete. If it still hasn't reported by the next wake that carries information about it (its own idle or completion notification, or — only when other Claude-side reviewers exist — all of them having since reported), proceed without it and list it under dropped reviewers. When it is the only Claude-side reviewer (light tier), only its own notification or the user's next message counts as evidence. Never nudge twice; never hold the pass for a nudged straggler.
+**Collecting results — wake-driven, single pass.** Completion notifications arrive automatically; do not poll, and end the turn while reviewers run. On any wake where a reviewer has gone idle without delivering — or stayed silent while every other reviewer completed — send it ONE `SendMessage` nudge (to the `agent_id` from its spawn result): deliver findings now, even if incomplete, opening with the two receipt lines. If it still hasn't reported by the next wake that carries information about it (its own idle or completion notification, or — only when other Claude-side reviewers exist — all of them having since reported), proceed without it and list it under dropped reviewers. When it is the only Claude-side reviewer (light tier), only its own notification or the user's next message counts as evidence. Never nudge twice; never hold the pass for a nudged straggler.
 
 A Codex leg that dies after launch is a **failure**, not a skip — read the exit code from the completion notification, not the output file, and report it distinctly.
 
@@ -183,7 +189,7 @@ PR #<n> review — <title>  [draft]
 <url>
 Tier: light | full
 Coverage:
-  codex — participated (effort: low | inherited) | skipped (<reason>) | failed (<error>)
+  codex — participated (effort: low | inherited | <level> (explicit)) | skipped (<reason>[; effort <level> requested, unused]) | failed (<error>)
     auth: confirmed | no stored session | unknown (probe unsupported)
   code-reviewer — reported | dropped (stalled, nudged once)
   <each other dispatched reviewer — reported | skipped (<reason>) | failed | dropped>

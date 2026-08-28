@@ -55,7 +55,7 @@ fi
 
 # RC=1 → drift.
 CURRENT=$("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" --root "$PROJECT_ROOT" current-hash 2>/dev/null)
-# An empty CURRENT (near-impossible: check just computed the same hash) must
+# An empty CURRENT (near-impossible: the check computed the same hash) must
 # not degrade block-once into the hard loop the reason text promises can't
 # happen — a fallback token keeps the second stop soft-passing.
 [ -n "$CURRENT" ] || CURRENT="unknown-state"
@@ -74,7 +74,7 @@ printf '%s\n' "$CURRENT" > "$STOP_RECORD" 2>/dev/null || true
 # content goes in the top-level `reason` field.
 jq -n '{
   decision: "block",
-  reason: "BLOCKED: There are uncommitted changes that have not been reviewed. Invoke /review-cycle:review now (or /review-cycle:accept if the user already reviewed these changes themselves). Only if the user explicitly asked to defer review may you stop again without reviewing — this gate blocks once per state, and the commit gate still prevents unreviewed commits. Do not commit; the user is the final reviewer.",
+  reason: "BLOCKED: There are uncommitted changes that have not been reviewed. Invoke /review-cycle:review now (or /review-cycle:accept if the user already reviewed these changes themselves). This gate blocks once per state, so stopping again without reviewing is allowed in exactly two cases: the user explicitly asked to defer review, or you have just presented these changes with a review-or-accept choice and their answer is still pending — launching the cycle then preempts a decision that is theirs. The commit gate still prevents unreviewed commits. Do not commit; the user is the final reviewer.",
   systemMessage: "review-cycle: changes unreviewed"
 }' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes have not been reviewed. Run /review-cycle:review.","systemMessage":"review-cycle: changes unreviewed"}\n'
 

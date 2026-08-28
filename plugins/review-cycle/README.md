@@ -69,10 +69,11 @@ Arguments are natural language — no flags:
 - bare `/review-cycle:review` — review the uncommitted working tree, default 4 iterations
 - `against <ref>` (e.g. `against main`) — scope to `git diff <ref>..HEAD`
 - `max <n>` — override the iteration cap
+- `effort <level>` — pin the Codex leg's reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); overrides both the tier cap and your config, raising included
 
 ### `/review-cycle:review-pr`
 
-Single-pass, report-only review of a GitHub pull request, run from your machine. Takes a PR number, URL, or branch (bare invocation reviews the current branch's PR). It fetches the PR head into a disposable detached worktree — your checkout, branch, and index are never touched. The fan-out matches the review cycle's, with the intent brief sourced from the PR's title, body, and commits; on the full tier the report-only pair joins the same pass, since a single pass has no fix loop to shield them from. Findings are reported in the conversation with per-reviewer coverage, so "no findings" is never mistaken for "nobody looked". The Codex leg joins when the CLI is installed, briefed and scoped with `--base` against the PR's base branch.
+Single-pass, report-only review of a GitHub pull request, run from your machine. Takes a PR number, URL, or branch (bare invocation reviews the current branch's PR). It fetches the PR head into a disposable detached worktree — your checkout, branch, and index are never touched. The fan-out matches the review cycle's, with the intent brief sourced from the PR's title, body, and commits; on the full tier the report-only pair joins the same pass, since a single pass has no fix loop to shield them from. Findings are reported in the conversation with per-reviewer coverage, so "no findings" is never mistaken for "nobody looked". The Codex leg joins when the CLI is installed, briefed and scoped with `--base` against the PR's base branch; `effort <level>` pins its reasoning effort the same way it does in `/review-cycle:review`.
 
 Nothing is fixed and nothing is posted by default. Say `and post` (or ask after reading the report) to publish the findings as a single COMMENT review — never an approval — with fingerprint-marked comments, inline and body-level alike, that deduplicate across re-runs. The review sentinel and commit gate are untouched: this skill reviews someone's PR, not your working tree.
 
@@ -196,7 +197,7 @@ The one status the cycle treats as an error is a leg that passes the preflight p
 
 A two-line `.gitignore` fix doesn't need the same depth as a 500-line refactor. Light-tier diffs ask Codex for `low` reasoning effort when that would actually be lower than your configured value — if you already run at `low`, `minimal`, or `none`, nothing is overridden. Full-tier diffs pass no override at all and inherit whatever your `~/.codex/config.toml` sets. With `multi_agent = true` the effort applies to Codex's internal review agents too, so the reduction compounds.
 
-The adjustment only ever goes down. If you configured `medium` globally, a large diff won't be silently upgraded to `high` — your config is the ceiling. The summary reports which applied (`participated (effort: low)` vs `(effort: inherited)`).
+The tier adjustment only ever goes down. If you configured `medium` globally, a large diff won't be silently upgraded to `high` — your config is the ceiling. The one thing that outranks both the tier and the config is you, per invocation: say `effort medium` (or any of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) in the arguments to `/review-cycle:review` or `/review-cycle:review-pr` and the Codex leg runs at exactly that effort, raising included — a small diff to a gate condition is light on line count and exactly where deeper reasoning pays. The summary reports which applied (`participated (effort: low)` vs `(effort: inherited)` vs `(effort: medium (explicit))`).
 
 Effort is the tuning axis rather than model name on purpose: `codex review` exposes neither `--model` nor `--profile` (only `-c`), model names churn often enough that Codex ships its own `[notice.model_migrations]` table, and a name pinned inside the plugin would rot into an error or a silent downgrade on someone else's account.
 
