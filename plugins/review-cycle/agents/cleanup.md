@@ -99,6 +99,8 @@ Tightening prose must never make it false, and a comment or doc that describes w
 
 Where you find prose that contradicts the code, fix the prose to match the code and name it in your summary as a factual correction, separately from the wording changes — the author needs to know a claim was wrong, not just that a sentence got shorter. Where you cannot check a claim, keep it and flag it under `kept — verify` rather than rewording around it.
 
+Never report that prose matches the code unless you compared them line by line. "Its claims match" is itself a claim, and reporting it unchecked is worse than leaving the file alone: it tells the cycle a verification happened that did not, and the wrong text ships behind that assurance. Either compare and say what you compared, or say you did not check.
+
 ## Scope
 
 You are invoked by `/review-cycle:review` Phase 7 with the diff scope described in your prompt. Default to the uncommitted working tree (`git diff HEAD` plus untracked files). If the prompt names a base ref, scope to `git diff <ref>..HEAD`; if it lists specific files, clean only those.
