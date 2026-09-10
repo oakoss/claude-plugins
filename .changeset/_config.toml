@@ -1,0 +1,21 @@
+#:schema ./_schema.json
+tool-version = "0.2.0"
+change-files = true
+conventional-commits = true
+
+# `semver` (migrate's choice, not oakum's default) preserves bumpy's behavior:
+# a major change file takes review-cycle 0.17.0 to 1.0.0, not 0.18.0.
+versioning = "semver"
+
+# Carried from bumpy's `versionCommitMessage`.
+commit-message = "chore(release): version packages"
+
+# Undecided: bumpy's `changelog` setting (github formatter, internalAuthors)
+# has no counterpart here, so the default template runs and entries lose PR
+# links and author attribution. Settle before the CI cutover.
+
+# Every plugin is `private: true` — the package.json files are version anchors,
+# not registry packages. Without both axes oakum plans and tags nothing.
+[private-packages]
+version = true
+tag = true

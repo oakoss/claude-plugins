@@ -105,10 +105,22 @@ for plugin in "${AFFECTED[@]}"; do
     mp_bumped=1
   fi
   # A staged bump file naming the plugin is the other valid shape: the bump
-  # lands later in bumpy's version PR. The frontmatter name may be bare,
-  # double-, or single-quoted — bumpy add emits the bare form.
+  # lands later in the version PR. Both directories count while bumpy and oakum
+  # coexist. The frontmatter name may be bare, double-, or single-quoted; both
+  # tools' `add` emit the bare form, and oakum rejects a quoted unscoped name.
+  #
+  # The excluded names are oakum's skip list for .changeset/: it ignores
+  # README.md in any case and AGENTS/CLAUDE/GEMINI.md exactly, so a bump entry
+  # written into one covers nothing — and it skips them silently, exit 0.
+  # bumpy has no such list; .bumpy/AGENTS.md is a real bump file to it, and it
+  # skips only the exact name README.md. :(glob) keeps `*` from crossing `/`:
+  # oakum reads no nested change file, and bumpy reads one only under a
+  # configured channel, which this repo does not declare.
   cs_covered=0
-  if cd "$PROJECT_ROOT" && git diff --cached -- '.bumpy/*.md' 2>/dev/null \
+  if cd "$PROJECT_ROOT" && git diff --cached -- ':(glob).bumpy/*.md' ':(glob).changeset/*.md' \
+       ':(exclude,icase).changeset/README.md' ':(exclude).changeset/AGENTS.md' \
+       ':(exclude).changeset/CLAUDE.md' ':(exclude).changeset/GEMINI.md' \
+       ':(exclude).bumpy/README.md' 2>/dev/null \
        | grep -qE "^\+[[:space:]]*[\"']?${plugin}[\"']?[[:space:]]*:"; then
     cs_covered=1
   fi
@@ -126,7 +138,7 @@ for entry in "${MISSING[@]}"; do
 done
 REASON="$REASON
 
-Either stage a bump file (.bumpy/<name>.md with \"<plugin>\": patch|minor|major in its frontmatter — \`pnpm exec bumpy add\` writes one) and let the version PR do the bump, or bump \"version\" in plugins/<name>/.claude-plugin/plugin.json AND the matching entry in .claude-plugin/marketplace.json with a CHANGELOG entry. To bypass this gate, touch .claude/.no-version-gate."
+Either stage a bump file (.bumpy/<name>.md or .changeset/<name>.md with <plugin>: patch|minor|major in its frontmatter — \`pnpm exec bumpy add\` or \`pnpm exec oakum add\` writes one) and let the version PR do the bump, or bump \"version\" in plugins/<name>/.claude-plugin/plugin.json AND the matching entry in .claude-plugin/marketplace.json with a CHANGELOG entry. Until the CI cutover, CI still runs bumpy, which cannot see .changeset/ — so \`bumpy add\` is the one that keeps CI green. To bypass this gate, touch .claude/.no-version-gate."
 
 jq -n --arg reason "$REASON" '{
   hookSpecificOutput: {
