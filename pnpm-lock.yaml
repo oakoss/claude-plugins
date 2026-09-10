@@ -14,6 +14,9 @@ importers:
       '@commitlint/config-conventional':
         specifier: ^21.2.2
         version: 21.2.2
+      '@oakoss/oakum':
+        specifier: 0.2.0
+        version: 0.2.0
       '@varlock/bumpy':
         specifier: ^1.18.1
         version: 1.18.1(patch_hash=1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15)
@@ -142,6 +145,11 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@oakoss/oakum@0.2.0':
+    resolution: {integrity: sha512-zv9ThT8Y1VQM6WqPeyp4a38qEmhL97YwRsyniX+Tqh3daW+3W6ePlpnZAwwTl0utE5e60XG0/hxAYdOT2iAo2g==}
+    engines: {node: '>=14.14', npm: '>=6'}
+    hasBin: true
 
   '@oxfmt/binding-android-arm-eabi@0.63.0':
     resolution: {integrity: sha512-YmRth4ZPGgEXcgmkhvANbC9uD67dxmSobW7DQuyt5tOBOKvPnIpk5SVHBj88E+7wMNRI2FhqaDbOhQFBix+b8A==}
@@ -509,6 +517,10 @@ packages:
   dequal@2.0.3:
     resolution: {integrity: sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==}
     engines: {node: '>=6'}
+
+  detect-libc@2.1.2:
+    resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
+    engines: {node: '>=8'}
 
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
@@ -1087,6 +1099,10 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
+  '@oakoss/oakum@0.2.0':
+    dependencies:
+      detect-libc: 2.1.2
+
   '@oxfmt/binding-android-arm-eabi@0.63.0':
     optional: true
 
@@ -1311,6 +1327,8 @@ snapshots:
       character-entities: 2.0.2
 
   dequal@2.0.3: {}
+
+  detect-libc@2.1.2: {}
 
   devlop@1.1.0:
     dependencies:

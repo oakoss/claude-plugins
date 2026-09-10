@@ -327,6 +327,191 @@ CS
   [ -z "$output" ]
 }
 
+@test "allows runtime change when the bump file is oakum's .changeset/*.md" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/fix-foo.md <<'CS'
+---
+foo: patch
+---
+
+Fix the thing, in the directory oakum add writes to.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/fix-foo.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "BLOCKS when an oakum change file names a different plugin" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/fix-bar.md <<'CS'
+---
+bar: patch
+---
+
+Names a plugin this commit does not touch.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/fix-bar.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged change file uses a name oakum skips" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/AGENTS.md <<'CS'
+---
+foo: patch
+---
+
+oakum skips this filename, so it can never cover the bump.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/AGENTS.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged change file is nested below .changeset" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset/notes
+  cat > .changeset/notes/deep.md <<'CS'
+---
+foo: patch
+---
+
+Neither tool reads a nested change file, so it cannot cover the bump.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/notes/deep.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "allows runtime change when a lowercase .bumpy/readme.md names the plugin" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/readme.md <<'CS'
+---
+foo: patch
+---
+
+bumpy skips only the exact name README.md, so this is a real bump file.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/readme.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "BLOCKS when the only staged change file is .changeset/README.md" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/README.md <<'CS'
+---
+foo: patch
+---
+
+oakum skips its own README, so it covers nothing.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/README.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged change file is a lowercase .changeset/readme.md" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/readme.md <<'CS'
+---
+foo: patch
+---
+
+oakum skips its README in any case.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/readme.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged change file is .changeset/CLAUDE.md" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/CLAUDE.md <<'CS'
+---
+foo: patch
+---
+
+oakum skips this exact name.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/CLAUDE.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged change file is .changeset/GEMINI.md" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/GEMINI.md <<'CS'
+---
+foo: patch
+---
+
+oakum skips this exact name.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/GEMINI.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged bump file is .bumpy/README.md" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy
+  cat > .bumpy/README.md <<'CS'
+---
+foo: patch
+---
+
+bumpy skips its own README, so it covers nothing.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/README.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when the only staged bump file is nested below .bumpy" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .bumpy/notes
+  cat > .bumpy/notes/deep.md <<'CS'
+---
+foo: patch
+---
+
+bumpy reads a nested path only under a configured channel; this repo declares none.
+CS
+  git add plugins/foo/hooks/runtime.sh .bumpy/notes/deep.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
 @test "BLOCKS when the staged bump file names a different plugin" {
   echo "v2" > plugins/foo/hooks/runtime.sh
   mkdir -p .bumpy

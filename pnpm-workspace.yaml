@@ -2,7 +2,14 @@ packages:
   - "plugins/*"
 
 allowBuilds:
+  '@oakoss/oakum': true
   lefthook: true
+
+# Temporary: pnpm wrote this because oakum 0.2.0 was published inside the
+# release-age window. Remove it once the window passes — left in place it is a
+# standing exemption, and it needs hand-editing at every oakum bump.
+minimumReleaseAgeExclude:
+  - '@oakoss/oakum@0.2.0'
 
 patchedDependencies:
   "@varlock/bumpy@1.18.1": patches/@varlock__bumpy@1.18.1.patch
