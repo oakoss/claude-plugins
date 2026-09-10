@@ -3,19 +3,61 @@ tool-version = "0.2.0"
 change-files = true
 conventional-commits = true
 
-# `semver` (migrate's choice, not oakum's default) preserves bumpy's behavior:
-# a major change file takes review-cycle 0.17.0 to 1.0.0, not 0.18.0.
-versioning = "semver"
+# A major change file maps to a minor bump below 1.0.0, so reaching 1.0.0 is a
+# deliberate act rather than a side effect of one bump file. This is oakum's
+# default, stated explicitly because it reverses what `migrate` wrote here and
+# what bumpy did.
+versioning = "zero-major"
 
 # Carried from bumpy's `versionCommitMessage`.
 commit-message = "chore(release): version packages"
 
-# Undecided: bumpy's `changelog` setting (github formatter, internalAuthors)
-# has no counterpart here, so the default template runs and entries lose PR
-# links and author attribution. Settle before the CI cutover.
+# Matches the existing tags. oakum's default renders `<name>/v<version>`, and
+# its first release refuses on the mismatch against `<name>@<version>`.
+tag-format = "{{ package }}@{{ version }}"
+
+# Changelog rendering stays on oakum's default: entries lose the PR links
+# bumpy's github formatter added. Attribution is not a loss — `internalAuthors`
+# suppressed it for this repo's only author, so none was ever emitted.
+# Decided, not overlooked.
 
 # Every plugin is `private: true` — the package.json files are version anchors,
 # not registry packages. Without both axes oakum plans and tags nothing.
 [private-packages]
 version = true
 tag = true
+
+# The version anchor is package.json; these are the manifests that must move
+# with it. Takes effect at the workflow cutover, and replaces only the
+# version-sync half of scripts/sync-plugin-versions.mjs — that script also
+# checks CHANGELOG headings and plugins that have no package.json, neither of
+# which extra-files covers.
+[[packages.review-cycle.extra-files]]
+path = ".claude-plugin/plugin.json"
+format = "json"
+key = "version"
+
+[[packages.review-cycle.extra-files]]
+path = "/.claude-plugin/marketplace.json"
+format = "json"
+key = "plugins.{name=review-cycle}.version"
+
+[[packages.prose.extra-files]]
+path = ".claude-plugin/plugin.json"
+format = "json"
+key = "version"
+
+[[packages.prose.extra-files]]
+path = "/.claude-plugin/marketplace.json"
+format = "json"
+key = "plugins.{name=prose}.version"
+
+[[packages.pr-kit.extra-files]]
+path = ".claude-plugin/plugin.json"
+format = "json"
+key = "version"
+
+[[packages.pr-kit.extra-files]]
+path = "/.claude-plugin/marketplace.json"
+format = "json"
+key = "plugins.{name=pr-kit}.version"
