@@ -19,13 +19,13 @@ minimumReleaseAge: 1440
 overrides:
   smol-toml: '1.7.1'
 
-# Temporary: pnpm wrote this because oakum 0.3.1 was published inside the
-# release-age window. Measured load-bearing — without it `pnpm install
-# --frozen-lockfile` fails ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, in the five
-# places CI runs it. Remove it once the window passes: left in place it is a
-# standing exemption, and it needs hand-editing at every oakum bump.
+# Our own scope, exempted deliberately and permanently. The gate buys time for
+# someone to notice a bad third-party publish; for packages we publish we have
+# that knowledge directly, and a pinned entry would need hand-editing at every
+# oakum bump. The cost is real: a compromised npm token could publish under
+# @oakoss and install here with no delay.
 minimumReleaseAgeExclude:
-  - '@oakoss/oakum@0.3.1'
+  - '@oakoss/*'
 
 patchedDependencies:
   "@varlock/bumpy@1.18.1": patches/@varlock__bumpy@1.18.1.patch
