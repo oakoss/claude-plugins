@@ -1,5 +1,5 @@
 #:schema ./_schema.json
-tool-version = "0.2.0"
+tool-version = "0.3.1"
 change-files = true
 conventional-commits = true
 

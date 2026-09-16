@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^21.2.2",
-    "@oakoss/oakum": "0.2.0",
+    "@oakoss/oakum": "0.3.1",
     "@varlock/bumpy": "^1.18.1",
     "commitlint": "^21.2.2",
     "lefthook": "^2.1.10",
