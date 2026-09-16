@@ -7,9 +7,14 @@
 # If not set, bd init will auto-detect from directory name
 # Example: issue-prefix: "myproject" creates issues like "myproject-1", "myproject-2", etc.
 #
-# Set explicitly so bd does not auto-detect "claude-plugins" from the
-# directory name. `pnpm run setup` runs `bd bootstrap`, which takes the prefix
-# from whatever database it clones, so this governs the no-remote path.
+# Set explicitly so `bd init` does not auto-detect from the directory name.
+# It does NOT govern `bd bootstrap`, which `pnpm run setup` runs: bootstrap's
+# clone path takes the prefix from the database it clones, and its
+# fresh-database path ignores this key and uses the directory name — measured
+# on bd 1.3.0, a clone named `differently-named-clone` produced
+# `Created fresh database with prefix "differently-named-clone"`. A fresh
+# clone into a differently-named directory with no remote gets the wrong
+# prefix; check with `bd bootstrap --dry-run` before running setup.
 issue-prefix: "cpl"
 
 # The Dolt sync remote is deliberately NOT here. It is a per-machine value that
