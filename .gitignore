@@ -36,3 +36,6 @@ pnpm-debug.log
 *.db
 .beads-credential-key
 .beads/proxieddb/
+# Transient bd lock at the repo root; left behind on exit and read as
+# unreviewed drift by the review sentinel.
+.beads.gate.lock

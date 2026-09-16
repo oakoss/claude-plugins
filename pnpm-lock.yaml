@@ -15,8 +15,8 @@ importers:
         specifier: ^21.2.2
         version: 21.2.2
       '@oakoss/oakum':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.3.1
+        version: 0.3.1
       '@varlock/bumpy':
         specifier: ^1.18.1
         version: 1.18.1(patch_hash=1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15)
@@ -146,8 +146,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@oakoss/oakum@0.2.0':
-    resolution: {integrity: sha512-zv9ThT8Y1VQM6WqPeyp4a38qEmhL97YwRsyniX+Tqh3daW+3W6ePlpnZAwwTl0utE5e60XG0/hxAYdOT2iAo2g==}
+  '@oakoss/oakum@0.3.1':
+    resolution: {integrity: sha512-VtnkNcsfyscPKOQb1Q9bn6oyPI5i8sI+GNYN7j0jpLeLsZkp5yvrwxJKU6D5MrCKfKZVRhfJSiFd/T8E2yRxsw==}
     engines: {node: '>=14.14', npm: '>=6'}
     hasBin: true
 
@@ -1099,7 +1099,7 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@oakoss/oakum@0.2.0':
+  '@oakoss/oakum@0.3.1':
     dependencies:
       detect-libc: 2.1.2
 
