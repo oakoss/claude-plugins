@@ -122,6 +122,21 @@ Releases are driven by [bumpy](https://bumpy.varlock.dev) bump files; each plugi
 - Before releasing, run `claude plugin validate ./plugins/<name> --strict` — catches manifest/structure errors the bats suites don't cover.
 - **Runtime changes** (anything under `plugins/<name>/` except `README.md`, `LICENSE*`, `CHANGELOG.md`, `NOTICE`, and `tests/`) require **either a staged bump file naming the plugin or a version bump in the same commit**. A repo-local PreToolUse hook at `.claude/hooks/version-bump-gate.sh` (registered in `.claude/settings.json`) enforces this mechanically; `bumpy ci check` enforces the same rule on PRs in CI. Touch `.claude/.no-version-gate` to opt a project out; tests live next to the hook at `.claude/hooks/version-bump-gate.bats`.
 
+## Dependencies
+
+Rejecting versions published in the last 24 hours is pnpm's own default since v11, so `pnpm-workspace.yaml` declaring `minimumReleaseAge: 1440` restates the window rather than tightening it. Declaring it is still load-bearing, measured on 12.4.2: left implicit, pnpm applies the gate and then waives it — writing a `minimumReleaseAgeExclude` entry into `pnpm-workspace.yaml` itself and exiting 0 (`minimumReleaseAgeStrict: true` stops the auto-write — it refuses instead, or prompts to approve when run interactively). Declared explicitly, it refuses at exit 1 and writes nothing. Declaring it is also what makes the key visible to Renovate, below.
+
+A security patch is typically hours old when its fix PR arrives, so it lands inside that window. Measured on pnpm 12.4.2, an enforced gate takes one of two shapes:
+
+- A manifest pinned to the fresh version fails to resolve: `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, listing each held-back version with its publish time and the cutoff. `--trust-lockfile` does not help — it skips verification, not resolution.
+- A range the old version still satisfies exits 0, prints `Lockfile passes supply-chain policies`, and leaves the old version in the lockfile. Nothing names the version it declined.
+
+The second shape is the one to watch: a green security PR whose lockfile never moved. Confirm the lockfile names the patched version before merging it.
+
+Renovate clears the first shape itself. For upgrades flagged `isVulnerabilityAlert` it writes the matching `minimumReleaseAgeExclude` entry into the same PR, commented `# Renovate security update: <name>@<version>`, and skips that step entirely when `minimumReleaseAge` is absent or zero (`lib/modules/manager/npm/artifacts.ts`). Security PRs from anywhere else need the entry added by hand, then removed once 24 hours have passed.
+
+An entry is either a name pattern carrying no version, where globs work, or `<name>@<exact-version>`. Combining the two fails with `Invalid value in minimumReleaseAgeExclude: Name patterns are not allowed with version unions`, and a range is never a version. Prefer the pinned form for a temporary waiver: a glob is version-agnostic, so it never expires and exempts the package indefinitely. Use a glob only where that is the intent — `@oakoss/*` here exempts our own scope permanently, trading the gate for not hand-editing an entry at every release. Packages shipping platform binaries need two entries, because the main package's entry does not cover them and they often sit under a different scope: `oxfmt` here resolves 19 `@oxfmt/binding-*` subpackages, so excluding `oxfmt` alone would leave every one of them gated.
+
 ## Testing
 
 Test a plugin in-place during development:
