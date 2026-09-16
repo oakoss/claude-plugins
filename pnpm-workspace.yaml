@@ -5,6 +5,20 @@ allowBuilds:
   '@oakoss/oakum': true
   lefthook: true
 
+# 1440 is pnpm's default since v11, so this restates the 24-hour window rather
+# than tightening it. Declaring it explicitly is what makes pnpm refuse a fresh
+# version: left implicit, pnpm waives its own gate by writing a
+# minimumReleaseAgeExclude entry here and exiting 0. The camelCase spelling is
+# load-bearing too: `minimum-release-age` is accepted and ignored, warning
+# only. Security bumps: see the Dependencies section of AGENTS.md.
+minimumReleaseAge: 1440
+
+# markdownlint-cli2 pins smol-toml at exactly 1.7.0, and 0.23.2 is its current
+# release, so no update reaches the 1.7.1 security patch. Remove this once
+# markdownlint-cli2 bumps its own pin, or it will hold smol-toml back.
+overrides:
+  smol-toml: '1.7.1'
+
 # Temporary: pnpm wrote this because oakum 0.3.1 was published inside the
 # release-age window. Measured load-bearing — without it `pnpm install
 # --frozen-lockfile` fails ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, in the five

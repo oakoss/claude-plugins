@@ -44,9 +44,7 @@
     }
   ],
   "vulnerabilityAlerts": {
-    "labels": ["security"],
-    "schedule": ["at any time"],
-    "minimumReleaseAge": null
+    "labels": ["security"]
   },
   "lockFileMaintenance": {
     "enabled": true,
