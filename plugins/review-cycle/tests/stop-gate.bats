@@ -8,7 +8,11 @@ setup() {
 }
 
 run_stop_gate() {
-  CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$PLUGIN_ROOT/hooks/stop-gate.sh" <<< "${1:-\{\}}"
+  # The default has to be valid JSON. `\{\}` is not: jq rejects it at exit 5,
+  # sending every no-argument call down the malformed-payload path.
+  local payload="$1"
+  [ -n "$payload" ] || payload='{}'
+  CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" bash "$PLUGIN_ROOT/hooks/stop-gate.sh" <<< "$payload"
 }
 
 MARKER=".claude/review-cycle/in-progress"

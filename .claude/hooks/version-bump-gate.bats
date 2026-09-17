@@ -33,6 +33,9 @@ setup() {
 
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude"
+  # HOME alone leaves /etc/gitconfig's credential.helper=osxkeychain in play, so
+  # fixture git hunts a keychain under the fake HOME and macOS offers to reset one.
+  export GIT_CONFIG_NOSYSTEM=1
   unset CLAUDE_PROJECT_DIR
 
   export GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR:$(cd "$BATS_TEST_TMPDIR" && pwd -P)"

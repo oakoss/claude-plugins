@@ -18,7 +18,9 @@
 
 source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh"
 
-INPUT=$(cat 2>/dev/null || true)
+# Builtin redirection, not `cat`: one less PATH-resolved dependency ahead of
+# everything this hook decides.
+INPUT=$(</dev/stdin)
 
 SOURCE=$(echo "$INPUT" | jq -r '.source // "unknown"' 2>/dev/null || echo "unknown")
 [ "$SOURCE" != "startup" ] && exit 0

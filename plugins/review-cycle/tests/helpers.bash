@@ -86,6 +86,10 @@ setup_repo() {
   export HOME="$BATS_TEST_TMPDIR/home"
   mkdir -p "$HOME/.claude"
 
+  # HOME alone leaves /etc/gitconfig's credential.helper=osxkeychain in play, so
+  # fixture git hunts a keychain under the fake HOME and macOS offers to reset one.
+  export GIT_CONFIG_NOSYSTEM=1
+
   # Canonicalize: on macOS BATS_TEST_TMPDIR is under /var/folders which is a
   # symlink to /private/var/folders. `git rev-parse --show-toplevel` returns
   # the canonical path, so tests must compare against the canonical form.
