@@ -13,7 +13,8 @@ Structural rules from the Google developer documentation style guide, for cleani
 ## Lists
 
 - Numbered = sequence; bulleted = unordered set; description list = term + definition. One item is not a list.
-- Introduce with a complete sentence ending in a colon: "To get the USB driver, follow these steps:" — never a fragment the items complete ("Use the **Submit** button to:").
+- Introduce with a complete sentence: "To get the USB driver, follow these steps:" — never a fragment the items complete ("Use the **Submit** button to:"). It can end with a colon or a period, usually a colon immediately before the list and a period when other material intervenes.
+- A list that needs no context beyond the heading directly above it doesn't need an introduction. Heading-then-bullets is a valid shape; don't insert a sentence to satisfy the rule above.
 - Parallel structure across items. End items with periods unless every item is a single word, verb-less fragment, all code, or all link text.
 - Never end a list or series with "etc." or "and so on"; introduce with "such as" or "including" instead.
 
