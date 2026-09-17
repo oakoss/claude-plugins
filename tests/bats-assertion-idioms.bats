@@ -41,9 +41,9 @@ BARE_ARITH='^[[:space:]]*\(\(.*\)\)[[:space:]]*;?[[:space:]]*(#.*)?$'
 # is the suppression marker tracked as cpl-mqy, not a cleverer pattern.
 LEADING_BANG='^[[:space:]]*![[:space:]]'
 
-# A tripwire for "the enumeration collapsed", not a completeness check — the
-# tree holds 14 matching files. The per-root test below is what catches a
-# single directory dropping out, which a count cannot see.
+# A tripwire for "the enumeration collapsed", not a completeness check. The
+# per-root test below is what catches a single directory dropping out, which
+# a count cannot see.
 FLOOR=10
 
 setup() {

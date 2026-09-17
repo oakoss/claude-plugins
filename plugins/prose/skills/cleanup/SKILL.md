@@ -13,19 +13,19 @@ metadata:
 
 A manual rewrite pass that removes AI writing artifacts from existing text and aligns it with plain technical prose. The companion `Prose` output style prevents new artifacts; this skill retrofits text that already exists.
 
-**Scope:** prose only. Never rewrite quoted output, error strings, code identifiers, code blocks, linter or build directives (`eslint-disable`, `noqa`, `@ts-expect-error`), or text you're citing from someone else.
+Scope: prose only. These rules govern prose you write and prose you rewrite. They never apply to quoted output, error strings, code identifiers, code blocks, or linter and build directives (`eslint-disable`, `noqa`, `@ts-expect-error`). They never apply to text you're quoting, or to an example quoted to illustrate a rule — including an example of what not to write. Reproduce all of those exactly, including any banned word or punctuation they contain.
 
 ## Workflow
 
 1. Read the whole document first. Note its audience, purpose, and the author's voice; a tutorial tolerates more warmth than a reference page, and the author's own fragments and humor stay.
-2. Rewrite line by line. Never run regex replacements — every fix below depends on context. Preserve every fact, name, and number; a cleanup pass never changes meaning — never widen a scoped condition ("only under load" must not become "always") and never round a load-bearing number.
+2. Rewrite line by line. Never run regex replacements — every fix below depends on context. Preserve every fact, name, and number; a cleanup pass never changes meaning — never widen a scoped condition ("only under load" must not become "always") and never round a number that makes a claim actionable.
 3. Apply the four passes in order: cut filler, swap words, fix mechanics, then check structure.
 4. Read the result aloud (or simulate it). Recombine sentences that turned choppy; the goal is plain, not terse.
-5. Re-scan the result against passes 1 and 2 before returning — banned patterns that survive the rewrite are the most common failure.
+5. Re-scan the result against passes 1 and 2 before returning — banned patterns that survive the rewrite are the most common failure. Skip anything pass 3 or pass 4 deliberately licensed; this re-scan catches leftovers, not exceptions a later pass granted.
 
 ## Pass 1: cut filler
 
-Delete these outright — the sentence almost always survives without them:
+Delete these outright — the sentence rarely needs them:
 
 | Pattern | Fix |
 | --- | --- |
@@ -48,7 +48,7 @@ Delete these outright — the sentence almost always survives without them:
 | Vague comparisons ("X is better than Y") | Name what causes the difference |
 | "The architecture enables…", "this approach unlocks…" | Give the sentence a concrete subject that acts |
 | Sentences that would fit unchanged in any other document | Cut, or tie them to this document's specifics |
-| "best", "simplest", "fastest", "always", "never" | A verifiable claim, or delete |
+| "best", "simplest", "fastest", "always", "never" in a claim about behavior | A verifiable claim, or delete — an imperative ("never bypass hooks") is a rule, and stays |
 | "ensures", "guarantees" | Keep only if literally true; otherwise "helps", or state the actual behavior |
 | "prevents attacks", "is secure" | "helps protect against", "is designed to" — the next incident invalidates a security absolute |
 | Dramatic ellipses ("wait for it ...") | Delete; ellipses only mark omitted text inside quotations |
@@ -83,9 +83,8 @@ Vocabulary tells rotate by model generation — the "delve"/"tapestry" set faded
 | new, latest, existing, older (of features) | delete, or anchor to a version or date |
 | may (possibility) | might or can ("may" only for permission or policy) |
 | should | must (required), can (optional), or say who recommends it and why |
-| will / would / could | present tense; can |
-| delve, tapestry, landscape, journey | the concrete noun you mean |
-| robust, seamless, powerful, comprehensive, cutting-edge | a measurable claim, or nothing |
+| will ("the server will send") | present tense ("the server sends") — but keep it for a genuinely future event |
+| robust, seamless, powerful, comprehensive, cutting-edge, game-changer, delve, tapestry, landscape, journey, crucial, vital (canonical list: the "Never write" section of the [Prose output style](../../output-styles/prose.md)) | a measurable claim, the concrete noun you mean, or nothing |
 | click here | descriptive link text |
 
 ## Pass 3: fix mechanics
@@ -108,7 +107,7 @@ For READMEs, tutorials, and reference pages, also apply [documentation mechanics
 
 - Headings in sentence case, no trailing period. Task headings start with a bare verb ("Create an instance", not "Creating an instance"); conceptual headings are noun phrases — never lead with an "-ing" verb.
 - Bulleted list = unordered set; numbered list = sequence; sentence = everything else. A list with one item, or a numbered list of non-steps, becomes prose.
-- List items are parallel in structure, and the intro is a complete sentence ending in a colon.
+- List items are parallel in structure. An introduction is a complete sentence. It can end with a colon or a period, usually a colon immediately before the list and a period when other material intervenes. A list that needs no context beyond the heading directly above it doesn't need one at all.
 - Parentheses hide information — readers skip them. Promote anything important to the main sentence.
 - Semicolons only between closely related independent clauses, or in lists whose items contain commas.
 - Vary sentence and paragraph length; three same-shape bullets in a row and uniform 15-word sentences both read as generated.
@@ -123,9 +122,9 @@ The floor matters as much as the ceiling. Google's own guide quotes Orwell — "
 - **Articles**, even in headings: "Create a VM instance", not "Create VM instance".
 - **Contractions** — "isn't" is harder to misread than "is not".
 - **Em dashes** used for a genuine break, roughly one per paragraph at most; match the document's existing spacing convention. The artifact is frequency, not the character.
-- **Function words** — "update the rules that you defined", "if X, then Y". Google's guide explicitly says to keep "that", "then", and repeated "if"/"both" when they aid parsing. Terseness never beats clarity.
+- **Function words** — "update the rules that you defined", "if X, then Y". Google's guide explicitly says to keep "that", "then", and repeated "if"/"both" when they aid parsing. Clarity comes before terseness.
 - **Warmth where the genre allows it** — a tutorial can congratulate at a real milestone; a reference page can't.
-- **Existing structure** — headers, tables, and code blocks stay; only the prose inside them changes.
+- **Existing structure** — headings, tables, and code blocks stay. Only the prose in headings and table cells changes; code block contents are reproduced exactly.
 
 ## Before and after
 
