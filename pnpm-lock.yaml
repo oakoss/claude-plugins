@@ -165,9 +165,6 @@ settings:
 overrides:
   smol-toml: 1.7.1
 
-patchedDependencies:
-  '@varlock/bumpy@1.18.1': 1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15
-
 importers:
 
   .:
@@ -178,9 +175,6 @@ importers:
       '@oakoss/oakum':
         specifier: 0.3.1
         version: 0.3.1
-      '@varlock/bumpy':
-        specifier: ^1.18.1
-        version: 1.18.1(patch_hash=1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15)
       commitlint:
         specifier: ^21.2.2
         version: 21.2.2(@types/node@22.20.2)(conventional-commits-parser@7.1.2)(typescript@7.0.2)
@@ -583,10 +577,6 @@ packages:
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
-
-  '@varlock/bumpy@1.18.1':
-    resolution: {integrity: sha512-u6PHUr+laAgWWm/c3wdExHBCcvYkkTb+KsiRNR9GCFIbCDrCN9CyOZO/crtRZ5u4KWMKtUTeA7U/s+AA0k7Dcg==}
-    hasBin: true
 
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
@@ -1526,8 +1516,6 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
-
-  '@varlock/bumpy@1.18.1(patch_hash=1b72d0496938770d49b8d05835d325a0337de7c13bf4116bb9a7f37813d9ad15)': {}
 
   ajv@8.20.0:
     dependencies:
