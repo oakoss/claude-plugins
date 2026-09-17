@@ -14,10 +14,11 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  # The release branch queues instead of cancelling: its two pushes land
-  # seconds apart, and a cancellation that races a just-started job can leave
-  # it stuck holding this group until its timeout.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.head_ref != 'bumpy/version-packages' }}
+  # The release branch queues instead of cancelling: a cancellation that races
+  # a just-started job can leave it stuck holding this group until its timeout.
+  # oakum writes the version PR through the GitHub API in one shot, so there is
+  # no second push to race — but the stuck-group hazard is reason enough.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.head_ref != 'oakum/version-packages' }}
 
 jobs:
   changes:
@@ -62,32 +63,11 @@ jobs:
           # `plugins/` is in scope because tests/execution-receipt.bats scans
           # the agent and skill markdown: a diff that only edits an agent body
           # is exactly the diff that guard exists to catch.
-          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)(bin|hooks|tests|scripts)/|^plugins/|^\.github/workflows/|package\.json$|pnpm-lock\.yaml$'; then
+          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)(bin|hooks|tests)/|^plugins/|^\.github/workflows/|package\.json$|pnpm-lock\.yaml$'; then
             bats=true
           fi
           echo "shell=$shell" >> "$GITHUB_OUTPUT"
           echo "bats=$bats" >> "$GITHUB_OUTPUT"
-
-  versions:
-    name: Version consistency
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
-      - name: Harden Runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Cross-file consistency the commit-time bump gate can't see: plugin.json,
-      # marketplace.json, package.json, and a CHANGELOG heading must agree per
-      # plugin. The script has no dependencies, so no npm install.
-      - name: Check version drift
-        run: node scripts/sync-plugin-versions.mjs --check
 
   bump-files:
     name: Bump files
@@ -118,18 +98,56 @@ jobs:
           cache: true
           require-lockfile: true
 
-      # CI-side twin of the local PreToolUse bump gate: fails the PR when a
-      # changed plugin has no bump file, and posts a release-plan comment.
-      # --strict matches the local gate's per-plugin coverage (the default only
-      # fails when no bump files exist at all). The version PR carries real
-      # bumps instead of bump files and passes.
+      # Fork pull requests cannot read secrets, so minting is guarded on the PR
+      # coming from this repository. Without the guard the mint fails and takes
+      # the whole job with it; with it, `pr-status` falls back to the default
+      # token, finds no write permission, and writes its plan to the job
+      # summary instead (oakum ADR-0015).
+      - name: Mint app token
+        id: app-token
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: $/.github/actions/app-token
+        with:
+          client-id: ${{ secrets.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: claude-plugins
+
+      # CI-side twin of the local PreToolUse bump gate, but not its equal.
+      # --strict raises the level of coverage — per-plugin rather than
+      # any-bump-file-at-all — while honouring none of the hook's path
+      # exemptions: the hook lets a plugins/<x>/package.json edit through and
+      # oakum still demands intent for it. The version PR carries real bumps
+      # instead of bump files.
+      #
+      # Identity, not a branch name: a fork, a person, and a push to the bot's
+      # branch each fail one of these terms and get checked. Without the sender
+      # term anyone with write access could push to the bot's branch and inherit
+      # the exemption on the resulting `synchronize` run.
       - name: Check bump files
-        run: pnpm exec bumpy ci check --strict
+        if: >-
+          github.head_ref != 'oakum/version-packages'
+          || github.event.pull_request.head.repo.full_name != github.repository
+          || github.event.pull_request.user.type != 'Bot'
+          || github.event.sender.type != 'Bot'
+        run: pnpm exec oakum check --strict
+
+      - name: Post the release plan
+        id: pr-status
+        if: success() || failure()
+        continue-on-error: true
+        run: pnpm exec oakum ci pr-status
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+
+      # `continue-on-error` keeps an outage from failing the check; this keeps a
+      # step that failed from reading as one that reported. A post that fell back
+      # to the job summary is not this, and is by design.
+      - name: Release plan did not post
+        if: (success() || failure()) && steps.pr-status.outcome == 'failure'
+        run: echo "::warning title=oakum ci pr-status::the step failed, so its report may not have reached the pull request or the job summary; the check above still decides"
 
   lint:
-    name: Markdown and format
+    name: Markdown
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -153,13 +171,6 @@ jobs:
 
       - name: Lint markdown
         run: pnpm exec markdownlint-cli2 "**/*.md"
-
-      # oxfmt is scoped to hand-written scripts only: skill/agent markdown is
-      # runtime prose, changelogs are bumpy-generated, and the plugin manifests
-      # are written by the sync script — formatting any of those creates churn
-      # against their generators.
-      - name: Check script formatting
-        run: pnpm exec oxfmt --check scripts
 
   validate:
     name: Plugin manifests
@@ -308,7 +319,7 @@ jobs:
     # always(), not !cancelled(): a skipped required check counts as
     # satisfied, so cancellation must yield a red X here, not a skip.
     if: always()
-    needs: [changes, versions, bump-files, lint, validate, shellcheck, tests]
+    needs: [changes, bump-files, lint, validate, shellcheck, tests]
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -324,9 +335,8 @@ jobs:
             echo ""
             echo "| Job | Status | Required |"
             echo "| --- | --- | --- |"
-            echo "| Version consistency | \`${{ needs.versions.result }}\` | Yes |"
             echo "| Bump files | \`${{ needs.bump-files.result }}\` | Yes (PRs; skips on push) |"
-            echo "| Markdown and format | \`${{ needs.lint.result }}\` | Yes |"
+            echo "| Markdown | \`${{ needs.lint.result }}\` | Yes |"
             echo "| Plugin manifests | \`${{ needs.validate.result }}\` | Yes |"
             echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes (skips when no shell surface changed) |"
             echo "| Bats (both OSes) | \`${{ needs.tests.result }}\` | Yes (skips when no shell/test surface changed) |"
@@ -340,7 +350,6 @@ jobs:
           }
 
           fail_if_bad "changes" "${{ needs.changes.result }}"
-          fail_if_bad "versions" "${{ needs.versions.result }}"
           fail_if_bad "bump-files" "${{ needs.bump-files.result }}"
           fail_if_bad "lint" "${{ needs.lint.result }}"
           fail_if_bad "validate" "${{ needs.validate.result }}"

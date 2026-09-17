@@ -295,17 +295,18 @@ commit -m x"
   [ "$(gate_decision "$output")" = "deny" ]
 }
 
-@test "allows runtime change when a staged bump file names the plugin" {
+@test "allows runtime change when a quoted frontmatter name matches the plugin" {
   echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy
-  cat > .bumpy/fix-foo.md <<'CS'
+  mkdir -p .changeset
+  cat > .changeset/fix-foo.md <<'CS'
 ---
 "foo": patch
 ---
 
-Fix the thing.
+Quoted: oakum refuses this outright, so the gate must read it as covered and
+let `oakum check` be the one that fails, rather than miss it silently.
 CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/fix-foo.md
+  git add plugins/foo/hooks/runtime.sh .changeset/fix-foo.md
   run run_gate
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -313,15 +314,15 @@ CS
 
 @test "allows runtime change when the bump file's frontmatter name is unquoted" {
   echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy
-  cat > .bumpy/fix-foo-bare.md <<'CS'
+  mkdir -p .changeset
+  cat > .changeset/fix-foo-bare.md <<'CS'
 ---
 foo: patch
 ---
 
-Fix the thing, bare-name frontmatter as bumpy add emits it.
+Fix the thing, bare-name frontmatter as oakum add emits it.
 CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/fix-foo-bare.md
+  git add plugins/foo/hooks/runtime.sh .changeset/fix-foo-bare.md
   run run_gate
   [ "$status" -eq 0 ]
   [ -z "$output" ]
@@ -394,20 +395,21 @@ CS
   assert_contains "$output" "foo"
 }
 
-@test "allows runtime change when a lowercase .bumpy/readme.md names the plugin" {
+@test "BLOCKS when the only staged bump file is under .bumpy" {
   echo "v2" > plugins/foo/hooks/runtime.sh
   mkdir -p .bumpy
-  cat > .bumpy/readme.md <<'CS'
+  cat > .bumpy/fix-foo.md <<'CS'
 ---
 foo: patch
 ---
 
-bumpy skips only the exact name README.md, so this is a real bump file.
+bumpy is gone; nothing reads this directory, so it covers nothing.
 CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/readme.md
+  git add plugins/foo/hooks/runtime.sh .bumpy/fix-foo.md
   run run_gate
   [ "$status" -eq 0 ]
-  [ -z "$output" ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
 }
 
 @test "BLOCKS when the only staged change file is .changeset/README.md" {
@@ -478,63 +480,12 @@ CS
   assert_contains "$output" "foo"
 }
 
-@test "BLOCKS when the only staged bump file is .bumpy/README.md" {
-  echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy
-  cat > .bumpy/README.md <<'CS'
----
-foo: patch
----
-
-bumpy skips its own README, so it covers nothing.
-CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/README.md
-  run run_gate
-  [ "$status" -eq 0 ]
-  [ "$(gate_decision "$output")" = "deny" ]
-  assert_contains "$output" "foo"
-}
-
-@test "BLOCKS when the only staged bump file is nested below .bumpy" {
-  echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy/notes
-  cat > .bumpy/notes/deep.md <<'CS'
----
-foo: patch
----
-
-bumpy reads a nested path only under a configured channel; this repo declares none.
-CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/notes/deep.md
-  run run_gate
-  [ "$status" -eq 0 ]
-  [ "$(gate_decision "$output")" = "deny" ]
-  assert_contains "$output" "foo"
-}
-
-@test "BLOCKS when the staged bump file names a different plugin" {
-  echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy
-  cat > .bumpy/fix-bar.md <<'CS'
----
-"bar": patch
----
-
-Unrelated.
-CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/fix-bar.md
-  run run_gate
-  [ "$status" -eq 0 ]
-  [ "$(gate_decision "$output")" = "deny" ]
-  assert_contains "$output" "foo"
-}
-
 @test "BLOCKS when the bump file exists but is not staged" {
   echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy
-  cat > .bumpy/fix-foo.md <<'CS'
+  mkdir -p .changeset
+  cat > .changeset/fix-foo.md <<'CS'
 ---
-"foo": patch
+foo: patch
 ---
 
 Fix the thing.
@@ -547,18 +498,101 @@ CS
 
 @test "prose mention of the plugin in a bump file body does not satisfy the gate" {
   echo "v2" > plugins/foo/hooks/runtime.sh
-  mkdir -p .bumpy
-  cat > .bumpy/other.md <<'CS'
+  mkdir -p .changeset
+  cat > .changeset/other.md <<'CS'
 ---
-"bar": patch
+bar: patch
 ---
 
 This mentions "foo" in prose but does not version it.
 CS
-  git add plugins/foo/hooks/runtime.sh .bumpy/other.md
+  git add plugins/foo/hooks/runtime.sh .changeset/other.md
   run run_gate
   [ "$status" -eq 0 ]
   [ "$(gate_decision "$output")" = "deny" ]
+}
+
+@test "BLOCKS when a body line in another plugin's change file starts with this plugin's name" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  mkdir -p .changeset
+  cat > .changeset/fix-bar.md <<'CS'
+---
+bar: patch
+---
+
+foo now rejects empty input, so bar had to change.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/fix-bar.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when a tracked change file is edited in the body only" {
+  mkdir -p .changeset
+  cat > .changeset/existing-foo.md <<'CS'
+---
+foo: patch
+---
+
+Original wording.
+CS
+  git add .changeset/existing-foo.md
+  git -c user.name=t -c user.email=t@t commit -qm "add change file"
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  cat > .changeset/existing-foo.md <<'CS'
+---
+foo: patch
+---
+
+Reworded body, so the frontmatter is a context line rather than an added one.
+CS
+  git add plugins/foo/hooks/runtime.sh .changeset/existing-foo.md
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS when a change file naming the plugin is deleted alongside the runtime change" {
+  mkdir -p .changeset
+  cat > .changeset/existing-foo.md <<'CS'
+---
+foo: patch
+---
+
+Consumed by a release.
+CS
+  git add .changeset/existing-foo.md
+  git -c user.name=t -c user.email=t@t commit -qm "add change file"
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  rm .changeset/existing-foo.md
+  git add -A
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "BLOCKS a runtime file at the plugin root, not just nested ones" {
+  printf '{}\n' > plugins/foo/.mcp.json
+  git add plugins/foo/.mcp.json
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  assert_contains "$output" "foo"
+}
+
+@test "names an affected plugin once however many of its files are staged" {
+  echo "v2" > plugins/foo/hooks/runtime.sh
+  echo "v2" > plugins/foo/hooks/second.sh
+  echo "v2" > plugins/foo/hooks/third.sh
+  git add plugins/foo/hooks/
+  run run_gate
+  [ "$status" -eq 0 ]
+  [ "$(gate_decision "$output")" = "deny" ]
+  [ "$(printf '%s' "$output" | grep -c -- '- foo (')" -eq 1 ]
 }
 
 @test "no-op when only the plugin's package.json version anchor is staged" {
