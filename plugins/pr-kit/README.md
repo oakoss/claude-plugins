@@ -9,7 +9,9 @@ A pull-request workflow toolkit for Claude Code.
 - **`review-cycle`** — local, pre-commit quality gate on your uncommitted changes.
 - **`pr-kit`** — PR-stage helpers, after the branch is pushed.
 
-Every skill that would touch the remote or rewrite history is **gate-aware**: it stages and hands off, or asks first. Nothing commits, pushes, or force-pushes unreviewed. If you also run `review-cycle`, fixes route through `/review-cycle:review` before they are committed.
+Every skill that would touch the remote or rewrite history is **gate-aware**: nothing commits, pushes, or force-pushes unreviewed. If you also run `review-cycle`, fixes route through `/review-cycle:review` before they are committed.
+
+`fix-ci` is the exception, and deliberately so: getting CI green requires pushing, so invoking it authorizes committing and pushing each round. Every fix still goes through review first, and the loop stops after three rounds, or two on the same check. `make-pr-easy-to-review` rewrites history only after an explicit yes.
 
 All skills are invoked as bare slash commands and take natural-language arguments — no flags.
 
@@ -29,12 +31,12 @@ Makes a PR easy to review without changing behavior: a TL;DR that matches the ac
 
 ### `/pr-kit:fix-ci`
 
-Drives PR checks to green. Watches the check set with `gh pr checks` (the source of truth — it covers all attached checks, not just GitHub Actions), diagnoses the root failure, and applies the smallest safe fix. Each fix routes through `/review-cycle:review` before it is committed and pushed, so CI fixes are reviewed like any other change. Retries a flaky check once with evidence, and if a failure is unrelated to the PR and already green on `main`, merges `main` rather than bloating the diff. Never bypasses hooks.
+Drives PR checks to green. Watches the check set with `gh pr checks` (the source of truth — it covers all attached checks, not just GitHub Actions), diagnoses the root failure, and applies the smallest safe fix. Each fix routes through `/review-cycle:review` before it is committed and pushed, so CI fixes are reviewed like any other change. Retries a flaky check once with evidence, and if a failure is unrelated to the PR and already green on the base branch, merges the base in rather than bloating the diff. Stops after three rounds, or two on the same check. Never bypasses hooks.
 
 ## Requirements
 
-- **GitHub CLI (`gh`)**, authenticated — all four skills resolve the active PR and read checks/comments through `gh`.
-- **`review-cycle`** is recommended but not required. When present, `fix-ci` routes fixes through `/review-cycle:review`; without it, `fix-ci` still stages fixes for you to review before pushing.
+- **GitHub CLI (`gh`)**, authenticated — three of the four skills resolve the active PR and read checks/comments through `gh`. `fix-merge-conflicts` is purely local and needs no `gh`.
+- **`review-cycle`** is recommended but not required. When present, `fix-ci` routes fixes through `/review-cycle:review`; without it, `fix-ci` shows you each diff and waits for your OK before pushing.
 
 ## Relationship to other tools
 

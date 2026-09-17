@@ -42,19 +42,38 @@ Reordering/squashing commits and force-pushing is **destructive and visible**. N
 Before rewriting, capture the original tree so you can prove behavior is unchanged. First find where the head branch lives — for a fork PR it is **not** on `origin`:
 
 ```bash
-gh pr view <number> --json headRefName,baseRefName,isCrossRepository,headRepositoryOwner,commits
+gh pr view <number> --json headRefName,baseRefName,isCrossRepository,headRepository,maintainerCanModify,commits
 ```
 
-Fetch the head ref from the right place, then capture its tree:
+Fetch the head ref from the right place, then record its tree **in a git ref**. A shell variable does not survive between tool calls, and the rewrite spans many — a variable set here reads as empty by the time you verify, which leaves the check below with nothing to compare and silently permits the push it exists to stop.
+
+Chain every step with `&&`. A failed fetch that does not stop the capture stores the tree of a tracking ref nobody refreshed, and the guard then compares the rewrite against a stale baseline.
 
 ```bash
 # same-repo PR — the head ref is on origin
-git fetch origin <headRefName> <baseRefName>
-ORIGINAL_TREE=$(git rev-parse origin/<headRefName>^{tree})
+git fetch origin <headRefName> <baseRefName> &&
+git update-ref refs/pr-kit/original-head "$(git rev-parse --verify origin/<headRefName>)" &&
+git update-ref refs/pr-kit/original-tree "$(git rev-parse --verify refs/pr-kit/original-head^{tree})"
 
-# cross-repo (fork) PR — fetch from the fork instead
-git fetch https://github.com/<headRepositoryOwner>/<repo>.git <headRefName>
-ORIGINAL_TREE=$(git rev-parse FETCH_HEAD^{tree})
+# cross-repo (fork) PR — fetch from the fork instead. `nameWithOwner` carries
+# both halves; `headRepositoryOwner` is an object, and the fork may be renamed.
+git fetch "https://github.com/<headRepository.nameWithOwner>.git" <headRefName> &&
+git update-ref refs/pr-kit/original-head "$(git rev-parse --verify FETCH_HEAD)" &&
+git update-ref refs/pr-kit/original-tree "$(git rev-parse --verify refs/pr-kit/original-head^{tree})"
+```
+
+Then put yourself on the commit you just captured. `git fetch` writes `FETCH_HEAD` and moves nothing else, so after the fork block you are still on whatever branch you started on — and for a PR resolved by number that is not the PR's head at all:
+
+```bash
+git checkout --detach refs/pr-kit/original-head
+```
+
+This is also what makes "push the exact `HEAD` you verified" true rather than assumed, and it covers the same-repo path when the local branch is stale or absent.
+
+Write those refs **once per run**, from `origin/<headRefName>` or `FETCH_HEAD` immediately after a successful fetch — never from `HEAD` or a local branch, which records the rewrite you are trying to check rather than the baseline. If a run aborts, clear them and start from a fresh fetch:
+
+```bash
+git update-ref -d refs/pr-kit/original-tree; git update-ref -d refs/pr-kit/original-head
 ```
 
 A good commit grouping follows dependency order: schema/storage or generated API defs → core logic → wiring/integration → UI/surface → tests.
@@ -62,26 +81,39 @@ A good commit grouping follows dependency order: schema/storage or generated API
 After rewriting, **verify the tree is byte-identical** — the whole point is that history changed but code did not:
 
 ```bash
-echo "original: $ORIGINAL_TREE"
-echo "current:  $(git rev-parse HEAD^{tree})"
-git diff origin/<headRefName> --stat
+o=$(git rev-parse --verify refs/pr-kit/original-tree^{tree}) &&
+h=$(git rev-parse --verify HEAD^{tree}) &&
+[ -n "$o" ] && [ "$o" = "$h" ] && echo "TREES MATCH $o"
 ```
 
-If the trees differ at all, **do not push** — the rewrite changed code, which is not what this skill does. Investigate or abort.
+**Do not push unless you see the literal line `TREES MATCH <sha>`.** A silent exit 0 is a failure, not a pass. Comparing two command substitutions directly — `test "$(git …)" = "$(git …)"` — passes when *both* are empty, and command substitution throws away git's exit code, so a git that is absent, shimmed, broken, or run outside a repository produces `"" = ""`, exit 0, and no output at all. That is byte-identical to a genuine pass, and this harness resets the working directory between calls. The `--verify` flags and the `&&` chain are what turn git's failure into the guard's; `[ -n "$o" ]` is the backstop; the printed token is what you actually check.
 
-Check where the head branch lives before pushing. For a PR from a fork, `<headRefName>` is on the fork, not `origin` — pushing to `origin` would target the base repo and either fail or create a stray same-named branch there while leaving the PR untouched:
+If it does not print, **do not push** — either the rewrite changed code, or the check could not run. Both mean stop. To see what moved, `git diff refs/pr-kit/original-tree HEAD --stat`; compare against the ref rather than `origin/<headRefName>`, which does not exist for a fork PR and may name an unrelated branch in the base repo.
+
+Delete both refs once the push lands: `git update-ref -d refs/pr-kit/original-tree; git update-ref -d refs/pr-kit/original-head`.
+
+Only force-push after the tree check passes and the user has approved. Push the exact `HEAD` you verified — not a local branch name, which may be stale or absent — to the PR's **head** remote. For a PR from a fork that is the fork, not `origin`: pushing to `origin` targets the base repo and either fails or creates a stray same-named branch there while leaving the PR untouched. Add the fork remote only if you own it or `maintainerCanModify` is true. If you can't push to the head repo, stop and tell the user — don't rewrite history you can't publish.
+
+State the lease explicitly, against the head you recorded before rewriting. The bare `--force-with-lease` reads a remote-tracking ref, which a freshly added fork remote does not have — it is then rejected as `stale info` even though nothing is wrong. The explicit form carries the expected value itself, so it works for a fork and still refuses when the remote moved.
 
 ```bash
-gh pr view <number> --json isCrossRepository,headRepositoryOwner,headRefName,maintainerCanModify
+# same-repo PR
+git push --force-with-lease="<headRefName>:$(git rev-parse --verify refs/pr-kit/original-head)" \
+  origin HEAD:refs/heads/<headRefName>
+
+# cross-repo PR — name the remote per PR, and confirm where it points before
+# pushing. `git remote add` fails with exit 3 when the name is already taken,
+# and the push then goes to whatever repository the leftover name refers to.
+git remote remove pr-kit-head-<number> 2>/dev/null || true
+git remote add pr-kit-head-<number> "https://github.com/<headRepository.nameWithOwner>.git" &&
+git remote get-url pr-kit-head-<number>
+git push --force-with-lease="<headRefName>:$(git rev-parse --verify refs/pr-kit/original-head)" \
+  pr-kit-head-<number> HEAD:refs/heads/<headRefName>
 ```
 
-Only force-push after the trees match and the user has approved. Push the exact `HEAD` you verified (not a local branch name, which may be stale or absent) to the PR's **head** remote — `origin` for a same-repo PR, the fork's remote for a cross-repo one (add it if needed, and only if you own the fork or `maintainerCanModify` is true). If you can't push to the head repo, stop and tell the user — don't rewrite history you can't publish.
+Read the `get-url` output before the push: it must be the fork from `headRepository.nameWithOwner`. A remote name left over from an earlier run on a different PR redirects the force-push into that repository, with a valid lease and an exit 0, while the PR you are working on goes untouched.
 
-```bash
-git push --force-with-lease <head-remote> HEAD:<headRefName>
-```
-
-Use `--force-with-lease`, never `--force` — it refuses to clobber commits you haven't seen.
+Use `--force-with-lease`, never `--force`. **If it is rejected as `stale info`, someone pushed to the PR while you were rewriting — stop.** Do not fetch and retry: that refreshes the lease to include their commit and then overwrites it, which is `--force` by another route. Tell the user what landed, and let them decide whether to rebase onto it or abandon the rewrite. Your tree check is also stale at that point, because it compares against the snapshot you took before their push.
 
 ## When the PR is just too big
 
