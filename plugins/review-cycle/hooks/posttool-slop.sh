@@ -12,7 +12,9 @@ source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh"
 
 gate_disabled && exit 0
 
-INPUT=$(cat 2>/dev/null || true)
+# Builtin redirection, not `cat`: one less PATH-resolved dependency ahead of
+# everything this hook decides.
+INPUT=$(</dev/stdin)
 
 FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
 [ -z "$FILE" ] && exit 0

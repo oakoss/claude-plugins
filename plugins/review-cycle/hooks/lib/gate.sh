@@ -28,11 +28,14 @@ gate_project_opted_out() {
   # numbers, and missing values fall through to the legacy marker; a
   # hand-edit of `disabled: null` shouldn't silently lose the prior opt-out.
   # `disabled: false` (proper bool) does override a stale `.no-review-gate`.
+  # Read the value rather than trusting `-e`'s status: a jq stuck at exit 0
+  # answers yes to every test, which would read as "this project opted out"
+  # and stand down every gate. An unreadable answer falls to the marker below.
   if [ -f "$config" ] && command -v jq >/dev/null 2>&1; then
-    if jq -e '(.disabled | type) == "boolean"' "$config" >/dev/null 2>&1; then
-      jq -e '.disabled == true' "$config" >/dev/null 2>&1
-      return $?
-    fi
+    case "$(jq -r 'if (.disabled | type) == "boolean" then (.disabled | tostring) else "absent" end' "$config" 2>/dev/null)" in
+      true) return 0 ;;
+      false) return 1 ;;
+    esac
   fi
   [ -f "$root/.claude/.no-review-gate" ]
 }
@@ -127,8 +130,10 @@ gate_marker_is_stale() {
   [ -f "$marker" ] || return 0
   started=$(sed -n '1p' "$marker" 2>/dev/null | tr -cd '0-9')
   now=$(date +%s 2>/dev/null | tr -cd '0-9')
-  # No clock means no TTL decision: treat as fresh rather than kill a live cycle.
-  [ -n "$now" ] || return 1
+  # 2, not 1: no clock means no TTL decision at all. Keeping the marker beats
+  # killing a live cycle, but a caller that reads that as "fresh" holds its gate
+  # open forever on a dead date.
+  [ -n "$now" ] || return 2
   [ -n "$started" ] || return 0
   [ $((now - started)) -ge 0 ] && [ $((now - started)) -lt "$GATE_IN_PROGRESS_TTL" ] && return 1
   return 0

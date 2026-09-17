@@ -77,10 +77,10 @@ Shell scripts in `hooks/` must:
 
 - Use `#!/usr/bin/env bash` as the shebang
 - Be committed executable (`git update-index --chmod=+x` if added on a system without exec bit support)
-- Read stdin defensively (`INPUT=$(cat 2>/dev/null || true)`)
-- Fail-open on any error — exit 0 rather than trapping the user in a broken loop
+- Read stdin with builtin redirection (`INPUT=$(</dev/stdin)`), not `cat` — `cat` makes the payload read itself depend on a PATH lookup, upstream of anything that could probe for it. Measured on both commit gates, across five `cat` fault modes each: the emptied payload turned a kilobyte-scale deny into exit 0 with nothing on either stream, indistinguishable from a pass. (The Stop gate survives it — it reads the payload only for `stop_hook_active` — so this is a claim about the commit gates, not about every hook)
+- Fail-open on any error — the action proceeds. A hook that *decided* exits 0; one that could not run exits 1 and prints one self-contained line to stderr. Never report a broken dependency with exit 2: `PreToolUse` and `Stop` honour it and block, which is the trap fail-open exists to avoid, while `PostToolUse` and `SessionStart` ignore it — so it is unreliable as well as wrong. (The semantics this rests on: stderr at exit 0 reaches only the debug log; a non-zero, non-2 exit is a non-blocking error whose *first stderr line* surfaces, but only when stdout is empty or unparseable; and valid decision JSON on stdout is honoured with the exit code ignored entirely. From the hooks reference at code.claude.com/docs/en/hooks — version-sensitive, and not measured in-harness. They are why exit 0 is reserved for user-legible states, and why a hook that emits a decision need not care about its exit code.)
 - Resolve project root via `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}` because `CLAUDE_PROJECT_DIR` is unreliable in plugin hooks
-- Honor a global kill-switch at `~/.claude/.disable-review-gate` (or a plugin-specific equivalent) as the first check
+- Honor a global kill-switch at `~/.claude/.disable-review-gate` (or a plugin-specific equivalent) as the first check — ahead of the payload prefilter and of sourcing any lib, both of which can fail loudly and leave a user who disabled every gate with an error on each call
 - Use `${CLAUDE_PLUGIN_ROOT}` for plugin-relative paths in `hooks.json`
 
 When the hook needs to use sha256, prefer this cross-platform fallback:
