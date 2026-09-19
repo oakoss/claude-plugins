@@ -133,13 +133,13 @@ codex login status 2>&1; echo "login-exit=$?"
 - **127, or `command not found`** → `skipped (not installed)`. Expected where Codex isn't deployed; not an error.
 - **any other nonzero** → `skipped (codex present but unusable: <first line of stderr>)`. A broken install, a non-executable file, a `$PATH` this shell can't see. Reporting these as "not installed" sends the user to `npm install -g` for something already installed — quote what actually happened instead.
 
-**`codex login status` is advisory, never a gate**, and it has three outcomes, not two. It reports only on a *stored* session, so it exits nonzero with `Not logged in` whenever Codex is authenticated by environment variable (`OPENAI_API_KEY` and friends) with no login on disk — the standard CI setup, and exactly the environment an optional Codex leg exists to serve. Record which of these applies:
+**`codex login status` is advisory, never a gate**, and it reads the session file rather than exercising the credential. It reports only on a *stored* session, so it exits nonzero with `Not logged in` whenever Codex is authenticated by environment variable (`OPENAI_API_KEY` and friends) with no login on disk — the standard CI setup, and exactly the environment an optional Codex leg exists to serve. Record which of these applies:
 
-- exit 0 → auth `confirmed`
+- exit 0 → auth `stored session (not exercised)`
 - reports not logged in → auth `no stored session`
 - the subcommand is unrecognized (an older CLI) → auth `unknown (probe unsupported)`
 
-The third is not the second. Telling someone to run `codex login` when the probe simply doesn't exist on their CLI sends them to fix something that isn't broken.
+The third is not the second. Telling someone to run `codex login` when the probe simply doesn't exist on their CLI sends them to fix something that isn't broken. And exit 0 is not confirmation: its verdict is a pure function of whether `auth.json` exists and parses, so it reports the same for a revoked session and for a file containing only `{}`. Measured on codex-cli 0.155.1: it printed `Logged in using ChatGPT` and exited 0 while the refresh token had been revoked server-side, and the leg launched on that state died on a 401. Never report this outcome as working auth.
 
 **Write all of this into the Phase 9 summary draft now, not at Phase 9.** Open the draft here with the tier, the leg status, and the auth state — and add the Codex effort once Phase 3 decides it — updating the draft as the cycle proceeds. The loop ends turns and re-wakes across up to four iterations, and none of these facts is re-derivable later without re-running the probe.
 
@@ -291,7 +291,7 @@ The post-loop pass (Phase 7) runs the report-only reviewers and cleanup; none of
 
 **A Codex leg that dies after launch is a failure, not a skip.** It passed the Phase 1 probe, so anything short of a usable report means something broke mid-run — a revoked session, a rate limit, a crash, or credentials that were never valid.
 
-Read the status from the completion notification, which carries the shell's exit code — not from the output file, where a crashed run and a clean run look alike.
+Read *whether* the leg failed from the completion notification, which carries the shell's exit code; read *why* from the output file, which the notification cannot tell you. Exit 1 alone names no cause — a rejected credential, a rate limit, a sandbox denial and a signal death all arrive as that same integer. Open the output file before composing the failure message and quote what it actually says.
 
 `participated` is the outcome recorded here, replacing Phase 1's `eligible`; it is never the precondition for launching the run that produces it.
 
@@ -448,7 +448,7 @@ Target integrity: unchanged (Phase 3 fan-out; Phase 7 not covered) | CONTAMINATE
 Message fixes verified: N (one verification line per fix) | none
   valve: 1 Codex-only pass (effort: low | inherited | <level> (explicit)) | not needed
 Codex leg: participated (effort: low | inherited | <level> (explicit)) | skipped (<reason>[; effort <level> requested, unused]) | failed (<error>)
-  auth: confirmed | no stored session | unknown (probe unsupported)
+  auth: stored session (not exercised) | no stored session | unknown (probe unsupported)
 Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
 Canonicalization: ran (<commands>) | partial (<tool> unavailable) | no project checks found
 Reviewers dropped (stalled): none | <names, each nudged once before dropping>
