@@ -102,7 +102,7 @@ If missing:
 codex login status
 ```
 
-- Exit 0 (e.g. `Logged in using ChatGPT`): ✓ authed.
+- Exit 0 (e.g. `Logged in using ChatGPT`): use the `-` glyph, not `✓` — report `- Codex auth: stored session (not exercised)`. The probe only shows that `auth.json` exists and parses; it prints this for a revoked session too, so a checkmark promises what no one has tested.
 - Reports not logged in: use the `-` glyph, not `⚠` — this is unconfirmed, not broken. "no stored login — fine if you authenticate via `OPENAI_API_KEY`, else run `codex login`". The command only sees a stored session, so it says `Not logged in` for a working env-var setup, which is the normal CI arrangement.
 - Subcommand unrecognized (older CLI): report `- Codex auth: unknown (probe unsupported on this CLI)`. Don't silently drop the line — a check that vanishes reads as a check that passed.
 
@@ -162,7 +162,7 @@ Print a compact checklist of what was done. One line per item, single status gly
 - `✓` succeeded or already done
 - `⚠` needs user action
 - `✗` failed
-- `-` skipped or not applicable
+- `-` skipped, not applicable, or observed but not verified
 
 ```text
 review-cycle init summary:

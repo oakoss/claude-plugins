@@ -328,7 +328,7 @@ Beads/Trekker exports are already excluded (at any depth), so `bd`'s commit-time
 **Codex is missing or not authenticated.**
 A missing CLI is not an error — the cycle skips that leg, runs Claude-only, and names the skip in its summary. To add the leg back: `npm install -g @openai/codex`, then `codex login`, and verify `multi_agent = true` in `~/.codex/config.toml`.
 
-Missing auth reads differently: the CLI is present, so the leg runs and then fails (or, in a non-TTY shell, blocks on a login prompt). The summary reports the auth state the preflight observed — `confirmed`, `no stored session`, or `unknown (probe unsupported)` — and suggests `codex login` only for `no stored session`. `unknown` means the probe itself didn't run, not that your credentials are wrong. A `failed` leg with auth `confirmed` means something else broke mid-review — a revoked session or a rate limit.
+Missing auth reads differently: the CLI is present, so the leg runs and then fails (or, in a non-TTY shell, blocks on a login prompt). The summary reports the auth state the preflight observed — `stored session (not exercised)`, `no stored session`, or `unknown (probe unsupported)` — and suggests `codex login` only for `no stored session`. `unknown` means the probe itself didn't run, not that your credentials are wrong. Exit 0 from the probe only means `auth.json` exists and parses; it reports the same for a session whose refresh token has been revoked. A `failed` leg with a stored session means something broke mid-review — a revoked session, or a rate limit.
 
 **False trigger on a project I don't want gated.**
 Write `{"disabled": true}` to `.claude/review-cycle.json` in that project root.

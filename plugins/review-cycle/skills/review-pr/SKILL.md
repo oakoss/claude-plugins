@@ -54,7 +54,7 @@ codex --version 2>&1; echo "version-exit=$?"
 codex login status 2>&1; echo "login-exit=$?"
 ```
 
-`codex --version` exit 0 → leg `eligible`; exit 127 / `command not found` → `skipped (not installed)`; any other nonzero → `skipped (codex present but unusable: <first line of stderr>)`. `codex login status` is advisory, never a gate — it reports `Not logged in` for env-var auth, so record it as auth `confirmed` (exit 0), `no stored session` (reports not logged in), or `unknown (probe unsupported)` (subcommand unrecognized) and move on. Never stop over an absent Codex; never leave its status out of the report. `eligible` is a launch precondition, not an outcome: once the leg delivers, the report records `participated` (or `failed`) in its place.
+`codex --version` exit 0 → leg `eligible`; exit 127 / `command not found` → `skipped (not installed)`; any other nonzero → `skipped (codex present but unusable: <first line of stderr>)`. `codex login status` is advisory, never a gate — it reads the session file rather than exercising the credential, and reports `Not logged in` for env-var auth, so record it as auth `stored session (not exercised)` (exit 0), `no stored session` (reports not logged in), or `unknown (probe unsupported)` (subcommand unrecognized) and move on. Exit 0 is not confirmation: its verdict is a pure function of whether `auth.json` exists and parses, and it reports the same for a revoked session. Never stop over an absent Codex; never leave its status out of the report. `eligible` is a launch precondition, not an outcome: once the leg delivers, the report records `participated` (or `failed`) in its place.
 
 **Record three literal values now** — each Bash call runs in a fresh shell, so shell variables never survive between calls; these are recorded once and substituted by you into every later command (the snippets below write them as `<...>` placeholders, never live variables):
 
@@ -152,7 +152,7 @@ In a single conversation turn, invoke ALL of the following:
 
 **Collecting results — wake-driven, single pass.** Completion notifications arrive automatically; do not poll, and end the turn while reviewers run. On any wake where a reviewer has gone idle without delivering — or stayed silent while every other reviewer completed — send it ONE `SendMessage` nudge (to the `agent_id` from its spawn result): deliver findings now, even if incomplete, opening with the two receipt lines. If it still hasn't reported by the next wake that carries information about it (its own idle or completion notification, or — only when other Claude-side reviewers exist — all of them having since reported), proceed without it and list it under dropped reviewers. When it is the only Claude-side reviewer (light tier), only its own notification or the user's next message counts as evidence. Never nudge twice; never hold the pass for a nudged straggler.
 
-A Codex leg that dies after launch is a **failure**, not a skip — read the exit code from the completion notification, not the output file, and report it distinctly.
+A Codex leg that dies after launch is a **failure**, not a skip. The completion notification's exit code says *whether* it failed; the output file says *why*, and exit 1 alone names no cause. Open that file before filling `failed (<error>)` and quote what it says.
 
 ## Phase 4: Aggregate
 
@@ -190,7 +190,7 @@ PR #<n> review — <title>  [draft]
 Tier: light | full
 Coverage:
   codex — participated (effort: low | inherited | <level> (explicit)) | skipped (<reason>[; effort <level> requested, unused]) | failed (<error>)
-    auth: confirmed | no stored session | unknown (probe unsupported)
+    auth: stored session (not exercised) | no stored session | unknown (probe unsupported)
   code-reviewer — reported | dropped (stalled, nudged once)
   <each other dispatched reviewer — reported | skipped (<reason>) | failed | dropped>
 Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
