@@ -167,6 +167,12 @@ bin/run-bats path/to/one.bats               # a single file
 bin/run-bats -f "test name" path/to.bats    # filter, like bats -f
 ```
 
-The wrapper never reports a partial run as success: if it kills a stalled bats before every planned test has reported, it prints `only <n>/<total> tests reported` and exits 2. Treat that exit code as a failed run, not a flaky one — it means results are missing, not that tests failed.
+Given more than one file the wrapper runs them concurrently, one `bats` process per file, and merges their TAP streams into a single renumbered plan. Measured back to back on a 12-core machine, 654 tests: 266s serial against 78s parallel, roughly 3.4x. Both numbers move with the machine and the environment — the same suite was 111s parallel before `jq` stopped resolving through a tool-manager shim — so re-measure rather than trusting these, and treat the ordering as the claim: wall time converges on the slowest single file. This is file-level parallelism deliberately — `bats --jobs` interleaves tests *within* a file, and these suites plant PATH shims and build git fixtures, so the isolation that makes them safe to run together is the process boundary each file already has. Every file runs exactly as it would alone. `RUN_BATS_JOBS=1` forces them through one at a time, for diagnosing a suite that only misbehaves alongside others.
+
+The wrapper never reports a partial run as success. Exit 2 means *results are missing*, which is worse news than *tests failed* and therefore outranks exit 1 — a run that lost results and also had a failure exits 2, and the loss is always named on stderr. It fires on a stalled bats killed before every planned test reported (`only <n>/<total> tests reported`, naming the file when several ran), on the merge emitting a different number of results than the per-file runs reported, on merged results that are not numbered contiguously, and on results arriving past the plan.
+
+Those merge checks exist because every other suite's trustworthiness rides on the merge: the count is taken from the merged stream rather than from the inputs, so a renumbering bug cannot leave the per-file checks happy while the caller sees fewer tests than ran. Treat exit 2 as a failed run, not a flaky one.
+
+`tests/run-bats.bats` covers the wrapper itself, each cell written against a mutation that survived without it. Two guards are deliberately unpinned and say so in that file's header, because no input reaches them on bats 1.14.0.
 
 Plugin-local wrappers (e.g. `plugins/review-cycle/tests/run.sh`) are thin shims that delegate to `bin/run-bats` and can still be invoked from inside a plugin directory.
