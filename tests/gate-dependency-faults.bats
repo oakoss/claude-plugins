@@ -52,6 +52,7 @@ setup() {
   FIXTURE="$BATS_TEST_TMPDIR/fixture"
   DEP_CHECK="$REPO_ROOT/plugins/review-cycle/hooks/lib/dep-check.sh"
   REAL_GIT="$(command -v git)"
+  REAL_GREP="$(command -v grep)"
 }
 
 # git answers every liveness question correctly and misanswers one scoped to
@@ -158,6 +159,40 @@ make_shim() {
 
 clear_shim() { rm -rf "$SHIM_DIR"; }
 
+# Three greps that pass dep_probe_grep and misanswer afterwards. The probe asks
+# a five-byte BRE and a fixed absent pattern, so none of these is visible at
+# startup: `uniform` reports no match for everything, `ere` misanswers only
+# extended regexes -- the mode every verb decision uses -- and `fpat` misanswers
+# one fixed pattern, the literal the prefilter asks about.
+make_grep_late_shim() {
+  local mode="$1"
+  rm -rf "$SHIM_DIR"
+  mkdir -p "$SHIM_DIR"
+  {
+    printf '#!/bin/sh\n'
+    printf 'REAL=%s\n' "$REAL_GREP"
+    # Drained in shell rather than left to close: the writer's broken-pipe
+    # notice would take the one stderr line the transcript shows.
+    printf 'drain() { while read -r _; do :; done; exit "$1"; }\n'
+    printf 'for a in "$@"; do\n'
+    printf '  case "$a" in probe|absent-pattern) exec "$REAL" "$@" ;; esac\n'
+    case "$mode" in
+      uniform) printf 'done\n'; printf 'drain 1\n' ;;
+      # Keyed on the pattern, not on the mode: it answers the needle drawn
+      # from the haystack correctly and misanswers the one literal the
+      # prefilter actually asked about.
+      fpat)    printf '  case "$a" in commit) drain 1 ;; esac\n'
+               printf 'done\n'
+               printf 'exec "$REAL" "$@"\n' ;;
+      ere)     printf '  case "$a" in -*E*) drain 1 ;; esac\n'
+               printf 'done\n'
+               printf 'exec "$REAL" "$@"\n' ;;
+      *) echo "unknown late-grep fault: $mode" >&2; return 1 ;;
+    esac
+  } > "$SHIM_DIR/grep"
+  chmod +x "$SHIM_DIR/grep"
+}
+
 # DIAGNOSTIC needs a nonzero exit as well as stderr: stderr from a hook exiting
 # 0 reaches the debug log only, so it is still silence from the user's side.
 #
@@ -193,7 +228,8 @@ run_vbg() {
   local errfile="$BATS_TEST_TMPDIR/vbg.err" out rc=0
   : > "$errfile"
   out=$(cd "${PAYLOAD_CWD:-$FIXTURE}" \
-    && printf '{"tool_input":{"command":"git commit -m x"},"cwd":"%s"}' "${PAYLOAD_CWD:-$FIXTURE}" \
+    && printf '{"tool_input":{"command":"%s"},"cwd":"%s"}' \
+         "${PAYLOAD_CMD:-git commit -m x}" "${PAYLOAD_CWD:-$FIXTURE}" \
     | PATH="$SHIM_DIR:$PATH" CLAUDE_PROJECT_DIR="${VBG_PROJECT_DIR-$FIXTURE}" \
       bash "$VBG" 2>"$errfile") || rc=$?
   classify "$out" "$errfile" "$rc"
@@ -214,7 +250,8 @@ run_cg() {
   local errfile="$BATS_TEST_TMPDIR/cg.err" out rc=0
   : > "$errfile"
   out=$(cd "${PAYLOAD_CWD:-$FIXTURE}" \
-    && printf '{"tool_input":{"command":"git commit -m x"},"cwd":"%s"}' "${PAYLOAD_CWD:-$FIXTURE}" \
+    && printf '{"tool_input":{"command":"%s"},"cwd":"%s"}' \
+         "${PAYLOAD_CMD:-git commit -m x}" "${PAYLOAD_CWD:-$FIXTURE}" \
     | PATH="$SHIM_DIR:$PATH" CLAUDE_PROJECT_DIR="${CG_PROJECT_DIR-$FIXTURE}" \
       CLAUDE_PLUGIN_ROOT="${CG_ROOT_OVERRIDE:-$CG_PLUGIN_ROOT}" bash "$CG" 2>"$errfile") || rc=$?
   classify "$out" "$errfile" "$rc"
@@ -603,6 +640,137 @@ assert_sentinel_faults_bite() {
   assert_rooted_probe_bites vbg
 }
 
+# Only the two commit gates read a command; the Stop gate is handed no command
+# to parse, so it has no exposure to this fault.
+build_ground() {
+  local gate="$1" ground="$2"
+  [ "$ground" = clean ] && { build_clean_fixture "$gate"; return; }
+  case "$gate" in
+    vbg) build_vbg_fixture ;;
+    cg)  build_cg_fixture  ;;
+    *) echo "unknown gate: $gate" >&2; return 1 ;;
+  esac
+}
+
+# \u0063ommit decodes to the verb only after jq, so the raw bytes carry no
+# literal for a fallback to match. Built here rather than written inline
+# because printf's format string would expand the escape.
+escaped_verb_payload() {
+  local bs='\'
+  printf 'git %su0063ommit -m x' "$bs"
+}
+
+# A command the prefilter's backslash arm admits and that is not a commit. The
+# doubled backslash is the JSON escape; it decodes to one.
+backslash_noncommit_payload() {
+  local bs='\'
+  printf 'echo a%s%stb' "$bs" "$bs"
+}
+
+# fault:ground:payload. Clean ground wherever it works: a fault row can only
+# mean something when the healthy verdict differs from the faulted one, and on
+# a drifting tree both were BLOCK until the gate learned to stand down. Rows
+# that killed no mutant are gone -- measured, an over-matching grep on drifting
+# ground is unfalsifiable by construction, because it can turn a pass into a
+# block but never a block into a pass.
+#
+# escaped rides the drifting row: it is the only coverage anywhere in the repo
+# for the fallback's backslash arm, and there it is a real commit being waved
+# through rather than a quiet pass that was correct anyway. backslash is its
+# opposite number -- an ordinary command carrying a backslash, which the same
+# arm admits and which must therefore become visibly noisy, not silently denied.
+LATE_GREP_ROWS=(
+  uniform:clean:literal
+  uniform:clean:backslash
+  uniform:drift:escaped
+  ere:clean:literal
+  ere:clean:unbalanced
+  fpat:clean:literal
+)
+LATE_ROW_FLOOR=6
+
+assert_late_grep_bites() {
+  local gate="$1" row fault ground shape cmd verdict failures=""
+  [ "${#LATE_GREP_ROWS[@]}" -ge "$LATE_ROW_FLOOR" ] || {
+    echo "late-grep row list collapsed to ${#LATE_GREP_ROWS[@]}" >&2
+    return 1
+  }
+  for row in "${LATE_GREP_ROWS[@]}"; do
+    fault="${row%%:*}"; shape="${row##*:}"
+    ground="${row#*:}"; ground="${ground%%:*}"
+    cmd=""
+    case "$shape" in
+      escaped) cmd=$(escaped_verb_payload) ;;
+      backslash) cmd=$(backslash_noncommit_payload) ;;
+      # An unterminated quote leaves the lexer unable to build a skeleton, so
+      # the raw view answers alone -- a path that returns straight out of
+      # parse_grep_verb, making its confirmation the only one on duty. An
+      # unclosed subshell does not do this: measured, parse_strip_text still
+      # exits 0 for it, and the shell-exec confirmation covers that route.
+      unbalanced) cmd="git commit -m 'x" ;;
+    esac
+
+    clear_shim
+    build_ground "$gate" "$ground" || return 1
+    verdict=$(PAYLOAD_CMD="$cmd" run_gate "$gate")
+    case "$ground/$verdict" in
+      clean/SILENT|drift/BLOCK) ;;
+      *)
+        echo "$gate/$row: healthy grep gives $verdict; the row below proves nothing" >&2
+        return 1 ;;
+    esac
+
+    make_grep_late_shim "$fault" || return 1
+    # Without this the cell silently becomes a startup test: a shim that fails
+    # the probe drops DEPS_OK at line one, and the diagnostic that follows has
+    # nothing to do with the late failure the row is named for.
+    PATH="$SHIM_DIR:$PATH" bash -c "source '$DEP_CHECK'; dep_probe_grep" </dev/null || {
+      echo "$gate/$row: the shim fails dep_probe_grep, so this tests startup, not late failure" >&2
+      clear_shim
+      return 1
+    }
+    build_ground "$gate" "$ground" || return 1
+    verdict=$(PAYLOAD_CMD="$cmd" run_gate "$gate")
+    clear_shim
+    # DIAGNOSTIC only. A BLOCK here would be the gate ruling on the very
+    # question it just reported it could not answer.
+    case "$verdict" in
+      DIAGNOSTIC)
+        # The one line the transcript shows has to send the user to the tool
+        # that is actually broken; blaming another costs them the remedy.
+        head -1 "$BATS_TEST_TMPDIR/$gate.err" | grep -q grep \
+          || failures="$failures $row=diagnostic-does-not-name-grep" ;;
+      *) failures="$failures $row=$verdict" ;;
+    esac
+  done
+  [ -z "$failures" ] || {
+    echo "$gate did not stand down on a grep that passed its probe and broke after:$failures" >&2
+    return 1
+  }
+}
+
+@test "commit gate reports a grep that breaks after its probe" {
+  assert_late_grep_bites cg
+}
+
+@test "version-bump gate reports a grep that breaks after its probe" {
+  assert_late_grep_bites vbg
+}
+
+@test "both gates stay quiet on a non-commit that clears the payload prefilter" {
+  # The arm that exits 0 on a confirmed miss. Deleting it from the version-bump
+  # gate left all 632 cells green while turning every prefilter-clearing Bash
+  # call into a deny on a tree with work pending.
+  clear_shim
+  local verdict
+  build_vbg_fixture || return 1
+  verdict=$(PAYLOAD_CMD='git log -p commit' run_vbg)
+  [ "$verdict" = "SILENT" ] || { echo "vbg answered $verdict" >&2; return 1; }
+  build_cg_fixture || return 1
+  verdict=$(PAYLOAD_CMD='git log -p commit' run_cg)
+  [ "$verdict" = "SILENT" ] || { echo "cg answered $verdict" >&2; return 1; }
+}
+
 @test "commit gate reports a git that refuses its own root" {
   assert_rooted_probe_bites cg
 }
@@ -706,11 +874,18 @@ covered_tools() {
 @test "the two gates share one prefilter, byte for byte" {
   # It must run before the source loop, so it cannot be extracted; a test is
   # what keeps the copies from drifting.
-  local a b
-  a=$(sed -n '/^case "\$INPUT" in$/,/^esac$/p' "$VBG")
-  b=$(sed -n '/^case "\$INPUT" in$/,/^esac$/p' "$CG")
+  # Every copy, not only the unindented one: the fallback that runs with a
+  # broken dependency is a second `case "$INPUT" in` block making the same
+  # decision, and a guard anchored to column zero never saw it.
+  local a b na nb
+  a=$(sed -n '/case "\$INPUT" in/,/esac/p' "$VBG")
+  b=$(sed -n '/case "\$INPUT" in/,/esac/p' "$CG")
+  na=$(grep -c 'case "\$INPUT" in' "$VBG")
+  nb=$(grep -c 'case "\$INPUT" in' "$CG")
   [ -n "$a" ] || { echo "no prefilter found in $VBG" >&2; return 1; }
   [ -n "$b" ] || { echo "no prefilter found in $CG" >&2; return 1; }
+  [ "$na" = "$nb" ] || { echo "block counts differ: $VBG=$na $CG=$nb" >&2; return 1; }
+  [ "$na" -ge 2 ] || { echo "expected the prefilter and its fallback, found $na" >&2; return 1; }
   [ "$a" = "$b" ]
 }
 

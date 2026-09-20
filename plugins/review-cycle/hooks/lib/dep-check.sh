@@ -43,6 +43,8 @@
 #
 # Both directions: a grep stuck at 0 claims every pattern matches, one stuck at
 # 1 claims none do. Each is silent, and they fail the gate opposite ways.
+# A grep that answers here and breaks afterwards is out of reach from a probe
+# that runs once, so parse_has_commit confirms its own miss where it decides.
 dep_probe_grep() {
   command -v grep >/dev/null 2>&1 || return 1
   { printf 'probe\n' | grep -q 'probe'; } 2>/dev/null || return 1

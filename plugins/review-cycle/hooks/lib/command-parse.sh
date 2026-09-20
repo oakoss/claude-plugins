@@ -14,7 +14,8 @@
 #   parse_join_raw <cmd>        joined single-line view, every byte kept
 #   parse_join_flat <cmd>       joined view with shell comments stripped
 #   parse_strip_text <cmd>      per-line view with data regions blanked
-#   parse_has_commit <cmd>      0 if the text runs a git-commit invocation
+#   parse_has_commit <cmd>      0 runs a git-commit invocation, 1 a miss grep
+#                               confirmed, 2 grep could not be believed
 #   parse_commit_count <cmd>    print the number of git-commit invocations
 #   parse_accept_chain_ok <cmd> 0 if the command is a sanctioned
 #                               accept-state+commit chain
@@ -191,14 +192,45 @@ parse_strip_text() {
 # 0 found, 1 a trustworthy miss, 2 could not tell. Every caller must keep
 # those three apart: grep exits 2 on its own errors and 127 when it is absent,
 # and reading either as "no commit here" switches the whole gate off.
+# A miss is believable only from a grep that can still match the pattern that
+# produced it, so the confirmation re-asks THIS pattern about text built to
+# match. dep_probe_grep asks a five-byte BRE and cannot speak for a 250-byte
+# ERE: measured, a grep failing only on -E passes that probe and made both
+# gates exit 0 with nothing on either stream, on a tree they deny.
+parse_ere_confirms_miss() {
+  { printf '%s\n' "$2" | LC_ALL=C grep -qE "$1"; } 2>/dev/null
+}
+
 parse_grep_verb() {
   local rc=0
   LC_ALL=C grep -qE "$PARSE_GIT_COMMIT_VERB_RE" || rc=$?
-  [ "$rc" -le 1 ] && return "$rc"
-  return 2
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -gt 1 ] && return 2
+  parse_ere_confirms_miss "$PARSE_GIT_COMMIT_VERB_RE" 'git commit -m x' || return 2
+  return 1
 }
 
-parse_has_commit() {
+# A grep stuck at "no match" reports every command as harmless, and its miss is
+# indistinguishable by exit status from an honest one. The startup probe cannot
+# separate them: a grep correct at the probe and broken afterwards answers a
+# repeat of that probe too. So the needle comes from this haystack — text
+# contains its own leading bytes, and a grep denying that is lying rather than
+# reporting.
+parse_grep_confirms_miss() {
+  local needle="${1:0:8}"
+  [ -n "$needle" ] || return 1
+  { printf '%s' "$1" | LC_ALL=C grep -qF -- "$needle"; } 2>/dev/null || return 1
+  # The needle varies the pattern and holds the haystack fixed, so a grep whose
+  # fault keys on the pattern -- its length, its value -- answers that and still
+  # misanswered `commit`. Measured: two such shims passed the line above and
+  # left both gates at exit 0 with nothing on either stream. Re-ask the literal
+  # that missed, about text built to match it.
+  { printf 'commit\n' | LC_ALL=C grep -qF commit; } 2>/dev/null
+}
+
+# 0 found, 1 not found. Callers reach it through parse_has_commit, which is
+# what decides whether a 1 here can be believed.
+parse_has_commit_verdict() {
   local code raw rc=0 grc=0 vrc=0
   # Only a trustworthy miss short-circuits. A grep that errored, or is absent,
   # says nothing about the text and must not stand in for "no commit here".
@@ -213,17 +245,38 @@ parse_has_commit() {
   if [ "$rc" -ne 0 ]; then
     vrc=0; printf '%s' "$raw" | tr "\"'" '  ' | parse_grep_verb || vrc=$?
     [ "$vrc" -eq 1 ] && return 1
+    [ "$vrc" -eq 2 ] && return 2
     return 0
   fi
   vrc=0; parse_join_raw "$code" | parse_grep_verb || vrc=$?
+  [ "$vrc" -eq 2 ] && return 2
   [ "$vrc" -ne 1 ] && return 0
   # A substitution joins the shell-exec shapes here because the lexer tracks
   # its nesting by counting parentheses, which `case` patterns and quoted
   # parens throw off; the raw view is the backstop when it does.
+  grc=0
   printf '%s\n' "$1" \
     | LC_ALL=C grep -qE "$PARSE_SHELL_EXEC_RE"'|\$\(|`' || grc=$?
-  [ "$grc" -eq 1 ] && return 1
-  printf '%s' "$raw" | tr "\"'" '  ' | LC_ALL=C grep -qE "$PARSE_GIT_COMMIT_VERB_RE"
+  [ "$grc" -gt 1 ] && return 2
+  if [ "$grc" -eq 1 ]; then
+    parse_ere_confirms_miss "$PARSE_SHELL_EXEC_RE"'|\$\(|`' 'bash -c x' || return 2
+    return 1
+  fi
+  vrc=0; printf '%s' "$raw" | tr "\"'" '  ' | parse_grep_verb || vrc=$?
+  return "$vrc"
+}
+
+# Every path to "no commit here" runs through grep, so the answer is confirmed
+# once, here, rather than at each of the four misses that can produce it.
+parse_has_commit() {
+  local rc=0
+  # An empty command invokes nothing, which the text settles without consulting
+  # grep -- so there is no miss here for the confirmations to vouch for.
+  [ -n "$1" ] || return 1
+  parse_has_commit_verdict "$1" || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -eq 1 ] && { parse_grep_confirms_miss "$1" && return 1; }
+  return 2
 }
 
 # Raw view deliberately: callers refuse when the count exceeds one, so an
