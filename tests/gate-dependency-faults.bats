@@ -242,7 +242,7 @@ run_sg() {
   : > "$errfile"
   out=$(printf '{"stop_hook_active":false,"cwd":"%s"}' "$FIXTURE" \
     | PATH="$SHIM_DIR:$PATH" CLAUDE_PROJECT_DIR="$FIXTURE" \
-      CLAUDE_PLUGIN_ROOT="$CG_PLUGIN_ROOT" bash "$SG" 2>"$errfile") || rc=$?
+      CLAUDE_PLUGIN_ROOT="${CG_ROOT_OVERRIDE:-$CG_PLUGIN_ROOT}" bash "$SG" 2>"$errfile") || rc=$?
   classify "$out" "$errfile" "$rc"
 }
 
@@ -283,20 +283,50 @@ build_clean_fixture() {
 }
 
 # <gate> <tool>: every fault mode must produce something a user can see.
+# A drifting fixture cannot test a guard. The gate denies for drift whether or
+# not the guard fired, and BLOCK is an accepted outcome, so the assertion is
+# satisfied by the gate's ordinary answer. Measured 2026-09-19 on the 41-test
+# suite: dep_probe_sed, _awk, _tr, _sort and _date each replaced by `return 0`
+# — five probes deleted in substance, eleven cells naming them — produced zero
+# failures, and disabling dep_require entirely produced nine. On the clean
+# ground below the same two mutations produce eleven and twenty-one.
+#
+# assert_rooted_probe_bites already avoids this, and is the only fault helper
+# that kills its mutant on every row. This follows it: a clean fixture, and a
+# SILENT precondition so a run that proves nothing says so rather than passing.
+#
+# cat keeps the drift fixture. A gate reading an emptied payload on a clean
+# tree is correctly silent, so a clean-fixture cat cell would fail on healthy
+# code — the guard rejecting correct work, which is worse than no guard.
 assert_never_silent() {
-  local gate="$1" tool="$2" mode verdict failures=""
+  local gate="$1" tool="$2" mode verdict failures="" ground=clean
   [ "${#FAULT_MODES[@]}" -ge "$MODE_FLOOR" ] || {
     echo "fault-mode list collapsed to ${#FAULT_MODES[@]}" >&2
     return 1
   }
+  [ "$tool" = cat ] && ground=drift
+  if [ "$ground" = clean ]; then
+    clear_shim
+    build_clean_fixture "$gate" || return 1
+    verdict=$(run_gate "$gate")
+    [ "$verdict" = "SILENT" ] || {
+      echo "$gate: clean fixture is not a quiet pass ($verdict); the rows below prove nothing" >&2
+      return 1
+    }
+  fi
   for mode in "${FAULT_MODES[@]}"; do
     make_shim "$tool" "$mode" || return 1
-    case "$gate" in
-      vbg) build_vbg_fixture || return 1; verdict=$(run_vbg) ;;
-      cg)  build_cg_fixture  || return 1; verdict=$(run_cg)  ;;
-      sg)  build_sg_fixture  || return 1; verdict=$(run_sg)  ;;
-      *) echo "unknown gate: $gate" >&2; return 1 ;;
-    esac
+    if [ "$ground" = clean ]; then
+      build_clean_fixture "$gate" || return 1
+    else
+      case "$gate" in
+        vbg) build_vbg_fixture || return 1 ;;
+        cg)  build_cg_fixture  || return 1 ;;
+        sg)  build_sg_fixture  || return 1 ;;
+        *) echo "unknown gate: $gate" >&2; return 1 ;;
+      esac
+    fi
+    verdict=$(run_gate "$gate")
     clear_shim
     [ -n "$verdict" ] || { echo "$gate/$tool/$mode: classifier returned nothing" >&2; return 1; }
     case "$verdict" in
@@ -832,10 +862,13 @@ covered_tools() {
     printf 'GATE_NAME="x"\n'
     printf 'dep_require "$GATE_NAME" grep git awk sed tr sort || DEPS_OK=0\n'
     printf 'dep_require "$GATE_NAME" "git:$ROOT" || DEPS_OK=0\n'
+    # date appears ONLY in rooted form: git does not isolate the `:` strip,
+    # because the plain line above supplies it either way.
+    printf 'dep_require "$GATE_NAME" "date:$ROOT" || DEPS_OK=0\n'
     printf 'dep_report_broken "$GATE_NAME" jq "known-answer probe failed"\n'
   } > "$snippet"
-  [ "$(declared_tools "$snippet" | tr '\n' ' ')" = "awk git grep jq sed sort tr " ]
-  [ "$(dep_require_tools "$snippet" | tr '\n' ' ')" = "awk git grep sed sort tr " ]
+  [ "$(declared_tools "$snippet" | tr '\n' ' ')" = "awk date git grep jq sed sort tr " ]
+  [ "$(dep_require_tools "$snippet" | tr '\n' ' ')" = "awk date git grep sed sort tr " ]
 }
 
 @test "the two gates share one prefilter, byte for byte" {
