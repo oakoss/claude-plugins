@@ -1192,6 +1192,37 @@ tree:$TREE"
       echo "review-sentinel: delta summary generation failed" >&2
       exit 2
     }
+    # How much of that list might not be this session's work. Paths that
+    # differ through history are a subset of those where the marked tree and
+    # HEAD disagree, and that is one tree-to-tree question with no shell set
+    # logic -- which matters, because every portable way to intersect two sets
+    # of raw pathnames here was either wrong or quadratic. An upper bound is
+    # enough for the reader to know the list is not purely their own work, and
+    # the list itself is never touched by this.
+    DELTA_NOTE=""
+    HIST_N=0
+    # An unborn HEAD has no tree to compare against, and there is no history to
+    # have authored anything: skip rather than report a failure.
+    if ( cd "$PROJECT_ROOT" && git rev-parse --verify -q HEAD >/dev/null 2>&1 ); then
+      # Status checked rather than inferred from the count: a failed diff and a
+      # diff with no differences both leave an empty stream, and `wc -c` reads
+      # both as 0 -- so counting alone would report all-clear on a failure.
+      HIST_RAW=$(mktemp) || HIST_RAW=""
+      if [ -n "$HIST_RAW" ] \
+         && ( cd "$PROJECT_ROOT" && git diff -z --no-renames --name-only \
+              "$STORED_TREE" HEAD -- ) > "$HIST_RAW" 2>/dev/null; then
+        HIST_N=$(LC_ALL=C tr -dc '\0' < "$HIST_RAW" | wc -c | tr -d ' ')
+      else
+        HIST_N="unknown"
+      fi
+      /bin/rm -f "$HIST_RAW" 2>/dev/null
+    fi
+    case "$HIST_N" in
+      ''|*[!0-9]*) DELTA_NOTE="unreadable" ;;
+      0) ;;
+      *) DELTA_NOTE="the marked tree and HEAD differ in $HIST_N path(s); any of those you have not edited appear above as differences this session did not author — a pull, a branch switch, or a commit made after the mark" ;;
+    esac
+
     # Buffered until everything succeeded, then written checked: a partial
     # list with exit 0 would scope reviewers from incomplete output
     # (measured against /dev/full: unchecked printf statuses vanish).
@@ -1199,6 +1230,13 @@ tree:$TREE"
       printf '%s\n' "$NAMESTAT" || { echo "review-sentinel: delta output write failed" >&2; exit 2; }
     fi
     printf '%s\n%s\n' "--" "$SUMMARY" || { echo "review-sentinel: delta output write failed" >&2; exit 2; }
+    case "$DELTA_NOTE" in
+      '') ;;
+      unreadable)
+        echo "review-sentinel: could not tell whether the paths above include differences this session did not author; treat the whole list as the scope" >&2 ;;
+      *)
+        echo "review-sentinel: $DELTA_NOTE" >&2 ;;
+    esac
     exit 0
     ;;
 
