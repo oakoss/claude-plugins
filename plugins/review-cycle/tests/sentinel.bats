@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   load 'helpers'
   setup_repo
@@ -1504,6 +1506,83 @@ SH
   assert_contains "$output" "$(printf 'A\tbrand.txt')"
   assert_contains "$output" "--"
   assert_contains "$output" "delta: 2 files"
+}
+
+# The list is the contract; the annotation is advice about it. Nothing the
+# annotation does may add to, remove from, or reorder the list -- earlier
+# designs filtered it and lost files in ways two review rounds kept finding.
+@test "delta annotates on stderr and leaves the list untouched" {
+  printf 'base\n' > f.txt
+  printf 'shared\n' > shared.txt
+  git add -A
+  git commit -q -m base
+  local base_branch
+  base_branch=$(git rev-parse --abbrev-ref HEAD)
+  git checkout -qb feature
+  printf 'feature\n' > shared.txt
+  git add -A
+  "$REVIEW_SENTINEL" accept-state
+  git commit -q -m feature
+  git checkout -q "$base_branch"
+  printf 'my edit\n' > f.txt
+
+  run --separate-stderr "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+  # Both paths still listed: the one edited here and the one that differs only
+  # because the branch moved.
+  assert_contains "$output" "$(printf 'M\tf.txt')"
+  assert_contains "$output" "shared.txt"
+  assert_contains "$output" "delta: 2 files"
+  # The advice is on stderr, never mixed into the list.
+  refute_contains "$output" "marked tree and HEAD differ"
+  assert_contains "$stderr" "marked tree and HEAD differ in 1 path(s)"
+}
+
+# Nothing arrived through history, so there is nothing to warn about. A note
+# here would make the cycle report a caveat that does not apply.
+@test "delta says nothing when every listed path is local work" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'edited\n' > f.txt
+  printf 'new\n' > brand.txt
+
+  run --separate-stderr "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "delta: 2 files"
+  [ -z "$stderr" ]
+}
+
+# The annotation is advice, so losing it costs advice. It must never cost a
+# path, and it must say it could not tell rather than implying all-clear.
+@test "delta still lists everything when the annotation cannot be computed" {
+  printf 'base\n' > f.txt
+  git add -A
+  git commit -q -m base
+  "$REVIEW_SENTINEL" accept-state
+  printf 'edited\n' > f.txt
+
+  local shim="$BATS_TEST_TMPDIR/dshim"
+  mkdir -p "$shim"
+  {
+    printf '#!/bin/sh\n'
+    printf 'prev=""\n'
+    printf 'for a in "$@"; do\n'
+    printf '  if [ "$prev" = diff ] && [ "$a" = -z ]; then exit 3; fi\n'
+    printf '  prev="$a"\n'
+    printf 'done\n'
+    printf 'exec %s "$@"\n' "$(command -v git)"
+  } > "$shim/git"
+  chmod +x "$shim/git"
+
+  PATH="$shim:$PATH" run --separate-stderr "$REVIEW_SENTINEL" delta
+  [ "$status" -eq 0 ]
+  assert_contains "$output" "$(printf 'M\tf.txt')"
+  assert_contains "$output" "delta: 1 files"
+  # Saying nothing would read as "no history differences", which is the one
+  # thing a failed probe has not established.
+  assert_contains "$stderr" "could not tell"
 }
 
 @test "delta refuses with exit 4 when the index diverges from worktree and HEAD" {
