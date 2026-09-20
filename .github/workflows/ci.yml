@@ -304,9 +304,47 @@ jobs:
               printf '::error::%s had %s failing test(s)\n' "$suite" "$failed"
               status=1
             fi
-          done < <(find . -type f -name '*.bats' -not -path './.git/*' -not -path './node_modules/*' | sort)
+          done < <(find . -type f -name '*.bats' -not -path '*/.git/*' -not -path '*/node_modules/*' | sort)
+          suites="$(find . -type f -name '*.bats' -not -path '*/.git/*' -not -path '*/node_modules/*' | wc -l | tr -d ' ')"
 
-          printf '\n%d tests reported across all suites\n' "$total"
+
+          printf '\n%d tests reported across all suites from %d files\n' "$total" "$suites"
+
+          # The loop above calls the wrapper once per file, which is its
+          # single-file path. One whole-repo call exercises the concurrent
+          # merge, which nothing else on a runner reaches. It costs a second
+          # full run of the suite, deliberately.
+          merged="$(bin/run-bats 2>&1)" || status=1
+          # Printed before anything is derived from it: the derivations are
+          # what fail when a run went wrong, and the evidence has to outlive
+          # them. Unabridged, as the per-suite loop prints its own output.
+          printf '%s\n' "$merged"
+
+          # `|| true` on the count: grep exits 1 when it matches nothing, the
+          # step runs under `-e`, and a merged run that produced no results is
+          # exactly what this block exists to catch -- it must not die here.
+          merged_reported="$(printf '%s\n' "$merged" | grep -acE '^(not )?ok ' || true)"
+          merged_planned="$(printf '%s\n' "$merged" | sed -n 's/^1\.\.\([0-9]\{1,\}\)$/\1/p' | tail -1)"
+          if [ "$merged_reported" -ne "$total" ]; then
+            printf '::error::merged run reported %s of the %s the per-suite loop did\n' \
+              "$merged_reported" "$total"
+            status=1
+          fi
+          if [ "$merged_planned" != "$total" ]; then
+            printf '::error::merged plan says %s, per-suite loop counted %s\n' \
+              "$merged_planned" "$total"
+            status=1
+          fi
+          # Counts alone miss every defect that preserves them, so the
+          # numbering is re-derived here rather than taken from the wrapper
+          # that produced it.
+          if ! printf '%s\n' "$merged" | grep -aE '^(not )?ok ' \
+               | awk '{ if ($1 == "not") print $3; else print $2 }' \
+               | awk 'NR != $1 { exit 1 }'; then
+            printf '::error::merged results are not numbered 1..%s\n' "$merged_reported"
+            status=1
+          fi
+
           exit "$status"
 
   # The single required check: the branch ruleset gates on this job alone, so
