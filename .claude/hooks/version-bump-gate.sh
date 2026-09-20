@@ -104,18 +104,39 @@ esac
 
 
 # With a broken dependency the short-circuit below cannot be trusted: a dead jq
-# empties COMMAND and a grep stuck at 1 reports no match, both of which read as
-# "not a commit". Fall back to the raw payload -- but to the LITERAL only. The
-# prefilter's other arm admits any command carrying a double quote, and gating
-# on that denied ordinary Bash calls that were never commits, which a broken jq
-# then made unclearable because /review and /accept need the same jq.
+# empties COMMAND, and a grep reporting no match says "not a commit" about every
+# command there is. jq answers for itself in the token above; grep answers for
+# itself in parse_has_commit, since dep_probe_grep ran once at startup and says
+# nothing about the invocation this decision rests on. Either way, fall back to
+# the raw payload on the prefilter's own two arms. The backslash arm is not
+# optional: a JSON escape can carry the verb (\u0063ommit) past a reader of raw
+# bytes, and dropping it here let an unreviewed commit through at exit 0 while
+# the diagnostic went to the debug log, where nobody sees it.
+PARSE_RC=0
 if [ "$DEPS_OK" -eq 1 ]; then
-  parse_has_commit "$COMMAND" || exit 0
-else
+  parse_has_commit "$COMMAND" || PARSE_RC=$?
+  case "$PARSE_RC" in
+    1) exit 0 ;;
+    2) DEPS_OK=0 ;;
+  esac
+fi
+if [ "$DEPS_OK" -eq 0 ]; then
+  # The same arms as the top prefilter, restated so the fallback stays correct
+  # on its own if that prefilter is ever narrowed. Both arms pass today, so
+  # nothing reaches the exit below; what decided relevance was the prefilter.
   case "$INPUT" in
-    *commit*) ;;
+    *commit*|*\\*) ;;
     *) exit 0 ;;
   esac
+  # An unconfirmable miss means grep could not say whether this is a commit at
+  # all, so the gate has no standing to deny it: continuing would block an
+  # ordinary Bash call on an answer nothing computed, which is the trap
+  # fail-open exists to avoid. Report and stand down -- exit 1 is non-blocking,
+  # and the action proceeds.
+  if [ "$PARSE_RC" -eq 2 ]; then
+    dep_report_broken "$GATE_NAME" grep "reported a miss it could not confirm"
+    exit 1
+  fi
 fi
 
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-}"

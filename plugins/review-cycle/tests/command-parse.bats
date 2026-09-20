@@ -10,6 +10,81 @@ setup() {
 
 # --- parse_has_commit / detection shapes ---
 
+# --- parse_has_commit: the third answer ---
+#
+# These pin the contract end-to-end coverage reaches only through a 95-second
+# suite: a miss is reported as a miss only when grep can still be shown to
+# match. Each shim answers dep_probe_grep's questions, so none of them is a
+# fault the gates' startup probe could have caught.
+
+# A shim answering `probe` and `absent-pattern` through the real grep, and
+# behaving as `$1` says on everything after.
+late_grep_shim() {
+  local mode="$1" dir="$BATS_TEST_TMPDIR/shim-$1"
+  mkdir -p "$dir"
+  {
+    printf '#!/bin/sh\n'
+    printf 'REAL=%s\n' "$(command -v grep)"
+    printf 'drain() { while read -r _; do :; done; exit "$1"; }\n'
+    printf 'for a in "$@"; do\n'
+    printf '  case "$a" in probe|absent-pattern) exec "$REAL" "$@" ;; esac\n'
+    case "$mode" in
+      miss) printf 'done\n'; printf 'drain 1\n' ;;
+      ere)  printf '  case "$a" in -*E*) drain 1 ;; esac\n'
+            printf 'done\n'
+            printf 'exec "$REAL" "$@"\n' ;;
+      error) printf 'done\n'; printf 'drain 2\n' ;;
+    esac
+  } > "$dir/grep"
+  chmod +x "$dir/grep"
+  printf '%s' "$dir"
+}
+
+@test "has_commit: a grep reporting no match cannot produce a clean miss" {
+  local dir rc=0 clean=0
+  dir=$(late_grep_shim miss)
+  PATH="$dir:$PATH" parse_has_commit "git commit -m x" || rc=$?
+  parse_has_commit "git commit -m x" || clean=$?
+  # Paired: rc=2 alone is satisfied by a parse_has_commit that has stopped
+  # working, so the same call without the shim has to still answer 0.
+  [ "$clean" = 0 ]
+  [ "$rc" = 2 ]
+}
+
+@test "has_commit: a grep broken only on extended regexes cannot either" {
+  # dep_probe_grep asks a BRE, so this one passes it; every verb decision is an
+  # ERE, so this one decides everything.
+  local dir rc=0 clean=0
+  dir=$(late_grep_shim ere)
+  PATH="$dir:$PATH" parse_has_commit "git commit -m x" || rc=$?
+  parse_has_commit "git commit -m x" || clean=$?
+  # Paired: rc=2 alone is satisfied by a parse_has_commit that has stopped
+  # working, so the same call without the shim has to still answer 0.
+  [ "$clean" = 0 ]
+  [ "$rc" = 2 ]
+}
+
+@test "has_commit: a grep erroring out is not read as absence" {
+  local dir rc=0 clean=0
+  dir=$(late_grep_shim error)
+  PATH="$dir:$PATH" parse_has_commit "git commit -m x" || rc=$?
+  parse_has_commit "git commit -m x" || clean=$?
+  # Paired: rc=2 alone is satisfied by a parse_has_commit that has stopped
+  # working, so the same call without the shim has to still answer 0.
+  [ "$clean" = 0 ]
+  [ "$rc" = 2 ]
+}
+
+@test "has_commit: an empty command is settled without consulting grep" {
+  # Every shim here would answer 2; the text decides this one on its own, and a
+  # confirmation that vouched for it would be a verdict produced by no check.
+  local dir rc=0
+  dir=$(late_grep_shim error)
+  PATH="$dir:$PATH" parse_has_commit "" || rc=$?
+  [ "$rc" = 1 ]
+}
+
+
 @test "has_commit: plain git commit" {
   parse_has_commit "git commit -m x"
 }
