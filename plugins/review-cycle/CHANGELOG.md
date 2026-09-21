@@ -4,6 +4,48 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.18.1 (2026-09-21)
+
+### Added
+
+`review-sentinel delta` lists every path whose content differs from the marked tree, which after a branch switch or a pull mixes work you have not reviewed with the difference between two branches. Measured: a two-file change on a switched branch reported nine files; a one-file change after a merge reported five, four of them the other branch's already-reviewed work. The cycle hands that list to reviewers as their scope.
+
+The delta now adds one line on stderr when the marked tree and HEAD differ, naming how many paths that covers, so the reader knows some of the list reflects history this session did not author. `/review-cycle:review` relays that instead of claiming the rest of the diff matches the reviewed state. When it cannot tell, it says so; that is distinguished from "no differences", because a failed probe and an empty result both produce an empty stream.
+
+**The list itself is untouched — deliberately.** An earlier attempt filtered it down to paths git reports as modified, staged or untracked. Two rounds of review kept finding files that filtering dropped: pathnames git C-quotes (`é`, tab, `"`, `\`), a file untracked at the mark and then deleted, a truncated record stream, a partial write to the path set, and every path at all when the membership test errored — each at exit 0 with nothing on stderr, while the consumer contract told reviewers the rest of the diff was already reviewed. It was also quadratic: 26 seconds at 2000 changed paths, against 0 before.
+
+Filtering can lose work; annotating cannot. A failed probe now costs a line of advice rather than a file.
+
+### Fixed
+
+The Codex preflight recorded auth as `confirmed` whenever `codex login status` exited 0, and the summary reported that word to the user. The probe does not exercise the credential — its verdict is a pure function of whether `auth.json` exists and parses — so `confirmed` was a claim the cycle had no evidence for.
+
+Measured on codex-cli 0.155.1, three times independently during review: the probe printed `Logged in using ChatGPT` and exited 0 while the refresh token had been revoked server-side. The cycle recorded `confirmed`, spawned the Codex leg, and the leg died against `401 Unauthorized`. The probe prints the identical line and exit code after re-authenticating, and prints it again for an `auth.json` containing only `{}` — nothing in its output distinguishes a working credential from a revoked one, or from no credential at all.
+
+The exit-0 outcome is now `stored session (not exercised)` in `/review-cycle:review`, `/review-cycle:review-pr`, and the plugin README. `/review-cycle:init` stopped printing `✓ authed` for it, which was the same promise in stronger words, and its glyph legend now covers observed-but-not-verified.
+
+One sentence was removed for being false rather than imprecise. Both review skills justified reading a failed leg's status from the completion notification "not from the output file, where a crashed run and a clean run look alike". Measured: the output file records `[exited with code N]` on both, so it is strictly more informative than the notification, which flattens a rejected credential, a rate limit, a sandbox denial and a signal death into the same integer. Both skills now say the exit code reports whether the leg failed and the output file reports why, and both open that file before composing the failure message.
+
+`tests/codex-auth-anchors.bats` anchors the vocabulary across the four files. Its anchors were chosen by mutation rather than by eye, and it states what it checks rather than claiming coverage: a rewrite that keeps every anchored phrase while changing what the surrounding rule means still passes, and no grep can close that.
+
+Phase 1 still makes no API call. Exercising the credential on every review would spend a real request to catch a rare failure.
+
+Deliberately not included: classifying *which* credential a 401 rejected, and the retry and remedy rules that would follow from it. A first attempt shipped that machinery and review found it repeatedly unsound — a branch written for a state the harness makes unreachable, and a recognizer that would fire on a non-fatal `401 Unauthorized` from a subsystem unrelated to auth, at the cost of the leg's retry. It needs its own design pass rather than a widening patch on this one.
+
+A grep that answered the startup probe and then misanswered turned the commit gate off without a word. `dep_probe_grep` tests both directions at startup, but `DEPS_OK` caches that verdict and every later guard trusts it, so `parse_has_commit` read every command as harmless and the gate took the bare exit 0.
+
+Measured with three greps that each pass the startup probe — one reporting "no match" for everything, one misanswering only extended regexes (the mode every verb decision uses), one misanswering a single fixed pattern. Before, on trees both gates deny: exit 0, zero bytes on stdout and zero on stderr, indistinguishable from a pass. After: both gates print one line naming grep and exit 1, and the command proceeds.
+
+Three changes:
+
+- **`parse_has_commit` confirms its own miss along both axes.** A fixed-string miss is confirmed twice — with a needle drawn from the searched text, which varies the pattern, and by re-asking the literal that missed, which varies the haystack. An extended-regex miss re-asks that same pattern about text built to match it, because a five-byte probe cannot vouch for a 250-byte regex. A miss it cannot confirm returns a third code.
+- **A gate that cannot tell whether this is a commit stands down instead of ruling.** On the third code both gates report and exit 1, which is non-blocking. Continuing would let a broken grep deny an ordinary Bash call on an answer nothing computed — the trap fail-open exists to avoid.
+- **A grep error is no longer read as absence, and the raw-payload fallback matches the prefilter again.** While a dependency is broken the fallback tested only for the literal verb, so a JSON-escaped one (`commit`) reached a quiet exit 0 with the diagnostic stranded in the debug log. It now carries the prefilter's backslash arm.
+
+You see a diagnostic where you previously saw nothing, and a command carrying a backslash is noisy rather than silently denied while grep is broken. A healthy grep is unaffected: measured across 29,284 command strings — the test corpus, an exhaustive three-byte prefix sweep, and random-byte fuzz — the new code returns the same answer as the old one on every input, and never reports an unconfirmable miss.
+
+Known gap: a grep whose fault keys on the *length or bytes of the text being searched* rather than on the pattern still defeats the extended-regex confirmation. Closing it needs the confirmation to re-ask about the failing input itself, which changes how the parser buffers stdin; that is tracked separately.
+
 ## 0.18.0 (2026-09-17)
 
 ### Added
@@ -614,4 +656,4 @@ Security and robustness fixes for issues found by running `/review-cycle:review`
 - Per-project opt-out via `.claude/.no-review-gate` and global kill-switch via `~/.claude/.disable-review-gate`.
 - Embedded comment and fix-vs-defer policies inside the skills, with standalone copies in `reference/policies.md` for optional CLAUDE.md installation.
 
-Generated by oakum 0.3.1.
+Generated by oakum 0.4.0.
