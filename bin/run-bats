@@ -37,6 +37,18 @@ kill_tree() {
   kill -KILL "$parent" 2>/dev/null || true
 }
 
+# 0 when the result ordinals in $1 run 1..n, which bats guarantees per file.
+# The number is field 3 on `not ok N` and field 2 on `ok N`; reading field 2
+# for both makes every failing test look like a numbering fault. A stream with
+# no results has nothing to check.
+ordinals_contiguous() {
+  local nums
+  nums=$(grep -aE '^(ok|not ok) ' "$1" 2>/dev/null \
+         | awk '{ if ($1 == "not") print $3; else print $2 }')
+  [ -n "$nums" ] || return 0
+  printf '%s\n' "$nums" | awk 'NR != $1 { exit 1 }'
+}
+
 # Runs bats once, to completion or to a stall, writing raw TAP to $1.
 # Returns 0 when every planned test reported, 2 otherwise — failures are the
 # caller's to count, because a `not ok` is a complete result, not a shortfall.
@@ -201,6 +213,7 @@ if [ ${#FILES[@]} -eq 0 ]; then
   echo "bin/run-bats: no .bats files among the given targets" >&2
   exit 2
 fi
+FILE_COUNT=${#FILES[@]}
 
 WORK=$(mktemp -d) || {
   echo "bin/run-bats: could not create a work directory (mktemp -d failed)" >&2
@@ -218,6 +231,10 @@ if [ ${#FILES[@]} -eq 1 ]; then
   run_bats_once "$OUT" ${FLAGS[@]+"${FLAGS[@]}"} "${FILES[0]}"
   SHORTFALL=$?
   cat "$OUT"
+  # A run cannot check its own discovery: a file never looked for reports
+  # nothing and leaves every count downstream consistent. Naming the size of
+  # the set lets a caller that knows the repo disagree.
+  echo "bin/run-bats: $FILE_COUNT files" >&2
   PLAN=$(grep -a -m1 -E '^1\.\.[0-9]+' "$OUT" 2>/dev/null || true)
   if [ -z "$PLAN" ]; then
     # `ERROR: Found no tests.` carries no trailing newline, so the `1..0` that
@@ -239,10 +256,17 @@ if [ ${#FILES[@]} -eq 1 ]; then
     exit 2
   fi
   # bats emits results past its own plan for a setup_file or teardown_file
-  # failure. This is the path CI calls, so leaving the check to the merge gave
-  # one input two verdicts depending on how the wrapper was invoked.
+  # failure. The merged path carries its own copy of this check, because
+  # leaving it to the merge gave one input two verdicts depending on how the
+  # wrapper was invoked.
   if [ "$REPORTED" -gt "$EXPECTED" ]; then
     echo "bin/run-bats: plan says $EXPECTED but $REPORTED results were emitted" >&2
+    exit 2
+  fi
+  # A line the suite wrote to bats's fd 3 is counted as a result, which ends
+  # the run early with the count still agreeing with the plan.
+  if ! ordinals_contiguous "$OUT"; then
+    echo "bin/run-bats: ${FILES[0]} emitted TAP-shaped output of its own, so its results cannot be trusted" >&2
     exit 2
   fi
   [ "$FAILED" -gt 0 ] && exit 1
@@ -344,6 +368,8 @@ OFFSET=0
 FAILED=0
 REPORTED=0
 SHORT=""
+EMPTY=""
+STRAY=""
 i=0
 while [ "$i" -lt ${#FILES[@]} ]; do
   TAP="$WORK/$i.tap"
@@ -371,19 +397,38 @@ while [ "$i" -lt ${#FILES[@]} ]; do
   REPORTED=$((REPORTED + COUNT))
   OFFSET=$((OFFSET + COUNT))
 
+  # bats numbers each file's results 1..n itself, so an ordinal out of sequence
+  # means a line counted as a result was not one -- anything a suite writes to
+  # bats's fd 3 arrives here unprefixed. Checked on the raw file because the
+  # renumbering above rewrites the evidence, and it matters upstream of the
+  # merge: the stall watchdog counts these same lines to decide bats has
+  # finished, so one phantom ends the run a test early and leaves the count
+  # agreeing with the plan.
+  if ! ordinals_contiguous "$TAP"; then
+    STRAY="$STRAY
+  ${FILES[$i]}"
+  fi
+
   if [ -z "$PLAN" ]; then
     SHORT="$SHORT
   ${FILES[$i]}: no plan line"
   elif [ "$COUNT" -lt "${PLAN#1..}" ]; then
     SHORT="$SHORT
   ${FILES[$i]}: only $COUNT/${PLAN#1..} tests reported"
+  elif [ "$FILTERED" -eq 0 ] && [ "${PLAN#1..}" -eq 0 ]; then
+    # Every file is run with --allow-empty-suite so that a filter matching
+    # nothing in one of them is not an error. Unfiltered there is no such
+    # case: a suite reporting no tests has stopped testing, and it must not
+    # trade the exit 2 it gets alone for a quiet pass beside its neighbours.
+    EMPTY="$EMPTY
+  ${FILES[$i]}"
   fi
   i=$((i + 1))
 done
 
 # Everything above counted the per-file TAP files, not the merged stream, so a
 # renumbering bug that dropped lines would leave every check happy while the
-# caller saw fewer tests than ran. Count what is actually about to be printed,
+# caller saw fewer tests than ran. Count what is about to be printed,
 # and check the numbering is contiguous: a gap or a duplicate means two files'
 # results collided and one silently replaced the other.
 EMITTED=$(grep -acE '^(ok|not ok) ' "$MERGED" 2>/dev/null || true)
@@ -393,17 +438,14 @@ MERGE_FAULT=""
   || MERGE_FAULT="merged $EMITTED results from $REPORTED reported"
 [ -n "$MERGE_FAULT" ] || [ "$EMITTED" -le "$TOTAL" ] \
   || MERGE_FAULT="plan says $TOTAL but $EMITTED results were emitted"
-if [ -z "$MERGE_FAULT" ] && [ "$EMITTED" -gt 0 ]; then
-  # The number is field 2 on `ok N` and field 3 on `not ok N`; reading field 2
-  # for both makes every failing test look like a numbering fault.
-  grep -aE '^(ok|not ok) ' "$MERGED" \
-    | awk '{ if ($1 == "not") print $3; else print $2 }' \
-    | awk 'NR != $1 { exit 1 }' \
+if [ -z "$MERGE_FAULT" ]; then
+  ordinals_contiguous "$MERGED" \
     || MERGE_FAULT="merged results are not numbered 1..$EMITTED"
 fi
 
 echo "1..$TOTAL"
 cat "$MERGED"
+echo "bin/run-bats: $FILE_COUNT files" >&2
 
 # Missing results are worse news than failing tests, so they are reported
 # first and they decide the exit code. Checking failures first meant a run that
@@ -416,6 +458,14 @@ if [ -n "$MERGE_FAULT" ]; then
 fi
 if [ -n "$SHORT" ]; then
   echo "bin/run-bats: results are missing, so this run proves nothing:$SHORT" >&2
+  INCOMPLETE=1
+fi
+if [ -n "$EMPTY" ]; then
+  echo "bin/run-bats: these suites contain no tests:$EMPTY" >&2
+  INCOMPLETE=1
+fi
+if [ -n "$STRAY" ]; then
+  echo "bin/run-bats: these suites emitted TAP-shaped output of their own, so their results cannot be trusted:$STRAY" >&2
   INCOMPLETE=1
 fi
 [ "$INCOMPLETE" -eq 0 ] || exit 2

@@ -1,21 +1,29 @@
 #!/usr/bin/env bats
+
+# `run --separate-stderr`, in the cells that assert on stderr.
+bats_require_minimum_version 1.5.0
 # bin/run-bats is the wrapper every other suite's results pass through, and
-# until this file existed nothing exercised it: most mutations to the merge
-# produced byte-identical output, and CI only ever calls the single-file path.
-# Every cell here was written against a mutation that survived without it.
+# until this file existed nothing exercised it -- most mutations to the merge
+# produce byte-identical output. Every cell here was written against a mutation
+# that survived without it.
 #
 # Most cells drive a fake `bats` on PATH replaying canned TAP, so they cost
-# milliseconds. The last three use real bats, because process reaping, empty
-# suites and parity with a direct run are not things a fake stands in for.
+# milliseconds. The cells that need it use real bats: process reaping, empty
+# suites, the fd 3 race and parity with a direct run are not things a fake
+# stands in for.
 #
-# Two guards in the wrapper stay unpinned, and say so rather than being quietly
-# assumed: the merged-vs-reported count, which correct code keeps equal and the
-# truncation that once broke it is prevented upstream by LC_ALL=C; and the tree
-# walk in kill_tree, which on bats 1.14.0 here reaps nothing that `wait` does
-# not already reap. A review leg measured that walk as load-bearing 3/3 against
-# a hanging teardown_file; two attempts to reproduce that on this machine found
+# Three guards in the wrapper stay unpinned, and say so rather than being
+# quietly assumed. The merged-vs-reported count: correct code keeps it equal,
+# and the truncation that once broke it is prevented upstream by LC_ALL=C. The
+# tree walk in kill_tree: on bats 1.14.0 here it reaps nothing that `wait` does
+# not already reap -- a review leg measured it load-bearing 3/3 against a
+# hanging teardown_file, two attempts to reproduce that on this machine found
 # zero orphans either way, so the code keeps the walk and this file does not
-# claim to prove it.
+# claim to prove it. And the `| sort` on both discovery finds, which buys
+# numbering that reproduces across machines rather than correctness: pinning it
+# needs an order-dependent assertion, and `sort` treats a leading dot by
+# locale, so such a cell would fail over collation and read as a discovery
+# defect. The cells below assert membership and count instead.
 
 setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -141,8 +149,8 @@ EOF
 }
 
 @test "results past the plan are reported on the single-file path" {
-  # This is the path CI calls. Leaving the check to the merge gave one input
-  # two verdicts depending on how the wrapper happened to be invoked.
+  # Leaving this check to the merge gave one input two verdicts depending on
+  # how the wrapper happened to be invoked.
   fake_bats
   canned over <<'EOF'
 1..1
@@ -166,6 +174,74 @@ EOF
   run_wrapper "$FX/over2.bats" "$FX/over2.bats"
   [ "$status" -eq 2 ]
   assert_contains "$output" "plan says"
+}
+
+# Copies the real wrapper in, so the cells below exercise the real discovery
+# rather than a stub.
+plant_discovery_root() {
+  local f
+  DISC_ROOT="$BATS_TEST_TMPDIR/root"
+  mkdir -p "$DISC_ROOT/bin" "$DISC_ROOT/tests" "$DISC_ROOT/.claude/hooks" \
+           "$DISC_ROOT/plugins/p/tests" "$DISC_ROOT/plugins/p/hooks/tests" \
+           "$DISC_ROOT/plugins/p/node_modules" "$DISC_ROOT/node_modules/dep" \
+           "$DISC_ROOT/.git/hooks"
+  cp "$RUN_BATS" "$DISC_ROOT/bin/run-bats"
+  # .claude/hooks is the shape that matters most: `.git` is excluded by name,
+  # not because it is hidden, and this repo keeps a 43-test release-gate suite
+  # under an ordinary dot-directory. hooksuite sits a level deeper than
+  # anything real, so matching it proves the walk is not depth-limited.
+  # plugins/p/node_modules is the nested copy an exclusion anchored to the
+  # root would leak.
+  for f in tests/shallow .claude/hooks/dotdir plugins/p/tests/plugsuite \
+           plugins/p/hooks/tests/hooksuite plugins/p/node_modules/nested \
+           node_modules/dep/vendored .git/hooks/gitdir; do
+    : > "$DISC_ROOT/$f.bats"
+    printf '1..1\nok 1 %s\n' "${f##*/}" > "$DISC_ROOT/$f.tap"
+  done
+  # Not a suite. Pins `-name '*.bats'` against a widened `*.bats*`, which would
+  # sweep up editor backups and merge leftovers.
+  : > "$DISC_ROOT/tests/stale.bats.orig"
+}
+
+# Every other cell names the files it runs, so nothing else pins discovery --
+# and a bare run is what CI and most developers invoke. A `find` that quietly
+# stopped matching a directory would look like a repo with fewer tests in it.
+@test "whole-repo discovery takes every .bats file, minus node_modules and .git" {
+  plant_discovery_root
+  fake_bats
+  PATH="$FAKE_DIR:$PATH" run --separate-stderr "$DISC_ROOT/bin/run-bats"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "1..4" ]
+  assert_contains "$output" "dotdir"
+  assert_contains "$output" "hooksuite"
+  assert_contains "$output" "plugsuite"
+  assert_contains "$output" "shallow"
+  refute_contains "$output" "vendored"
+  refute_contains "$output" "nested"
+  refute_contains "$output" "gitdir"
+  refute_contains "$output" "stale"
+  # CI parses this line, so its exact text is the contract -- and it belongs on
+  # stderr, where it cannot be read as a TAP result.
+  [ "$stderr" = "bin/run-bats: 4 files" ]
+  refute_contains "$output" "4 files"
+}
+
+# `bin/run-bats plugins/review-cycle/tests/` is the invocation AGENTS.md
+# documents, and it runs a second `find` carrying its own copy of the
+# exclusions. Replacing that one with `true` leaves the documented command
+# exiting 2 while every other cell here still passes.
+@test "a directory target expands with the same exclusions" {
+  plant_discovery_root
+  fake_bats
+  PATH="$FAKE_DIR:$PATH" run --separate-stderr \
+    "$DISC_ROOT/bin/run-bats" "$DISC_ROOT/plugins"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "1..2" ]
+  assert_contains "$output" "hooksuite"
+  assert_contains "$output" "plugsuite"
+  refute_contains "$output" "nested"
+  refute_contains "$output" "shallow"
+  [ "$stderr" = "bin/run-bats: 2 files" ]
 }
 
 @test "a path that does not exist is named, not swept into a whole-repo run" {
@@ -285,6 +361,92 @@ EOF
   [ "${lines[0]}" = "1..1" ]
 }
 
+# Anything a suite writes to bats's fd 3 -- its documented progress channel --
+# arrives in the TAP stream unprefixed, and the stall watchdog counts those
+# lines to decide bats has finished. Measured against real bats 1.14.0: a
+# setup_file writing `ok 99 phantom` to fd 3 made a three-test file report four
+# results, SIGKILLed the last test before it ran, and exited 0 with the count
+# agreeing with the plan. The ordinals are the only surviving evidence, and the
+# merge renumbers them away.
+@test "a suite's own TAP-shaped output is not counted as a result" {
+  fake_bats
+  canned phantom <<'EOF'
+1..3
+ok 99 phantom
+ok 1 real one
+ok 2 real two
+EOF
+  # Correctly numbered, and failing. The ordinal sits in field 3 on a `not ok`
+  # line and field 2 on an `ok` one; reading field 2 for both yields the word
+  # "ok" here and would name this file on every run that has a failure.
+  canned neighbour <<'EOF'
+1..2
+not ok 1 neighbour fails
+ok 2 neighbour passes
+EOF
+  run_wrapper "$FX/phantom.bats" "$FX/neighbour.bats"
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "TAP-shaped output of their own"
+  assert_contains "$output" "phantom.bats"
+  refute_contains "$output" "neighbour.bats"
+}
+
+# The cell above proves the guard fires on a stream shaped like the fault.
+# This proves the fault is real on this bats: `--tap` passes fd 3 through
+# unprefixed and the wrapper's watchdog counts what arrives. Real bats,
+# because a fake cannot stand in for the race.
+@test "a phantom TAP line from fd 3 is caught with real bats" {
+  cat > "$FX/ghost.bats" <<'EOF'
+setup_file() { echo "ok 9 phantom" >&3; }
+@test "quick one" { true; }
+@test "slow one" { sleep 3; }
+EOF
+  cat > "$FX/company.bats" <<'EOF'
+@test "company one" { true; }
+EOF
+  run "$RUN_BATS" "$FX/ghost.bats" "$FX/company.bats"
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "TAP-shaped output of their own"
+  assert_contains "$output" "ghost.bats"
+  # The stream itself stays self-consistent -- no shortfall, no plan
+  # disagreement -- which is why the ordinals are the only evidence.
+  refute_contains "$output" "tests reported"
+
+  # One file never reaches the merge, so the check has to exist on both paths.
+  run "$RUN_BATS" "$FX/ghost.bats"
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "emitted TAP-shaped output of its own"
+
+  # And a clean suite on that path still passes.
+  run "$RUN_BATS" "$FX/company.bats"
+  [ "$status" -eq 0 ]
+  refute_contains "$output" "TAP-shaped"
+}
+
+@test "an emptied suite is named, not absorbed by the files beside it" {
+  # Alone it exits 2, because bats refuses a file with no tests. Beside others
+  # the wrapper passes --allow-empty-suite, which is what a filter needs, and
+  # the emptied file used to disappear into their plan.
+  fake_bats
+  canned full <<'EOF'
+1..1
+ok 1 full one
+EOF
+  canned gutted <<'EOF'
+1..0
+EOF
+  run_wrapper "$FX/full.bats" "$FX/gutted.bats"
+  [ "$status" -eq 2 ]
+  assert_contains "$output" "no tests"
+  assert_contains "$output" "gutted.bats"
+  refute_contains "$output" "full.bats"
+
+  # With a filter, matching nothing in one file is ordinary.
+  run_wrapper -f one "$FX/full.bats" "$FX/gutted.bats"
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "1..1" ]
+}
+
 @test "a filter matching nothing anywhere is reported, not a quiet pass" {
   # Real bats: per-file --allow-empty-suite is right for a filter matching in
   # some files, which made a filter matching NOWHERE a silent green run.
@@ -337,16 +499,19 @@ EOF
 }
 
 @test "single-file output matches a direct bats run" {
-  # CI calls the wrapper once per suite and parses its stdout, so the no-merge
-  # path is a published interface. The direct bats call here is the one place
-  # in the repo that warrants one, because parity is the assertion.
+  # Iterating on a single suite is the wrapper's most common invocation, so
+  # the no-merge path is a published interface. The direct bats call here is
+  # the one place in the repo that warrants one: parity is the assertion.
   cat > "$FX/plain.bats" <<'EOF'
 @test "p one" { true; }
 @test "p two" { false; }
 EOF
-  run bats --tap "$FX/plain.bats"
+  run --separate-stderr bats --tap "$FX/plain.bats"
   local direct="$output" direct_status="$status"
-  run "$RUN_BATS" "$FX/plain.bats"
+  run --separate-stderr "$RUN_BATS" "$FX/plain.bats"
   [ "$output" = "$direct" ]
   [ "$status" -eq "$direct_status" ]
+  # Parity is of the TAP stream. The wrapper adds one diagnostic of its own,
+  # and the step that consumes it needs that line on a one-suite run too.
+  [ "$stderr" = "bin/run-bats: 1 files" ]
 }
