@@ -112,12 +112,12 @@ jobs:
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: claude-plugins
 
-      # CI-side twin of the local PreToolUse bump gate, but not its equal.
-      # --strict raises the level of coverage — per-plugin rather than
-      # any-bump-file-at-all — while honouring none of the hook's path
-      # exemptions: the hook lets a plugins/<x>/package.json edit through and
-      # oakum still demands intent for it. The version PR carries real bumps
-      # instead of bump files.
+      # The only bump-file gate there is. A local PreToolUse hook used to run
+      # a looser version of this check and was retired: it offered a hand bump
+      # as an alternative to a bump file and waived docs and tests, and
+      # --strict refuses both. Nothing checks before the push, so an uncovered
+      # change is caught here. The version PR carries real bumps instead of
+      # bump files.
       #
       # Identity, not a branch name: a fork, a person, and a push to the bot's
       # branch each fail one of these terms and get checked. Without the sender

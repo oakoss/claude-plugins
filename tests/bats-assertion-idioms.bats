@@ -221,7 +221,7 @@ plant_fixture() {
   [ "$status" -eq 0 ]
   assert_contains "$output" "tests/bats-assertion-idioms.bats"
   assert_contains "$output" "plugins/review-cycle/tests/helpers.bash"
-  assert_contains "$output" ".claude/hooks/version-bump-gate.bats"
+  assert_contains "$output" "plugins/prose/tests/"
 }
 
 @test "the scan fails instead of passing when enumeration is impossible" {
