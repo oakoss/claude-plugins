@@ -270,81 +270,155 @@ jobs:
           command -v sha256sum || command -v shasum
 
       # Always through the wrapper, never bare `bats` — a direct invocation
-      # leaves an orphaned process tree after the final TAP line. Running on
-      # both runners is deliberate: the wrapper's process handling is the part
-      # that differs between Linux and macOS.
+      # leaves an orphaned process tree after the final TAP line. Both runners,
+      # because the wrapper's process handling is the part that differs between
+      # Linux and macOS.
       #
-      # One suite per invocation rather than a single whole-repo run, for
-      # per-suite failure attribution and to keep each run comfortably inside
-      # the wrapper's stall timeout. The plan-vs-result check is defence in
-      # depth: the wrapper already exits 2 on a short run, so this would only
-      # catch a regression in that reporting.
+      # One whole-repo invocation, which is both the command a developer runs
+      # and the only shape that exercises the concurrent merge every other
+      # suite's results pass through. A failure still names its file: bats
+      # writes the failing file and line in a `#` diagnostic under each
+      # `not ok`, and the merge passes those lines through untouched.
+      #
+      # The checks below re-read the printed stream for self-consistency —
+      # plan, count, numbering. That catches a wrapper that reported its own
+      # run wrongly. It cannot authenticate the stream: a suite writing a
+      # TAP-shaped line to bats's fd 3 lands in it unprefixed, which the
+      # wrapper rejects per file before merging. Nor can it see work lost
+      # before printing, so discovery is checked against a `find` this step
+      # runs itself.
       - name: Run bats suites
         run: |
           status=0
-          total=0
-          while IFS= read -r suite; do
-            out="$(bin/run-bats "$suite" 2>&1)" || status=1
-            printf '%s\n' "$out"
-
-            planned="$(printf '%s\n' "$out" | sed -n 's/^1\.\.\([0-9]\{1,\}\)$/\1/p' | tail -1)"
-            reported="$(printf '%s\n' "$out" | grep -cE '^(not )?ok ')"
-            failed="$(printf '%s\n' "$out" | grep -cE '^not ok' || true)"
-            total=$((total + reported))
-
-            if [ -z "$planned" ]; then
-              printf '::error::%s emitted no TAP plan\n' "$suite"
-              status=1
-            elif [ "$planned" -ne "$reported" ]; then
-              printf '::error::%s truncated: planned %s, reported %s\n' \
-                "$suite" "$planned" "$reported"
-              status=1
-            fi
-            if [ "$failed" -ne 0 ]; then
-              printf '::error::%s had %s failing test(s)\n' "$suite" "$failed"
-              status=1
-            fi
-          done < <(find . -type f -name '*.bats' -not -path '*/.git/*' -not -path '*/node_modules/*' | sort)
-          suites="$(find . -type f -name '*.bats' -not -path '*/.git/*' -not -path '*/node_modules/*' | wc -l | tr -d ' ')"
-
-
-          printf '\n%d tests reported across all suites from %d files\n' "$total" "$suites"
-
-          # The loop above calls the wrapper once per file, which is its
-          # single-file path. One whole-repo call exercises the concurrent
-          # merge, which nothing else on a runner reaches. It costs a second
-          # full run of the suite, deliberately.
-          merged="$(bin/run-bats 2>&1)" || status=1
+          rc=0
+          out="$(bin/run-bats 2>&1)" || rc=$?
           # Printed before anything is derived from it: the derivations are
           # what fail when a run went wrong, and the evidence has to outlive
-          # them. Unabridged, as the per-suite loop prints its own output.
-          printf '%s\n' "$merged"
+          # them.
+          printf '%s\n' "$out"
 
-          # `|| true` on the count: grep exits 1 when it matches nothing, the
-          # step runs under `-e`, and a merged run that produced no results is
-          # exactly what this block exists to catch -- it must not die here.
-          merged_reported="$(printf '%s\n' "$merged" | grep -acE '^(not )?ok ' || true)"
-          merged_planned="$(printf '%s\n' "$merged" | sed -n 's/^1\.\.\([0-9]\{1,\}\)$/\1/p' | tail -1)"
-          if [ "$merged_reported" -ne "$total" ]; then
-            printf '::error::merged run reported %s of the %s the per-suite loop did\n' \
-              "$merged_reported" "$total"
-            status=1
-          fi
-          if [ "$merged_planned" != "$total" ]; then
-            printf '::error::merged plan says %s, per-suite loop counted %s\n' \
-              "$merged_planned" "$total"
-            status=1
-          fi
-          # Counts alone miss every defect that preserves them, so the
-          # numbering is re-derived here rather than taken from the wrapper
-          # that produced it.
-          if ! printf '%s\n' "$merged" | grep -aE '^(not )?ok ' \
-               | awk '{ if ($1 == "not") print $3; else print $2 }' \
-               | awk 'NR != $1 { exit 1 }'; then
-            printf '::error::merged results are not numbered 1..%s\n' "$merged_reported"
+          # `|| status=1` alone records that the wrapper refused and discards
+          # why. Exit 2 is its report that results went missing, and the
+          # re-derivation below cannot see what never reached the stream.
+          if [ "$rc" -ne 0 ]; then
+            printf '::error::bin/run-bats exited %s\n' "$rc"
             status=1
           fi
 
+          # One pass rather than a `grep -c` per number: `grep` exits 1 on no
+          # match and 2 on failure, `|| true` folds both to 0, and a count
+          # left empty that way reads as false in every numeric test below.
+          summary="$(printf '%s\n' "$out" | LC_ALL=C awk '
+            /^1\.\.[0-9]+$/  { plans++; if (plans == 1) planned = substr($0, 4); next }
+            /^ok [0-9]+/     { n++; if ($2 != n) misnumbered++; next }
+            /^not ok [0-9]+/ { n++; failed++; if ($3 != n) misnumbered++; next }
+            END { printf "%d %d %d %d %s\n", n, failed + 0, misnumbered + 0,
+                                             plans + 0, (plans ? planned : "-") }
+          ')"
+          read -r reported failed misnumbered plans planned <<< "$summary"
+          # Each field on its own. Concatenating them first lets one empty
+          # value hide behind another's digits, and an empty value makes every
+          # `-ne` below return 2, which an `if` reads as "no problem". No
+          # measured input reaches this: an awk that exits non-zero aborts the
+          # assignment above under `-e`, and one broken enough to garble this
+          # program garbles the wrapper's merge too. Kept because what it
+          # prevents is a silent green.
+          for value in "$reported" "$failed" "$misnumbered" "$plans"; do
+            case "$value" in
+              ''|*[!0-9]*)
+                printf '::error::could not read the TAP stream (awk said: %s)\n' "$summary"
+                exit 1 ;;
+            esac
+          done
+
+          # Without this, a stream carrying no results at all satisfies every
+          # check below by vacuity.
+          if [ "$reported" -eq 0 ]; then
+            printf '::error::no test results in the output\n'
+            status=1
+          fi
+          # The wrapper prints exactly one plan, first. A second means results
+          # belonging to a plan nothing compared them against.
+          if [ "$plans" -ne 1 ]; then
+            printf '::error::expected one TAP plan, found %s\n' "$plans"
+            status=1
+          elif [ "${#planned}" -gt 18 ]; then
+            # awk guarantees $planned is digits, not that it fits the integers
+            # `[` compares. 18 is the widest that always does; a longer value
+            # may still be comparable, and is reported rather than compared
+            # because a plan that wide means the stream is already wrong.
+            printf '::error::the TAP plan is not a usable number: %s\n' "$planned"
+            status=1
+          elif [ "$planned" -ne "$reported" ]; then
+            # Both directions reach here and they are different faults. bats
+            # emits results past its own plan when setup_file or teardown_file
+            # fails, so calling that truncation sends a reader hunting for
+            # tests that were never lost.
+            if [ "$reported" -lt "$planned" ]; then
+              printf '::error::truncated: planned %s, reported %s\n' \
+                "$planned" "$reported"
+            else
+              printf '::error::plan says %s but %s results were reported\n' \
+                "$planned" "$reported"
+            fi
+            status=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            # bats names the file under every `not ok`, and a failure inside a
+            # helper names the helper first -- both shapes end in `in test
+            # file X, line N`, so one pattern reaches both. Extracted so the
+            # annotation panel carries the suites rather than only a count.
+            suites="$(printf '%s\n' "$out" \
+              | sed -n 's/.*in test file \([^,]*\),.*/\1/p' \
+              | sort -u | tr '\n' ' ')"
+            printf '::error::%s failing test(s) in: %s\n' \
+              "$failed" "${suites:-file not named}"
+            status=1
+          fi
+          # Counts alone miss every defect that preserves them, so the awk
+          # above re-derives the numbering as it counts.
+          if [ "$misnumbered" -ne 0 ]; then
+            printf '::error::%s result(s) are not numbered contiguously\n' \
+              "$misnumbered"
+            status=1
+          fi
+
+          # bats emits this when the number of tests it executed differs from
+          # its own plan, which is how a suite that ran short announces itself
+          # when it survives long enough to say so. It arrives `# `-prefixed on
+          # stdout, so this matches as a substring rather than anchoring.
+          case "$out" in
+            *"bats warning: Executed"*)
+              printf '::error::bats reported executing a different number of tests than it planned\n'
+              status=1 ;;
+          esac
+
+          # An independent `find`, because a run of the wrapper cannot check
+          # the wrapper's own discovery: a suite it never looks for is silent,
+          # and every count downstream of it stays consistent. Compared as
+          # strings, so a wrapper that stops reporting the number fails here
+          # loudly rather than disabling the check.
+          # A walk that died partway through -- an unreadable subtree, a
+          # symlink loop -- must not be counted: the wrapper's discovery
+          # carries the same predicates and degrades the same way, so the two
+          # counts would agree on the undercount. Capturing `find` alone lets
+          # `-e` see its status, and naming it here turns a bare abort into a
+          # line that says which step failed and why.
+          if ! found="$(find . -type f -name '*.bats' \
+               -not -path '*/.git/*' -not -path '*/node_modules/*')"; then
+            printf '::error::the discovery walk failed, so its count proves nothing\n'
+            status=1
+          fi
+          expected_files="$(printf '%s\n' "$found" | grep -c . || true)"
+          ran_files="$(printf '%s\n' "$out" \
+            | sed -n 's|^bin/run-bats: \([0-9]\{1,\}\) files$|\1|p' | head -1)"
+          if [ "$ran_files" != "$expected_files" ]; then
+            printf '::error::the run covered %s files, this step found %s\n' \
+              "${ran_files:-<no count reported>}" "$expected_files"
+            status=1
+          fi
+
+          printf '\n%s tests reported from %s files\n' "$reported" "$expected_files"
           exit "$status"
 
   # The single required check: the branch ruleset gates on this job alone, so
