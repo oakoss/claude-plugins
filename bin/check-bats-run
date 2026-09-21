@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Reads a bin/run-bats stream on stdin and decides whether it can be believed.
+#
+# This exists separately from the step that calls it because it is the layer
+# whose whole job is to distrust the wrapper: on a green run every one of its
+# checks executes its false arm, so without a suite they would first be
+# exercised by a real regression, in production. `tests/check-bats-run.bats`
+# is that suite.
+#
+# Usage:
+#   bin/check-bats-run <expected-file-count> < stream
+#
+# Exit 0 when the stream is consistent, 3 when it is not -- one `::error::`
+# annotation per fault -- and 2 when the arguments are unusable.
+#
+# 3, not 1, because the caller has to tell a verdict from a failure to reach
+# one, and 1 is what the shell hands out for accidents. Under `set -e`, which
+# is what GitHub Actions runs a `run:` block with, bash 3.2.57 returns 1 for a
+# missing path, a non-executable path, and a non-executable bare name alike;
+# only a bare name nothing resolves keeps 127. Without errexit the same cases
+# give 127 and 126 -- also shell-generated, so also unusable as a verdict.
+#
+# The caller keeps the two checks that are genuinely independent of the
+# wrapper's own bookkeeping: the wrapper's exit status, and the `find` that
+# produces <expected-file-count>.
+
+set -uo pipefail
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: check-bats-run <expected-file-count> < stream" >&2
+  exit 2
+fi
+# Digits, not merely present. `-` is the sentinel this script prints when the
+# stream carries no count, so taking it as an argument would make the two
+# compare equal and pass the one check that cannot be made any other way.
+case "$1" in
+  ''|*[!0-9]*)
+    echo "usage: check-bats-run <expected-file-count> < stream" >&2
+    echo "expected a count in digits, got: $1" >&2
+    exit 2 ;;
+esac
+expected_files="$1"
+
+status=0
+
+# One pass that reaches a verdict, rather than numbers a caller re-validates.
+# Deriving numbers needs a guard per number — each can be empty, and an empty
+# one makes `-ne` return 2, which an `if` reads as "no problem". Here the
+# comparisons happen where the values live, and the plan is compared as digits
+# rather than through a shell integer.
+# awk's own status is checked rather than inferred from its output: it can
+# emit a complete, parseable verdict and then fail. This script runs without
+# errexit, so that a fault can be reported rather than abort mid-annotation --
+# which also means nothing else here would notice.
+awk_rc=0
+verdicts="$(LC_ALL=C awk '
+  # Concatenating "" forces both to strings. Without it the comparison below
+  # depends on how the caller happened to produce them: a value that arrived
+  # as a field compares as a double and ties past 2^53 — measured, on the pair
+  # 99999999999999999991/…92.
+  function numcmp(a, b,   la, lb) {
+    a = a ""; b = b ""
+    sub(/^0+/, "", a); if (a == "") a = "0"
+    sub(/^0+/, "", b); if (b == "") b = "0"
+    la = length(a); lb = length(b)
+    if (la != lb) return (la < lb) ? -1 : 1
+    return (a < b) ? -1 : ((a > b) ? 1 : 0)
+  }
+
+  # These two set state and consume nothing, so they run first: below a rule
+  # ending in `next` they never see a line that rule took, and a test whose
+  # name contains the sentinel text is exactly such a line.
+  /bats warning: Executed/ { warned = 1 }
+  /in test file [^,]*,/ {
+    # match() is leftmost, so the occurrence extracted is the one the pattern
+    # validated. A greedy sub() jumps to the LAST occurrence, which may carry
+    # no comma — then the comma strip does nothing and the rest of the line
+    # leaks into the annotation. 13 is the length of `in test file `; the
+    # extra 1 drops the comma.
+    match($0, /in test file [^,]*,/)
+    suite = substr($0, RSTART + 13, RLENGTH - 14)
+    if (!(suite in seen)) { seen[suite] = 1; order[++ns] = suite }
+  }
+
+  /^1\.\.[0-9]+$/  { plans++; if (plans == 1) planned = substr($0, 4); next }
+  /^ok [0-9]+/     { n++; if ($2 != n) misnumbered++; next }
+  /^not ok [0-9]+/ { n++; failed++; if ($3 != n) misnumbered++; next }
+  # Last wins, and a second line is itself a fault. The wrapper emits this
+  # shape once, from one of two mutually exclusive branches, and prints nothing
+  # matching it afterwards -- so the last match is its own, and anything
+  # matching earlier was forged. A test writing this shape to bats fd 3 lands
+  # ahead of it, unprefixed. Taking the first would hand the discovery
+  # cross-check to that forgery in every case.
+  /^bin\/run-bats: [0-9]+ files$/ { nfiles++; files = $2; next }
+
+  END {
+    # POSIX awk has no asort, hence the insertion sort. Byte order under
+    # LC_ALL=C, which parts from locale order only for mixed-case paths.
+    # Computed only when it is read.
+    if (failed + 0 != 0) {
+      for (i = 2; i <= ns; i++) {
+        v = order[i]
+        for (j = i - 1; j >= 1 && order[j] > v; j--) order[j + 1] = order[j]
+        order[j + 1] = v
+      }
+      for (i = 1; i <= ns; i++) suites = suites (i == 1 ? "" : " ") order[i]
+    }
+
+    printf "COUNT %d\n", n + 0
+    printf "FILES %s\n", (files == "" ? "-" : files)
+    if (n + 0 == 0)
+      print "::error::no test results in the output"
+    if (plans + 0 != 1)
+      printf "::error::expected one TAP plan, found %d\n", plans + 0
+    # Plans wider than 18 digits are rejected rather than compared, though
+    # numcmp could compare them. Widening it is a behaviour change, so the
+    # bound stays until something needs it gone.
+    else if (length(planned) > 18)
+      printf "::error::the TAP plan is not a usable number: %s\n", planned
+    else if ((cmp = numcmp(planned, n "")) != 0) {
+      if (cmp > 0)
+        printf "::error::truncated: planned %s, reported %d\n", planned, n + 0
+      else
+        printf "::error::plan says %s but %d results were reported\n", planned, n + 0
+    }
+    if (failed + 0 != 0)
+      printf "::error::%d failing test(s) in: %s\n", failed + 0,
+             (suites == "" ? "file not named" : suites)
+    if (nfiles + 0 > 1)
+      printf "::error::the stream carries %d file-count lines; only the last comes from the wrapper\n", nfiles + 0
+    if (misnumbered + 0 != 0)
+      printf "::error::%d result(s) are not numbered contiguously\n", misnumbered + 0
+    if (warned)
+      print "::error::bats reported executing a different number of tests than it planned"
+    print "END"
+  }
+')" || awk_rc=$?
+if [ "$awk_rc" -ne 0 ]; then
+  printf '::error::the verdict pass exited %s\n' "$awk_rc"
+  status=3
+fi
+
+# Three facts and any faults. `END` is the load-bearing one: it is printed
+# last, so a verdict stream cut anywhere cannot pass.
+reported=""
+ran_files="-"
+saw_end=0
+while IFS= read -r line; do
+  case "$line" in
+    "COUNT "*) reported="${line#COUNT }" ;;
+    "FILES "*) ran_files="${line#FILES }" ;;
+    END) saw_end=1 ;;
+    "::error::"*) printf '%s\n' "$line"; status=3 ;;
+    # An awk that prints nothing leaves `verdicts` empty, and `<<<` still
+    # feeds the loop one empty line. Without this arm that line is reported as
+    # unexpected -- a third annotation saying nothing, beside two that say
+    # what happened.
+    '') ;;
+    *) printf '::error::unexpected line from the verdict pass: %s\n' "$line"
+       status=3 ;;
+  esac
+done <<< "$verdicts"
+
+flat_verdicts="$(printf '%s' "$verdicts" | tr '\n' ' ')"
+case "$reported" in
+  ''|*[!0-9]*)
+    printf '::error::the verdict pass reported a count that is not a number: %s\n' \
+      "$flat_verdicts"
+    exit 3 ;;
+esac
+if [ "$saw_end" -ne 1 ]; then
+  printf '::error::could not read the TAP stream (awk said: %s)\n' "$flat_verdicts"
+  exit 3
+fi
+
+# A run of the wrapper cannot check the wrapper's own discovery: a suite it
+# never looks for is silent, and every count downstream of it stays
+# consistent. Compared as strings, so a wrapper that stops reporting the
+# number fails here loudly rather than disabling the check.
+if [ "$ran_files" != "$expected_files" ]; then
+  printf '::error::the run covered %s files, the caller found %s\n' \
+    "$([ "$ran_files" = "-" ] && echo "<no count reported>" || echo "$ran_files")" \
+    "$expected_files"
+  status=3
+fi
+
+printf '\n%s tests reported from %s files\n' "$reported" "$expected_files"
+exit "$status"
