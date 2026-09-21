@@ -1,0 +1,21 @@
+# actionlint rejects `uses: $/...` as a malformed reference, wrongly. GitHub
+# expands `$` to the current repository at the current ref, observed on run
+# 35546625971 resolving `$/.github/actions/app-token` to
+# `oakoss/claude-plugins/.github/actions/app-token@9afe4351...` with the step
+# succeeding. actionlint 1.7.12 is the latest release and does not know the
+# shorthand, so a waiver is the only route.
+#
+# The pattern names the single path it waives rather than the `$/` prefix,
+# because a prefix waives everything after it. Measured: under a prefix
+# pattern, a one-character typo in the action path, a `$/../../../etc/passwd`
+# traversal and a bare `$/` were all suppressed, and all three are reported
+# without it. `$/` already costs actionlint's input checking — it validates
+# every `with:` key on the `./` form — so a misspelled path is the last signal
+# left, and a prefix waiver discards that too.
+#
+# The glob takes both suffixes: a workflow named `*.yaml` is otherwise linted
+# with no waiver at all.
+paths:
+  .github/workflows/**/*.y*ml:
+    ignore:
+      - 'specifying action "\$/\.github/actions/app-token" in invalid format because ref is missing'

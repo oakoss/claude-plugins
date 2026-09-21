@@ -421,6 +421,92 @@ jobs:
           printf '\n%s tests reported from %s files\n' "$reported" "$expected_files"
           exit "$status"
 
+  # `.github/workflows/` only. actionlint reads a composite action file as a
+  # workflow and reports `"jobs" section is missing`, and the ShellCheck job's
+  # file set is `*.sh`/`*.bash` — so the shell inside `.github/actions/` is
+  # linted by nothing.
+  actionlint:
+    name: Workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A pinned release binary checked against its published checksum rather
+      # than a third-party action. bats below is pinned too, but by tag and
+      # without a checksum, so the shared property is only that neither is a
+      # marketplace action. Renovate watches neither: its `github-actions`
+      # manager reads `uses:`, not `env:`, and `.github/renovate.json` defines
+      # no `customManagers` — so this pin ages until someone moves it
+      # deliberately. The version and the checksum move together; bumping one
+      # alone fails the step rather than installing something unverified.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          tarball="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $tarball" | sha256sum -c -
+          tar -xzf "$tarball" -C "$RUNNER_TEMP" actionlint
+          sudo install "$RUNNER_TEMP/actionlint" /usr/local/bin/actionlint
+          # The checksum covers the tarball, not what the next step resolves.
+          # An actionlint earlier on PATH would lint in its place, and a bare
+          # `--version` reads as a check while asserting nothing.
+          installed="$(actionlint --version | head -1)"
+          if [ "$installed" != "$ACTIONLINT_VERSION" ]; then
+            echo "actionlint on PATH is $installed, expected $ACTIONLINT_VERSION" >&2
+            exit 1
+          fi
+
+      # actionlint shells out to shellcheck for `run:` blocks and skips them
+      # silently when it cannot find it, so without this the job would pass
+      # while checking far less than its name implies. The `run:` blocks are
+      # most of what there is to get wrong in this file.
+      - name: Verify shellcheck is present
+        run: shellcheck --version
+
+      # `-pyflakes=` rather than absent: pyflakes is skipped as silently as
+      # shellcheck would be, and no `shell: python` block exists here, so
+      # disabling it is a decision rather than a property of the runner image.
+      #
+      # The plain run decides the verdict and writes the log; the second pass
+      # only adds annotations. `-format` replaces the caret diagram, and a
+      # template that parses but fails mid-range emits some annotations and not
+      # others — so running plain first keeps every finding in the log, and a
+      # broken template costs presentation rather than evidence.
+      #
+      # No severity floor is available, so `run:` blocks are held to a stricter
+      # bar than the ShellCheck job holds `*.sh` (`--severity=warning`): an
+      # info-level finding fails the build. Deliberate — a gate is the wrong
+      # place to be lenient. shellcheck's own version floats with the runner
+      # image, unlike actionlint, pinned above to a version and a checksum.
+      - name: Lint workflows
+        env:
+          # A template newline: actionlint 1.7.12 re-escapes the backslash in
+          # `{{"\n"}}` and then rejects it. `{{println}}` works; YAML resolving
+          # `\n` here reads better than either.
+          ACTIONLINT_FORMAT: "{{range $e := .}}::error file={{$e.Filepath}},line={{$e.Line}},col={{$e.Column}}::{{$e.Message}}\n{{end}}"
+        run: |
+          rc=0
+          actionlint -pyflakes= || rc=$?
+          # Only exit 1 means findings, so only exit 1 can yield annotations.
+          # Leaving on anything else spares a second invocation that would
+          # lint nothing and reprint the same diagnostic — measured on a
+          # broken config: four occurrences before this gate, two after.
+          [ "$rc" -eq 1 ] || exit "$rc"
+          actionlint -pyflakes= -format "$ACTIONLINT_FORMAT" || true
+          exit "$rc"
+
   # The single required check: the branch ruleset gates on this job alone, so
   # adding or renaming jobs never needs a ruleset edit. Every job above must be
   # listed in `needs` — an omitted job is invisible to the gate.
@@ -431,7 +517,7 @@ jobs:
     # always(), not !cancelled(): a skipped required check counts as
     # satisfied, so cancellation must yield a red X here, not a skip.
     if: always()
-    needs: [changes, bump-files, lint, validate, shellcheck, tests]
+    needs: [changes, bump-files, lint, validate, shellcheck, tests, actionlint]
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -452,6 +538,7 @@ jobs:
             echo "| Plugin manifests | \`${{ needs.validate.result }}\` | Yes |"
             echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes (skips when no shell surface changed) |"
             echo "| Bats (both OSes) | \`${{ needs.tests.result }}\` | Yes (skips when no shell/test surface changed) |"
+            echo "| Workflows | \`${{ needs.actionlint.result }}\` | Yes |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail_if_bad() {
@@ -467,3 +554,4 @@ jobs:
           fail_if_bad "validate" "${{ needs.validate.result }}"
           fail_if_bad "shellcheck" "${{ needs.shellcheck.result }}"
           fail_if_bad "tests" "${{ needs.tests.result }}"
+          fail_if_bad "actionlint" "${{ needs.actionlint.result }}"
