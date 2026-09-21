@@ -4,25 +4,60 @@ Local behavioral checks for the parts of the skill that are pure prose — the
 bats suites cover the hooks, but nothing else verifies the model actually
 follows the skill.
 
-`claude plugin eval` is in early access as of 2026-08: it needs an environment
-variable provided by Anthropic during onboarding (not self-service; set it in
-`~/.claude/settings.json` under `env` once obtained). Quick check: run
-`claude plugin eval` in an empty directory — "early access" means not enabled,
-"No eval cases found" means enabled. Until then this suite is authored but not
-runnable.
+The early-access gate is gone: the Claude Code changelog adds `claude plugin
+eval` under v2.1.269. Check for yourself rather than trusting this line, since
+it dates fast:
+
+```bash
+cd "$(mktemp -d)" && claude plugin eval   # "No eval cases found" means enabled
+```
+
+The suite is still not runnable wherever the Docker credential store holds
+symlinks — measured on one macOS host with Docker Desktop, which is where its
+`bin/` and `cli-plugins/` links come from; the refusal text names no platform.
+Reproduce in one command — the run below refuses before any model call, at
+`$0.00`:
+
+```bash
+claude plugin eval ./plugins/review-cycle \
+  --scaffold --ablation none --no-publish \
+  --allow-tools Bash --max-cost-usd 1
+```
+
+> the Docker (`~/.docker`, `DOCKER_CONFIG`) credential store on this machine
+> holds a symbolic link inside it, so the Bash sandbox cannot reliably exclude
+> it — a Bash-granting evaluation cannot run here
+
+The symlinks are Docker Desktop's own `~/.docker/bin/` and
+`~/.docker/cli-plugins/` entries, not a misconfiguration. The remedy the message
+suggests does not reach it — prefix the same command with a clean store and it
+refuses identically, which is a second experiment worth re-running rather than
+believing:
+
+```bash
+DC=$(mktemp -d) && cp ~/.docker/config.json "$DC/" \
+  && DOCKER_CONFIG="$DC" claude plugin eval ./plugins/review-cycle \
+    --scaffold --ablation none --no-publish \
+    --allow-tools Bash --max-cost-usd 1
+```
+
+Both cases need `--allow-tools Bash`, so there is no narrower grant that avoids
+the sandbox. Tracked as cpl-h1s, which records what was measured and when.
 
 Run before releasing skill-text changes:
 
 ```bash
 claude plugin eval ./plugins/review-cycle \
   --scaffold --ablation none --no-publish \
-  --allow-tools Bash Write Edit \
+  --allow-tools Bash Write Edit SendMessage \
   --max-cost-usd 10
 ```
 
 `--scaffold` is required (scaffold scripts are off by default), `--ablation
 none` skips the meaningless no-plugin baseline arm (without the plugin the
-prompt is an unknown slash command), and `--no-publish` keeps the report local.
+prompt is an unknown slash command), `SendMessage` is granted because the skill
+uses it to nudge a stalled review leg, and `--no-publish` keeps the report
+local.
 
 ## Cases
 
