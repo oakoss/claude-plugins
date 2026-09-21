@@ -173,8 +173,8 @@ importers:
         specifier: ^21.2.2
         version: 21.2.2
       '@oakoss/oakum':
-        specifier: 0.3.2
-        version: 0.3.2
+        specifier: 0.4.0
+        version: 0.4.0
       commitlint:
         specifier: ^21.2.2
         version: 21.2.2(@types/node@22.20.2)(conventional-commits-parser@7.1.2)(typescript@7.0.2)
@@ -304,8 +304,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@oakoss/oakum@0.3.2':
-    resolution: {integrity: sha512-NqFBE2DM8TkEBy4GiZp7TSUWIgTQNVZkoBKt0/2cSPDNhW/oLpOGEf3/alJ2OQzFyDqADAYC3deKSykQAGIGLg==}
+  '@oakoss/oakum@0.4.0':
+    resolution: {integrity: sha512-jcyVINgevty9KmuFMTGjza+Q4B2pu/uF9bArU2JxFQkW/6PGcfFC9JTpSkItBBmqmZjIK7MHpd8jT2l2kYFM/w==}
     engines: {node: '>=14.14', npm: '>=6'}
     hasBin: true
 
@@ -1374,7 +1374,7 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.3
 
-  '@oakoss/oakum@0.3.2':
+  '@oakoss/oakum@0.4.0':
     dependencies:
       detect-libc: 2.1.2
 
