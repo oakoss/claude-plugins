@@ -1,49 +1,42 @@
 # review-cycle
 
-Automated multi-agent code review cycle for Claude Code, with hook-driven gates that prevent unreviewed commits.
+Automated multi-agent code review cycle for Claude Code, with a commit gate that admits a commit only when you asked for it and a reviewer saw exactly what it records.
 
 ## What it does
 
-After you implement changes, `review-cycle` fans out parallel reviewers, applies fixes per embedded policies, loops until clean, runs a final de-slopify cleanup, and updates a sentinel that signals "this state has been reviewed." A Stop hook automatically prompts you to invoke the cycle when uncommitted changes haven't been reviewed yet. A commit gate hook prevents `git commit` on unreviewed changes — Claude cannot bypass it.
+After you implement changes, `review-cycle` fans out parallel reviewers, applies fixes per embedded policies, loops until a pass applies no fixes, and runs a final cleanup. Agents work as they like between commits; nothing prompts a review on every turn.
+
+The gate decides at commit time, from two questions:
+
+- **Did you ask for it?** The latest message you typed has to ask for a commit ("commit it", "ship it", "go ahead and commit") or answer yes to the agent's question about one, typed or picked in its question dialog. Pushes need the same. Messages from other sessions, background-task notifications and subagents never count.
+- **Did a reviewer see it?** Every path the commit records must hold content some review-cycle reviewer saw — unchanged from when that reviewer was spawned until it reported. An edit after the last review, an inline fix included, is unreviewed until a reviewer sees it again.
+
+Both answers come from what the gate watched in this session: which reviewers the engine spawned, what the working tree held when each started and finished, and which prompts you typed. None of it is a file, so there is nothing to mark, accept, or forge.
 
 ## Architecture
 
 ```text
-Implement changes
+Implement changes (no gate while you work)
        ↓
-Stop hook fires when you finish a turn
+/review-cycle:review (you ask, or the agent runs it before committing)
        ↓
-  Sentinel matches current diff?
-       │
-       ├── Yes → allow turn to end
-       │
-       └── No → block with "invoke /review-cycle:review"
-              ↓
-        /review-cycle:review runs
-              ↓
-        ┌─────┴─────┐
-        ↓           ↓
-   Codex review    pr-review-toolkit
-   (if available)  (parallel subagents)
-        └─────┬─────┘
-              ↓
-        Aggregate findings
-              ↓
-        Apply fixes per CLAUDE.md policy
-              ↓
-        Loop (up to 4 iterations)
-              ↓
-        Post-loop pass, once:
-        report-only reviewers
-        (maintainability + spec)
-        + de-slopify cleanup
-              ↓
-        Atomic sentinel write
-              ↓
-        Summary (with report-only
-        suggestions) → stop (no commit)
-              ↓
-You review the diff and commit yourself
+  ┌────┴─────┐
+  ↓          ↓
+Codex      review-cycle reviewers
+(if        (parallel subagents; the gate records
+installed)  the tree each one saw)
+  └────┬─────┘
+       ↓
+Aggregate findings → apply fixes
+       ↓
+Loop until a pass applies no fixes
+       ↓
+Post-loop pass, once: report-only reviewers
+(maintainability + spec) + cleanup
+       ↓
+Coverage check (confirmation pass if cleanup changed anything)
+       ↓
+git commit ── the gate checks: you asked? every path reviewed?
 ```
 
 ## Skills
@@ -53,46 +46,31 @@ You review the diff and commit yourself
 One-time setup helper. Run after installing the plugin to:
 
 - Check for the optional Codex CLI, verify `multi_agent = true` in `~/.codex/config.toml`, and report stored-login state (advisory — auth doesn't gate the leg)
+- Check that `git` and `jq` are present and that the commit gate loaded (see [Requirements](#requirements))
 - Optionally append the comment, fix-vs-defer, and evidence policies to your global or project `CLAUDE.md`
-- Update project `.gitignore` to exclude `.claude/review-cycle/` (auto-managed state)
 
 Idempotent — safe to run multiple times. Replaces the manual setup steps below.
 
 ### `/review-cycle:review`
 
-The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until clean, surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and updates the sentinel.
+The one command for the whole cycle. Fans out reviewers, auto-applies the safe fixes, loops until a pass applies none, surfaces report-only findings (spec conformance and structural suggestions) for you to act on, runs a final de-slopify pass, and checks that every changed path is covered. If you asked for a commit, it makes it at the end; otherwise it stops at the summary.
 
-The apparatus scales to the diff: light diffs (docs-only, or ~25 changed lines or fewer of anything) get the code reviewer with a 2-iteration cap; everything else gets the full conditional fan-out (max 4 iterations). The Codex leg joins either tier when it's available. Cleanup is a separate, size-only decision — inline under ~150 changed lines, the cleanup agent above that, whatever the tier. Iterations whose fixes were mechanical are verified by self-check against the findings list instead of a fresh reviewer fan-out; message-only fixes likewise skip the fan-out once the agent has reproduced the state the message addresses and confirmed the printed remedy clears it. Claims local verification can't reach (another OS or shell, a remote service) get at most one Codex-only reduced-effort pass per cycle. A reviewer that stalls is nudged once, then dropped and named in the summary rather than holding the cycle hostage. Every reviewer opens its report with a two-line receipt — the heaviest verification that succeeded, then every verification that did not succeed plus any project check it never attempted — and the summary grades each leg from both lines as `executed`, `partial` with the part it couldn't reach, `static-analysis-only`, or `unknown` when a line is missing. A leg that could not run the project's checks keeps the findings it saw by reading; claims about an external tool's behavior drawn only from a manifest or config become questions instead of fixes, wherever they come from — the label says whether the leg could have checked, not whether the rule applies. A leg that omitted the receipt is labelled but not demoted for that alone, unless something else in its report shows it could not run the checks — a formatting miss should not cost you a finding, but omitting one should not beat admitting it.
+The apparatus scales to the diff: light diffs (docs-only, or ~25 changed lines or fewer of anything) get the code reviewer alone; everything else gets the full conditional fan-out. The loop ends on a pass that applies no fixes, since every fix is content no reviewer has seen; a ceiling (3 light, 5 full) stops a cycle that will not converge, and the summary names what the gate will refuse. The Codex leg joins either tier when it's available. Cleanup is a separate, size-only decision — inline under ~150 changed lines, the cleanup agent above that, whatever the tier. Iterations whose fixes were mechanical, or message-only fixes the agent reproduced and verified, get a narrow confirmation pass — the code reviewer alone, on the fixes' delta — instead of a full fan-out; claims local verification can't reach (another OS or shell, a remote service) add the Codex leg to that pass at reduced effort. A reviewer that stalls is nudged once, then dropped and named in the summary rather than holding the cycle hostage. Every reviewer opens its report with a two-line receipt — the heaviest verification that succeeded, then every verification that did not succeed plus any project check it never attempted — and the summary grades each leg from both lines as `executed`, `partial` with the part it couldn't reach, `static-analysis-only`, or `unknown` when a line is missing. A leg that could not run the project's checks keeps the findings it saw by reading; claims about an external tool's behavior drawn only from a manifest or config become questions instead of fixes, wherever they come from — the label says whether the leg could have checked, not whether the rule applies. A leg that omitted the receipt is labelled but not demoted for that alone, unless something else in its report shows it could not run the checks — a formatting miss should not cost you a finding, but omitting one should not beat admitting it.
 
-Since 0.16, a completed review also stores a git tree of the exact reviewed content. The next cycle diffs against it and scopes itself to the unreviewed delta — a 20-line follow-up to a converged review gets a small review at the delta's tier, not a full re-run of the whole diff, and the summary names which scope ran. The first review, or one after a pre-0.16 mark, has no stored tree and reviews the full diff as before. The gates use the same tree: committing part of a reviewed file no longer re-arms them (content equality replaces hunk-sensitive hashing where a tree is stored — a single check measured 1.47s to 0.03s on a 100-dirty-file fixture), while staging content that is in neither the working tree nor HEAD routes to the precise hash comparison — staged unreviewed content still drifts, and a partial stage the mark saw still passes.
+The gate remembers what each reviewer saw for the rest of the session, and the next cycle scopes itself to what changed since: a 20-line follow-up to a converged review gets a small review at the delta's tier, not a full re-run. A review from an earlier session does not count; uncommitted work carried across a restart is reviewed again.
 
 Arguments are natural language — no flags:
 
-- bare `/review-cycle:review` — review the uncommitted working tree, default 4 iterations
+- bare `/review-cycle:review` — review the uncommitted working tree
 - `against <ref>` (e.g. `against main`) — scope to `git diff <ref>..HEAD`
-- `max <n>` — override the iteration cap
+- `max <n>` — override the iteration ceiling
 - `effort <level>` — pin the Codex leg's reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); overrides both the tier cap and your config, raising included
 
 ### `/review-cycle:review-pr`
 
 Single-pass, report-only review of a GitHub pull request, run from your machine. Takes a PR number, URL, or branch (bare invocation reviews the current branch's PR). It fetches the PR head into a disposable detached worktree — your checkout, branch, and index are never touched. The fan-out matches the review cycle's, with the intent brief sourced from the PR's title, body, and commits; on the full tier the report-only pair joins the same pass, since a single pass has no fix loop to shield them from. Findings are reported in the conversation with per-reviewer coverage, so "no findings" is never mistaken for "nobody looked". The Codex leg joins when the CLI is installed, briefed and scoped with `--base` against the PR's base branch; `effort <level>` pins its reasoning effort the same way it does in `/review-cycle:review`.
 
-Nothing is fixed and nothing is posted by default. Say `and post` (or ask after reading the report) to publish the findings as a single COMMENT review — never an approval — with fingerprint-marked comments, inline and body-level alike, that deduplicate across re-runs. The review sentinel and commit gate are untouched: this skill reviews someone's PR, not your working tree.
-
-### `/review-cycle:accept`
-
-Marks the current uncommitted state as reviewed by updating the review sentinel. Use when you've manually reviewed the substance of your changes and want to commit without running the full cycle. Per-state escape hatch (lighter than the project-wide `disabled: true` opt-out).
-
-#### Which verb writes the sentinel
-
-Two subcommands write the sentinel, and they are not interchangeable:
-
-- `review-sentinel mark` is what the review cycle runs at Phase 8. It refuses with exit 3 unless `.claude/review-cycle/in-progress` exists, and only `cycle-start` — the first step of a real cycle — writes that marker. So `mark` cannot be used without first declaring a cycle, and it is not a shape the commit gate's chained pass-through accepts. `/review-cycle:review-pr` deliberately uses a *different* marker (`pr-cycle-start`), because it reviews a PR head in a throwaway worktree and never looks at your working tree — its marker holds the Stop gate open without vouching for local changes. The Stop gate and SessionStart both delete markers older than 60 minutes, so a cycle that outruns the TTL also lands on exit 3.
-- `review-sentinel accept-state` is what `/review-cycle:accept` runs. It has no precondition. It is the escape hatch for a human who reviewed the changes themselves.
-
-The split exists because a hook that trusts a file the gated party can write cannot tell a review from a claim of one. The two used to be one verb, so the routine-looking `mark` cleared the gate by itself — and running it in one Bash call, then `git commit` in the next, sidestepped the gate entirely, since the PreToolUse matcher only ever sees one command at a time.
-
-This raises the bar rather than closing the hole. Any verb of a local binary is invocable by whoever holds the shell: `accept-state` is there for the taking, and `cycle-start` is unguarded too, so `cycle-start` followed by `mark` clears the gate while reading like a normal cycle. Nothing a local binary checks can distinguish a review from a claim of one. What changed is that the shortest path is no longer the one that looks like routine plumbing — `accept-state` names itself, and a self-declared cycle that marks without reviewing is a claim someone can check against the transcript.
+Nothing is fixed and nothing is posted by default. Say `and post` (or ask after reading the report) to publish the findings as a single COMMENT review — never an approval — with fingerprint-marked comments, inline and body-level alike, that deduplicate across re-runs. Its reviewers never count toward your own changes: the gate sees the skill start, and the legs it spawns review the PR, not your working tree.
 
 ### `/review-cycle:de-slopify`
 
@@ -113,61 +91,31 @@ New (this plugin):
 - `review-cycle:maintainability-auditor` — ambitious structural lens (code-judo moves, file-size sprawl, spaghetti branches, weak seams). Runs in `review` on substantial-code diffs, **report-only** — its speculative restructurings are surfaced for you to action, never auto-applied.
 - `review-cycle:spec-conformance-analyzer` — spec axis: does the diff implement what the originating issue/task/PRD asked for? Reported separately from quality findings, when a spec source is discoverable.
 
-## Hooks (active when plugin is enabled)
+## The commit gate
 
-### SessionStart
+The gate is a hooks module (`hooks/register.ts`), not a shell script: it keeps what it observes in memory for the session, where no tool the agent holds can reach. It watches:
 
-Seeds the per-project sentinel at session startup. Re-seeds only when the sentinel is missing (first install — treats pre-existing WIP as "already reviewed") or when the sentinel still matches the current state (idempotent refresh). If the sentinel disagrees with the current state, the previous session left unreviewed work — startup keeps the old sentinel so the Stop and commit gates can do their job. Only fires on `source: "startup"` events, not `/clear`, `/compact`, or `resume`.
+- **Your prompts.** Only prompts the engine stamps as yours — typed at the terminal, from the Remote Control bridge, or the SDK host's own turn — can grant a commit or push. A grant lasts until your next prompt.
+- **Reviewer spawns and completions.** A `review-cycle:*` reviewer spawned from the main session counts once it reports with its two-line receipt. The gate captures the working tree as the reviewer starts and again as it finishes; the review covers a path only if the path was part of the change it was shown and held the same content at both moments. A review that ran but could not be counted is named in the next refusal and in the status tool. `review-cycle:cleanup` edits code and never counts, and reviewers `/review-cycle:review-pr` spawns review a PR, not your tree.
+- **Every Bash call.** A command that commits or pushes has to take a shape the gate can check: an optional leading `cd <dir>`, any `git add …`, read-only git commands and steps that commit nothing (`fetch`, `branch`, `tag`, `remote`; `checkout`, `switch`, `stash` and `worktree` only when no `git commit` follows, since they can change what it records), then one `git commit …` (or one command that makes commits from history: `merge`, `cherry-pick`, `revert`, `pull`, `rebase`) and optionally one `git push …`. A `git add` is joined to what follows with `&&`, so a failed add stops the commit; other steps may also use `;` or newlines. Anything else that commits or pushes — a pipeline, a subshell, a substitution, `bash -c`, `eval`, a wrapper like `timeout` or `xargs`, a git alias for commit (aliases of aliases included, and one defined in the same command), `commit <paths>`, an abbreviated long option (`--ame`), `GIT_INDEX_FILE=`, a `GIT_EDITOR`/`GIT_PAGER` that is more than a program name, and git's commit-writing plumbing (`commit-tree`, `fast-import`, `send-pack`, `subtree push`) — is refused with the shape to use instead. Your shell's aliases are read from Claude Code's shell snapshot (the file the Bash tool sources, under `~/.claude/shell-snapshots/`) and expanded as bash expands them, so `gcam "msg"` is judged exactly like `git commit -s -a -m "msg"`, and an alias of several commands is judged like the commands it stands for. If the aliases cannot be read, the first command the gate lets through without a check carries a note saying so. Until a snapshot exists, which is normally from the session's first command, an aliased commit is not recognised before it runs; the gate still reports it afterwards. With several sessions open, the newest snapshot is read, which may be another session's; it describes the same shell. Text naming a git commit or push is data only where nothing will run it: an argument to `grep`, `printf` or `gh`, a quoted heredoc into `cat`. Handed to anything that runs code — a shell, an interpreter like `python3`, `find -exec`, a shell reading a pipe or heredoc — it is refused. Commands that make commits from history need your go-ahead but no review: what they record comes from existing commits, not from the working tree. Their `--continue` forms record a conflict resolution, which is new content, so the gate refuses them, as it does `git am`, which applies patches from outside the repository.
 
-Side effect: dependency bumps or IDE edits between Claude sessions (after a clean commit) will be detected as drift on the next startup. Run `/review-cycle:accept` (or `/review-cycle:review`) once to re-baseline. The alternative silently absorbed unreviewed in-progress work into the new baseline whenever Claude was quit.
+For an accepted commit, the gate replays the command's `git add`s against a scratch copy of the index, so it judges exactly the tree the commit would record, then compares each path with the trees reviewers saw. A refusal names every uncovered path as `edited after the last review` or `never reviewed`. The real index is never touched, and a refused `git add … && git commit …` runs neither half.
 
-### Stop
+Scripts and shell functions are opaque: `./release.sh` runs whatever it contains. So after any Bash call that moves HEAD, the gate checks the new commit too. A commit that slipped past the check — a script that commits, or a pre-commit hook that rewrote a file after the check — is reported back to the agent, which is told to tell you. A push from a script moves no HEAD and is not seen.
 
-Fires when Claude finishes a turn. If there are uncommitted changes whose hash doesn't match the sentinel, blocks with a directive to invoke `/review-cycle:review`. Fail-open on any error — the turn still ends — but not silently: see below. Two release valves keep the block from becoming ceremony:
+Subagents never commit or push in the project, and neither does anything run from another worktree of the same repository. Commits in other repositories (a scratch fixture, `git -C /tmp/…`) are not the gate's business. When the gate cannot finish judging a command that may commit or push — git failed, or a target directory does not resolve — it refuses rather than letting it through.
 
-- **A running cycle doesn't re-trigger the gate.** The review cycle writes `.claude/review-cycle/in-progress` at fan-out, letting turns end while background reviewers run (their completion notifications re-wake the agent — no sleep-loop workarounds). The marker is retired by the verbs that conclude a cycle — `mark`, `accept-state`, and `cycle-end` — and a stale one from a crashed cycle (over 60 minutes old) is removed and ignored by both the Stop gate and the next SessionStart. `/review-cycle:review-pr` writes `.claude/review-cycle/pr-in-progress` instead, which the Stop gate honors identically but the sentinel does not accept as evidence.
-- **Blocks once per drift state.** The gate records the state hash it blocked on; a later stop on the identical state passes with a warning instead of re-blocking, so a user-directed "keep going, review at the end" batches naturally instead of hard-looping. This relaxes only *when* review happens — the commit gate still makes review non-optional before any commit.
-
-### PreToolUse (Bash matcher)
-
-Fires before any Bash command. If the command is `git commit` and the sentinel doesn't match the current state, blocks the commit. This is the deterministic enforcement layer — Claude cannot bypass it with a CLAUDE.md rule or memory.
-
-A chained `review-sentinel accept-state && git commit` (the `/accept` flow) passes when it is exactly that shape: one `git commit` in the call, bare `accept-state` immediately `&&`-joined to it. `mark` does not qualify — see below. The lexical rules and their rationale live in `hooks/lib/command-parse.sh`.
-
-The gate guards one project, and stands aside only when the command proves it commits elsewhere. It reads the target from `git -C` and from the `cd` hops ahead of the commit, resolving a path through its nearest existing ancestor so a fixture the command is about to create still resolves — that is what lets a reviewer build a scratch repo with real history and commit in it. Both the payload cwd's repository and the one `CLAUDE_PROJECT_DIR` names count as the project, so a stale `CLAUDE_PROJECT_DIR` cannot switch the gate off where you are working.
-
-Anything short of proof gates instead. A `cd` only moves the commit if bash reaches it and keeps it, so hops count when the command is `&&`-joined throughout, or plainly sequenced with every directory already on disk. The target is unreadable when a `||`, a pipe, a subshell, or a brace group sits in between; when a substitution, a backtick, or a control keyword like `if` puts a hop in a subshell or a branch that may not run; when the command holds a second commit, since everything the router reads stops at the first; when a path was never expanded — a variable, a glob, a `cd` option, a `~+`, a `..` segment, or a token only partly quoted; when `--git-dir`, `GIT_DIR`, or `CDPATH` moves git or `cd` off the path that was computed; when the payload carries no cwd, or a relative one; or when the lexer could not follow the quoting.
-
-Detection reads the command skeleton, not the raw text. Quoted arguments, comments, and heredoc bodies are data: a tracker description quoting the phrase, or a heredoc writing a setup script, is not an invocation — whichever way its delimiter is quoted. Command substitutions are code wherever bash expands them, double quotes and unquoted heredoc bodies included. A quoted command handed to `bash -c` (or a cluster like `bash -lc`), `eval`, `ssh`, a heredoc into a shell, or a pipe into one is an invocation and still blocks; so is a path-qualified `/usr/bin/git`. That list is a named set, and a runner outside it — `python3 -c "git commit"`, a task runner — is missed, so the commit it carries passes ungated. `git commit-tree` and the other hyphenated plumbing verbs are not the gated verb: they write an object and move no ref.
-
-Every step distinguishes "no" from "could not tell". A `grep` that errored, an `awk` that died, or a lexer that lost track of quoting all mean the text has not been read, and unread text blocks.
-
-That distinction extends to the gate's own tools. Each gate puts a question whose answer it already knows to the tools it decides through — its own set, drawn from `jq`, `git`, `grep`, `sed`, `awk`, `tr`, `sort` and `date` — because a tool can fail by answering *wrongly* at exit 0 rather than by failing. Coverage stops at the tools a gate runs itself: those reached indirectly, inside `review-sentinel`'s own helpers, are not probed. A shimmed `jq` did exactly that: it printed nothing, exited 0, and the empty command read as "not a commit", so the gate was off for every commit in that window and said nothing. When a tool stops answering correctly the gate now exits 1 and names it on one line instead. The action still proceeds, so this is a visible failure rather than a block — and the Stop gate behaves the same way, so a broken tool produces a notice at each turn end until it is fixed. `~/.claude/.disable-review-gate` silences all of it, and is checked before any prefilter, probe or library load.
-
-Two limits are deliberate. Commands over 32 KB skip the skeleton entirely, because the lexer is quadratic and a slow hook is its own defect; the raw text decides instead, which blocks rather than passes. And the gate has never been an adversarial boundary — see the note on `mark` versus `accept-state` above. It raises the bar against routine unreviewed commits; anyone holding the shell can still call `accept-state`.
+The `mcp__review-cycle__status` tool reports the gate's view: the working tree, the last reviewed tree, which changed paths are uncovered, and whether your latest message asked for a commit or push. The review skill uses it to scope itself.
 
 ### PostToolUse (Write|Edit|MultiEdit matcher)
 
 Fires after every file write. Scans for high-confidence comment slop — section markers, restate-the-code phrasings, hedge prefixes, ticketless TODOs — plus a comment-density check on the text just written (4+ comment lines making up ≥30% of a code edit; a Write payload's shebang and leading header comment block are exempt, since a new file's legitimate header is not an edit). On a hit it injects a directive to fix the comments immediately with a follow-up Edit, so slop is caught at generation time rather than waiting for the review cycle. Never blocks. Prose files (`.md`, `.txt`, …) are skipped entirely — `#` is a heading there, and prose cleanup belongs to de-slopify — and comment-carried config formats (`.yml`, `.toml`, …) are exempt from the density check.
 
-## Optional: commit-time enforcement (`install-hook`)
+## Requirements
 
-The PreToolUse gate evaluates before a Bash chain runs, on command text. That leaves structural blind spots: a chain that edits files after the check and then commits, or commits issued from a terminal outside the Claude session. For repos where you want ground-truth enforcement, install a git pre-commit hook:
+The commit gate is a hooks module, an early-access Claude Code feature. Where hooks modules are off, it never loads and nothing is gated — the review skill still runs, and says in its summary that no gate is active. Turn them on with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` set to `1` in the `env` block of `~/.claude/settings.json`; `/review-cycle:init` checks whether the gate loaded.
 
-```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" install-hook
-```
-
-The hook runs `review-sentinel check` inside the commit — after everything earlier in the chain has executed — and blocks on drift. Properties:
-
-- **Humans are never gated.** The hook exits immediately unless `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT` is set, so it only fires for agent sessions. Commits from your own terminal are untouched.
-- **Opt-outs are honored.** The global kill-switch (`~/.claude/.disable-review-gate`), the per-project marker (`.claude/.no-review-gate`), and `.claude/review-cycle.json` `{"disabled": true}` all disable the installed hook with the same precedence as the PreToolUse gate.
-- **Fail-open by design.** A missing plugin binary (teammate's machine, uninstall) or a `check` error exits 0.
-- **Hook-manager aware.** Lefthook repos get a helper script plus a lefthook job (direct `.git/hooks` writes get clobbered by `lefthook install`; the config is only auto-edited when it has no `pre-commit` key yet). Repos using pre-commit or simple-git-hooks get the helper plus a printed config snippet — their committed config is never auto-edited. Husky and other `core.hooksPath` setups are handled implicitly. Under plain git, a pre-existing hook is relocated to `pre-commit.local` and chained first with its exit status preserved — appending to it instead could swallow its failures, sit dead behind an `exit 0`, or corrupt a non-shell hook. A hook file that is *tracked by git* (husky commits `.husky/`) is never rewritten — you get the helper plus a one-line snippet to add yourself, so no machine-specific path ever lands in a committed file.
-- **Worktree-safe.** The hooks path is resolved through `git rev-parse --git-path hooks`, so linked worktrees are covered.
-- **Removable.** `review-sentinel uninstall-hook` removes the gate, restores a relocated `pre-commit.local`, and deletes the helper script.
-
-The PreToolUse gate stays active either way — it fails fast (before a doomed chain runs its side effects) while the git hook is the accurate backstop. Per commit, the double check costs a few tens of milliseconds.
+While the gate is loaded, Bash inside an `isolation: "worktree"` subagent is refused — an open Claude Code issue (anthropics/claude-code#92533) with any hooks module that watches Bash.
 
 ## Optional: the Codex review leg
 
@@ -205,7 +153,11 @@ The tier adjustment only ever goes down. If you configured `medium` globally, a 
 
 Effort is the tuning axis rather than model name on purpose: `codex review` exposes neither `--model` nor `--profile` (only `-c`), model names churn often enough that Codex ships its own `[notice.model_migrations]` table, and a name pinned inside the plugin would rot into an error or a silent downgrade on someone else's account.
 
-## Recommended configuration
+## Configuration
+
+### Turning the gate off
+
+The gate is one setting, `review-cycle.enabled`, in `/config`. Only you can change it: the gate refuses a change from anywhere but the menu. Changing it reloads the gate, which forgets the reviews it had seen. Claude Code also reloads a plugin when your user settings file changes, so the gate refuses an agent's Edit or Write to a JSON file that changes review-cycle's entries under `enabledPlugins` or `pluginConfigs`, `disableAllHooks`, or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` in `env`. A Bash command that writes while naming one of those keys or a file under `.claude` named `settings…`, or that runs `claude plugin disable` or `uninstall`, is refused too, and so is a Monitor command the gate would otherwise have to judge. The Bash check reads the command's text, so it is a speed bump: a command that builds its target at run time gets past it. It applies to every project; to turn review-cycle off for a single project, disable the plugin there with `enabledPlugins` in that project's `.claude/settings.json`.
 
 ### Add the policies to your global CLAUDE.md
 
@@ -213,125 +165,54 @@ The skills embed the comment, fix-vs-defer, and evidence policies, so the cycle 
 
 ### Per-project config: `.claude/review-cycle.json`
 
-A single JSON config file controls project-level behavior. All fields are optional:
+Paths that never need review:
 
 ```json
 {
-  "disabled": false,
-  "ignore": [
-    "dist/**",
-    "generated/**",
-    "tests/fixtures/large-corpora/**"
-  ]
+  "ignore": ["dist/**", "generated/**", "tests/fixtures/large-corpora/**"]
 }
 ```
 
-- `disabled: true` opts the project out of all gates.
-- `ignore: [...]` extends the built-in exclusion list with project-specific pathspec-glob patterns. Additive; built-ins still apply.
-
-The file is meant to be committed so a team gets the same gate behavior. `jq` is required to read it. Malformed JSON falls back to defaults (gate active, no extra ignores); the gate fails open on `disabled` and fails closed on `ignore` so a typo can't accidentally disable review.
-
-### Migrating from `.no-review-gate`
-
-The legacy `touch .claude/.no-review-gate` marker is still honored indefinitely as a fallback. There is no auto-migration: the old marker was typically gitignored (local-only opt-out) while `review-cycle.json` is meant to be committed (team-wide), and silently converting one to the other could publish an opt-out unintentionally.
-
-To consolidate manually:
-
-```bash
-# write the new config explicitly (and commit it if you want team-wide)
-echo '{"disabled": true}' > .claude/review-cycle.json
-rm .claude/.no-review-gate
-```
+`ignore` extends the built-in exclusions with pathspec globs. The file is meant to be committed, and it is itself always reviewable: an unreviewed `ignore` entry could hide the change it was added alongside. Malformed JSON adds no patterns.
 
 ### Default exclusions
 
-The gate skips paths that are state or preferences rather than reviewable code, so working in them won't force a review:
+Paths that are state or preferences rather than reviewable code never need review:
 
 - Agent task trackers: `.beads/`, `.trekker/`
 - IDE state: `.vscode/`, `.idea/`, `.zed/`, `.cursor/`, `.fleet/`
-- Gate's own state: `.claude/review-cycle/mark`, `.claude/review-cycle/in-progress`, `.claude/review-cycle/pr-in-progress`, `.claude/review-cycle/stop-block`, plus the legacy `.claude/.no-review-gate` marker (still recognized indefinitely as a fallback)
 
-These directories are excluded at any depth, so a monorepo `subproject/.beads/` is skipped too. `/review-cycle:review` still works manually against excluded paths if you want a pass.
+These are excluded at any depth, so a monorepo `subproject/.beads/` is skipped too.
 
-### Adding new `ignore` patterns
+### Upgrading from 0.18 or earlier
 
-Editing `.claude/review-cycle.json` itself drifts the sentinel by design: the config file is force-included in the hash and cannot be excluded by any pattern (including `**`). The flow is:
-
-1. Edit `.claude/review-cycle.json` and add the patterns you want
-2. Run `/review-cycle:review` once; reviewers see the config change (and any matching source edits) and you mark
-3. From now on, changes within the new patterns don't trip the gate
-
-This prevents an unreviewed config edit from silently hiding source drift.
-
-### Global kill-switch
-
-Emergency disable for all hooks (use if something goes wrong):
+The sentinel is gone, along with `/review-cycle:accept`, the Stop gate, `review-sentinel install-hook`, and every marker file. Nothing reads them any more; in each project that used them you can delete the state directory and the tree refs:
 
 ```bash
-touch ~/.claude/.disable-review-gate
+rm -rf .claude/review-cycle .claude/.no-review-gate
+git for-each-ref --format='%(refname)' refs/review-cycle/ | xargs -r -n1 git update-ref -d
 ```
 
-Remove the file to re-enable.
-
-### Gitignore the sentinel
-
-The sentinel and the Stop gate's markers are per-project state, not source. Add to your project's `.gitignore` (`/review-cycle:init` does this, sourcing the list from `review-sentinel paths`; installs that ran init before 0.16.0 should re-run it once to pick up the state directory — the old per-file entries are harmless leftovers):
-
-```text
-.claude/review-cycle/
-```
-
-The config file (`.claude/review-cycle.json`) is meant to be committed so the team gets consistent gate behavior. Don't gitignore it.
-
-## State files
-
-```text
-${PROJECT}/.claude/review-cycle/mark            sentinel (anchor + sha256, plus a tree line since 0.16)
-${PROJECT}/.claude/review-cycle/in-progress     cycle-running marker (Stop gate passes while fresh)
-${PROJECT}/.claude/review-cycle/pr-in-progress  review-pr marker (Stop gate only; never licenses mark)
-${PROJECT}/.claude/review-cycle/stop-block      state hash the Stop gate last blocked on
-${PROJECT}/.claude/review-cycle.json            per-project config (disabled, ignore) — committed, not state
-${PROJECT}/.claude/.no-review-gate              legacy opt-out marker (still honored)
-~/.claude/.disable-review-gate                  global kill-switch (user-touched)
-```
-
-Pre-0.16 installs kept these as loose dotfiles directly under `.claude/`; the SessionStart hook moves them into `.claude/review-cycle/` once, on the first startup after upgrading. If hooks never fire (disabled, or a host without them), the gate sees a missing sentinel at the new path and blocks once — one `/review-cycle:review` or `/review-cycle:accept` re-establishes it. The reviewed-tree snapshot the sentinel's `tree:` line names is kept alive by a per-worktree ref under `refs/review-cycle/trees/`, which no git porcelain lists (linked worktrees each keep their own; ordinary pushes never carry it). Comparing trees means the gate writes unreferenced blobs into `.git/objects` as you work — growth is bounded by content you wrote, and git's regular gc expires them.
+If you installed the git pre-commit hook, remove it from `.git/hooks/pre-commit` (or your hook manager's config); it calls a binary that no longer ships. `~/.claude/.disable-review-gate` and `.claude/review-cycle.json`'s `disabled` field no longer do anything — use the `/config` setting above.
 
 ## Troubleshooting
 
-**Hooks don't fire after install.**
-Run `/reload-plugins`. If still nothing, check `claude --debug` for hook registration errors. Verify hook scripts are executable (`ls -l plugins/review-cycle/hooks/`).
+**Commits are not gated at all.**
+The gate did not load. Run `/review-cycle:init`: it reports whether the gate is loaded, and the usual cause is hooks modules being off in this Claude Code build (see [Requirements](#requirements)).
 
-**Infinite loop / Claude can't stop.**
-Touch the global kill-switch immediately: `touch ~/.claude/.disable-review-gate`. Then file an issue with hook output. The sentinel-based gate should prevent this, but the kill-switch is the safety net.
+**A commit is refused right after a review.**
+The refusal lists the paths and why. `edited after the last review` means content changed after the last reviewer saw it — an inline fix, cleanup, or an edit made while a reviewer was running. Run `/review-cycle:review` again; it scopes itself to what changed. `never reviewed` after a session restart is expected: the gate remembers reviews for the session only.
 
-**Stop hook fires on every turn even after running the cycle.**
-The cycle didn't successfully write the sentinel. Check `${PROJECT}/.claude/review-cycle/mark` exists and contains a `sha256:<hex>` line. Re-run `/review-cycle:review` — it should write the sentinel as its final step.
+**"The user's latest message doesn't ask for a commit."**
+Say so in your next message ("commit it"). A request made several prompts ago does not carry over, and neither does one relayed by another session.
 
-**Commit blocked even though the changes were just reviewed.**
-The gate compares the current state against the last mark; a block after a real review means the state changed *after* marking, not that the review didn't count. Diagnose first:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" status
-```
-
-It prints the stored mark, the current hash, and a one-line verdict. Common causes of post-review drift, in observed order: a commit-time formatter mutating files (see the next entry), a hook manager restoring the index after a rejected commit (lefthook does this — your staged files are gone; re-stage before retrying), and ordinary edits after the mark, including agent bookkeeping files not covered by the default exclusions. Two things that are *not* the cause: staging order (marking works before or after `git add` — staged, unstaged, and untracked forms of the same content hash identically) and committing in batches (the mark anchors at the HEAD it was taken from, so splitting one reviewed state into several commits keeps passing).
-
-**Review re-triggers right after a commit, on a clean-looking change.**
-A pre-commit hook that mutates files at commit time (a formatter or linter) can leave residual working-tree changes the gate correctly reads as fresh unreviewed drift. The rule for any such hook: it must leave a clean tree — only ever touch files that end up *in* the commit. Two ways to guarantee that:
-
-- **Scope formatters to the staged set, not the whole workspace.** `cargo fmt --all`, `prettier --write .`, etc. reformat files beyond what you're committing; with lefthook's `stage_fixed` those unrelated edits aren't re-staged and are stranded dirty after the commit. Use the staged-file form instead — e.g. `rustfmt --edition <ed> {staged_files}`, `prettier --write {staged_files}`.
-- **Normalize before you mark.** Run the formatters as part of the change *before* `/review-cycle:review`, so the marked state already equals the formatted state and the commit-time hook is a no-op.
-
-Beads/Trekker exports are already excluded (at any depth), so `bd`'s commit-time `issues.jsonl` re-export is not the cause — look at formatters/linters.
+**A commit landed and the agent reported unreviewed content.**
+Usually a pre-commit hook that rewrites files (a formatter) changed content after the gate checked it. Run the formatter before the review — the cycle's canonicalize phase does this when it can find the project's commands — or scope the hook to staged files.
 
 **Codex is missing or not authenticated.**
 A missing CLI is not an error — the cycle skips that leg, runs Claude-only, and names the skip in its summary. To add the leg back: `npm install -g @openai/codex`, then `codex login`, and verify `multi_agent = true` in `~/.codex/config.toml`.
 
 Missing auth reads differently: the CLI is present, so the leg runs and then fails (or, in a non-TTY shell, blocks on a login prompt). The summary reports the auth state the preflight observed — `stored session (not exercised)`, `no stored session`, or `unknown (probe unsupported)` — and suggests `codex login` only for `no stored session`. `unknown` means the probe itself didn't run, not that your credentials are wrong. Exit 0 from the probe only means `auth.json` exists and parses; it reports the same for a session whose refresh token has been revoked. A `failed` leg with a stored session means something broke mid-review — a revoked session, or a rate limit.
-
-**False trigger on a project I don't want gated.**
-Write `{"disabled": true}` to `.claude/review-cycle.json` in that project root.
 
 ## Local development
 
@@ -340,10 +221,11 @@ To test changes to this plugin:
 ```bash
 git clone https://github.com/oakoss/claude-plugins
 cd claude-plugins
+pnpm install
 claude --plugin-dir ./plugins/review-cycle
 ```
 
-Then `/reload-plugins` to pick up subsequent edits without restarting.
+Then `/reload-plugins` to pick up subsequent edits without restarting; saving the hooks module reloads it on its own, and a reload forgets the reviews the gate had seen. The module's pure logic is tested with `pnpm test` (vitest), the hooks themselves with `pnpm test:hooks` (`claude plugin test`; hooks modules must be on, see [Requirements](#requirements)), its types with `pnpm typecheck`, and the shell hook with `bin/run-bats plugins/review-cycle/tests/`.
 
 ## License
 

@@ -33,9 +33,9 @@ Each round:
    For an external check, follow its `link` to find the failing command or service.
 3. **Apply the smallest safe fix** for that one cause. Don't batch unrelated fixes into one round — one cause at a time keeps each push diagnosable.
 4. **Review before it leaves your machine.** Route the fix through your review gate so it's never pushed unreviewed:
-   - If `review-cycle` is installed: invoke `/review-cycle:review` via the Skill tool. It reviews, applies fixes, and marks the sentinel, and it already tiers a one-line lint correction down to a light two-iteration pass. Do not reach for `/review-cycle:accept` — it is `disable-model-invocation: true`, the escape hatch for a human who reviewed the changes themselves, and self-certifying a fix you are about to push defeats the gate.
+   - If `review-cycle` is installed: invoke `/review-cycle:review` via the Skill tool. It reviews and applies fixes, and it tiers a one-line lint correction down to a light pass. Its commit gate then admits the commit only if a reviewer saw exactly what it records and the user asked for a commit or push.
    - If not: show the diff and get the user's OK before pushing.
-5. **Stage, commit, and push.** `/review-cycle:review` reviews and marks the diff but does not stage it, so `git add` the reviewed files yourself, then commit and push — never `--no-verify`.
+5. **Stage, commit, and push.** `git add` the reviewed files, then commit and push — never `--no-verify`. Edit nothing between the review and the commit: an edit after the review is content no reviewer saw. With review-cycle installed, the gate also needs the user's latest message to ask for the commit and push; "fix CI" does not, so ask once — "commit and push the fixes each round?" — before the first commit. A yes covers every round until the user next writes.
 6. **Re-check** the full set and repeat, within the round cap below.
 
 ## Guardrails

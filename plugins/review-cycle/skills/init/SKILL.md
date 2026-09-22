@@ -1,24 +1,23 @@
 ---
 name: init
-description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, optionally appends the comment, fix-vs-defer, and evidence policies to CLAUDE.md (global or project), and updates .gitignore to exclude the per-project state directory. Idempotent — safe to run multiple times.
+description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, checks that the commit gate can load, and optionally appends the comment, fix-vs-defer, and evidence policies to CLAUDE.md (global or project). Idempotent — safe to run multiple times.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 ---
 
 # Initialize review-cycle
 
-One-time setup for using `review-cycle`. Run this once globally, then optionally re-run inside any project to handle project-level `.gitignore` entries.
+One-time setup for using `review-cycle`. Run it once; re-running is safe and adds anything a newer version introduced.
 
 ## What this skill does
 
-Six named checks, each idempotent:
+Five named checks, each idempotent:
 
-1. **Hook prerequisites** — verifies `jq`, `git`, and a sha256 tool (`sha256sum` or `shasum`) are on `$PATH`. The hooks silently fail-open if any are missing, so a misconfigured machine would have the gate quietly disabled.
+1. **Gate prerequisites** — verifies `git` and `jq` are on `$PATH`, and that this Claude Code build loads hooks modules. The commit gate is a hooks module; where modules are off, it never loads and nothing is gated.
 2. **Codex CLI** (optional) — verifies `codex --version` works
 3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
 4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
 5. **CLAUDE.md policies** — offers to append the comment, fix-vs-defer, and evidence policies (global or project scope)
-6. **Project `.gitignore`** — adds the state-directory and opt-out marker entries if inside a git repo
 
 Each step checks state first. If something is already configured, it reports "✓ already done" and continues.
 
@@ -35,27 +34,24 @@ fi
 
 Remember whether we're inside a git repo. Project-scope options only apply when `PROJECT_ROOT` is set.
 
-### Step 1.5: Hook prerequisites
+### Step 1.5: Gate prerequisites
 
-Verify that `jq`, `git`, and a sha256 tool are available. The hooks fail-open if any are missing, which means the gate would silently do nothing on this machine.
+The commit gate runs `git` for every check, and the comment-slop hook reads its payload with `jq`. The gate is a hooks module, an early-access Claude Code feature; a build that has them off never loads it, and nothing is gated.
 
 ```bash
-command -v jq >/dev/null && echo "✓ jq" || echo "⚠ jq missing"
 command -v git >/dev/null && echo "✓ git" || echo "⚠ git missing"
-if command -v sha256sum >/dev/null; then
-  echo "✓ sha256sum"
-elif command -v shasum >/dev/null; then
-  echo "✓ shasum"
-else
-  echo "⚠ no sha256 tool (need sha256sum or shasum)"
-fi
+command -v jq >/dev/null && echo "✓ jq" || echo "⚠ jq missing"
 ```
 
-For any missing tool, surface a clear install hint in the final summary:
+Then call the `mcp__review-cycle__status` tool. The gate registers it when it loads, so:
 
-- `jq`: macOS `brew install jq`; Debian/Ubuntu `apt install jq`
+- the tool answers → `✓ commit gate loaded`
+- the tool does not exist → `⚠ commit gate not loaded`. Either the gate is switched off (`review-cycle.enabled` in `/config`) or hooks modules are off in this build; for the latter, setting `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` to `1` in the `env` block of `~/.claude/settings.json` turns them on from the next session.
+
+For a missing tool, surface an install hint in the final summary:
+
 - `git`: macOS `xcode-select --install` or `brew install git`; Debian/Ubuntu `apt install git`
-- `sha256sum`/`shasum`: should ship with the OS; on macOS use `shasum` (already present), on Linux `sha256sum` (coreutils)
+- `jq`: macOS `brew install jq`; Debian/Ubuntu `apt install jq`
 
 Continue with subsequent steps regardless — each one is independent.
 
@@ -134,28 +130,7 @@ For each chosen target file:
 
 If user chose "Skip", print the policy snippets to the conversation so they can paste manually later. Note: snippets are also always available at `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`.
 
-### Step 6: Project .gitignore
-
-Only run this step if `PROJECT_ROOT` is set.
-
-Get the entries to add from the sentinel CLI so this stays in sync with whatever the hooks actually write:
-
-```bash
-GITIGNORE="$PROJECT_ROOT/.gitignore"
-ENTRIES_TO_ADD=()
-while IFS= read -r line; do
-  ENTRIES_TO_ADD+=("$line")
-done < <("${CLAUDE_PLUGIN_ROOT}/bin/review-sentinel" paths)
-```
-
-For each entry:
-
-- If `.gitignore` exists and already contains the entry (exact line match), skip.
-- Otherwise, append it (create `.gitignore` if missing).
-
-No user prompt — these entries are safe and minimal.
-
-### Step 7: Summary
+### Step 6: Summary
 
 Print a compact checklist of what was done. One line per item, single status glyph at the start of each line:
 
@@ -166,12 +141,11 @@ Print a compact checklist of what was done. One line per item, single status gly
 
 ```text
 review-cycle init summary:
-  ✓ Prereqs: jq, git, sha256sum
+  ✓ Prereqs: git, jq; commit gate loaded
   ✓ Codex CLI: codex-cli 0.130.0
   ✓ multi_agent enabled
   - Codex auth: no stored login — fine if you authenticate via OPENAI_API_KEY, else run codex login
   ✓ Policies appended to ~/.claude/CLAUDE.md (backup: .bak)
-  - .gitignore: skipped (not in a git repo)
 
 Run /review-cycle:review on a project with uncommitted changes.
 ```
@@ -180,12 +154,11 @@ When something needs manual action, surface it inline with `⚠` and a clear nex
 
 ```text
 review-cycle init summary:
-  ⚠ Prereqs: jq missing — brew install jq
+  ⚠ Prereqs: commit gate not loaded — set CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 in ~/.claude/settings.json env
   - Codex CLI: not installed — review runs Claude-only (npm i -g @openai/codex to add it)
   - multi_agent: n/a without the CLI
   - Codex auth: n/a without the CLI
   - Policies: skipped by user (snippets at ${CLAUDE_PLUGIN_ROOT}/reference/policies.md)
-  ✓ .gitignore updated in /Users/.../my-project
 
 Run /review-cycle:review on a project with uncommitted changes.
 ```
@@ -199,7 +172,7 @@ Keep each line short. Avoid bracketed status fields (`[✓]`) that widen the lay
 - **~/.codex/config.toml doesn't exist**: create with `[features]\nmulti_agent = true\n` if user opts in.
 - **~/.codex/config.toml exists but no `[features]` section**: append `[features]\nmulti_agent = true\n` at the end.
 - **`[features]` section exists with other entries**: insert `multi_agent = true` line within that section.
-- **User runs from outside a project**: still useful for global setup (Codex + global CLAUDE.md). Skip project steps.
+- **User runs from outside a project**: still useful for global setup (Codex + global CLAUDE.md). Offer only the global CLAUDE.md scope.
 - **User runs init twice**: idempotent. Each check verifies state first.
 
 ## Things to NOT do
@@ -207,5 +180,5 @@ Keep each line short. Avoid bracketed status fields (`[✓]`) that widen the lay
 - Do NOT enable `multi_agent` without `AskUserQuestion` confirmation. User's codex config requires consent.
 - Do NOT append to CLAUDE.md without confirmation (or without backup). User's instructions are sensitive.
 - Do NOT run `codex login` automatically. It requires an interactive browser flow.
-- Do NOT modify any file outside `~/.codex/`, `~/.claude/`, `${PROJECT_ROOT}/.claude/`, or `${PROJECT_ROOT}/.gitignore`.
+- Do NOT modify any file outside `~/.codex/`, `~/.claude/`, or the project's `CLAUDE.md`.
 - Do NOT abort if one step fails. Each step is independent; continue and report state in the final summary.
