@@ -8,22 +8,34 @@
 #
 # Fail-open on any error. Silent when no slop detected.
 
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh"
-
-gate_disabled && exit 0
-
 # Builtin redirection, not `cat`: one less PATH-resolved dependency ahead of
 # everything this hook decides.
 INPUT=$(</dev/stdin)
 
-FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+# A jq that cannot run must not read as "nothing to scan".
+FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null) || {
+  echo "review-cycle: jq could not read the hook payload; comment-slop scan skipped" >&2
+  exit 1
+}
 [ -z "$FILE" ] && exit 0
 [ ! -f "$FILE" ] && exit 0
 
-# Scope to git-tracked projects (matches the other hooks). Skip orphan files.
-PROJECT_ROOT=$(git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>/dev/null || true)
-[ -z "$PROJECT_ROOT" ] && exit 0
-gate_project_opted_out "$PROJECT_ROOT" && exit 0
+# Scope to git-tracked projects. Skip orphan files; a git that cannot run is
+# not the same as a file outside any repository.
+command -v git >/dev/null 2>&1 || {
+  echo "review-cycle: git not found; comment-slop scan skipped" >&2
+  exit 1
+}
+# git's messages are matched in English, so its locale is pinned.
+PROJECT_ROOT=$(LC_ALL=C LANGUAGE=C git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>&1) || {
+  rc=$?
+  case "$PROJECT_ROOT" in
+    *"not a git repository"*) exit 0 ;;
+  esac
+  reason=${PROJECT_ROOT%%$'\n'*}
+  echo "review-cycle: git failed (${reason:-exit $rc}); comment-slop scan skipped" >&2
+  exit 1
+}
 
 # Skip non-text and uninteresting paths.
 case "$FILE" in

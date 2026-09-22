@@ -32,25 +32,38 @@ write_lines() {
   [ -z "$output" ]
 }
 
+@test "a jq that cannot run exits 1 and names itself" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nexit 127\n' > "$BATS_TEST_TMPDIR/shim/jq"
+  chmod +x "$BATS_TEST_TMPDIR/shim/jq"
+  write_lines f.ts "// ===== HELPERS ====="
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\"\$PATH\" CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{\"tool_input\":{\"file_path\":\"$TEST_REPO/f.ts\"}}'"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "jq could not read the hook payload"
+}
+
+@test "a git that cannot run exits 1 and names itself" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nexit 137\n' > "$BATS_TEST_TMPDIR/shim/git"
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  write_lines f.ts "// ===== HELPERS ====="
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\"\$PATH\" CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{\"tool_input\":{\"file_path\":\"$TEST_REPO/f.ts\"}}'"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "git failed"
+}
+
+@test "a git killed without a message names its exit status" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nkill -9 $$\n' > "$BATS_TEST_TMPDIR/shim/git"
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  write_lines f.ts "// ===== HELPERS ====="
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\"\$PATH\" CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{\"tool_input\":{\"file_path\":\"$TEST_REPO/f.ts\"}}'"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "exit 137"
+}
+
 @test "silent when payload has no file_path" {
   run bash -c "CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{}'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "silent when kill-switch active" {
-  touch "$HOME/.claude/.disable-review-gate"
-  write_lines f.ts "// ===== HELPERS ====="
-  run run_slop_hook "$TEST_REPO/f.ts"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "silent when project opted out" {
-  mkdir -p "$TEST_REPO/.claude"
-  touch "$TEST_REPO/.claude/.no-review-gate"
-  write_lines f.ts "// ===== HELPERS ====="
-  run run_slop_hook "$TEST_REPO/f.ts"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }

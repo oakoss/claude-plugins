@@ -1,43 +1,7 @@
 {
+  "description": "review-cycle: refuses a commit unless a reviewer saw exactly what it records and the user asked for it; refuses a push the user did not ask for.",
+  "modules": ["./register.ts"],
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-init.sh",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-gate.sh",
-            "timeout": 30,
-            "statusMessage": "review-cycle: checking unreviewed changes"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/commit-gate.sh",
-            "timeout": 10,
-            "statusMessage": "review-cycle: checking commit gate"
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
