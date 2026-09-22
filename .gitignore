@@ -39,3 +39,8 @@ pnpm-debug.log
 # Transient bd lock at the repo root; left behind on exit and read as
 # unreviewed drift by the review sentinel.
 .beads.gate.lock
+
+# `claude plugin eval` writes its scored results and HTML report here, one
+# timestamped directory per run. Generated, regenerable, and large enough that
+# an accidental commit is worse than a rerun.
+plugins/*/evals/results/
