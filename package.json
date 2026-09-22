@@ -1,23 +1,35 @@
 {
   "name": "claude-plugins",
   "private": true,
+  "type": "module",
   "scripts": {
-    "setup": "bd bootstrap --yes"
+    "format": "oxfmt 'plugins/**/*.ts' '*.config.ts'",
+    "format:check": "oxfmt --check 'plugins/**/*.ts' '*.config.ts'",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "setup": "bd bootstrap --yes",
+    "test": "vitest run",
+    "test:hooks": "claude plugin test plugins/review-cycle",
+    "typecheck": "tsc -p plugins/review-cycle"
   },
   "devDependencies": {
-    "@commitlint/config-conventional": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.3",
     "@oakoss/oakum": "0.4.0",
-    "commitlint": "^21.2.2",
+    "commitlint": "^21.2.3",
     "lefthook": "^2.1.14",
-    "markdownlint-cli2": "^0.23.2",
-    "oxfmt": "^0.68.0"
+    "markdownlint-cli2": "^0.23.3",
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0",
+    "oxlint-tsgolint": "^7.0.2002",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   },
-  "packageManager": "pnpm@12.4.2",
   "devEngines": {
     "runtime": {
       "name": "node",
       "version": "24.19.0",
       "onFail": "download"
     }
-  }
+  },
+  "packageManager": "pnpm@12.4.2"
 }
