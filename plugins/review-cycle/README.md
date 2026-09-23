@@ -46,7 +46,7 @@ git commit ── the gate checks: you asked? every path reviewed?
 One-time setup helper. Run after installing the plugin to:
 
 - Check for the optional Codex CLI, verify `multi_agent = true` in `~/.codex/config.toml`, and report stored-login state (advisory — auth doesn't gate the leg)
-- Check that `git` and `jq` are present and that the commit gate loaded (see [Requirements](#requirements))
+- Check that `git` is present and that the commit gate loaded (see [Requirements](#requirements))
 - Optionally append the comment, fix-vs-defer, and evidence policies to your global or project `CLAUDE.md`
 
 Idempotent — safe to run multiple times. Replaces the manual setup steps below.
@@ -107,13 +107,13 @@ Subagents never commit or push in the project, and neither does anything run fro
 
 The `mcp__review-cycle__status` tool reports the gate's view: the working tree, the last reviewed tree, which changed paths are uncovered, and whether your latest message asked for a commit or push. The review skill uses it to scope itself.
 
-### PostToolUse (Write|Edit matcher)
+### Comment-slop check
 
-Fires after every file write. Scans for high-confidence comment slop — section markers, restate-the-code phrasings, hedge prefixes, ticketless TODOs — plus a comment-density check on the text just written (4+ comment lines making up ≥30% of a code edit; a Write payload's shebang and leading header comment block are exempt, since a new file's legitimate header is not an edit). On a hit it injects a directive to fix the comments immediately with a follow-up Edit, so slop is caught at generation time rather than waiting for the review cycle. Never blocks. Prose files (`.md`, `.txt`, …) are skipped entirely — `#` is a heading there, and prose cleanup belongs to de-slopify — and comment-carried config formats (`.yml`, `.toml`, …) are exempt from the density check.
+Runs after every Edit and Write, in the same hooks module as the gate, and also while the gate is switched off. Scans for high-confidence comment slop — section markers, restate-the-code phrasings, hedge prefixes, ticketless TODOs — plus a comment-density check on the text just written (4+ comment lines making up ≥30% of a code edit; a Write payload's shebang and leading header comment block are exempt, since a new file's legitimate header is not an edit). On a hit it injects a directive to fix the comments immediately with a follow-up Edit, so slop is caught at generation time rather than waiting for the review cycle. Never blocks, and scans only files inside a git repository; when git cannot run, the agent is told the scan was skipped. Prose files (`.md`, `.txt`, …) are skipped entirely — `#` is a heading there, and prose cleanup belongs to de-slopify — and comment-carried config formats (`.yml`, `.toml`, …) are exempt from the density check.
 
 ## Requirements
 
-The commit gate is a hooks module, an early-access Claude Code feature. Where hooks modules are off, it never loads and nothing is gated — the review skill still runs, and says in its summary that no gate is active. Turn them on with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` set to `1` in the `env` block of `~/.claude/settings.json`; `/review-cycle:init` checks whether the gate loaded.
+The commit gate and the comment-slop check are a hooks module, an early-access Claude Code feature. Where hooks modules are off, neither loads and nothing is gated — the review skill still runs, and says in its summary that no gate is active. Turn them on with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` set to `1` in the `env` block of `~/.claude/settings.json`; `/review-cycle:init` checks whether the gate loaded.
 
 While the gate is loaded, Bash inside an `isolation: "worktree"` subagent is refused — an open Claude Code issue (anthropics/claude-code#92533) with any hooks module that watches Bash.
 
@@ -225,7 +225,7 @@ pnpm install
 claude --plugin-dir ./plugins/review-cycle
 ```
 
-Then `/reload-plugins` to pick up subsequent edits without restarting; saving the hooks module reloads it on its own, and a reload forgets the reviews the gate had seen. The module's pure logic is tested with `pnpm test` (vitest), the hooks themselves with `pnpm test:hooks` (`claude plugin test`; hooks modules must be on, see [Requirements](#requirements)), its types with `pnpm typecheck`, and the shell hook with `bin/run-bats plugins/review-cycle/tests/`.
+Then `/reload-plugins` to pick up subsequent edits without restarting; saving the hooks module reloads it on its own, and a reload forgets the reviews the gate had seen. The module's pure logic is tested with `pnpm test` (vitest), the hooks themselves with `pnpm test:hooks` (`claude plugin test`; hooks modules must be on, see [Requirements](#requirements)), and its types with `pnpm typecheck`.
 
 ## License
 

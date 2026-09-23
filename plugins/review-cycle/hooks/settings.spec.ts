@@ -69,6 +69,26 @@ describe('bashTouchesGate', () => {
     'mv /tmp/x .claude/settings.local.json',
     `f=~/.claude/settings; jq . $f.json > /tmp/s && cat /tmp/s > $f.json`,
     `python3 -c "open('/Users/x/.claude/settings.json','w')"`,
+    `echo 'export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0' >> ~/.zshrc`,
+    `echo 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0' >> ~/.zshenv`,
+    `printf 'unset CLAUDE_CODE_ENABLE_FUNCTION_HOOKS\\n' >> ~/.bash_profile`,
+    `echo 'disableAllHooks: true' > x.yaml`,
+    `python3 - <<'EOF'\nopen('notes.md','w').write('set CLAUDE_CODE_ENABLE_FUNCTION_HOOKS')\nEOF`,
+    'echo {} > ~/.CLAUDE/SETTINGS.JSON',
+    'cd x && FOO=1 tee ~/.zshrc <<< "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0"',
+    `echo 'x;CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0 ' >> ~/.zshrc`,
+    `echo 'alias claude=";CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0 claude"' >> ~/.zshrc`,
+    'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0 env > ~/.zshenv',
+    'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0 claude -p "go" > out.log',
+    'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=10 claude plugin test x > out.log',
+    'F=CLAUDE_CODE_ENABLE_FUNCTION_HOOKS; echo "$F=0" >> ~/.zshenv',
+    'echo {} > "$CLAUDE_CONFIG_DIR/settings.json"',
+    `echo '{"disableAllHooks":true}' > x.json`,
+    'echo CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1"0" >> ~/.zshrc',
+    'echo CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1-0 >> ~/.zshrc',
+    // Refused though it only turns modules on: the variable belongs in
+    // settings, so no command needs it.
+    'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test plugins/review-cycle > out.log',
   ])('refuses %s', (cmd) => expect(bashTouchesGate(cmd)).toBe(true));
   test.each([
     'cat ~/.claude/settings.json',
@@ -79,5 +99,7 @@ describe('bashTouchesGate', () => {
     'jq . .vscode/settings.json > /dev/null',
     'jq .plugins .claude-plugin/marketplace.json > out.json',
     'claude plugin validate ./plugins/review-cycle',
+    'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test plugins/review-cycle',
+    'pnpm test:hooks > out.log',
   ])('allows %s', (cmd) => expect(bashTouchesGate(cmd)).toBe(false));
 });

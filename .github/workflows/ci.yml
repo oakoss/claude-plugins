@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       shell: ${{ steps.filter.outputs.shell }}
-      bats: ${{ steps.filter.outputs.bats }}
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -41,33 +40,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Push builds run everything; PR builds skip the shell-surface jobs when
-      # the diff touches no shell, hook, script, or test file. The summary job
-      # counts their skips as satisfied, so gating semantics are unchanged.
+      # Push builds run everything; PR builds skip ShellCheck when the diff
+      # touches no shell script, and the summary job counts that skip as satisfied.
       - name: Classify the diff
         id: filter
         run: |
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "shell=true" >> "$GITHUB_OUTPUT"
-            echo "bats=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           base=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD)
           changed=$(git diff --name-only "$base" HEAD)
           printf 'changed files:\n%s\n' "$changed"
           shell=false
-          bats=false
-          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)bin/|(^|/)hooks/'; then
+          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash)$'; then
             shell=true
           fi
-          # `plugins/` is in scope because tests/execution-receipt.bats scans
-          # the agent and skill markdown: a diff that only edits an agent body
-          # is exactly the diff that guard exists to catch.
-          if printf '%s\n' "$changed" | grep -qE '\.(sh|bash|bats)$|(^|/)(bin|hooks|tests)/|^plugins/|^\.github/workflows/|package\.json$|pnpm-lock\.yaml$'; then
-            bats=true
-          fi
           echo "shell=$shell" >> "$GITHUB_OUTPUT"
-          echo "bats=$bats" >> "$GITHUB_OUTPUT"
 
   bump-files:
     name: Bump files
@@ -234,8 +223,9 @@ jobs:
       - name: Type-check hooks modules
         run: pnpm typecheck
 
-      # The modules' pure logic; register.ts runs under `claude plugin test` above.
-      - name: Unit-test hooks modules
+      # The modules' pure logic and the prose anchors; register.ts runs under
+      # `claude plugin test` above.
+      - name: Unit tests
         run: pnpm test
 
       # oxlint's typeAware rules run through oxlint-tsgolint.
@@ -261,124 +251,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The hooks fail open by design, so a defect here disables the gate
-      # silently rather than erroring — which is exactly what static analysis
-      # catches and the bats suites, testing behavior, cannot.
+      # The eval scaffolds are the repository's only shell; nothing else
+      # exercises them outside an eval run.
       - name: Lint shell scripts
         run: |
           mapfile -t files < <(
             find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -not -path './node_modules/*' | sort
           )
-          # Named explicitly because they carry no extension, and the `find`
-          # above matches `*.sh`/`*.bash` only.
-          files+=(bin/run-bats bin/check-bats-run)
           printf 'checking %d files\n' "${#files[@]}"
           shellcheck --external-sources --severity=warning "${files[@]}"
-
-  tests:
-    name: Bats (${{ matrix.os }})
-    needs: changes
-    if: needs.changes.outputs.bats == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
-      - name: Harden Runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Installed from the git tag rather than npm: npm's `bats` lags at 1.13.0
-      # while local development runs 1.14.0, and `bin/run-bats` works around a
-      # post-suite hang whose behavior is version-specific — CI diverging from
-      # local is the one place that difference must not appear. Pinned for the
-      # same reason: an unpinned bump could change what the wrapper compensates
-      # for without any change landing in this repo.
-      - name: Install bats
-        run: |
-          git clone --depth 1 --branch v1.14.0 \
-            https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats-core"
-          sudo "$RUNNER_TEMP/bats-core/install.sh" /usr/local
-          bats --version
-
-      # Always through the wrapper, never bare `bats` — a direct invocation
-      # leaves an orphaned process tree after the final TAP line. Both runners,
-      # because the wrapper's process handling is the part that differs between
-      # Linux and macOS.
-      #
-      # One whole-repo invocation, which is both the command a developer runs
-      # and the only shape that exercises the concurrent merge every other
-      # suite's results pass through. A failure still names its file: bats
-      # writes the failing file and line in a `#` diagnostic under each
-      # `not ok`, and the merge passes those lines through untouched.
-      #
-      # The checks below re-read the printed stream for self-consistency —
-      # plan, count, numbering. That catches a wrapper that reported its own
-      # run wrongly. It cannot authenticate the stream: a suite writing a
-      # TAP-shaped line to bats's fd 3 lands in it unprefixed, which the
-      # wrapper rejects per file before merging. Nor can it see work lost
-      # before printing, so discovery is checked against a `find` this step
-      # runs itself.
-      - name: Run bats suites
-        run: |
-          status=0
-          rc=0
-          out="$(bin/run-bats 2>&1)" || rc=$?
-          # Printed before anything is derived from it: the derivations are
-          # what fail when a run went wrong, and the evidence has to outlive
-          # them.
-          printf '%s\n' "$out"
-
-          # `|| status=1` alone records that the wrapper refused and discards
-          # why. Exit 2 is its report that results went missing, and nothing
-          # downstream can see what never reached the stream.
-          if [ "$rc" -ne 0 ]; then
-            printf '::error::bin/run-bats exited %s\n' "$rc"
-            status=1
-          fi
-
-          # Which awk this is decides the verdict pass, and the two runners
-          # ship different ones: implementations differ on numeric-versus-
-          # string typing and on record limits. `--version` is not portable —
-          # mawk wants `-W version` — so try both.
-          { awk --version 2>/dev/null || awk -W version 2>&1 \
-            || echo "awk: version unknown"; } | head -1
-
-          # An independent `find`, because a run of the wrapper cannot check
-          # the wrapper's own discovery. A walk that died partway must not be
-          # counted — the wrapper carries the same predicates and degrades the
-          # same way, so the two counts would agree on the undercount.
-          if ! found="$(find . -type f -name '*.bats' \
-               -not -path '*/.git/*' -not -path '*/node_modules/*')"; then
-            printf '::error::the discovery walk failed, so its count proves nothing\n'
-            status=1
-          fi
-          expected_files="$(printf '%s\n' "$found" | grep -c . || true)"
-
-          # Everything derived from the stream lives in a script with its own
-          # suite, because on a green run every check inside it executes its
-          # false arm and nothing here would notice if one stopped firing.
-          gate_rc=0
-          printf '%s\n' "$out" | bin/check-bats-run "$expected_files" || gate_rc=$?
-          if [ "$gate_rc" -ne 0 ]; then
-            status=1
-            # 3 is the gate's own verdict and is already annotated. Anything
-            # else means the stream was never checked -- a missing or
-            # non-executable script, a bad interpreter, a kill -- and nothing
-            # else here would say so. The gate reserves 3 for exactly this
-            # reason: 1 is also what the shell returns when the gate never ran.
-            [ "$gate_rc" -eq 3 ] \
-              || printf '::error::bin/check-bats-run exited %s, so the stream was never checked\n' "$gate_rc"
-          fi
-          exit "$status"
 
   # `.github/workflows/` only. actionlint reads a composite action file as a
   # workflow and reports `"jobs" section is missing`, and the ShellCheck job's
@@ -400,9 +281,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # A pinned release binary checked against its published checksum rather
-      # than a third-party action. bats below is pinned too, but by tag and
-      # without a checksum, so the shared property is only that neither is a
-      # marketplace action. Renovate watches neither: its `github-actions`
+      # than a third-party action. Renovate does not watch it: its `github-actions`
       # manager reads `uses:`, not `env:`, and `.github/renovate.json` defines
       # no `customManagers` — so this pin ages until someone moves it
       # deliberately. The version and the checksum move together; bumping one
@@ -476,7 +355,7 @@ jobs:
     # always(), not !cancelled(): a skipped required check counts as
     # satisfied, so cancellation must yield a red X here, not a skip.
     if: always()
-    needs: [changes, bump-files, lint, validate, shellcheck, tests, actionlint]
+    needs: [changes, bump-files, lint, validate, shellcheck, actionlint]
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -496,7 +375,6 @@ jobs:
             echo "| Markdown | \`${{ needs.lint.result }}\` | Yes |"
             echo "| Plugin manifests | \`${{ needs.validate.result }}\` | Yes |"
             echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes (skips when no shell surface changed) |"
-            echo "| Bats (both OSes) | \`${{ needs.tests.result }}\` | Yes (skips when no shell/test surface changed) |"
             echo "| Workflows | \`${{ needs.actionlint.result }}\` | Yes |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -512,5 +390,4 @@ jobs:
           fail_if_bad "lint" "${{ needs.lint.result }}"
           fail_if_bad "validate" "${{ needs.validate.result }}"
           fail_if_bad "shellcheck" "${{ needs.shellcheck.result }}"
-          fail_if_bad "tests" "${{ needs.tests.result }}"
           fail_if_bad "actionlint" "${{ needs.actionlint.result }}"

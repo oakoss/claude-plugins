@@ -87,19 +87,18 @@ export function applyEdit(
   return all ? text.replaceAll(old, replacement) : text.replace(old, () => replacement);
 }
 
-const CLAUDE_DIR = /\.claude\b|CLAUDE_CONFIG_DIR/;
+const CLAUDE_DIR = /\.claude\b|CLAUDE_CONFIG_DIR/i;
 const WRITES =
   /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|python3?|node|bun|deno|osascript)\b|\b(sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z]*i|--in-place)/;
 const SWITCH_WORD =
   /\b(enabledPlugins|pluginConfigs|disableAllHooks|CLAUDE_CODE_ENABLE_FUNCTION_HOOKS)\b/;
 const PLUGIN_CLI = /\bclaude\b[^|;&]*\bplugins?\b[^|;&]*\b(disable|uninstall|remove|rm)\b/;
 
-// Whether a Bash command may switch review-cycle off: it writes something
-// while naming a switch key or a Claude settings file, or runs `claude plugin
-// disable|uninstall`. A speed bump, not a wall: it reads the command's text,
-// so one that builds its target at run time gets past it.
+// A speed bump, not a wall: it reads text, so a target built at run time gets
+// past it. `KEY=1` is not exempt, since the shell can join more onto the `1`.
 export function bashTouchesGate(command: string): boolean {
   if (PLUGIN_CLI.test(command)) return true;
   if (!WRITES.test(command)) return false;
-  return SWITCH_WORD.test(command) || (CLAUDE_DIR.test(command) && command.includes('settings'));
+  if (SWITCH_WORD.test(command)) return true;
+  return CLAUDE_DIR.test(command) && command.toLowerCase().includes('settings');
 }

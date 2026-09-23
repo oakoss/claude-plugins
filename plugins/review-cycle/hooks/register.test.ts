@@ -12,6 +12,14 @@ type World = {
   calls: { argv: string[]; env?: Record<string, string> }[];
   aliases: string;
   fail: (argv: string) => boolean;
+  // Answers a git call itself, ahead of the scripted git.
+  git?: (argv: string) => Partial<Run> | undefined;
+  // Answers an Edit or Write itself, after it wrote `files`; null keeps the
+  // ordinary result.
+  tool?: (path: string, files: Record<string, string>) => object | null;
+  readFails?: boolean;
+  // fs.stat reports the path as something other than a file.
+  statKind?: string;
   toplevel?: (argv: string) => string | undefined;
   // Runs as the Bash tool itself, after the gate let the command through.
   shell?: (command: string) => void;
@@ -26,6 +34,8 @@ type World = {
   // Makes every fs.exists call reject.
   fsFails?: boolean;
 };
+
+type Run = { exitCode: number; stdout: string; stderr: string };
 
 function globRegex(g: string): RegExp {
   const body = g
@@ -79,6 +89,8 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
       w.calls.push({ argv: e.argv, env: e.init?.env });
       const a = e.argv.join(' ');
       if (w.fail(a)) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: injected' } };
+      const own = w.git?.(a);
+      if (own) return { value: { exitCode: 0, stdout: '', stderr: '', ...own } };
       const top = w.toplevel?.(a);
       if (top !== undefined) return ok(top);
       if (a.includes('--show-toplevel')) return ok('/repo\n/repo/.git\n');
@@ -133,6 +145,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   }));
   on('fs.read', ($: unknown, e: { path?: string } | string) => {
     const path = typeof e === 'string' ? e : (e.path ?? '');
+    if (w.readFails && w.files?.[path] !== undefined) return { deny: 'EIO' };
     if (w.files?.[path] !== undefined) return { value: w.files[path] };
     return path.endsWith('snapshot-zsh-1790000000001-new.sh')
       ? { value: w.shellAliases ?? '' }
@@ -146,13 +159,42 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   on('tool.register', ($: unknown, e: { name: string }) => ({
     value: { tool: `mcp__review-cycle__${e.name}` },
   }));
-  on('tool.call', ($: unknown, e: { tool: string; command?: string }) => {
-    if (e.tool === 'AskUserQuestion') {
-      return { result: { questions: [], answers: w.dialog ?? {}, annotations: {} } };
-    }
-    w.shell?.(e.command ?? '');
-    return { result: { stdout: `ran ${e.command ?? ''}`, stderr: '', interrupted: false } };
+  on('fs.stat', ($: unknown, e: { path?: string } | string) => {
+    const path = typeof e === 'string' ? e : (e.path ?? '');
+    const text = w.files?.[path];
+    if (text === undefined) return { deny: 'ENOENT' };
+    const size = new TextEncoder().encode(text).length;
+    return { value: { kind: w.statKind ?? 'file', size, mtimeMs: 0 } };
   });
+  on(
+    'tool.call',
+    (
+      $: unknown,
+      e: {
+        tool: string;
+        command?: string;
+        file_path?: string;
+        content?: string;
+        old_string?: string;
+        new_string?: string;
+      },
+    ) => {
+      if (e.tool === 'AskUserQuestion') {
+        return { result: { questions: [], answers: w.dialog ?? {}, annotations: {} } };
+      }
+      if (e.tool === 'Write' || e.tool === 'Edit') {
+        const path = e.file_path ?? '';
+        w.files ??= {};
+        w.files[path] =
+          e.tool === 'Write'
+            ? (e.content ?? '')
+            : (w.files[path] ?? '').replace(e.old_string ?? '', () => e.new_string ?? '');
+        return w.tool?.(path, w.files) ?? { result: { filePath: path } };
+      }
+      w.shell?.(e.command ?? '');
+      return { result: { stdout: `ran ${e.command ?? ''}`, stderr: '', interrupted: false } };
+    },
+  );
   on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }));
   on('agent.spawn', ($: unknown, e: { tool_use_id: string }) => ({
     model: 'test',
@@ -527,6 +569,109 @@ describe('the switch in settings files', () => {
   test('a failed read refuses a JSON edit', async ($, on) => {
     fakeWorld(on, { fsFails: true });
     expect(denied(await $.tool.call(edit('a', 'b')), 'could not check')).toBe(true);
+  });
+});
+
+function contextOf(r: unknown): string[] {
+  return (r as { context?: string[] }).context ?? [];
+}
+
+describe('comment slop', () => {
+  const FILE = '/repo/f.ts';
+  const SLOP = '// ===== HELPERS =====\nconst a = 1;\n';
+  const write = ($: any, content = SLOP, file_path = FILE) =>
+    $.tool.call({ tool: 'Write', file_path, content });
+  test('a Write that creates a file with slop is scanned after it lands', async ($, on) => {
+    fakeWorld(on);
+    const r = await write($);
+    expect(ran(r)).toBe(true);
+    expect(contextOf(r).join('\n')).toContain('Section-marker');
+  });
+  test('an Edit is judged by the file it leaves and its new_string, as an edit', async ($, on) => {
+    fakeWorld(on, { files: { [FILE]: 'const a = 1;\n' } });
+    const r = await $.tool.call({
+      tool: 'Edit' as const,
+      file_path: FILE,
+      old_string: 'const a = 1;',
+      new_string:
+        '// alpha\n// beta\n// gamma\n// delta\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;',
+    });
+    expect(contextOf(r).join('\n')).toContain('4 of 8');
+  });
+  test('a clean file adds nothing', async ($, on) => {
+    fakeWorld(on);
+    expect(contextOf(await write($, 'const a = 1;\n'))).toEqual([]);
+  });
+  test('a call the tool failed is not scanned', async ($, on) => {
+    fakeWorld(on, { tool: () => ({ result: { error: 'not found' }, isError: true }) });
+    expect(contextOf(await write($))).toEqual([]);
+  });
+  test('context the tool already carried is kept', async ($, on) => {
+    fakeWorld(on, { tool: (path) => ({ result: { filePath: path }, context: ['from below'] }) });
+    const context = contextOf(await write($));
+    expect(context[0]).toBe('from below');
+    expect(context.join('\n')).toContain('Section-marker');
+  });
+  test('a file over 1 MiB is not scanned, counted in bytes', async ($, on) => {
+    fakeWorld(on);
+    expect(contextOf(await write($, `${SLOP}${'x'.repeat(1_048_577)}`))).toEqual([]);
+    // Under 1 MiB of characters, over 1 MiB of UTF-8 bytes.
+    expect(contextOf(await write($, `${SLOP}${'€'.repeat(400_000)}`))).toEqual([]);
+  });
+  test('a refused call is passed through unscanned', async ($, on) => {
+    fakeWorld(on, { files: { [FILE]: SLOP }, tool: () => ({ deny: 'denied below' }) });
+    const r = await write($);
+    expect(r).toEqual({ deny: 'denied below' });
+  });
+  test('a file gone after the write is silently not scanned', async ($, on) => {
+    fakeWorld(on, {
+      tool: (path, files) => {
+        delete files[path];
+        return null;
+      },
+    });
+    expect(contextOf(await write($))).toEqual([]);
+  });
+  test('a path that is not a regular file is not read', async ($, on) => {
+    fakeWorld(on, { statKind: 'dir' });
+    expect(contextOf(await write($))).toEqual([]);
+  });
+  test('a file at the filesystem root is scanned from /', async ($, on) => {
+    const w = fakeWorld(on);
+    await write($, SLOP, '/f.ts');
+    expect(w.calls.some((c) => c.argv.join(' ') === 'git -C / rev-parse --show-toplevel')).toBe(
+      true,
+    );
+  });
+  test('a file outside any repository is not scanned', async ($, on) => {
+    fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('git -C /tmp ')
+          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          : undefined,
+    });
+    expect(contextOf(await write($, SLOP, '/tmp/f.ts'))).toEqual([]);
+  });
+  test('a git that fails says the scan was skipped, naming why', async ($, on) => {
+    fakeWorld(on, { fail: (a) => a.startsWith('git -C /repo rev-parse') });
+    expect(contextOf(await write($)).join('\n')).toContain('git failed (fatal: injected)');
+  });
+  test('a git killed without a message names its exit status', async ($, on) => {
+    fakeWorld(on, {
+      git: (a) => (a.startsWith('git -C /repo rev-parse') ? { exitCode: 137 } : undefined),
+    });
+    expect(contextOf(await write($)).join('\n')).toContain('git failed (exit 137)');
+  });
+  test('a file that cannot be read says the scan was skipped', async ($, on) => {
+    fakeWorld(on, { readFails: true });
+    expect(contextOf(await write($)).join('\n')).toContain('comment-slop scan skipped (');
+  });
+  test('a relative path is scanned from the working directory', async ($, on) => {
+    const w = fakeWorld(on);
+    await write($, SLOP, 'f.ts');
+    expect(w.calls.some((c) => c.argv.join(' ') === 'git -C . rev-parse --show-toplevel')).toBe(
+      true,
+    );
   });
 });
 
