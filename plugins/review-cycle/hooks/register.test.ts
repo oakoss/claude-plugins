@@ -35,8 +35,10 @@ type World = {
   refLines?: string[];
   // What $.agent.list reports.
   agents?: { id: string; status: string }[];
-  // Makes the plugin's own prompt submissions fail.
+  // Makes the plugin's own prompt submissions fail, once `submitGate` settles
+  // when it is set.
   submitFails?: boolean;
+  submitGate?: Promise<void>;
   // HEAD names no readable commit.
   headMissing?: boolean;
   // What the user picks in the question dialog, keyed by question.
@@ -252,8 +254,11 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     },
   );
   on('agent.list', () => ({ value: w.agents ?? [] }));
-  on('prompt.submit', ($: unknown, e: { text: string }) => {
-    if (w.submitFails && e.text.startsWith('review-cycle:')) throw new Error('refused');
+  on('prompt.submit', async ($: unknown, e: { text: string }) => {
+    if (w.submitFails && e.text.startsWith('review-cycle:')) {
+      await w.submitGate;
+      throw new Error('refused');
+    }
     (w.prompts ??= []).push(e.text);
     return { text: e.text };
   });
@@ -1421,6 +1426,23 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await endTurn($);
     expect(nudges(w)).toEqual([]);
+    w.submitFails = false;
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a refusal that lands after a dialog answer still allows a retry', async ($, on) => {
+    let open: (() => void) | undefined;
+    const submitGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const w = fakeWorld(on, { submitFails: true, submitGate });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    await ($ as any).tool.call({ tool: 'AskUserQuestion', questions: [] });
+    open?.();
+    for (let i = 0; i < 100; i++) await Promise.resolve();
     w.submitFails = false;
     w.work = { 'a.ts': 'three' };
     await endTurn($);

@@ -9,23 +9,37 @@ import type {
   ToolCallResult,
 } from 'claude-code';
 
-import { aliasCommits, classify, possibleAliases, type Classification } from './command';
+import { aliasCommits, classify, possibleAliases } from './command';
 import { grantOf, grantOfAnswers, NO_GRANT, type Grant } from './consent';
+import {
+  coverageOf,
+  firstLine,
+  headOf,
+  parentTree,
+  prospectTree,
+  refsOf,
+  repoAt,
+  reviewablePaths,
+  sha,
+  snapshotOf,
+  treeOf,
+  worktreeTree,
+  type Coverage,
+  type Git,
+  type Refs,
+  type Repo,
+  type Run,
+} from './git';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { parseShellAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import {
-  CONFIG_PATH,
   EMPTY_TREE,
-  EXCLUDES,
-  coverage,
   describeUncovered,
   hasReceipt,
-  ignoresOf,
   isReviewerType,
   uncoveredOf,
   type Review,
-  type Row,
 } from './witness';
 
 // Every function that calls `$` lives in this file: `claude plugin validate`
@@ -51,19 +65,28 @@ type Output<H> = H extends (...args: never[]) => infer R ? Awaited<R> : never;
 
 const HUMAN = new Set<PromptOrigin['kind']>(['composer', 'bridge', 'sdk']);
 
-// A repository by its working tree and by the object store its worktrees share.
-type Repo = { top: string; common: string };
+// `spawnTree` is null when the tree could not be read as the leg started; such
+// a leg reviews nothing, but it is still under way until `done`.
+type Leg = { type: string; counts: boolean; spawnTree: string | null; done: boolean };
 
-type Leg = { type: string; counts: boolean; spawnTree: string };
+// What the user's latest message settled: a fresh message replaces it, a
+// prompt queued into the running turn updates it.
+type Message = {
+  grant: Grant;
+  // The working tree when it arrived; null when unreadable.
+  tree: string | null;
+  // Whether the agent was told to review since it arrived.
+  nudged: boolean;
+  // Legs spawned while review-pr runs review a PR worktree, not this tree.
+  prWindow: boolean;
+};
 
 type GateState = {
   // undefined until resolved; null when the session is not in a repository.
   root: Repo | null | undefined;
   reviews: Review[];
   legs: Map<string, Leg>;
-  // Legs spawned while review-pr runs review a PR worktree, not this tree.
-  prWindow: boolean;
-  grant: Grant;
+  message: Message;
   lastAnswer: string;
   // The user's shell aliases, which the Bash tool expands.
   shellAliases: Map<string, string>;
@@ -75,19 +98,14 @@ type GateState = {
   dropped: string[];
   // How many of `dropped` predate the latest recorded review.
   droppedSince: number;
-  running: Set<string>;
-  // The working tree at the user's latest message; null when unreadable.
-  promptTree: string | null;
-  // Whether the agent was told to review since that message.
-  nudged: boolean;
 };
 
 const state: GateState = {
   root: undefined,
   reviews: [],
   legs: new Map(),
-  prWindow: false,
-  grant: NO_GRANT,
+  // No message yet, so nothing to nudge about.
+  message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
   lastAnswer: '',
   shellAliases: new Map(),
   aliasError: null,
@@ -95,12 +113,7 @@ const state: GateState = {
   aliasesLoaded: false,
   dropped: [],
   droppedSince: 0,
-  running: new Set(),
-  promptTree: null,
-  nudged: true,
 };
-
-type Run = { exitCode: number; stdout: string; stderr: string };
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
 // which is what a command's own relative paths resolve against.
@@ -114,176 +127,9 @@ async function run(
   return $.process.run(argv, { timeoutMs: 60_000, ...opts, env });
 }
 
-function sha(s: string): string | null {
-  const t = s.trim();
-  return /^[a-f0-9]{40}$/.test(t) ? t : null;
-}
-
-function firstLine(s: string): string {
-  return s.trim().split('\n')[0] ?? '';
-}
-
-// The repository at `dir` (or the given cwd), 'none' when there is none, and
-// a throw when git could not say.
-async function repoAt($: $, dir: string | null, cwd?: string): Promise<Repo | 'none'> {
-  const argv = ['git', ...(dir === null ? [] : ['-C', dir])];
-  const r = await run(
-    $,
-    [...argv, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
-    cwd === undefined ? {} : { cwd },
-  );
-  if (r.exitCode === 0) {
-    const [top, common] = r.stdout.trim().split('\n');
-    if (top && common) return { top, common };
-  }
-  if (/not a git repository/i.test(r.stderr)) return 'none';
-  throw new Error(`git rev-parse failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-}
-
-// HEAD's commit, or EMPTY_TREE on an unborn branch or when HEAD names a
-// missing object; a throw when git failed.
-async function headOf($: $, root: string): Promise<string> {
-  const r = await run($, ['git', 'rev-parse', '--verify', '-q', 'HEAD^{commit}'], { cwd: root });
-  if (r.exitCode === 0) {
-    const head = sha(r.stdout);
-    if (head) return head;
-  }
-  if (r.exitCode === 1 && r.stdout.trim() === '') return EMPTY_TREE;
-  throw new Error(`git rev-parse HEAD failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-}
-
-async function treeOf($: $, root: string, commit: string): Promise<string | null> {
-  if (commit === EMPTY_TREE) return EMPTY_TREE;
-  const r = await run($, ['git', 'rev-parse', `${commit}^{tree}`], { cwd: root });
-  return r.exitCode === 0 ? sha(r.stdout) : null;
-}
-
-// The config is read from the tree being judged, not the working tree: an
-// `ignore` entry counts only once it is part of what gets reviewed.
-async function pathspecs($: $, root: string, tree: string): Promise<string[]> {
-  const r = await run($, ['git', 'show', `${tree}:${CONFIG_PATH}`], { cwd: root });
-  return ['.', ...EXCLUDES, ...ignoresOf(r.exitCode === 0 ? r.stdout : null)];
-}
-
-function nulList(out: string): string[] {
-  return out.split('\0').filter(Boolean);
-}
-
-// Paths that differ between two trees and need review: the excludes and
-// `ignore` patterns applied, the config always included.
-async function reviewablePaths(
-  $: $,
-  root: string,
-  from: string,
-  to: string,
-): Promise<string[] | null> {
-  const base = ['git', 'diff-tree', '-r', '-z', '--no-renames', '--name-only', from, to, '--'];
-  const main = await run($, [...base, ...(await pathspecs($, root, to))], { cwd: root });
-  const cfg = await run($, [...base, CONFIG_PATH], { cwd: root });
-  if (main.exitCode !== 0 || cfg.exitCode !== 0) return null;
-  return [...new Set([...nulList(main.stdout), ...nulList(cfg.stdout)])];
-}
-
-// A tree built in a scratch copy of the index, so the real index is never
-// touched. `prepare` stages into it; its commands see GIT_INDEX_FILE.
-async function scratchTree(
-  $: $,
-  root: string,
-  prepare: (env: Record<string, string>) => Promise<boolean>,
-): Promise<string | null> {
-  const mk = await run($, ['mktemp'], { cwd: root });
-  const scratch = mk.stdout.trim();
-  if (mk.exitCode !== 0 || !scratch) return null;
-  const env = { GIT_INDEX_FILE: scratch };
-  try {
-    const idx = await run(
-      $,
-      ['git', 'rev-parse', '--path-format=absolute', '--git-path', 'index'],
-      { cwd: root },
-    );
-    const cp = await run(
-      $,
-      [
-        'sh',
-        '-c',
-        'if [ -f "$1" ]; then cp "$1" "$2"; else rm -f "$2"; fi',
-        'sh',
-        idx.stdout.trim(),
-        scratch,
-      ],
-      { cwd: root },
-    );
-    if (idx.exitCode !== 0 || cp.exitCode !== 0) return null;
-    if (!(await prepare(env))) return null;
-    const wt = await run($, ['git', 'write-tree'], { cwd: root, env });
-    return wt.exitCode === 0 ? sha(wt.stdout) : null;
-  } finally {
-    try {
-      await run($, ['rm', '-f', scratch], { cwd: root });
-    } catch {
-      // A leftover temp file does not change the verdict.
-    }
-  }
-}
-
-async function worktreeTree($: $, root: string): Promise<string | null> {
-  return scratchTree($, root, async (env) => {
-    const add = await run($, ['git', 'add', '-A'], { cwd: root, env });
-    return add.exitCode === 0;
-  });
-}
-
-// The tree the command's commit would record: the index after replaying its
-// `git add`s, plus `add -u` for `commit -a`.
-async function prospectTree(
-  $: $,
-  root: string,
-  cls: Extract<Classification, { kind: 'gated' }>,
-): Promise<string | null> {
-  return scratchTree($, root, async (env) => {
-    for (const argv of cls.adds) {
-      const add = await run($, ['git', '-C', cls.dir, ...argv], { env });
-      if (add.exitCode !== 0) return false;
-    }
-    if (!cls.commit?.all) return true;
-    const update = await run($, ['git', ...cls.commit.config, 'add', '-u'], { cwd: root, env });
-    return update.exitCode === 0;
-  });
-}
-
-type Coverage = { rows: Row[]; unread: number };
-
-// Coverage of the paths `to` changes against `from`. `unread` counts reviewed
-// trees git could not compare, which then cover nothing.
-async function coverageOf($: $, root: string, from: string, to: string): Promise<Coverage | null> {
-  const changed = await reviewablePaths($, root, from, to);
-  if (changed === null) return null;
-  if (changed.length === 0) return { rows: [], unread: 0 };
-  let unread = 0;
-  const differing = new Map<string, Set<string>>();
-  for (const tree of new Set(state.reviews.flatMap((r) => r.trees))) {
-    // Changed paths are literal file names here, never pathspec magic.
-    const d = await run(
-      $,
-      [
-        'git',
-        '--literal-pathspecs',
-        'diff-tree',
-        '-r',
-        '-z',
-        '--no-renames',
-        '--name-only',
-        tree,
-        to,
-        '--',
-        ...changed,
-      ],
-      { cwd: root },
-    );
-    if (d.exitCode === 0) differing.set(tree, new Set(nulList(d.stdout)));
-    else unread++;
-  }
-  return { rows: coverage(changed, state.reviews, differing), unread };
+// The runner git.ts's reads take, bound to this hook's `$`.
+function gitOf($: $): Git {
+  return (argv, opts) => run($, argv, opts);
 }
 
 // Why uncovered content is uncovered, including what the gate itself lost.
@@ -344,7 +190,7 @@ function newestSnapshot(
 
 async function ensureRoot($: $): Promise<Repo | null> {
   if (state.root === undefined) {
-    const repo = await repoAt($, null, await $.session.cwd());
+    const repo = await repoAt(gitOf($), null, await $.session.cwd());
     state.root = repo === 'none' ? null : repo;
   }
   return state.root;
@@ -383,19 +229,22 @@ async function onPromptSubmit(
   next: NextOf<HookFor<'prompt.submit'>>,
 ): Promise<Output<HookFor<'prompt.submit'>>> {
   if (HUMAN.has(e.origin.kind)) {
-    state.grant = grantOf(e.text, state.lastAnswer);
-    state.nudged = false;
+    const grant = grantOf(e.text, state.lastAnswer);
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
-    if (e.turnId === undefined) {
-      state.prWindow = false;
+    if (e.turnId !== undefined) {
+      // Updated in place: a pending nudge's rollback holds this record.
+      state.message.grant = grant;
+      state.message.nudged = false;
+    } else {
+      let tree: string | null = null;
       try {
         const root = await ensureRoot($);
-        state.promptTree = root === null ? null : await worktreeTree($, root.top);
+        if (root !== null) tree = await worktreeTree(gitOf($), root.top);
       } catch {
         // No starting tree means no nudge this message; the commit gate still holds.
-        state.promptTree = null;
       }
+      state.message = { grant, tree, nudged: false, prWindow: false };
     }
   }
   return next(e);
@@ -406,31 +255,39 @@ async function onPromptSubmit(
 // not stop to ask the user whether to. Once per user message, and not while a
 // review is under way.
 async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<void> {
-  if (state.nudged || e.reason !== 'answer') return;
+  const message = state.message;
+  if (message.nudged || e.reason !== 'answer') return;
   const root = state.root;
-  const since = state.promptTree;
+  const since = message.tree;
   if (!root || since === null) return;
-  // A leg that ended without a turn.complete would otherwise hold this off for good.
-  if (state.running.size > 0) {
+  const pending = [...state.legs].filter(([, leg]) => leg.counts && !leg.done);
+  if (pending.length > 0) {
+    // A leg that ended without a turn.complete would otherwise hold this off for good.
     const agents = await $.agent.list();
     const live = new Set(agents.filter((a) => a.status === 'running').map((a) => a.id));
-    for (const id of state.running) if (!live.has(id)) state.running.delete(id);
-    if (state.running.size > 0) return;
+    for (const [id, leg] of pending) if (!live.has(id)) leg.done = true;
+    if (pending.some(([, leg]) => !leg.done)) return;
   }
-  const tree = await worktreeTree($, root.top);
+  const tree = await worktreeTree(gitOf($), root.top);
   if (tree === null || tree === since) return;
-  const touched = new Set(await reviewablePaths($, root.top, since, tree));
-  const c = await coverageOf($, root.top, await headOf($, root.top), tree);
+  const touched = new Set(await reviewablePaths(gitOf($), root.top, since, tree));
+  const c = await coverageOf(
+    gitOf($),
+    root.top,
+    await headOf(gitOf($), root.top),
+    tree,
+    state.reviews,
+  );
   if (c === null) return;
   const rows = c.rows.filter((row) => touched.has(row.path));
   if (uncoveredOf(rows).length === 0) return;
-  state.nudged = true;
+  message.nudged = true;
   const text = `review-cycle: this turn left changes no reviewer has seen (${explain({ ...c, rows })}). Invoke /review-cycle:review via the Skill tool now, then report back. Skip it only if the user's latest message said not to review, or your last message asked them something they must answer first.`;
   // Not awaited: the prompt enters once this turn has ended.
   Promise.resolve()
     .then(() => $.prompt.submit({ text }))
     .catch(() => {
-      state.nudged = false;
+      message.nudged = false;
     });
 }
 
@@ -454,17 +311,17 @@ async function onAsk(
   if (r.deny !== undefined) return r;
   const answers = (r.result as { answers?: unknown } | undefined)?.answers;
   if (answers !== null && typeof answers === 'object') {
-    state.grant = grantOfAnswers(answers as Record<string, unknown>);
+    state.message.grant = grantOfAnswers(answers as Record<string, unknown>);
   }
   return r;
 }
 
 function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {
-  if (!e.agentId && e.skill === 'review-cycle:review-pr') state.prWindow = true;
+  if (!e.agentId && e.skill === 'review-cycle:review-pr') state.message.prWindow = true;
   if (!e.agentId && e.skill === 'review-cycle:review') {
-    state.prWindow = false;
+    state.message.prWindow = false;
     // A review already under way needs no reminder to start one.
-    state.nudged = true;
+    state.message.nudged = true;
   }
   return next(e);
 }
@@ -483,19 +340,16 @@ async function onAgentSpawn(
       !e.cwd || (root !== null && (e.cwd === root.top || e.cwd.startsWith(`${root.top}/`)));
     isLeg = root !== null && !e.parentAgentId && isReviewerType(e.subagentType) && inRoot;
     // Captured before the leg starts, so it is the tree the leg is given.
-    if (isLeg && root !== null) spawnTree = await worktreeTree($, root.top);
+    if (isLeg && root !== null) spawnTree = await worktreeTree(gitOf($), root.top);
   } catch (error) {
     isLeg = isReviewerType(e.subagentType) && !e.parentAgentId;
     why = `${why} (${error instanceof Error ? error.message : String(error)})`;
   }
   const r = await next(e);
   if (isLeg && 'agentId' in r && r.agentId) {
-    if (!state.prWindow) state.running.add(r.agentId);
-    if (spawnTree === null) {
-      state.dropped.push(`${e.subagentType}: ${why}`);
-    } else {
-      state.legs.set(r.agentId, { type: e.subagentType, counts: !state.prWindow, spawnTree });
-    }
+    if (spawnTree === null) state.dropped.push(`${e.subagentType}: ${why}`);
+    const counts = !state.message.prWindow;
+    state.legs.set(r.agentId, { type: e.subagentType, counts, spawnTree, done: false });
   }
   return r;
 }
@@ -517,10 +371,10 @@ async function onTurnComplete(
     }
     return r;
   }
-  state.running.delete(e.agentId);
   const leg = state.legs.get(e.agentId);
+  if (leg) leg.done = true;
   const root = state.root;
-  if (!leg?.counts || !root) return next(e);
+  if (!leg?.counts || leg.spawnTree === null || !root) return next(e);
   if (e.isAborted || e.reason !== 'answer') {
     state.dropped.push(`${leg.type}: it did not finish (${e.isAborted ? 'aborted' : e.reason})`);
     return next(e);
@@ -530,10 +384,10 @@ async function onTurnComplete(
     return next(e);
   }
   try {
-    const tree = await worktreeTree($, root.top);
+    const tree = await worktreeTree(gitOf($), root.top);
     if (tree === null) throw new Error('the working tree could not be read when it finished');
-    const head = await headOf($, root.top);
-    const reviewedPaths = await reviewablePaths($, root.top, head, tree);
+    const head = await headOf(gitOf($), root.top);
+    const reviewedPaths = await reviewablePaths(gitOf($), root.top, head, tree);
     if (reviewedPaths === null) throw new Error('the paths it reviewed could not be listed');
     state.reviews.push({ type: leg.type, trees: [leg.spawnTree, tree], reviewedPaths });
     // Refusals explain the current state; older failures stay in the status tool.
@@ -727,7 +581,7 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
 
   const root = await ensureRoot($);
   if (root === null) return next(e);
-  const target = await repoAt($, cls.dir);
+  const target = await repoAt(gitOf($), cls.dir);
   if (target === 'none' || target.common !== root.common) return next(e);
   if (target.top !== root.top) {
     return deny(
@@ -741,7 +595,7 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   }
 
   const commits = cls.commit !== null || cls.history !== null;
-  if ((commits && !state.grant.commit) || (cls.push && !state.grant.push)) {
+  if ((commits && !state.message.grant.commit) || (cls.push && !state.message.grant.push)) {
     const wants = [commits ? 'commit' : null, cls.push ? 'push' : null]
       .filter(Boolean)
       .join(' or ');
@@ -751,11 +605,13 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   }
 
   if (cls.commit && !cls.commit.dryRun) {
-    const head = await headOf($, root.top);
+    const head = await headOf(gitOf($), root.top);
     // An amend replaces HEAD, so what it records is judged against HEAD's parent.
-    const base = cls.commit.amend && head !== EMPTY_TREE ? await parentTree($, root.top) : head;
-    const prospect = await prospectTree($, root.top, cls);
-    const c = prospect && base ? await coverageOf($, root.top, base, prospect) : null;
+    const base =
+      cls.commit.amend && head !== EMPTY_TREE ? await parentTree(gitOf($), root.top) : head;
+    const prospect = await prospectTree(gitOf($), root.top, cls);
+    const c =
+      prospect && base ? await coverageOf(gitOf($), root.top, base, prospect, state.reviews) : null;
     if (c === null) throw new Error('could not compute the tree this commit would record');
     if (uncoveredOf(c.rows).length > 0) {
       return deny(
@@ -764,38 +620,6 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
     }
   }
   return watch($, root, e, next, cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push');
-}
-
-// HEAD's parent's tree; the caller has already resolved HEAD to a commit.
-async function parentTree($: $, root: string): Promise<string | null> {
-  const p = await run($, ['git', 'rev-parse', '--verify', '-q', 'HEAD^'], { cwd: root });
-  return p.exitCode === 0 ? treeOf($, root, p.stdout.trim()) : EMPTY_TREE;
-}
-
-type Refs = Map<string, string>;
-
-// Every ref that names a commit, directly or through a tag, by name. Symbolic
-// refs are left out: their reflog does not follow the ref they point at.
-async function refsOf($: $, root: string): Promise<Refs> {
-  const r = await run(
-    $,
-    [
-      'git',
-      'for-each-ref',
-      '--format=%(objectname)%09%(objecttype)%09%(*objecttype)%09%(symref)%09%(refname)',
-    ],
-    { cwd: root },
-  );
-  if (r.exitCode !== 0) {
-    throw new Error(`git for-each-ref failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  const refs: Refs = new Map();
-  for (const line of r.stdout.split('\n')) {
-    const [id, type, peeled, symref, name] = line.split('\t');
-    if (!id || !name || symref) continue;
-    if (type === 'commit' || peeled === 'commit') refs.set(name, id);
-  }
-  return refs;
 }
 
 // The reflog messages the command added to `ref`, newest first: the entries
@@ -923,7 +747,7 @@ async function watch(
   if (root === null) return next(e);
   let start: Start | null = null;
   try {
-    start = { head: await headOf($, root.top), refs: await refsOf($, root.top) };
+    start = { head: await headOf(gitOf($), root.top), refs: await refsOf(gitOf($), root.top) };
   } catch {
     // Reported below: without a starting point nothing can be compared.
   }
@@ -940,8 +764,8 @@ async function watch(
   } else {
     let moves: Moves | null = null;
     try {
-      moves = await refMoves($, root.top, start, await refsOf($, root.top));
-      if (moves.pushed.length > 0 && !state.grant.push) {
+      moves = await refMoves($, root.top, start, await refsOf(gitOf($), root.top));
+      if (moves.pushed.length > 0 && !state.message.grant.push) {
         notes.push(
           `review-cycle: this command pushed to ${moves.pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -967,7 +791,7 @@ async function commitNotes(
   checked: 'commit' | 'history' | 'push' | 'unchecked',
 ): Promise<string[]> {
   const before = start.head;
-  const after = await headOf($, root);
+  const after = await headOf(gitOf($), root);
   if (after === EMPTY_TREE && before !== EMPTY_TREE) {
     return ['review-cycle: HEAD no longer resolves to a commit after this command. Tell the user.'];
   }
@@ -993,9 +817,10 @@ async function commitNotes(
       `git rev-parse ${oldest}^ failed: ${firstLine(parent.stderr) || `exit ${parent.exitCode}`}`,
     );
   }
-  const tree = await treeOf($, root, after);
-  const baseTree = await treeOf($, root, base);
-  const c = tree && baseTree ? await coverageOf($, root, baseTree, tree) : null;
+  const tree = await treeOf(gitOf($), root, after);
+  const baseTree = await treeOf(gitOf($), root, base);
+  const c =
+    tree && baseTree ? await coverageOf(gitOf($), root, baseTree, tree, state.reviews) : null;
   if (c === null) notes.push(`review-cycle could not check commit ${short}. Tell the user.`);
   else if (checked !== 'history' && uncoveredOf(c.rows).length > 0) {
     const why =
@@ -1006,24 +831,12 @@ async function commitNotes(
       `review-cycle: commit ${short} records content no reviewer saw (${explain(c)}). ${why} Tell the user.`,
     );
   }
-  if (!state.grant.commit) {
+  if (!state.message.grant.commit) {
     notes.push(
       `review-cycle: commit ${short} landed without the user asking for one. Tell the user.`,
     );
   }
   return notes;
-}
-
-// A digest of HEAD and every reviewable change against it, blob ids included:
-// equal digests mean nothing a reviewer should see has moved.
-async function snapshotOf($: $, root: string, head: string, tree: string): Promise<string | null> {
-  const base = ['git', 'diff-tree', '-r', '--no-renames', '--raw', head, tree, '--'];
-  const main = await run($, [...base, ...(await pathspecs($, root, tree))], { cwd: root });
-  const cfg = await run($, [...base, CONFIG_PATH], { cwd: root });
-  if (main.exitCode !== 0 || cfg.exitCode !== 0) return null;
-  const bytes = new TextEncoder().encode(`${head}\n${main.stdout}${cfg.stdout}`);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function onStatus(
@@ -1039,17 +852,17 @@ async function onStatus(
     reviews: state.reviews.length,
     droppedReviews: state.dropped,
     shellAliases: state.aliasError ?? state.shellAliases.size,
-    consent: state.grant,
+    consent: state.message.grant,
     error: null,
   };
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
-    const head = await headOf($, root.top);
-    const tree = await worktreeTree($, root.top);
-    const c = tree ? await coverageOf($, root.top, head, tree) : null;
+    const head = await headOf(gitOf($), root.top);
+    const tree = await worktreeTree(gitOf($), root.top);
+    const c = tree ? await coverageOf(gitOf($), root.top, head, tree, state.reviews) : null;
     status.worktreeTree = tree;
-    status.snapshot = tree ? await snapshotOf($, root.top, head, tree) : null;
+    status.snapshot = tree ? await snapshotOf(gitOf($), root.top, head, tree) : null;
     status.changed = c?.rows.length ?? null;
     status.uncovered = c ? uncoveredOf(c.rows) : null;
     status.unreadReviews = c?.unread ?? null;
