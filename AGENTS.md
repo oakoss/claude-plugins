@@ -50,7 +50,7 @@ Optional component directories at the plugin root:
 
 - `skills/<skill-name>/SKILL.md` — invoked as `/<plugin-name>:<skill-name>`
 - `agents/<name>.md` — custom subagents
-- `hooks/hooks.json` plus shell scripts — event handlers
+- `hooks/hooks.json` plus a hooks module (`register.ts`) — event handlers
 - `reference/` — optional reference docs, snippets, examples
 - `.mcp.json`, `.lsp.json`, `monitors/monitors.json` — server integrations
 
@@ -71,45 +71,14 @@ Plugin `plugin.json` must include:
 
 Marketplace `marketplace.json` includes each plugin with `source: "./plugins/<name>"`.
 
-## Hook conventions
-
-Shell scripts in `hooks/` must:
-
-- Use `#!/usr/bin/env bash` as the shebang
-- Be committed executable (`git update-index --chmod=+x` if added on a system without exec bit support)
-- Read stdin with builtin redirection (`INPUT=$(</dev/stdin)`), not `cat` — `cat` makes the payload read itself depend on a PATH lookup, upstream of anything that could probe for it. Measured on review-cycle's two shell commit gates (since retired), across five `cat` fault modes each: the emptied payload turned a kilobyte-scale deny into exit 0 with nothing on either stream, indistinguishable from a pass. (The Stop gate survives it — it reads the payload only for `stop_hook_active` — so this is a claim about the commit gates, not about every hook)
-- Fail-open on any error — the action proceeds. A hook that *decided* exits 0; one that could not run exits 1 and prints one self-contained line to stderr. Never report a broken dependency with exit 2: `PreToolUse` and `Stop` honour it and block, which is the trap fail-open exists to avoid, while `PostToolUse` and `SessionStart` ignore it — so it is unreliable as well as wrong. (The semantics this rests on: stderr at exit 0 reaches only the debug log; a non-zero, non-2 exit is a non-blocking error whose *first stderr line* surfaces, but only when stdout is empty or unparseable; and valid decision JSON on stdout is honoured with the exit code ignored entirely. From the hooks reference at code.claude.com/docs/en/hooks — version-sensitive, and not measured in-harness. They are why exit 0 is reserved for user-legible states, and why a hook that emits a decision need not care about its exit code.)
-- Resolve project root via `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}` because `CLAUDE_PROJECT_DIR` is unreliable in plugin hooks
-- Honor the plugin's off switch, when it has one, as the first check — ahead of the payload prefilter and of sourcing any lib, both of which can fail loudly and leave a user who switched the hook off with an error on each call. A `userConfig` option reaches a shell hook as `CLAUDE_PLUGIN_OPTION_<KEY>`
-- Use `${CLAUDE_PLUGIN_ROOT}` for plugin-relative paths in `hooks.json`
-
-When the hook needs to use sha256, prefer this cross-platform fallback:
-
-```bash
-if command -v sha256sum >/dev/null 2>&1; then
-  SHA_CMD="sha256sum"
-elif command -v shasum >/dev/null 2>&1; then
-  SHA_CMD="shasum -a 256"
-else
-  exit 0
-fi
-```
-
-When blocking, always provide a printf fallback so the block decision is preserved if `jq` fails:
-
-```bash
-jq -n '{decision:"block", reason:"..."}' 2>/dev/null \
-  || printf '{"decision":"block","reason":"..."}\n'
-```
-
 ## Hooks modules
 
-A plugin can also ship a hooks module: TypeScript that Claude Code runs itself, named in `hooks.json` as `"modules": ["./register.ts"]` beside any shell hooks. review-cycle's commit gate is one. There is no build step and no runtime dependency — a module imports only relative files and `"claude-code"`.
+Hooks here are hooks modules: TypeScript that Claude Code runs itself, named in `hooks.json` as `"modules": ["./register.ts"]`. review-cycle's commit gate and comment-slop check are one module. No plugin ships shell hooks. There is no build step and no runtime dependency — a module imports only relative files and `"claude-code"`.
 
 - Keep every function that calls `$` in the file that registers the hooks. `claude plugin validate` follows `$` only into functions declared there, and refuses a module that passes `$` across an import. Pure logic goes in sibling files, which is also what makes it testable.
-- A hook that throws is skipped and the action proceeds. Where proceeding is the harm a hook exists to prevent, catch with `on(…).catch(handler)` and refuse; everywhere else, fail open as shell hooks do.
+- A hook that throws is skipped and the action proceeds. Where proceeding is the harm a hook exists to prevent, catch with `on(…).catch(handler)` and refuse; everywhere else, fail open, and tell the agent in the result's `context` when a check could not run rather than passing silently.
 - Hooks modules are early access. A build without them loads none, silently, and `claude plugin test` prints a notice and exits 0 having run nothing — set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, and check that the run reports its tests.
-- Pure logic is tested with vitest: `*.spec.ts` beside the module, run by `pnpm test`. The module that registers hooks is tested with `claude plugin test plugins/<name>` (`pnpm test:hooks` for review-cycle), which runs only `*.test.ts` and whose kit is the only thing that can raise engine events. That kit runs no real processes: a test answers `process.run` itself with `{ value: { exitCode, stdout, stderr } }`, its options under `e.init`.
+- Pure logic is tested with vitest: `*.spec.ts` beside the module, run by `pnpm test`, which also runs the prose anchors in each plugin's `tests/`. The module that registers hooks is tested with `claude plugin test plugins/<name>` (`pnpm test:hooks` for review-cycle), which runs only `*.test.ts` and whose kit is the only thing that can raise engine events. That kit runs no real processes: a test answers `process.run` itself with `{ value: { exitCode, stdout, stderr } }`, its options under `e.init`.
 - Types come from `types/claude-code/claude-code.d.ts`, written by `/plugin-types` (headless: `claude -p "/plugin-types <dir>"`). Regenerating needs a login, so the file is committed; regenerate it when Claude Code updates and the module uses something new. `pnpm typecheck` checks against it, `pnpm lint` runs oxlint type-aware, and `pnpm format` is oxfmt.
 
 ## Skill conventions
@@ -119,7 +88,7 @@ A plugin can also ship a hooks module: TypeScript that Claude Code runs itself, 
 - If a policy could also apply outside the skill, provide a standalone snippet in `reference/` that users can copy into their `CLAUDE.md`.
 - Keep skill bodies under ~500 lines. Move detailed reference material to supporting files in the skill directory.
 - When a skill's prose tells the model to invoke another skill, write it as *invoke `/plugin:skill` via the Skill tool* — naming the tool fires more reliably than a bare slash command in prose. Never instruct model-invocation of a `disable-model-invocation: true` skill.
-- A skill or agent change is **done when**: `claude plugin validate ./plugins/<name> --strict` passes; `bin/run-bats` is green; every factual claim the new prose makes has been verified against the tool or code it describes; a bump file describes the change; and the body is still under the line budget.
+- A skill or agent change is **done when**: `claude plugin validate ./plugins/<name> --strict` passes; `pnpm test` is green; every factual claim the new prose makes has been verified against the tool or code it describes; a bump file describes the change; and the body is still under the line budget.
 
 ## Versioning and changelog
 
@@ -132,7 +101,7 @@ There is deliberately no cross-file drift check. The old `sync-plugin-versions.m
 - On push to main with pending bump files, the Release workflow maintains a version PR (`oakum/version-packages`) carrying the version bumps, changelog entries, and synced manifests. **Merging that PR is the release**; `oakum release` then tags it and creates the GitHub releases.
 - **The version PR's title is what lands on main, not its commit.** This repository allows squash-merge only and sets `squash_merge_commit_title = PR_TITLE`, so GitHub discards the `chore(release): version packages` subject oakum writes on the branch and uses the PR title instead. oakum 0.3.1 titled that PR `Version Packages`, which landed unconventionally (#55 was renamed by hand before merging). 0.3.2 defaults the title to the version commit's **built-in** message — the schema is explicit that a configured `commit-message` does not change it, which is why setting one was never the remedy and why #55 was misnamed with one already configured. Measured 2026-09-21 on the live branch under 0.3.2: the version commit's subject and PR #62's title are both `chore(release): version packages`, so the default lands conventionally and no rename is needed. Re-check after the first release on 0.4.0, since the workflow rebuilds that PR on every push to main; if it ever regresses, set `title` in `.changeset/_config.toml`, which takes the same `oakum status --json` document the commit message does.
 - Direct releases remain valid for hand-cut cases: `pnpm exec oakum version` after writing a bump file does the whole propagation locally.
-- Before releasing, run `claude plugin validate ./plugins/<name> --strict` — catches manifest/structure errors the bats suites don't cover.
+- Before releasing, run `claude plugin validate ./plugins/<name> --strict` — catches manifest and structure errors the tests don't cover.
 - **Any change under `plugins/<name>/` needs a bump file naming that plugin.** There are no exemptions: a README-only or tests-only change still needs one, `<plugin>: none` or empty frontmatter if it should not release — a bare `none` line is refused. `oakum check --strict` decides, in CI's `Bump files` job. That is the only gate: nothing checks locally, so run `pnpm exec oakum check --strict` yourself before pushing if you want the answer sooner. A lefthook `pre-push` command was tried and removed — `oakum check` derives its range from the checked-out HEAD rather than from the refs being pushed, so pushing a branch while standing on `main` examined `main`, found nothing, and exited 0 while the uncovered branch reached the remote. Measured in a clone against a local bare remote.
 
   A repo-local PreToolUse hook used to enforce a looser version of this rule and was retired. Measured on oakum 0.4.0 against throwaway clones, all three at exit 1: a runtime change with no bump file (`changed with no covering intent`); a hand bump with all three manifests agreeing (`manifest 0.18.2 is above tagged 0.18.1`, plus the coverage error); and manifests disagreeing (the coverage error again). The hook offered a hand bump as an alternative to a bump file and waived docs and tests — both paths oakum refuses, so it was permitting what CI then rejected.
@@ -160,35 +129,12 @@ Test a plugin in-place during development:
 claude --plugin-dir ./plugins/<name>
 ```
 
-Use `/reload-plugins` to pick up edits without restarting the session. Test hook scripts in isolation by piping sample JSON to stdin:
+Use `/reload-plugins` to pick up edits without restarting the session; saving a hooks module reloads it on its own.
 
 ```bash
-echo '{"tool_input":{"file_path":"/tmp/test/f.ts"}}' | CLAUDE_PLUGIN_ROOT=plugins/review-cycle bash plugins/review-cycle/hooks/posttool-slop.sh
+pnpm test          # vitest: modules' pure logic and prose anchors
+pnpm test:hooks    # claude plugin test: the modules' hooks
+pnpm typecheck && pnpm lint && pnpm format:check
 ```
 
-Verify hook scripts exit 0 on every code path that shouldn't trap the user.
-
-### Bats
-
-Plugin and repo-local hooks have `.bats` suites. **Always invoke bats through `bin/run-bats`, never directly.** Bats 1.13 on macOS hangs after the final `ok`/`not ok` line because it holds file descriptors open during post-suite cleanup; the wrapper polls the TAP plan and force-kills bats once every test has reported. A direct `bats path/to/suite.bats` invocation will appear to succeed but leave an orphaned bats process tree that lingers until launchd reaps it.
-
-```bash
-bin/run-bats                                # auto-discover every .bats in the repo
-bin/run-bats plugins/review-cycle/tests/    # everything under a directory
-bin/run-bats path/to/one.bats               # a single file
-bin/run-bats -f "test name" path/to.bats    # filter, like bats -f
-```
-
-Given more than one file the wrapper runs them concurrently, one `bats` process per file, and merges their TAP streams into a single renumbered plan. Measured back to back on a 12-core machine, 654 tests: 266s serial against 78s parallel, roughly 3.4x. Both numbers move with the machine and the environment — the same suite was 111s parallel before `jq` stopped resolving through a tool-manager shim — so re-measure rather than trusting these, and treat the ordering as the claim: wall time converges on the slowest single file. This is file-level parallelism deliberately — `bats --jobs` interleaves tests *within* a file, and these suites plant PATH shims and build git fixtures, so the isolation that makes them safe to run together is the process boundary each file already has. Every file runs exactly as it would alone. `RUN_BATS_JOBS=1` forces them through one at a time, for diagnosing a suite that only misbehaves alongside others.
-
-The wrapper never reports a partial run as success. Exit 2 means *results are missing*, which is worse news than *tests failed* and therefore outranks exit 1 — a run that lost results and also had a failure exits 2, and the loss is always named on stderr. It fires on a stalled bats killed before every planned test reported (`only <n>/<total> tests reported`, naming the file when several ran), on the merge emitting a different number of results than the per-file runs reported, on merged results that are not numbered contiguously, on results arriving past the plan, on a suite that reports no tests at all when no filter was given, and on a suite whose own result ordinals do not run `1..n`.
-
-The last two are about a file disappearing rather than a count going wrong, and both were silent before. A suite whose tests are all gone exits 2 alone but used to vanish into its neighbours' plan in a multi-file run, because every file is given `--allow-empty-suite` so that a filter matching nothing in one of them is not an error; unfiltered there is no such case. And anything a suite writes to bats's fd 3 — its progress channel, which `--tap` passes through unprefixed — arrives in the TAP stream looking like a result, which the stall watchdog counts: that ends the run a test early with the count still agreeing with the plan, so the ordinals are the only surviving evidence and the merge renumbers them away. The ordinal check runs per file on both paths. The empty-suite verdict is reached on both but by different routes: alone, bats itself refuses the file and the wrapper reports `bats found no tests in <file>`; beside others it is the wrapper's own check, naming the file among `these suites contain no tests`.
-
-Every run also names the size of the set it ran, on stderr, as `bin/run-bats: <n> files`. CI compares that against a `find` of its own, because a run cannot check its own discovery: a file never looked for reports nothing, costs nothing, and leaves every count downstream of it consistent.
-
-Those merge checks exist because every other suite's trustworthiness rides on the merge: the count is taken from the merged stream rather than from the inputs, so a renumbering bug cannot leave the per-file checks happy while the caller sees fewer tests than ran. Treat exit 2 as a failed run, not a flaky one.
-
-`tests/run-bats.bats` covers the wrapper itself, each cell written against a mutation that survived without it. Two guards are deliberately unpinned and say so in that file's header, because no input reaches them on bats 1.14.0.
-
-Plugin-local wrappers (e.g. `plugins/review-cycle/tests/run.sh`) are thin shims that delegate to `bin/run-bats` and can still be invoked from inside a plugin directory.
+Prose anchors (`plugins/<name>/tests/*.spec.ts`) pin wording that skills and agents load as instructions, where nothing else would notice it going missing. Write each against a mutation: remove the phrase it anchors and confirm the test fails.
