@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { aliasCommits, classify, possibleAliases } from './command';
-import { parse, parseShellAliases } from './shell';
+import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
 
 const HEREDOC_MESSAGE = `git commit -m "$(cat <<'EOF'
 feat(x): add a thing
@@ -209,6 +209,20 @@ describe('gates the accepted shapes', () => {
     expect(classify('gp', aliases)).toEqual(expect.objectContaining({ kind: 'gated', push: true }));
     expect(classify('g commit -m x', aliases)).toEqual(
       expect.objectContaining({ kind: 'gated', commit: PLAIN }),
+    );
+  });
+  test('an alias after `time -p` is expanded, as bash does', () => {
+    const aliases = new Map([['gcam', 'git commit -s -a -m']]);
+    expect(classify('time -p gcam msg', aliases)).toEqual(
+      expect.objectContaining({ kind: 'refuse' }),
+    );
+    expect(classify('time -p echo gcam', aliases)).toEqual({ kind: 'none' });
+    for (const c of ['echo time -p gcam msg', 'echo time gcam msg']) {
+      expect(classify(c, aliases), c).toEqual({ kind: 'none' });
+      expect(expanded(c, [...aliases]), c).toBe(c);
+    }
+    expect(classify('if true; then gcam msg; fi', aliases)).toEqual(
+      expect.objectContaining({ kind: 'refuse' }),
     );
   });
   test('a statement of only assignments runs nothing, so it may precede a commit', () => {
@@ -721,5 +735,118 @@ describe('shell aliases', () => {
       gcam: 'git commit -s -a -m',
       g: 'git',
     });
+  });
+});
+
+const TAG = 't1';
+
+function wrap(body: string): string {
+  return `junk=no\nreview-cycle: aliases ${TAG}\n${body}\nreview-cycle: end of aliases ${TAG}\n`;
+}
+
+function read(body: string): Map<string, string> | null {
+  return readAliases(wrap(body), TAG);
+}
+
+// Claude Code's own snapshot, measured: CLAUDE_CODE_SHELL, else $SHELL, when it
+// names zsh (checked first) or bash, else zsh; `-c -l`, sourcing
+// `$HOME/.<shell>rc` from /dev/null.
+describe('the alias read mirrors the snapshot', () => {
+  test.each([
+    [undefined, '/bin/zsh', '/bin/zsh'],
+    [undefined, '/opt/homebrew/bin/bash', '/opt/homebrew/bin/bash'],
+    [undefined, '/usr/local/bin/bash5', '/usr/local/bin/bash5'],
+    [undefined, '/opt/homebrew/bin/fish', 'zsh'],
+    [undefined, undefined, 'zsh'],
+    ['/usr/local/bin/bash', '/bin/zsh', '/usr/local/bin/bash'],
+    ['', '/bin/bash', '/bin/bash'],
+    ['/usr/bin/fish', '/bin/bash', '/bin/bash'],
+  ])('CLAUDE_CODE_SHELL=%s SHELL=%s runs %s', (claudeShell, shell, chosen) => {
+    expect(aliasShell(claudeShell, shell).path).toBe(chosen);
+  });
+  test('each shell sources its own rc; a path naming both is zsh, as Claude Code checks', () => {
+    expect(aliasShell(undefined, '/bin/zsh').rc).toBe('.zshrc');
+    expect(aliasShell(undefined, '/bin/bash').rc).toBe('.bashrc');
+    expect(aliasShell(undefined, '/home/bashful/bin/zsh').rc).toBe('.zshrc');
+  });
+  test("the script is laid out as Claude Code's snapshot script, the rc path a literal", () => {
+    const listing = "alias | sed 's/^alias //g' | sed 's/^/alias -- /' | head -n 1000";
+    const open = `trap - DEBUG 2>/dev/null; builtin echo; builtin echo 'review-cycle: aliases ${TAG}'`;
+    const close = `builtin echo 'review-cycle: end of aliases ${TAG}'`;
+    expect(aliasScript("/home/o'neil/.zshrc", TAG)).toBe(
+      [
+        String.raw`source '/home/o'\''neil/.zshrc' < /dev/null > /dev/null 2>&1`,
+        open,
+        listing,
+        close,
+      ].join('\n'),
+    );
+    // With no rc file, Claude Code's snapshot lists no aliases either.
+    expect(aliasScript(null, TAG)).toBe([open, close].join('\n'));
+  });
+  test('output that never reached the end line reads as no answer', () => {
+    expect(readAliases(`\nreview-cycle: aliases ${TAG}\nalias gp='git push'\n`, TAG)).toBeNull();
+    expect(readAliases('', TAG)).toBeNull();
+  });
+  test('only the lines between this read’s markers are read', () => {
+    const out = `\u001B]697;DoneSourcing\u0007git=echo\n${wrap("alias -- gp='git push'")}`;
+    expect(Object.fromEntries(readAliases(out, TAG) ?? [])).toEqual({ gp: 'git push' });
+    const other = 'review-cycle: aliases other\nreview-cycle: end of aliases other\n';
+    expect(readAliases(other + wrap("alias -- gp='git push'"), TAG)?.get('gp')).toBe('git push');
+  });
+  test("a line the listing did not print, such as an rc's ERR trap output, is not an alias", () => {
+    expect(Object.fromEntries(read("lasterr=3\nalias -- gp='git push'") ?? [])).toEqual({
+      gp: 'git push',
+    });
+    // The listing itself failed, so the trap's line is all there is.
+    expect(read('lasterr=3')?.size).toBe(0);
+  });
+  test('a value holding the end line does not cut the list short', () => {
+    const body = `alias a='x\nreview-cycle: end of aliases ${TAG}\ny'\nalias gp='git push'`;
+    expect(read(body)?.get('gp')).toBe('git push');
+  });
+  test("zsh's quoting of a value ending in a quote, and bash's, read the same", () => {
+    const next = "\nalias -- gp='git push'";
+    for (const [line, value] of [
+      [String.raw`alias -- q='echo '\''x y'\'`, "echo 'x y'"],
+      [String.raw`alias -- q='echo '\''x y'\'''`, "echo 'x y'"],
+      [String.raw`alias -- q=$'echo \'a\tb\''`, "echo 'a\tb'"],
+      [String.raw`alias -- q='it'\''s'`, "it's"],
+    ] as const) {
+      const aliases = read(line + next);
+      expect(aliases?.get('q'), line).toBe(value);
+      expect(aliases?.get('gp'), line).toBe('git push');
+    }
+  });
+  test('a tab inside a value survives', () => {
+    expect(read("alias gt='git\tpush'")?.get('gt')).toBe('git\tpush');
+    expect(read(String.raw`alias -- gt=$'git\tpush'`)?.get('gt')).toBe('git\tpush');
+  });
+  test('a carriage return inside a value keeps the alias, and a push after it is judged', () => {
+    const aliases = read("alias -- x='true\r; git push'\nalias -- gs='git status'");
+    expect(aliases?.get('x')).toBe('true\r; git push');
+    expect(classify('x', aliases ?? new Map())).not.toEqual({ kind: 'none' });
+  });
+  test('control characters inside a value stay, as bash reads them', () => {
+    expect(read("alias gp='git push # \u0007'")?.get('gp')).toBe('git push # \u0007');
+    const aliases = read("alias -- z1='\u0001#; git push'");
+    expect(classify('z1', aliases ?? new Map())).not.toEqual({ kind: 'none' });
+  });
+  test('a zsh global alias, listed by plain alias, is read', () => {
+    expect(read("alias -- GC='git commit'")?.get('GC')).toBe('git commit');
+  });
+  test('a value bash prints across lines is read whole, and a push in it is judged', () => {
+    const aliases = read("alias ship='git add -A\ngit push'\nalias gs='git status'");
+    expect(aliases?.get('ship')).toBe('git add -A\ngit push');
+    expect(aliases?.get('gs')).toBe('git status');
+    expect(classify('ship', aliases ?? new Map())).not.toEqual({ kind: 'none' });
+    const last = read("alias -- gs='git status'\nalias -- zz='git add -A\nalias -- git push'");
+    expect(last?.get('zz')).toBe('git add -A\nalias -- git push');
+    expect(last?.get('gs')).toBe('git status');
+  });
+  test("a function body's brace starts a command, in both forms", () => {
+    for (const c of ['f() { gp; }', 'function f { gp; }']) {
+      expect(expanded(c, [['gp', 'git push']]), c).toBe(c.replace('gp', 'git push'));
+    }
   });
 });
