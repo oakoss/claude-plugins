@@ -27,12 +27,36 @@ type World = {
   shellAliases?: string;
   // Each commit's parent, when it has one.
   parents?: Record<string, string>;
+  // Refs other than HEAD, by name, and each one's reflog as `<id> <message>`
+  // lines, newest first.
+  refs?: Record<string, string>;
+  reflogs?: Record<string, string[]>;
+  // Raw for-each-ref lines printed after `refs`, such as symbolic refs.
+  refLines?: string[];
+  // HEAD's reflog as `<id> <message>` lines, newest first. A Bash call that
+  // moves HEAD without adding a line gets `commit: made`, unless `headLogOff`.
+  headLog?: string[];
+  headLogOff?: boolean;
+  // A reftable repository: no logs/HEAD file, though HEAD's reflog exists.
+  reftable?: boolean;
+  // logs/HEAD exists but cannot be read.
+  logUnreadable?: boolean;
+  // What $.agent.list reports.
+  agents?: { id: string; status: string }[];
+  // Makes the plugin's own prompt submissions fail, once `submitGate` settles
+  // when it is set.
+  submitFails?: boolean;
+  submitGate?: Promise<void>;
+  // HEAD names no readable commit.
+  headMissing?: boolean;
   // What the user picks in the question dialog, keyed by question.
   dialog?: Record<string, string>;
   // Files outside the repository, by absolute path.
   files?: Record<string, string>;
   // Makes every fs.exists call reject.
   fsFails?: boolean;
+  // Every prompt that reached the session, the plugin's own included.
+  prompts?: string[];
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -85,7 +109,10 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   const filesOf = (ref: string) => w.trees.get(ref) ?? w.commits[ref] ?? {};
   on(
     'process.run',
-    ($: unknown, e: { argv: string[]; init?: { env?: Record<string, string> } }) => {
+    (
+      $: unknown,
+      e: { argv: string[]; init?: { env?: Record<string, string>; stdin?: string } },
+    ) => {
       w.calls.push({ argv: e.argv, env: e.init?.env });
       const a = e.argv.join(' ');
       if (w.fail(a)) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: injected' } };
@@ -94,6 +121,11 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
       const top = w.toplevel?.(a);
       if (top !== undefined) return ok(top);
       if (a.includes('--show-toplevel')) return ok('/repo\n/repo/.git\n');
+      if (a.includes('--verify -q HEAD^{commit}')) {
+        return w.headMissing
+          ? { value: { exitCode: 1, stdout: '', stderr: '' } }
+          : ok(`${w.head}\n`);
+      }
       if (a.includes('--verify -q HEAD^{tree}')) {
         return ok(`${treeId(w, w.commits[w.head] ?? {})}\n`);
       }
@@ -113,6 +145,44 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
         return text === undefined
           ? { value: { exitCode: 128, stdout: '', stderr: 'no' } }
           : ok(text);
+      }
+      if (a.startsWith('git for-each-ref')) {
+        const lines = Object.entries(w.refs ?? {}).map(([n, id]) => `${id}\t\t${n}`);
+        return ok([...lines, ...(w.refLines ?? [])].join('\n'));
+      }
+      const reflog = /^git log -g -n 50 --format=%H %gs (\S+) --$/.exec(a);
+      if (reflog) {
+        // git prints nothing and exits 0 for a ref it keeps no reflog for.
+        const lines = w.reflogs?.[reflog[1] ?? ''] ?? [];
+        return ok(lines.map((l) => `${l}\n`).join(''));
+      }
+      if (a === 'git rev-list -g --count HEAD') {
+        return w.headMissing
+          ? { value: { exitCode: 128, stdout: '', stderr: 'fatal: bad revision' } }
+          : ok(`${w.headLog?.length ?? 0}\n`);
+      }
+      if (a.includes('--git-path logs/HEAD')) return ok('/repo/.git/logs/HEAD\n');
+      if (e.argv[0] === 'sh' && e.argv.at(-1) === '/repo/.git/logs/HEAD') {
+        if (w.logUnreadable) {
+          return { value: { exitCode: 2, stdout: '', stderr: "awk: can't open file" } };
+        }
+        return ok(w.reftable ? 'none\n' : `${w.headLog?.length ?? 0}\n`);
+      }
+      if (a === 'git reflog exists HEAD') {
+        return { value: { exitCode: w.reftable ? 0 : 1, stdout: '', stderr: '' } };
+      }
+      const headLog = /^git log -g -n (\d+) --date=raw --format=\S+ \S+ HEAD --$/.exec(a);
+      if (headLog) {
+        if (w.headMissing)
+          return { value: { exitCode: 128, stdout: '', stderr: 'fatal: bad revision' } };
+        const lines = w.headLog ?? [];
+        // Each entry's date is its distance from the oldest, so it stays fixed
+        // as newer entries are added above it.
+        const shown = lines.slice(0, Number(headLog[1])).map((l, i) => {
+          const space = l.indexOf(' ');
+          return `${l.slice(0, space)}\0HEAD@{${lines.length - i} +0000}\0t <t@t>\0${l.slice(space + 1)}`;
+        });
+        return ok(shown.map((l) => `${l}\n`).join(''));
       }
       if (a.startsWith('git config --get-regexp')) {
         return w.aliases ? ok(w.aliases) : { value: { exitCode: 1, stdout: '', stderr: '' } };
@@ -191,11 +261,24 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
             : (w.files[path] ?? '').replace(e.old_string ?? '', () => e.new_string ?? '');
         return w.tool?.(path, w.files) ?? { result: { filePath: path } };
       }
+      const head = w.head;
+      const logged = w.headLog?.length ?? 0;
       w.shell?.(e.command ?? '');
+      if (w.head !== head && (w.headLog?.length ?? 0) === logged && !w.headLogOff) {
+        w.headLog = [`${w.head} commit: made`, ...(w.headLog ?? [])];
+      }
       return { result: { stdout: `ran ${e.command ?? ''}`, stderr: '', interrupted: false } };
     },
   );
-  on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }));
+  on('agent.list', () => ({ value: w.agents ?? [] }));
+  on('prompt.submit', async ($: unknown, e: { text: string }) => {
+    if (w.submitFails && e.text.startsWith('review-cycle:')) {
+      await w.submitGate;
+      throw new Error('refused');
+    }
+    (w.prompts ??= []).push(e.text);
+    return { text: e.text };
+  });
   on('agent.spawn', ($: unknown, e: { tool_use_id: string }) => ({
     model: 'test',
     agentId: `leg-${e.tool_use_id}`,
@@ -249,6 +332,10 @@ async function review(
 
 async function bash($: any, command: string, extra: Record<string, unknown> = {}) {
   return $.tool.call({ tool: 'Bash', command, ...extra });
+}
+
+function has(context: string[], text: string): boolean {
+  return context.some((c) => c.includes(text));
 }
 
 function ran(r: unknown): boolean {
@@ -451,18 +538,376 @@ describe('aliases', () => {
 });
 
 describe('after the command', () => {
+  const HEAD = 'c'.repeat(40);
+  const THEIRS = 'd'.repeat(40);
+  const UP = 'a'.repeat(40);
+  // A snapshot exists, so the only notes are about what the command did.
+  const quiet = { shellAliases: '' };
+
   test('a commit that landed without a request is reported', async ($, on) => {
-    const next = 'd'.repeat(40);
     fakeWorld(on, {
-      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, [next]: { 'a.ts': 'one' } },
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'one' } },
       shell(this: World) {
-        this.head = next;
+        this.head = THEIRS;
       },
     });
-    const r = await bash($, './release.sh');
-    const context = (r as { context?: string[] }).context ?? [];
-    expect(context.some((c) => c.includes('landed without the user asking'))).toBe(true);
-    expect(context.some((c) => c.includes('did not go through the commit gate'))).toBe(true);
+    const context = contextOf(await bash($, './release.sh'));
+    expect(has(context, 'landed without the user asking')).toBe(true);
+    expect(has(context, 'did not go through the commit gate')).toBe(true);
+  });
+  for (const message of [
+    'checkout: moving from main to topic',
+    `reset: moving to ${THEIRS}`,
+    'pull --ff-only: Fast-forward',
+    'merge origin/main: Fast-forward',
+    'rebase (finish): returning to refs/heads/main',
+  ]) {
+    test(`HEAD moved by "${message}" is not a commit`, async ($, on) => {
+      fakeWorld(on, {
+        ...quiet,
+        commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'other' } },
+        shell(this: World) {
+          this.head = THEIRS;
+          this.headLog = [`${THEIRS} ${message}`];
+        },
+      });
+      expect(contextOf(await bash($, './move.sh'))).toEqual([]);
+    });
+  }
+  test('a side-branch commit is judged apart from a reviewed one on this branch', async ($, on) => {
+    const SIDE = 'b'.repeat(40);
+    fakeWorld(on, {
+      ...quiet,
+      commits: {
+        [HEAD]: { 'a.ts': 'zero' },
+        [SIDE]: { 'a.ts': 'zero', 's.ts': 'side' },
+        [THEIRS]: { 'a.ts': 'one' },
+      },
+      headLog: [`${HEAD} commit: base`],
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [
+          `${THEIRS} commit: main`,
+          `${HEAD} checkout: moving from side to main`,
+          `${SIDE} commit: side`,
+          `${HEAD} checkout: moving from main to side`,
+          ...(this.headLog ?? []),
+        ];
+      },
+    });
+    await review($);
+    const context = contextOf(await bash($, './two.sh'));
+    expect(has(context, 'records content no reviewer saw (never reviewed: s.ts)')).toBe(true);
+  });
+  test('a commit on another branch is reported after HEAD comes back', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'one' } },
+      headLog: [`${HEAD} commit: base`],
+      shell(this: World) {
+        this.headLog = [
+          `${HEAD} checkout: moving from side to main`,
+          `${THEIRS} commit: side`,
+          `${HEAD} checkout: moving from main to side`,
+          ...(this.headLog ?? []),
+        ];
+      },
+    });
+    const context = contextOf(await bash($, './side.sh'));
+    expect(has(context, `commit ${THEIRS.slice(0, 12)} landed without the user asking`)).toBe(true);
+    // Judged at the side commit, not at the HEAD it returned to.
+    expect(has(context, 'records content no reviewer saw (never reviewed: a.ts)')).toBe(true);
+  });
+  test('a pull that merges records a commit', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'merged' } },
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [`${THEIRS} pull: Merge made by the 'ort' strategy.`];
+      },
+    });
+    expect(has(contextOf(await bash($, './sync.sh')), 'landed without the user asking')).toBe(true);
+  });
+  test('a rebase is judged from the commit it rebased onto', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: {
+        [HEAD]: { 'a.ts': 'zero' },
+        [UP]: { 'a.ts': 'zero', 'b.ts': 'upstream' },
+        [THEIRS]: { 'a.ts': 'one', 'b.ts': 'upstream' },
+      },
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [
+          `${THEIRS} pull --rebase (finish): returning to refs/heads/main`,
+          `${THEIRS} pull --rebase (pick): local`,
+          `${UP} pull --rebase (start): checkout ${UP}`,
+        ];
+      },
+    });
+    await review($);
+    const context = contextOf(await bash($, './sync.sh'));
+    expect(has(context, 'landed without the user asking')).toBe(true);
+    expect(has(context, 'records content no reviewer saw')).toBe(false);
+  });
+  test('a commit built with plumbing and reached by a reset is not seen', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'one' } },
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [`${THEIRS} reset: moving to ${THEIRS}`];
+      },
+    });
+    expect(contextOf(await bash($, './plumb.sh'))).toEqual([]);
+  });
+  test('a HEAD that moved without a reflog entry is reported as unchecked', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      headLogOff: true,
+      shell(this: World) {
+        this.head = THEIRS;
+      },
+    });
+    expect(has(contextOf(await bash($, './ship.sh')), 'HEAD moved without a reflog entry')).toBe(
+      true,
+    );
+  });
+  test('a reflog that no longer reaches the start is reported as unchecked', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      headLog: [`${HEAD} commit: base`],
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [`${THEIRS} commit: other history`];
+      },
+    });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), 'does not reach where the command began'),
+    ).toBe(true);
+  });
+  test("a failed read of HEAD's reflog is reported", async ($, on) => {
+    let after = false;
+    fakeWorld(on, {
+      ...quiet,
+      fail: (a) => after && /^git log -g -n \d+ --date=raw/.test(a),
+      shell() {
+        after = true;
+      },
+    });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), 'could not check whether this command committed'),
+    ).toBe(true);
+  });
+  test('a HEAD that stops naming a commit is reported', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      shell(this: World) {
+        this.headMissing = true;
+      },
+    });
+    expect(has(contextOf(await bash($, './break.sh')), 'HEAD no longer resolves')).toBe(true);
+  });
+  test('the first commit on an unborn branch is reported', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      headMissing: true,
+      commits: { [THEIRS]: { 'a.ts': 'one' } },
+      shell(this: World) {
+        this.headMissing = false;
+        this.head = THEIRS;
+      },
+    });
+    expect(has(contextOf(await bash($, './init.sh')), 'landed without the user asking')).toBe(true);
+  });
+  test('a command that adds more entries than the gate reads is reported as unchecked', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [
+          ...Array.from({ length: 201 }, (_, i) => `${THEIRS} commit: ${i}`),
+          ...(this.headLog ?? []),
+        ];
+      },
+    });
+    expect(has(contextOf(await bash($, './many.sh')), 'which the gate does not read')).toBe(true);
+  });
+  test('a start that could not be read names why', async ($, on) => {
+    fakeWorld(on, { ...quiet, fail: (a) => a.startsWith('git log -g -n 3') });
+    expect(has(contextOf(await bash($, 'ls')), 'git log -g HEAD failed: fatal: injected')).toBe(
+      true,
+    );
+  });
+  test('a commit that lands while HEAD ends unborn is reported as unchecked', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      headMissing: true,
+      shell(this: World) {
+        this.headLog = [
+          `${THEIRS} checkout: moving from main to other`,
+          `${THEIRS} commit (initial): x`,
+        ];
+      },
+    });
+    expect(has(contextOf(await bash($, './orphan.sh')), 'grew while HEAD ended unborn')).toBe(true);
+  });
+  test('an unborn HEAD whose log cannot be read is reported as unchecked', async ($, on) => {
+    fakeWorld(on, { ...quiet, headMissing: true, logUnreadable: true });
+    expect(has(contextOf(await bash($, 'ls')), "awk: can't open file")).toBe(true);
+  });
+  test('an unborn HEAD in a reftable repository is reported as unchecked', async ($, on) => {
+    fakeWorld(on, { ...quiet, headMissing: true, reftable: true });
+    expect(has(contextOf(await bash($, 'ls')), 'cannot be read while HEAD is unborn')).toBe(true);
+  });
+  test('an unborn HEAD that stays unborn is not reported', async ($, on) => {
+    fakeWorld(on, { ...quiet, headMissing: true });
+    expect(contextOf(await bash($, 'ls'))).toEqual([]);
+  });
+  test('a new commit whose tree cannot be read is reported', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'one' } },
+      fail: (a) => a === `git rev-parse ${THEIRS}^{tree}`,
+      shell(this: World) {
+        this.head = THEIRS;
+      },
+    });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), `could not check commit ${THEIRS.slice(0, 12)}`),
+    ).toBe(true);
+  });
+
+  test('a commit a script made and pushed is reported, push included', async ($, on) => {
+    fakeWorld(on, {
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'one' } },
+      refs: { 'refs/remotes/origin/main': HEAD },
+      shell(this: World) {
+        this.head = THEIRS;
+        this.refs = { 'refs/remotes/origin/main': THEIRS };
+        this.reflogs = {
+          'refs/remotes/origin/main': [`${THEIRS} update by push`, `${HEAD} update by push`],
+        };
+      },
+    });
+    const context = contextOf(await bash($, './ship.sh'));
+    expect(has(context, 'landed without the user asking')).toBe(true);
+    expect(has(context, 'pushed to origin/main without the user')).toBe(true);
+  });
+  test('a push the gate did not see is reported unless the user asked for one', async ($, on) => {
+    const w = fakeWorld(on, {
+      refs: { 'refs/remotes/origin/main': HEAD },
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/main': THEIRS };
+        this.reflogs = {
+          'refs/remotes/origin/main': [`${THEIRS} update by push`, `${HEAD} fetch`],
+        };
+      },
+    });
+    const unasked = contextOf(await bash($, './ship.sh'));
+    expect(has(unasked, 'pushed to origin/main without the user')).toBe(true);
+    w.refs = { 'refs/remotes/origin/main': HEAD };
+    await say($, 'push it');
+    expect(contextOf(await bash($, './ship.sh'))).toEqual([]);
+  });
+  test('a push that creates a remote-tracking ref is seen', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/side': THEIRS };
+        this.reflogs = { 'refs/remotes/origin/side': [`${THEIRS} update by push`] };
+      },
+    });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), 'pushed to origin/side without the user'),
+    ).toBe(true);
+  });
+  test('a push from a fresh clone, whose reflog starts at the push, is seen', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      refs: { 'refs/remotes/origin/main': HEAD },
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/main': THEIRS };
+        this.reflogs = { 'refs/remotes/origin/main': [`${THEIRS} update by push`] };
+      },
+    });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), 'pushed to origin/main without the user'),
+    ).toBe(true);
+  });
+  test('a fetch after an earlier push is not a push', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      refs: { 'refs/remotes/origin/main': HEAD },
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/main': THEIRS };
+        this.reflogs = {
+          'refs/remotes/origin/main': [`${THEIRS} fetch: fast-forward`, `${HEAD} update by push`],
+        };
+      },
+    });
+    expect(contextOf(await bash($, 'git fetch'))).toEqual([]);
+  });
+  test('a renamed remote is not a push', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      refs: { 'refs/remotes/origin/main': HEAD },
+      shell(this: World) {
+        this.refs = { 'refs/remotes/upstream/main': HEAD };
+        this.reflogs = {
+          'refs/remotes/upstream/main': [
+            `${HEAD} remote: renamed refs/remotes/origin/main to refs/remotes/upstream/main`,
+            `${HEAD} update by push`,
+          ],
+        };
+      },
+    });
+    expect(contextOf(await bash($, 'git remote rename origin upstream'))).toEqual([]);
+  });
+  test('a symbolic remote-tracking ref is not read', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      shell(this: World) {
+        this.refLines = [`${THEIRS}\trefs/remotes/origin/main\trefs/remotes/origin/HEAD`];
+        this.reflogs = { 'refs/remotes/origin/HEAD': [`${THEIRS} update by push`] };
+      },
+    });
+    expect(contextOf(await bash($, './ship.sh'))).toEqual([]);
+  });
+  test('a reflog that cannot be read hides neither the push check nor the commit', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: { [HEAD]: { 'a.ts': 'zero' }, [THEIRS]: { 'a.ts': 'one' } },
+      refs: { 'refs/remotes/origin/main': HEAD },
+      fail: (a) => a.startsWith('git log -g -n 50'),
+      shell(this: World) {
+        this.head = THEIRS;
+        this.refs = { 'refs/remotes/origin/main': THEIRS };
+      },
+    });
+    const context = contextOf(await bash($, './ship.sh'));
+    expect(has(context, 'could not check whether this command pushed')).toBe(true);
+    expect(has(context, 'landed without the user asking')).toBe(true);
+  });
+  test('refs that cannot be read are reported, not passed over', async ($, on) => {
+    fakeWorld(on, { ...quiet, fail: (a) => a.startsWith('git for-each-ref') });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), 'could not check whether this command committed'),
+    ).toBe(true);
+  });
+  test('refs unreadable after the command are reported as an unchecked push', async ($, on) => {
+    let after = false;
+    fakeWorld(on, {
+      ...quiet,
+      fail: (a) => after && a.startsWith('git for-each-ref'),
+      shell() {
+        after = true;
+      },
+    });
+    expect(
+      has(contextOf(await bash($, './ship.sh')), 'could not check whether this command pushed'),
+    ).toBe(true);
   });
 });
 
@@ -736,7 +1181,7 @@ describe('failures while judging a commit refuse it', () => {
     ['write-tree', (a) => a.includes('write-tree')],
     ['the replayed add', (a) => a === 'git -C . add -A'],
     ['add -u for commit -a', (a) => a === 'git add -u'],
-    ['reading HEAD', (a) => a === 'git rev-parse --verify -q HEAD'],
+    ['reading HEAD', (a) => a === 'git rev-parse --verify -q HEAD^{commit}'],
   ];
   for (const [name, fail] of failures) {
     test(name, async ($, on) => {
@@ -839,6 +1284,202 @@ describe('reviews that do not count, and say so', () => {
     const second = (await bash($, 'ls')) as { context?: string[] };
     expect((first.context ?? []).some((c) => c.includes('could not read the user'))).toBe(true);
     expect(second.context ?? []).toEqual([]);
+  });
+});
+
+function nudges(w: World): string[] {
+  return (w.prompts ?? []).filter((p) => p.startsWith('review-cycle: this turn left'));
+}
+
+async function endTurn($: any, reason = 'answer') {
+  await $.turn.complete({
+    answer: 'done',
+    durationMs: 1,
+    isAborted: reason === 'aborted',
+    turnId: 'main',
+    reason,
+  });
+  // The nudge is submitted without waiting on it.
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+async function skill($: any, name: string, agentId?: string) {
+  await $.tool.call({ tool: 'Skill', skill: name, ...(agentId ? { agentId } : {}) });
+}
+
+async function startLeg($: any) {
+  await $.agent.spawn({
+    tool_use_id: 'running',
+    subagentType: 'review-cycle:code-reviewer',
+    prompt: 'review',
+    description: 'review',
+    background: true,
+  });
+}
+
+describe('the review nudge', () => {
+  test('a turn that left unreviewed changes is told to review, once', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+    expect(nudges(w)[0]).toContain('/review-cycle:review');
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a turn that changed nothing is not nudged, whatever was unreviewed before', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'what is next?');
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test('reviewed changes are not nudged', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await review($);
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test('an edit after a finished review is nudged', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await review($);
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('no nudge while a reviewer is still running', async ($, on) => {
+    const w = fakeWorld(on, { agents: [{ id: 'leg-running', status: 'running' }] });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await startLeg($);
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test('a reviewer that ended without saying so does not hold the nudge off', async ($, on) => {
+    const w = fakeWorld(on, { agents: [{ id: 'leg-running', status: 'killed' }] });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await startLeg($);
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a review the agent or user already started is not nudged', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await $.tool.call({ tool: 'Skill', skill: 'review-cycle:review' });
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test("a subagent's review does not stand in for the main loop's", async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await skill($, 'review-cycle:review', 'sub');
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a prompt queued mid-turn keeps the turn’s starting tree', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await $.prompt.submit({
+      text: 'also x',
+      origin: { kind: 'composer' },
+      wait: false,
+      turnId: 'main',
+    });
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a reviewer whose start could not be recorded still holds the nudge off', async ($, on) => {
+    let spawning = false;
+    const w = fakeWorld(on, {
+      agents: [{ id: 'leg-running', status: 'running' }],
+      fail: (a) => spawning && a.includes('write-tree'),
+    });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    spawning = true;
+    await startLeg($);
+    spawning = false;
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test('the nudge names only what this turn changed', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'add b');
+    w.work = { 'a.ts': 'one', 'b.ts': 'new' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+    expect(nudges(w)[0]).toContain('b.ts');
+    expect(nudges(w)[0]).not.toContain('a.ts');
+  });
+  test('unreviewed work from before the message is not nudged', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'update the tracker');
+    w.work = { 'a.ts': 'one', '.beads/issues.jsonl': 'x' };
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test('each user message is judged from its own starting tree', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    await say($, 'what is next?');
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a nudge the session refused is tried again', async ($, on) => {
+    const w = fakeWorld(on, { submitFails: true });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+    w.submitFails = false;
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a refusal that lands after a dialog answer still allows a retry', async ($, on) => {
+    let open: (() => void) | undefined;
+    const submitGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const w = fakeWorld(on, { submitFails: true, submitGate });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    await ($ as any).tool.call({ tool: 'AskUserQuestion', questions: [] });
+    open?.();
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    w.submitFails = false;
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('an interrupted turn is not nudged', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($, 'aborted');
+    expect(nudges(w)).toEqual([]);
+  });
+  test('the next user message allows another nudge', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    await say($, 'and the other one');
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(2);
   });
 });
 
