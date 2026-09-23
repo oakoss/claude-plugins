@@ -118,6 +118,7 @@ describe('grants nothing on a mention', () => {
     'ok the flow is review then commit',
     "don't push yet, but commit it",
     "commit it and I'll push later",
+    'Use this commit message: "release notes\npush to origin"',
     "Commit and push, but not until I've checked the diff",
     'push it but not now',
     'Push it, but only if CI is green.',

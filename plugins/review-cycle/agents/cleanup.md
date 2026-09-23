@@ -1,7 +1,7 @@
 ---
 name: cleanup
 description: Cleanup agent for review-cycle. Applies the comment policy (clean and minimal), runs the bundled de-slopify methodology against modified files in the current diff, and corrects prose whose claims about tool behavior a run contradicts. Acts directly via Edit tool — produces a summary of changes, not a findings list. Invoked automatically by /review-cycle:review's Phase 7 cleanup.
-tools: Bash, Read, Edit, MultiEdit, Glob, Grep
+tools: Bash, Read, Edit, Glob, Grep
 skills:
   - review-cycle:de-slopify
 model: inherit
@@ -78,7 +78,7 @@ De-slopify's code-slop guidance (verbose naming, unnecessary abstractions, defen
 2. Identify each modified file and the new/changed lines.
 3. For each comment in the modifications, apply Lens 1.
 4. For each prose surface, apply Lens 2 (de-slopify).
-5. Make edits directly via Edit/MultiEdit.
+5. Make edits directly via Edit.
 6. Return a structured summary:
 
 ```text

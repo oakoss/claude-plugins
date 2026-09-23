@@ -643,10 +643,9 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   return watch($, root, e, next, cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push');
 }
 
+// HEAD's parent's tree; the caller has already resolved HEAD to a commit.
 async function parentTree($: $, root: string): Promise<string | null> {
-  const r = await run($, ['git', 'rev-parse', '--verify', '-q', 'HEAD^{tree}'], { cwd: root });
   const p = await run($, ['git', 'rev-parse', '--verify', '-q', 'HEAD^'], { cwd: root });
-  if (r.exitCode !== 0) return null;
   return p.exitCode === 0 ? treeOf($, root, p.stdout.trim()) : EMPTY_TREE;
 }
 

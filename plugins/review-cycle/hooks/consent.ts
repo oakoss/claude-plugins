@@ -266,11 +266,12 @@ const HANDBACK = new Set(['yourself', "you'd", 'rather', 'skip', 'leave', 'inste
 const AFFIRMATIVE =
   /^(yes|yep|yeah|yup|y|ok|okay|sure|go ahead|go for it|do it|please do|sounds good|lgtm)\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$/i;
 
-// Quoted text is a commit message or a name, never part of the request.
+// Quoted text is a commit message or a name, never part of the request, even
+// when it runs over several lines.
 function unquote(text: string): string {
   return text
-    .replaceAll(/(^|[\s(:=])(["'`])[^\n]*?\2(?=$|[\s.,;:!?)])/g, '$1 quoted ')
-    .replaceAll(/“[^”\n]*”|‘[^’\n]*’/g, ' quoted ');
+    .replaceAll(/(^|[\s(:=])(["'`])[\s\S]*?\2(?=$|[\s.,;:!?)])/g, '$1 quoted ')
+    .replaceAll(/“[^”]*”|‘[^’]*’/g, ' quoted ');
 }
 
 function words(text: string): string[] {

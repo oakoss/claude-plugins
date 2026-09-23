@@ -107,7 +107,7 @@ Subagents never commit or push in the project, and neither does anything run fro
 
 The `mcp__review-cycle__status` tool reports the gate's view: the working tree, the last reviewed tree, which changed paths are uncovered, and whether your latest message asked for a commit or push. The review skill uses it to scope itself.
 
-### PostToolUse (Write|Edit|MultiEdit matcher)
+### PostToolUse (Write|Edit matcher)
 
 Fires after every file write. Scans for high-confidence comment slop — section markers, restate-the-code phrasings, hedge prefixes, ticketless TODOs — plus a comment-density check on the text just written (4+ comment lines making up ≥30% of a code edit; a Write payload's shebang and leading header comment block are exempt, since a new file's legitimate header is not an edit). On a hit it injects a directive to fix the comments immediately with a follow-up Edit, so slop is caught at generation time rather than waiting for the review cycle. Never blocks. Prose files (`.md`, `.txt`, …) are skipped entirely — `#` is a heading there, and prose cleanup belongs to de-slopify — and comment-carried config formats (`.yml`, `.toml`, …) are exempt from the density check.
 

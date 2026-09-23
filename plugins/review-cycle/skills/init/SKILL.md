@@ -126,7 +126,7 @@ For each chosen target file:
    - The "Fix-vs-defer policy" markdown block
    - The "Evidence policy" markdown block
    - Skip the meta/header content from `policies.md` — only the actual policy text in the code blocks gets appended.
-4. Use `MultiEdit` or `Edit` to append. Create the file if it doesn't exist.
+4. Use `Edit` to append. Create the file if it doesn't exist.
 
 If user chose "Skip", print the policy snippets to the conversation so they can paste manually later. Note: snippets are also always available at `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`.
 
