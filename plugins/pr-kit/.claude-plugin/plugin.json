@@ -1,7 +1,7 @@
 {
   "name": "pr-kit",
   "description": "Pull-request workflow toolkit: summarize review feedback, resolve merge conflicts, make diffs reviewable, and drive CI to green — gate-aware, with no unreviewed commits.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",
