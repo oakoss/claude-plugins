@@ -287,7 +287,8 @@ export default defineConfig({
       },
     },
     {
-      files: ['**/*.test.ts'],
+      // Specs under a plugin's tests/ reach the module they test from outside it.
+      files: ['**/*.test.ts', 'plugins/*/tests/**/*.spec.ts'],
       rules: {
         'no-console': 'off',
         'import/no-relative-parent-imports': 'off',

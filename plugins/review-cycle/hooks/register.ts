@@ -9,6 +9,7 @@ import type {
   ToolCallResult,
 } from 'claude-code';
 
+import { added, madeBy, MARK, type Entry } from './attribution';
 import { aliasCommits, classify, possibleAliases } from './command';
 import { grantOf, grantOfAnswers, NO_GRANT, type Grant } from './consent';
 import {
@@ -17,10 +18,12 @@ import {
   headOf,
   parentTree,
   prospectTree,
-  refsOf,
+  headLog,
+  headLogCount,
+  pushedRefs,
+  remoteRefs,
   repoAt,
   reviewablePaths,
-  sha,
   snapshotOf,
   treeOf,
   worktreeTree,
@@ -40,6 +43,7 @@ import {
   isReviewerType,
   uncoveredOf,
   type Review,
+  type Row,
 } from './witness';
 
 // Every function that calls `$` lives in this file: `claude plugin validate`
@@ -622,134 +626,39 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   return watch($, root, e, next, cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push');
 }
 
-// The reflog messages the command added to `ref`, newest first: the entries
-// after the one that set its starting value `was`. A fresh clone logs nothing
-// before a ref's first move, so a log that never reaches `was` is all new. A
-// ref the command created stops at `remote: renamed`: a renamed remote keeps
-// the old remote's entries below that line. At most 50 are read.
-async function reflogSince(
-  $: $,
-  root: string,
-  ref: string,
-  was: string | undefined,
-): Promise<string[]> {
-  const r = await run($, ['git', 'log', '-g', '-n', '50', '--format=%H %gs', ref, '--'], {
-    cwd: root,
-  });
-  if (r.exitCode !== 0) {
-    throw new Error(`git log -g ${ref} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  const messages: string[] = [];
-  for (const line of r.stdout.split('\n')) {
-    const space = line.indexOf(' ');
-    if (space === -1) break;
-    const message = line.slice(space + 1);
-    if (line.slice(0, space) === was) break;
-    if (was === undefined && message.startsWith('remote: renamed ')) break;
-    messages.push(message);
-  }
-  return messages;
-}
+type Checked = 'commit' | 'history' | 'push' | 'unchecked';
+// HEAD's newest reflog entries and the log's length before a command, so the
+// entries it added can be told apart afterwards.
+type Start = { head: string; refs: Refs; log: Entry[]; count: number };
 
-// How git logs a ref a fetch or pull moved to commits that already existed.
-const FETCHED = /^(fetch|pull)\b.*: (fast-forward|storing (head|ref)|forced-update)$/i;
-
-type Start = { head: string; refs: Refs };
-type Moves = { pushed: string[]; fetched: string[] };
-
-// Refs the command moved: by a push (`pushed`, remote-tracking names, logged
-// `update by push`) or by a fetch (`fetched`, the commits they now name). A
-// push that updates no remote-tracking ref, deletes one, or leaves no reflog
-// is not seen.
-async function refMoves($: $, root: string, start: Start, after: Refs): Promise<Moves> {
-  const pushed: string[] = [];
-  const fetched: string[] = [];
-  for (const [ref, id] of after) {
-    if (start.refs.get(ref) === id) continue;
-    const log = await reflogSince($, root, ref, start.refs.get(ref));
-    if (ref.startsWith('refs/remotes/') && log.some((m) => m.startsWith('update by push'))) {
-      pushed.push(ref.slice('refs/remotes/'.length));
-    } else if (log.length > 0 && log.every((m) => FETCHED.test(m))) {
-      fetched.push(id);
-    }
-  }
-  return { pushed, fetched };
-}
-
-// The commits FETCH_HEAD names: every fetch writes it, a pull or a fetch by
-// URL included.
-async function fetchHead($: $, root: string): Promise<string[]> {
-  const p = await run(
-    $,
-    ['git', 'rev-parse', '--path-format=absolute', '--git-path', 'FETCH_HEAD'],
-    { cwd: root },
-  );
-  const path = p.stdout.trim();
-  if (p.exitCode !== 0 || !path || !(await $.fs.exists(path))) return [];
-  let text: string;
-  try {
-    text = await $.fs.read(path);
-  } catch (error) {
-    const why = error instanceof Error ? error.message : String(error);
-    throw new Error(`${path} could not be read: ${why}`, { cause: error });
-  }
-  return text.split('\n').flatMap((l) => /^[0-9a-f]{40,64}/.exec(l) ?? []);
-}
-
-// The commits the command made, oldest first: those `head` reaches that no ref
-// reached before it ran and no fetch brought in. A checkout, reset or
-// fast-forward makes none. FETCH_HEAD is not trusted after a push, since a
-// fetch following it names the pushed commits.
-async function newCommits(
-  $: $,
-  root: string,
-  head: string,
-  start: Start,
-  moves: Moves | null,
-): Promise<string[]> {
-  // Unknown moves could hide a push, so nothing a fetch named is trusted then.
-  const trusted = moves?.pushed.length === 0;
-  const fetched = trusted ? await fetchHead($, root) : [];
-  const known = new Set([
-    start.head,
-    ...start.refs.values(),
-    ...(moves?.fetched ?? []),
-    ...fetched,
-  ]);
-  known.delete(EMPTY_TREE);
-  const stdin = `${[head, ...[...known].map((id) => `^${id}`)].join('\n')}\n`;
-  // `head` is known to resolve, so a missing object here is a known commit the
-  // command pruned, which would otherwise fail the whole walk.
-  const r = await run($, ['git', 'rev-list', '--reverse', '--ignore-missing', '--stdin'], {
-    cwd: root,
-    stdin,
-  });
-  if (r.exitCode !== 0) {
-    throw new Error(`git rev-list failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
-  }
-  const lines = r.stdout.split('\n').filter((l) => l !== '');
-  const odd = lines.find((l) => sha(l) === null);
-  if (odd !== undefined) throw new Error(`git rev-list printed ${JSON.stringify(odd)}`);
-  return lines;
-}
+// More entries than this in one command are not read; the command is then
+// reported as unchecked.
+const MAX_ADDED = 200;
 
 // Runs the command, then reports a commit the gate did not check (a script),
 // one whose content changed after the check (a pre-commit hook restaging),
 // and a push the user did not ask for. A history command records existing
-// commits by design, so only consent matters for it.
+// commits by design, so only consent matters for it. A commit made in another
+// worktree is not seen: each worktree has its own HEAD.
 async function watch(
   $: $,
   root: Repo | null,
   e: Input<BashHook>,
   next: NextOf<BashHook>,
-  checked: 'commit' | 'history' | 'push' | 'unchecked',
+  checked: Checked,
 ): Promise<Output<BashHook>> {
   if (root === null) return next(e);
+  const git = gitOf($);
   let start: Start | null = null;
+  let startError: unknown = null;
   try {
-    start = { head: await headOf(gitOf($), root.top), refs: await refsOf(gitOf($), root.top) };
-  } catch {
-    // Reported below: without a starting point nothing can be compared.
+    const head = await headOf(git, root.top);
+    const unborn = head === EMPTY_TREE;
+    const log = unborn ? [] : await headLog(git, root.top, MARK);
+    const count = await headLogCount(git, root.top, unborn);
+    start = { head, refs: await remoteRefs(git, root.top), log, count };
+  } catch (error) {
+    startError = error;
   }
   const r = await next(e);
   const notes: string[] = [];
@@ -760,21 +669,20 @@ async function watch(
     );
   };
   if (start === null) {
-    failed('committed or pushed', new Error('HEAD and refs could not be read before it ran'));
+    failed('committed or pushed', startError);
   } else {
-    let moves: Moves | null = null;
     try {
-      moves = await refMoves($, root.top, start, await refsOf(gitOf($), root.top));
-      if (moves.pushed.length > 0 && !state.message.grant.push) {
+      const pushed = await pushedRefs(git, root.top, start.refs, await remoteRefs(git, root.top));
+      if (pushed.length > 0 && !state.message.grant.push) {
         notes.push(
-          `review-cycle: this command pushed to ${moves.pushed.join(', ')} without the user asking for a push. Tell the user.`,
+          `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
       }
     } catch (error) {
       failed('pushed', error);
     }
     try {
-      notes.push(...(await commitNotes($, root.top, start, moves, checked)));
+      notes.push(...(await commitNotes(git, root.top, start, checked)));
     } catch (error) {
       failed('committed', error);
     }
@@ -784,45 +692,51 @@ async function watch(
 }
 
 async function commitNotes(
-  $: $,
+  git: Git,
   root: string,
   start: Start,
-  moves: Moves | null,
-  checked: 'commit' | 'history' | 'push' | 'unchecked',
+  checked: Checked,
 ): Promise<string[]> {
-  const before = start.head;
-  const after = await headOf(gitOf($), root);
-  if (after === EMPTY_TREE && before !== EMPTY_TREE) {
-    return ['review-cycle: HEAD no longer resolves to a commit after this command. Tell the user.'];
+  const after = await headOf(git, root);
+  if (after === EMPTY_TREE) {
+    if (start.head !== EMPTY_TREE) {
+      return [
+        'review-cycle: HEAD no longer resolves to a commit after this command. Tell the user.',
+      ];
+    }
+    // Unborn before and after, but a commit may have landed in between.
+    if ((await headLogCount(git, root, true)) === start.count) return [];
+    throw new Error("HEAD's reflog grew while HEAD ended unborn");
   }
-  if (after === before) return [];
-  const made = await newCommits($, root, after, start, moves);
-  const oldest = made[0];
-  if (oldest === undefined) return [];
+  const count = (await headLogCount(git, root, false)) - start.count;
+  if (count < 0 || count > MAX_ADDED) {
+    throw new Error(`HEAD's reflog changed by ${count} entries, which the gate does not read`);
+  }
+  const entries = added(await headLog(git, root, count + MARK), start.log, count);
+  if (entries === null) throw new Error("HEAD's reflog does not reach where the command began");
+  if (entries.length === 0 && after !== start.head) {
+    throw new Error('HEAD moved without a reflog entry');
+  }
+  const lineages = madeBy(entries, start.head);
+  const tip = lineages.at(-1)?.tip;
+  if (tip === undefined) return [];
+  const short = tip.slice(0, 12);
+  // Each lineage is judged from its own base, so a commit on another branch
+  // is not hidden behind the one HEAD ended on.
+  const rows: Row[] = [];
+  let unread = 0;
+  for (const lineage of lineages) {
+    const tree = await treeOf(git, root, lineage.tip);
+    const baseTree = await treeOf(git, root, lineage.base);
+    const c = tree && baseTree ? await coverageOf(git, root, baseTree, tree, state.reviews) : null;
+    if (c === null)
+      return [`review-cycle could not check commit ${lineage.tip.slice(0, 12)}. Tell the user.`];
+    rows.push(...c.rows);
+    unread += c.unread;
+  }
   const notes: string[] = [];
-  const short = after.slice(0, 12);
-  if (moves === null) {
-    return [
-      `review-cycle could not tell whether commit ${short} was made by this command or fetched, since its refs could not be read. Tell the user.`,
-    ];
-  }
-  // Judged from the parent of the oldest new commit, so fetched commits the new
-  // ones were built on are not counted as theirs; a pull that merges still is.
-  const parent = await run($, ['git', 'rev-parse', '--verify', '-q', `${oldest}^`], { cwd: root });
-  const isRoot =
-    parent.exitCode === 1 && parent.stdout.trim() === '' && parent.stderr.trim() === '';
-  const base = isRoot ? EMPTY_TREE : parent.exitCode === 0 ? sha(parent.stdout) : null;
-  if (base === null) {
-    throw new Error(
-      `git rev-parse ${oldest}^ failed: ${firstLine(parent.stderr) || `exit ${parent.exitCode}`}`,
-    );
-  }
-  const tree = await treeOf(gitOf($), root, after);
-  const baseTree = await treeOf(gitOf($), root, base);
-  const c =
-    tree && baseTree ? await coverageOf(gitOf($), root, baseTree, tree, state.reviews) : null;
-  if (c === null) notes.push(`review-cycle could not check commit ${short}. Tell the user.`);
-  else if (checked !== 'history' && uncoveredOf(c.rows).length > 0) {
+  const c = { rows, unread };
+  if (checked !== 'history' && uncoveredOf(rows).length > 0) {
     const why =
       checked === 'commit'
         ? "A pre-commit hook may have changed it after the gate's check."

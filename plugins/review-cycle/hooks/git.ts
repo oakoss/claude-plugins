@@ -2,6 +2,7 @@
 // validate` follows `$` only into functions declared in register.ts, so the
 // runner is passed in rather than `$`.
 
+import { parseReflog, REFLOG_FORMAT, type Entry } from './attribution';
 import type { Classification } from './command';
 import {
   CONFIG_PATH,
@@ -203,15 +204,11 @@ export async function parentTree(git: Git, root: string): Promise<string | null>
 
 export type Refs = Map<string, string>;
 
-// Every ref that names a commit, directly or through a tag, by name. Symbolic
-// refs are left out: their reflog does not follow the ref they point at.
-export async function refsOf(git: Git, root: string): Promise<Refs> {
+// Remote-tracking refs by name. Symbolic refs are left out: their reflog does
+// not follow the ref they point at.
+export async function remoteRefs(git: Git, root: string): Promise<Refs> {
   const r = await git(
-    [
-      'git',
-      'for-each-ref',
-      '--format=%(objectname)%09%(objecttype)%09%(*objecttype)%09%(symref)%09%(refname)',
-    ],
+    ['git', 'for-each-ref', '--format=%(objectname)%09%(symref)%09%(refname)', 'refs/remotes'],
     { cwd: root },
   );
   if (r.exitCode !== 0) {
@@ -219,11 +216,115 @@ export async function refsOf(git: Git, root: string): Promise<Refs> {
   }
   const refs: Refs = new Map();
   for (const line of r.stdout.split('\n')) {
-    const [id, type, peeled, symref, name] = line.split('\t');
-    if (!id || !name || symref) continue;
-    if (type === 'commit' || peeled === 'commit') refs.set(name, id);
+    const [id, symref, name] = line.split('\t');
+    if (id && name && !symref) refs.set(name, id);
   }
   return refs;
+}
+
+// The reflog messages the command added to `ref`, newest first: the entries
+// after the one that set its starting value `was`. A fresh clone logs nothing
+// before a ref's first move, so a log that never reaches `was` is all new. A
+// ref the command created stops at `remote: renamed`: a renamed remote keeps
+// the old remote's entries below that line. At most 50 are read.
+async function reflogSince(
+  git: Git,
+  root: string,
+  ref: string,
+  was: string | undefined,
+): Promise<string[]> {
+  const r = await git(['git', 'log', '-g', '-n', '50', '--format=%H %gs', ref, '--'], {
+    cwd: root,
+  });
+  if (r.exitCode !== 0) {
+    throw new Error(`git log -g ${ref} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  const messages: string[] = [];
+  for (const line of r.stdout.split('\n')) {
+    const space = line.indexOf(' ');
+    if (space === -1) break;
+    const message = line.slice(space + 1);
+    if (line.slice(0, space) === was) break;
+    if (was === undefined && message.startsWith('remote: renamed ')) break;
+    messages.push(message);
+  }
+  return messages;
+}
+
+// Remote-tracking refs a push moved, by name: git logs those moves as
+// `update by push`. A push that updates no remote-tracking ref, deletes one,
+// or leaves no reflog is not seen.
+export async function pushedRefs(
+  git: Git,
+  root: string,
+  before: Refs,
+  after: Refs,
+): Promise<string[]> {
+  const pushed: string[] = [];
+  for (const [ref, id] of after) {
+    if (before.get(ref) === id) continue;
+    const log = await reflogSince(git, root, ref, before.get(ref));
+    if (log.some((m) => m.startsWith('update by push'))) {
+      pushed.push(ref.slice('refs/remotes/'.length));
+    }
+  }
+  return pushed;
+}
+
+// HEAD's newest `n` reflog entries, newest first. git cannot read it while
+// HEAD is unborn, so callers skip it then.
+export async function headLog(git: Git, root: string, n: number): Promise<Entry[]> {
+  const r = await git(
+    ['git', 'log', '-g', '-n', String(n), '--date=raw', `--format=${REFLOG_FORMAT}`, 'HEAD', '--'],
+    { cwd: root },
+  );
+  if (r.exitCode !== 0) {
+    throw new Error(`git log -g HEAD failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  return parseReflog(r.stdout);
+}
+
+// How many entries HEAD's reflog holds. While HEAD is unborn git will not
+// read it, so the log file's entries are counted instead, skipping the ones
+// that record a deletion (a null new id), as `rev-list -g` does. A reftable
+// repository keeps no such file, so an unborn HEAD there cannot be counted.
+export async function headLogCount(git: Git, root: string, unborn: boolean): Promise<number> {
+  if (!unborn) {
+    const r = await git(['git', 'rev-list', '-g', '--count', 'HEAD'], { cwd: root });
+    const n = Number(r.stdout.trim());
+    if (r.exitCode !== 0 || !Number.isInteger(n)) {
+      throw new Error(`git rev-list -g failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+    }
+    return n;
+  }
+  const p = await git(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD'], {
+    cwd: root,
+  });
+  const path = p.stdout.trim();
+  if (p.exitCode !== 0 || !path) {
+    throw new Error(`git rev-parse failed: ${firstLine(p.stderr) || `exit ${p.exitCode}`}`);
+  }
+  const count = await git([
+    'sh',
+    '-c',
+    // awk counts, so a file it cannot read fails the call rather than counting 0.
+    'if [ -f "$1" ]; then awk \'$2 ~ /^[0-9a-f]+$/ && $2 !~ /^0+$/ { n++ } END { print n + 0 }\' "$1"; else echo none; fi',
+    'sh',
+    path,
+  ]);
+  const out = count.stdout.trim();
+  if (out === 'none') {
+    const exists = await git(['git', 'reflog', 'exists', 'HEAD'], { cwd: root });
+    if (exists.exitCode === 0) throw new Error("HEAD's reflog cannot be read while HEAD is unborn");
+    return 0;
+  }
+  const n = Number(out);
+  if (count.exitCode !== 0 || !Number.isInteger(n)) {
+    throw new Error(
+      `counting ${path} failed: ${firstLine(count.stderr) || `exit ${count.exitCode}`}`,
+    );
+  }
+  return n;
 }
 
 // A digest of HEAD and every reviewable change against it, blob ids included:
