@@ -40,6 +40,13 @@ const SHARED_SCRATCHPAD_ANCHOR = 'never a shared session scratchpad';
 const NAME_DIR_ANCHOR = /name that directory in your report/i;
 const WRITE_NOWHERE_ANCHOR = /write nowhere outside it/i;
 const EVADE_ANCHOR = 'slip past a guard';
+// A reviewer once symlinked node_modules into its copy, and an install emptied
+// the target's; another ran git from an unset directory and created ~/.git.
+const NO_SYMLINK_ANCHOR = 'never symlink anything from the target';
+const NO_INSTALL_ANCHOR = 'no package-manager install';
+const SCRIPT_DIR_ANCHOR = /set -u.*cd <dir> &&`? before any git command/;
+const SCRIPT_GIT_ANCHOR =
+  'a script never runs git anywhere but your copy or the target you were given';
 
 // Seven agents today, cleanup included. A floor, not a count: the per-file
 // loop catches one dropping out; this only catches the enumeration collapsing.
@@ -101,6 +108,10 @@ test('every measuring agent requires a private mktemp -d it names in its report'
       [SHARED_SCRATCHPAD_ANCHOR, 'shared-scratchpad ban lost'],
       [NAME_DIR_ANCHOR, 'measurements not traceable to a named directory'],
       [WRITE_NOWHERE_ANCHOR, 'write-nowhere clause lost'],
+      [NO_SYMLINK_ANCHOR, 'symlink ban lost'],
+      [NO_INSTALL_ANCHOR, 'install ban lost'],
+      [SCRIPT_DIR_ANCHOR, 'script directory rule lost'],
+      [SCRIPT_GIT_ANCHOR, 'script git-location rule lost'],
     ]);
   }
 });
@@ -148,6 +159,9 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
       ],
       [NAME_DIR_ANCHOR, 'the reviewer prompt lost the name-directory clause'],
       [WRITE_NOWHERE_ANCHOR, 'the reviewer prompt lost the write-nowhere clause'],
+      [NO_SYMLINK_ANCHOR, 'the reviewer prompt lost the symlink ban'],
+      [NO_INSTALL_ANCHOR, 'the reviewer prompt lost the install ban'],
+      [SCRIPT_DIR_ANCHOR, 'the reviewer prompt lost the script directory rule'],
     ]);
   }
 });
@@ -170,6 +184,9 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
     ['reshape a command', 'Phase 7 sentence lost the never-evade clause'],
     [NAME_DIR_ANCHOR, 'Phase 7 sentence lost the name-directory clause'],
     [WRITE_NOWHERE_ANCHOR, 'Phase 7 sentence lost the write-nowhere clause'],
+    [NO_SYMLINK_ANCHOR, 'Phase 7 sentence lost the symlink ban'],
+    [NO_INSTALL_ANCHOR, 'Phase 7 sentence lost the install ban'],
+    [SCRIPT_DIR_ANCHOR, 'Phase 7 sentence lost the script directory rule'],
   ]);
 });
 
