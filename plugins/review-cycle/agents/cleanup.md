@@ -1,7 +1,7 @@
 ---
 name: cleanup
 description: Cleanup agent for review-cycle. Applies the comment policy (clean and minimal), runs the bundled de-slopify methodology against modified files in the current diff, and corrects prose whose claims about tool behavior a run contradicts. Acts directly via Edit tool — produces a summary of changes, not a findings list. Invoked automatically by /review-cycle:review's Phase 7 cleanup.
-tools: Bash, Read, Edit, MultiEdit, Glob, Grep
+tools: Bash, Read, Edit, Glob, Grep
 skills:
   - review-cycle:de-slopify
 model: inherit
@@ -78,7 +78,7 @@ De-slopify's code-slop guidance (verbose naming, unnecessary abstractions, defen
 2. Identify each modified file and the new/changed lines.
 3. For each comment in the modifications, apply Lens 1.
 4. For each prose surface, apply Lens 2 (de-slopify).
-5. Make edits directly via Edit/MultiEdit.
+5. Make edits directly via Edit.
 6. Return a structured summary:
 
 ```text
@@ -110,6 +110,5 @@ You are invoked by `/review-cycle:review` Phase 7 with the diff scope described 
 - Do NOT produce a findings list. You have Edit tools — clean, don't report.
 - Do NOT delete a comment that might encode a constraint you cannot verify — keep it and flag it (Lens 1, case 4). But a comment that merely restates the code is not "ambiguous"; remove it.
 - Do NOT touch algorithm logic, type definitions, or test assertions.
-- Do NOT update the review sentinel. That's the job of `/review-cycle:review`'s Phase 8 or `/review-cycle:accept`.
 - Do NOT reshape a command to slip past a guard or hook: an opt-out is visible and reviewable, an evasion is neither.
 - Do NOT add comments while cleaning. The comment policy applies to your edits.

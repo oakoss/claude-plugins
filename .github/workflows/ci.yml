@@ -202,6 +202,48 @@ jobs:
           done
           exit "$status"
 
+      # Hooks modules are early access. Without this variable `claude plugin
+      # test` prints a notice and exits 0 having run nothing, so the step also
+      # requires each run to report the tests it ran.
+      - name: Test hooks modules
+        env:
+          CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1"
+        run: |
+          status=0
+          for plugin in plugins/*/; do
+            grep -qs '"modules"' "$plugin/hooks/hooks.json" || continue
+            out=$(claude plugin test "$plugin" 2>&1) || status=1
+            printf '%s\n' "$out"
+            if ! printf '%s\n' "$out" | grep -qE '^Ran [1-9][0-9]* tests?'; then
+              printf '::error::%s: claude plugin test ran no tests\n' "$plugin"
+              status=1
+            fi
+          done
+          exit "$status"
+
+      # Installs pnpm (version from `packageManager`), Node, and the
+      # workspace's dependencies, TypeScript among them.
+      - name: Setup pnpm and Node
+        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          cache: true
+          require-lockfile: true
+
+      # Against types/claude-code/claude-code.d.ts, which `/plugin-types`
+      # writes and which needs a login to regenerate, so it is committed.
+      - name: Type-check hooks modules
+        run: pnpm typecheck
+
+      # The modules' pure logic; register.ts runs under `claude plugin test` above.
+      - name: Unit-test hooks modules
+        run: pnpm test
+
+      # oxlint's typeAware rules run through oxlint-tsgolint.
+      - name: Lint and format-check TypeScript
+        run: |
+          pnpm lint
+          pnpm format:check
+
   shellcheck:
     name: ShellCheck
     needs: changes
@@ -229,7 +271,7 @@ jobs:
           )
           # Named explicitly because they carry no extension, and the `find`
           # above matches `*.sh`/`*.bash` only.
-          files+=(bin/run-bats bin/check-bats-run plugins/review-cycle/bin/review-sentinel)
+          files+=(bin/run-bats bin/check-bats-run)
           printf 'checking %d files\n' "${#files[@]}"
           shellcheck --external-sources --severity=warning "${files[@]}"
 
@@ -266,10 +308,6 @@ jobs:
             https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats-core"
           sudo "$RUNNER_TEMP/bats-core/install.sh" /usr/local
           bats --version
-
-      - name: Verify sha256 tool is present
-        run: |
-          command -v sha256sum || command -v shasum
 
       # Always through the wrapper, never bare `bats` — a direct invocation
       # leaves an orphaned process tree after the final TAP line. Both runners,

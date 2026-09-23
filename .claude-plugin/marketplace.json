@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "review-cycle",
-      "description": "Automated multi-agent code review cycle with hook-driven gates. Spawns pr-review-toolkit reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, and prevents commits on unreviewed changes.",
+      "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, and admits a commit only when you asked for it and a reviewer saw exactly what it records.",
       "version": "0.18.1",
       "author": {
         "name": "Oak OSS",
@@ -20,14 +20,7 @@
       "category": "development",
       "source": "./plugins/review-cycle",
       "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/review-cycle",
-      "keywords": [
-        "code-review",
-        "review-loop",
-        "codex",
-        "automation",
-        "hooks",
-        "pr-review"
-      ]
+      "keywords": ["code-review", "review-loop", "codex", "automation", "hooks", "pr-review"]
     },
     {
       "name": "pr-kit",

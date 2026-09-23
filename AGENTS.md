@@ -77,10 +77,10 @@ Shell scripts in `hooks/` must:
 
 - Use `#!/usr/bin/env bash` as the shebang
 - Be committed executable (`git update-index --chmod=+x` if added on a system without exec bit support)
-- Read stdin with builtin redirection (`INPUT=$(</dev/stdin)`), not `cat` — `cat` makes the payload read itself depend on a PATH lookup, upstream of anything that could probe for it. Measured on both commit gates, across five `cat` fault modes each: the emptied payload turned a kilobyte-scale deny into exit 0 with nothing on either stream, indistinguishable from a pass. (The Stop gate survives it — it reads the payload only for `stop_hook_active` — so this is a claim about the commit gates, not about every hook)
+- Read stdin with builtin redirection (`INPUT=$(</dev/stdin)`), not `cat` — `cat` makes the payload read itself depend on a PATH lookup, upstream of anything that could probe for it. Measured on review-cycle's two shell commit gates (since retired), across five `cat` fault modes each: the emptied payload turned a kilobyte-scale deny into exit 0 with nothing on either stream, indistinguishable from a pass. (The Stop gate survives it — it reads the payload only for `stop_hook_active` — so this is a claim about the commit gates, not about every hook)
 - Fail-open on any error — the action proceeds. A hook that *decided* exits 0; one that could not run exits 1 and prints one self-contained line to stderr. Never report a broken dependency with exit 2: `PreToolUse` and `Stop` honour it and block, which is the trap fail-open exists to avoid, while `PostToolUse` and `SessionStart` ignore it — so it is unreliable as well as wrong. (The semantics this rests on: stderr at exit 0 reaches only the debug log; a non-zero, non-2 exit is a non-blocking error whose *first stderr line* surfaces, but only when stdout is empty or unparseable; and valid decision JSON on stdout is honoured with the exit code ignored entirely. From the hooks reference at code.claude.com/docs/en/hooks — version-sensitive, and not measured in-harness. They are why exit 0 is reserved for user-legible states, and why a hook that emits a decision need not care about its exit code.)
 - Resolve project root via `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}` because `CLAUDE_PROJECT_DIR` is unreliable in plugin hooks
-- Honor a global kill-switch at `~/.claude/.disable-review-gate` (or a plugin-specific equivalent) as the first check — ahead of the payload prefilter and of sourcing any lib, both of which can fail loudly and leave a user who disabled every gate with an error on each call
+- Honor the plugin's off switch, when it has one, as the first check — ahead of the payload prefilter and of sourcing any lib, both of which can fail loudly and leave a user who switched the hook off with an error on each call. A `userConfig` option reaches a shell hook as `CLAUDE_PLUGIN_OPTION_<KEY>`
 - Use `${CLAUDE_PLUGIN_ROOT}` for plugin-relative paths in `hooks.json`
 
 When the hook needs to use sha256, prefer this cross-platform fallback:
@@ -101,6 +101,16 @@ When blocking, always provide a printf fallback so the block decision is preserv
 jq -n '{decision:"block", reason:"..."}' 2>/dev/null \
   || printf '{"decision":"block","reason":"..."}\n'
 ```
+
+## Hooks modules
+
+A plugin can also ship a hooks module: TypeScript that Claude Code runs itself, named in `hooks.json` as `"modules": ["./register.ts"]` beside any shell hooks. review-cycle's commit gate is one. There is no build step and no runtime dependency — a module imports only relative files and `"claude-code"`.
+
+- Keep every function that calls `$` in the file that registers the hooks. `claude plugin validate` follows `$` only into functions declared there, and refuses a module that passes `$` across an import. Pure logic goes in sibling files, which is also what makes it testable.
+- A hook that throws is skipped and the action proceeds. Where proceeding is the harm a hook exists to prevent, catch with `on(…).catch(handler)` and refuse; everywhere else, fail open as shell hooks do.
+- Hooks modules are early access. A build without them loads none, silently, and `claude plugin test` prints a notice and exits 0 having run nothing — set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, and check that the run reports its tests.
+- Pure logic is tested with vitest: `*.spec.ts` beside the module, run by `pnpm test`. The module that registers hooks is tested with `claude plugin test plugins/<name>` (`pnpm test:hooks` for review-cycle), which runs only `*.test.ts` and whose kit is the only thing that can raise engine events. That kit runs no real processes: a test answers `process.run` itself with `{ value: { exitCode, stdout, stderr } }`, its options under `e.init`.
+- Types come from `types/claude-code/claude-code.d.ts`, written by `/plugin-types` (headless: `claude -p "/plugin-types <dir>"`). Regenerating needs a login, so the file is committed; regenerate it when Claude Code updates and the module uses something new. `pnpm typecheck` checks against it, `pnpm lint` runs oxlint type-aware, and `pnpm format` is oxfmt.
 
 ## Skill conventions
 
@@ -153,7 +163,7 @@ claude --plugin-dir ./plugins/<name>
 Use `/reload-plugins` to pick up edits without restarting the session. Test hook scripts in isolation by piping sample JSON to stdin:
 
 ```bash
-echo '{"source":"startup","cwd":"/tmp/test"}' | bash plugins/<name>/hooks/session-init.sh
+echo '{"tool_input":{"file_path":"/tmp/test/f.ts"}}' | CLAUDE_PLUGIN_ROOT=plugins/review-cycle bash plugins/review-cycle/hooks/posttool-slop.sh
 ```
 
 Verify hook scripts exit 0 on every code path that shouldn't trap the user.

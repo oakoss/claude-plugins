@@ -17,14 +17,6 @@ pnpm-debug.log
 # Local test artifacts
 .tmp/
 
-# review-cycle per-project state (this repo opts out of its own gate)
-.claude/review-cycle/
-.claude/.no-review-gate
-# pre-0.16 layout, kept while sessions running the old plugin version remain
-.claude/.review-mark
-.claude/.review-in-progress
-.claude/.review-stop-block
-
 # Local Claude Code overrides
 .claude/settings.local.json
 # Session plan artifacts. A local choice, not one the plugin's init imposes —
@@ -36,8 +28,7 @@ pnpm-debug.log
 *.db
 .beads-credential-key
 .beads/proxieddb/
-# Transient bd lock at the repo root; left behind on exit and read as
-# unreviewed drift by the review sentinel.
+# Transient bd lock at the repo root; left behind on exit.
 .beads.gate.lock
 
 # `claude plugin eval` writes its scored results and HTML report here, one

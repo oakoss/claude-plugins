@@ -30,6 +30,17 @@ pre-commit:
       glob: '*.md'
       run: pnpm exec markdownlint-cli2 --fix {staged_files}
       stage_fixed: true
+    typecheck:
+      glob: '*.ts'
+      run: pnpm typecheck
+    oxlint:
+      glob: '*.{ts,js,cjs,mjs}'
+      run: pnpm exec oxlint --fix {staged_files}
+      stage_fixed: true
+    oxfmt:
+      glob: '*.{ts,js,cjs,mjs,json}'
+      run: pnpm exec oxfmt {staged_files}
+      stage_fixed: true
     beads:
       env:
         TERM: dumb

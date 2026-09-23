@@ -1,29 +1,43 @@
 #!/usr/bin/env bash
-# review-cycle: PostToolUse hook (Write|Edit|MultiEdit matcher)
+# review-cycle: PostToolUse hook (Write|Edit matcher)
 #
 # Scans the just-modified file for high-confidence comment-slop patterns
 # (section markers, restate-the-code, AI phrasings, hedge prefixes, TODOs
 # without ticket). When detected, returns additionalContext for Claude to
 # address on the next turn. Does NOT block — the write already happened.
 #
-# Fail-open on any error. Silent when no slop detected.
-
-source "${CLAUDE_PLUGIN_ROOT}/hooks/lib/gate.sh"
-
-gate_disabled && exit 0
+# Silent when no slop is detected. A hook that decided exits 0; one whose jq
+# or git could not run exits 1 with one line on stderr, so a broken dependency
+# is never read as a clean scan.
 
 # Builtin redirection, not `cat`: one less PATH-resolved dependency ahead of
 # everything this hook decides.
 INPUT=$(</dev/stdin)
 
-FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+# A jq that cannot run must not read as "nothing to scan".
+FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null) || {
+  echo "review-cycle: jq could not read the hook payload; comment-slop scan skipped" >&2
+  exit 1
+}
 [ -z "$FILE" ] && exit 0
 [ ! -f "$FILE" ] && exit 0
 
-# Scope to git-tracked projects (matches the other hooks). Skip orphan files.
-PROJECT_ROOT=$(git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>/dev/null || true)
-[ -z "$PROJECT_ROOT" ] && exit 0
-gate_project_opted_out "$PROJECT_ROOT" && exit 0
+# Scope to git-tracked projects. Skip orphan files; a git that cannot run is
+# not the same as a file outside any repository.
+command -v git >/dev/null 2>&1 || {
+  echo "review-cycle: git not found; comment-slop scan skipped" >&2
+  exit 1
+}
+# git's messages are matched in English, so its locale is pinned.
+PROJECT_ROOT=$(LC_ALL=C LANGUAGE=C git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>&1) || {
+  rc=$?
+  case "$PROJECT_ROOT" in
+    *"not a git repository"*) exit 0 ;;
+  esac
+  reason=${PROJECT_ROOT%%$'\n'*}
+  echo "review-cycle: git failed (${reason:-exit $rc}); comment-slop scan skipped" >&2
+  exit 1
+}
 
 # Skip non-text and uninteresting paths.
 case "$FILE" in
@@ -71,10 +85,7 @@ case "$FILE" in
   *)
     # tr strips NUL bytes from payloads — bash >= 4.4 warns on NULs in
     # command substitution.
-    NEW_TEXT=$(echo "$INPUT" | jq -r '
-      .tool_input.content
-      // .tool_input.new_string
-      // ((.tool_input.edits // []) | map(.new_string // "") | join("\n"))' 2>/dev/null | tr -d '\0')
+    NEW_TEXT=$(echo "$INPUT" | jq -r '.tool_input.content // .tool_input.new_string // ""' 2>/dev/null | tr -d '\0')
     # A Write payload is the whole file, not an edit — a legitimate header
     # comment block would read as slop density. Skip the shebang and the
     # leading run of comment/blank lines before counting, for the Write
@@ -98,17 +109,11 @@ case "$FILE" in
     # comment anchor must not wave a large narrated block through. Blank
     # means no non-whitespace character; an indented separator line must
     # not break the skip.
-    OLD_TEXT=$(echo "$INPUT" | jq -r '
-      .tool_input.old_string
-      // ((.tool_input.edits // []) | map(.old_string // "") | join("\n"))' 2>/dev/null | tr -d '\0')
+    OLD_TEXT=$(echo "$INPUT" | jq -r '.tool_input.old_string // ""' 2>/dev/null | tr -d '\0')
     OLD_TOTAL=$(printf '%s\n' "$OLD_TEXT" | grep -c '[^[:space:]]' 2>/dev/null | tr -cd '0-9')
     OLD_COMMENTS=$(printf '%s\n' "$OLD_TEXT" | grep -cE "$COMMENT_RE" 2>/dev/null | tr -cd '0-9')
     [ -n "$OLD_TOTAL" ] || OLD_TOTAL=0
     [ -n "$OLD_COMMENTS" ] || OLD_COMMENTS=0
-    # A MultiEdit insertion (empty old_string) is new narration riding a
-    # comment anchor, not comment-editing; it disqualifies the skip. The
-    # string compare means a jq failure defaults toward the check running.
-    INS_EMPTY=$(echo "$INPUT" | jq -r '(.tool_input.edits // []) | map(.old_string // "" | gsub("\\s";"")) | any(. == "") | tostring' 2>/dev/null)
     if [ -n "$NEW_TEXT" ]; then
       # grep -c prints the 0 itself on no match (while exiting 1), so no
       # fallback echo; tr guards against a hard grep failure leaving junk.
@@ -122,8 +127,7 @@ case "$FILE" in
       # char); it guards a faulted count — a failed nonblank grep must not
       # vacuously pass the new-side test while COMMENT_LINES stays healthy.
       if [ "$OLD_TOTAL" -gt 0 ] && [ "$OLD_COMMENTS" -ge "$OLD_TOTAL" ] \
-         && [ "$NEW_NONBLANK" -gt 0 ] && [ "$COMMENT_LINES" -ge "$NEW_NONBLANK" ] \
-         && [ "$INS_EMPTY" = "false" ]; then
+         && [ "$NEW_NONBLANK" -gt 0 ] && [ "$COMMENT_LINES" -ge "$NEW_NONBLANK" ]; then
         :
       elif [ "$COMMENT_LINES" -ge 4 ] && [ "$TOTAL_LINES" -gt 0 ] \
          && [ $((COMMENT_LINES * 100 / TOTAL_LINES)) -ge 30 ]; then

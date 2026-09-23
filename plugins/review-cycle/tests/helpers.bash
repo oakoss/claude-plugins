@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Shared setup for sentinel.bats and gate.bats. Loaded via `load 'helpers'`.
+# Shared setup for the plugin's .bats suites. Loaded via `load 'helpers'`.
 
+# shellcheck disable=SC2034  # read by the .bats suites that load this file
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # bash 3.2 does not honor `set -e` for a failing bare [[ ]], so a mid-body
@@ -72,19 +73,12 @@ refute() {
   return 0
 }
 
-# Consumed by the .bats suites that `load 'helpers'`; shellcheck can't see them.
-# shellcheck disable=SC2034
-REVIEW_SENTINEL="$PLUGIN_ROOT/bin/review-sentinel"
-# shellcheck disable=SC2034
-GATE_LIB="$PLUGIN_ROOT/hooks/lib/gate.sh"
-
 setup_repo() {
-  # Isolate HOME before any git call. It keeps kill-switch tests off the real
-  # ~/.claude, and it keeps every git call here off the developer's
-  # ~/.gitconfig — a global commit.gpgsign signs every fixture commit, which
-  # measured 166ms against 21ms unsigned.
+  # Isolate HOME before any git call. It keeps every git call here off the
+  # developer's ~/.gitconfig — a global commit.gpgsign signs every fixture
+  # commit, which measured 166ms against 21ms unsigned.
   export HOME="$BATS_TEST_TMPDIR/home"
-  mkdir -p "$HOME/.claude"
+  mkdir -p "$HOME"
 
   # HOME alone leaves /etc/gitconfig's credential.helper=osxkeychain in play, so
   # fixture git hunts a keychain under the fake HOME and macOS offers to reset one.
@@ -95,9 +89,6 @@ setup_repo() {
   # the canonical path, so tests must compare against the canonical form.
   mkdir -p "$BATS_TEST_TMPDIR/repo"
   TEST_REPO="$(cd "$BATS_TEST_TMPDIR/repo" && pwd -P)"
-  # Fixtures write state files directly, before any sentinel verb has had a
-  # chance to create the directory.
-  mkdir -p "$BATS_TEST_TMPDIR/repo/.claude/review-cycle"
   cd "$TEST_REPO" || return 1
   git init -q
   git config user.email "test@example.com"

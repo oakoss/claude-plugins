@@ -74,7 +74,7 @@ Both land the same label when nothing succeeded, so the distinction lives in wha
 
 **Containment.** Demonstrating that a restructuring preserves behavior means applying it, and it is never applied to the review target. Copy the tree to a private directory you create with `mktemp -d` — never a shared session scratchpad or another agent's directory — restructure and run there, and delete the copy when you finish — never edit, stage, or commit in the target. Name that directory in your report, so your measurements are traceable to where they ran. Write nowhere outside it. Never reshape a command to slip past a guard or hook: an opt-out is visible and reviewable, an evasion is neither. If a claim cannot be demonstrated inside a copy, tag it speculative rather than reaching into the target to prove it.
 
-Nothing checks you, and the reason differs by caller. Inside `/review-cycle:review` you run in the post-loop phase, which the cycle's integrity snapshot does not cover, and the sentinel is marked immediately after you report — so a file you leave changed is marked reviewed without anyone seeing it. In `/review-cycle:review-pr` you run in the single fan-out and there is no snapshot and no sentinel at all. Invoked directly, there is neither. Assume nothing checks you in any of them.
+Nothing checks you, and the reason differs by caller. Inside `/review-cycle:review` you run in the post-loop phase, which the cycle's integrity snapshot does not cover — a file you leave changed surfaces only as uncovered content in the final coverage check, after you have gone. In `/review-cycle:review-pr` you run in the single fan-out and there is no snapshot at all. Invoked directly, there is neither. Assume nothing checks you in any of them.
 
 ## Output
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # posttool-slop hook: pattern greps, comment-density arithmetic across the
-# three tool payload shapes, prose exemption, and the silent exit paths.
+# Write and Edit payload shapes, prose exemption, and the silent exit paths.
 
 setup() {
   load 'helpers'
@@ -9,7 +9,7 @@ setup() {
 
 # Runs the hook with a payload for $1 (file path). Payload content defaults
 # to the file's bytes (the Write shape); pass explicit JSON as $2 to test
-# the Edit/MultiEdit shapes.
+# the Edit shape.
 run_slop_hook() {
   local file="$1" payload="${2:-}"
   if [ -z "$payload" ]; then
@@ -32,25 +32,38 @@ write_lines() {
   [ -z "$output" ]
 }
 
+@test "a jq that cannot run exits 1 and names itself" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nexit 127\n' > "$BATS_TEST_TMPDIR/shim/jq"
+  chmod +x "$BATS_TEST_TMPDIR/shim/jq"
+  write_lines f.ts "// ===== HELPERS ====="
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\"\$PATH\" CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{\"tool_input\":{\"file_path\":\"$TEST_REPO/f.ts\"}}'"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "jq could not read the hook payload"
+}
+
+@test "a git that cannot run exits 1 and names itself" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nexit 137\n' > "$BATS_TEST_TMPDIR/shim/git"
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  write_lines f.ts "// ===== HELPERS ====="
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\"\$PATH\" CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{\"tool_input\":{\"file_path\":\"$TEST_REPO/f.ts\"}}'"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "git failed"
+}
+
+@test "a git killed without a message names its exit status" {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  printf '#!/usr/bin/env bash\nkill -9 $$\n' > "$BATS_TEST_TMPDIR/shim/git"
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  write_lines f.ts "// ===== HELPERS ====="
+  run bash -c "PATH='$BATS_TEST_TMPDIR/shim':\"\$PATH\" CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{\"tool_input\":{\"file_path\":\"$TEST_REPO/f.ts\"}}'"
+  [ "$status" -eq 1 ]
+  assert_contains "$output" "exit 137"
+}
+
 @test "silent when payload has no file_path" {
   run bash -c "CLAUDE_PLUGIN_ROOT='$PLUGIN_ROOT' bash '$PLUGIN_ROOT/hooks/posttool-slop.sh' <<< '{}'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "silent when kill-switch active" {
-  touch "$HOME/.claude/.disable-review-gate"
-  write_lines f.ts "// ===== HELPERS ====="
-  run run_slop_hook "$TEST_REPO/f.ts"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "silent when project opted out" {
-  mkdir -p "$TEST_REPO/.claude"
-  touch "$TEST_REPO/.claude/.no-review-gate"
-  write_lines f.ts "// ===== HELPERS ====="
-  run run_slop_hook "$TEST_REPO/f.ts"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
@@ -176,17 +189,6 @@ write_lines() {
   assert_contains "$output" "4 of 8"
 }
 
-@test "density aggregates MultiEdit edits[].new_string" {
-  write_lines f.ts "const a = 1;"
-  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
-    {new_string:"// alpha\n// beta\nconst a = 1;\nconst b = 2;"},
-    {new_string:"// gamma\n// delta\nconst c = 3;\nconst d = 4;"}
-  ]}}')
-  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  assert_contains "$output" "High comment density"
-  assert_contains "$output" "4 of 8"
-}
-
 @test "density skips an edit that replaces a pure comment block" {
   write_lines f.ts "const a = 1;"
   OLD=$'// one long changelog-style comment\n// spanning several lines\n// that a prior fire asked to tighten'
@@ -204,28 +206,6 @@ write_lines() {
   NEW=$'// alpha\n// beta\n// gamma\n// delta\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;'
   PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" --arg os "$OLD" --arg ns "$NEW" \
     '{tool_input:{file_path:$fp, old_string:$os, new_string:$ns}}')
-  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  assert_contains "$output" "High comment density"
-  assert_contains "$output" "4 of 8"
-}
-
-@test "density skips a MultiEdit whose combined old_strings are all comments" {
-  write_lines f.ts "const a = 1;"
-  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
-    {old_string:"// old one", new_string:"// new one\n// new two"},
-    {old_string:"// old two", new_string:"// new three\n// new four"}
-  ]}}')
-  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "density fires on a MultiEdit when any old_string carries code" {
-  write_lines f.ts "const a = 1;"
-  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
-    {old_string:"// old one", new_string:"// alpha\n// beta\nconst a = 1;\nconst b = 2;"},
-    {old_string:"const x = 9;", new_string:"// gamma\n// delta\nconst c = 3;\nconst d = 4;"}
-  ]}}')
   run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
   assert_contains "$output" "High comment density"
   assert_contains "$output" "4 of 8"
@@ -250,26 +230,6 @@ write_lines() {
   run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
   assert_contains "$output" "High comment density"
   assert_contains "$output" "4 of 8"
-}
-
-@test "a MultiEdit comment-only insertion riding a comment anchor still fires density" {
-  write_lines f.ts "const a = 1;"
-  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
-    {old_string:"// c", new_string:"// c2"},
-    {old_string:"", new_string:"// alpha\n// beta\n// gamma\n// delta"}
-  ]}}')
-  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  assert_contains "$output" "High comment density"
-}
-
-@test "a whitespace-only anchor does not reopen the insertion hole" {
-  write_lines f.ts "const a = 1;"
-  PAYLOAD=$(jq -n --arg fp "$TEST_REPO/f.ts" '{tool_input:{file_path:$fp, edits:[
-    {old_string:"// c", new_string:"// c2"},
-    {old_string:"   ", new_string:"// alpha\n// beta\n// gamma\n// delta"}
-  ]}}')
-  run run_slop_hook "$TEST_REPO/f.ts" "$PAYLOAD"
-  assert_contains "$output" "High comment density"
 }
 
 @test "an empty old_string on an Edit leaves density active" {

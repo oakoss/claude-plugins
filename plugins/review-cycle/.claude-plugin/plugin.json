@@ -1,6 +1,6 @@
 {
   "name": "review-cycle",
-  "description": "Automated multi-agent code review cycle with hook-driven gates. Spawns pr-review-toolkit reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, and prevents commits on unreviewed changes.",
+  "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, and admits a commit only when you asked for it and a reviewer saw exactly what it records.",
   "version": "0.18.1",
   "author": {
     "name": "Oak OSS",
@@ -10,12 +10,13 @@
   "license": "MIT",
   "repository": "https://github.com/oakoss/claude-plugins",
   "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/review-cycle",
-  "keywords": [
-    "code-review",
-    "review-loop",
-    "codex",
-    "automation",
-    "hooks",
-    "pr-review"
-  ]
+  "keywords": ["code-review", "review-loop", "codex", "automation", "hooks", "pr-review"],
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Commit gate",
+      "description": "Refuse a commit unless a reviewer saw what it records and you asked for it, and a push you did not ask for. Only you can change this, here in /config.",
+      "default": true
+    }
+  }
 }
