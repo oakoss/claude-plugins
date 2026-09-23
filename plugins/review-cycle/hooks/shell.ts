@@ -25,6 +25,8 @@ export type Statement = {
   // array, rather than a simple command.
   group: boolean;
   heredocs: Heredoc[];
+  // Set when the statement redirects to or from anything, a file or a descriptor.
+  redirected: boolean;
   op: Op;
   // Alias names among the words that were not expanded, because they stood
   // where this reader does not look for a command. The shell may still run
@@ -69,7 +71,15 @@ export function assignmentName(w: Word): string | null {
 }
 
 export function statement(): Statement {
-  return { words: [], inner: [], group: false, heredocs: [], op: '', aliases: [] };
+  return {
+    words: [],
+    inner: [],
+    group: false,
+    heredocs: [],
+    redirected: false,
+    op: '',
+    aliases: [],
+  };
 }
 
 class Lexer {
@@ -236,6 +246,7 @@ class Lexer {
     const rest = this.s.slice(this.i);
     const op = /^(<<<|<<-|<<|&>>|&>|>>|>&|<&|>\||<>|<|>)/.exec(rest)?.[0] ?? '>';
     this.i += op.length;
+    cur.redirected = true;
     if ((op === '<' || op === '>') && this.ch() === '(') {
       // Process substitution: `<( … )` and `>( … )` run a command list.
       this.i++;

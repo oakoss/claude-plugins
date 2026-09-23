@@ -75,6 +75,11 @@ type GateState = {
   dropped: string[];
   // How many of `dropped` predate the latest recorded review.
   droppedSince: number;
+  running: Set<string>;
+  // The working tree at the user's latest message; null when unreadable.
+  promptTree: string | null;
+  // Whether the agent was told to review since that message.
+  nudged: boolean;
 };
 
 const state: GateState = {
@@ -90,6 +95,9 @@ const state: GateState = {
   aliasesLoaded: false,
   dropped: [],
   droppedSince: 0,
+  running: new Set(),
+  promptTree: null,
+  nudged: true,
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -99,7 +107,7 @@ type Run = { exitCode: number; stdout: string; stderr: string };
 async function run(
   $: $,
   argv: string[],
-  opts: { cwd?: string; env?: Record<string, string> } = {},
+  opts: { cwd?: string; env?: Record<string, string>; stdin?: string } = {},
 ): Promise<Run> {
   // git's messages are matched in English, so its locale is pinned.
   const env = { LC_ALL: 'C', LANGUAGE: 'C', ...opts.env };
@@ -132,9 +140,10 @@ async function repoAt($: $, dir: string | null, cwd?: string): Promise<Repo | 'n
   throw new Error(`git rev-parse failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
 }
 
-// HEAD's commit, or EMPTY_TREE on an unborn branch; a throw when git failed.
+// HEAD's commit, or EMPTY_TREE on an unborn branch or when HEAD names a
+// missing object; a throw when git failed.
 async function headOf($: $, root: string): Promise<string> {
-  const r = await run($, ['git', 'rev-parse', '--verify', '-q', 'HEAD'], { cwd: root });
+  const r = await run($, ['git', 'rev-parse', '--verify', '-q', 'HEAD^{commit}'], { cwd: root });
   if (r.exitCode === 0) {
     const head = sha(r.stdout);
     if (head) return head;
@@ -368,17 +377,61 @@ async function onSessionStart(
   return next(e);
 }
 
-function onPromptSubmit(
+async function onPromptSubmit(
   $: $,
   e: Input<HookFor<'prompt.submit'>>,
   next: NextOf<HookFor<'prompt.submit'>>,
-): ReturnType<HookFor<'prompt.submit'>> {
+): Promise<Output<HookFor<'prompt.submit'>>> {
   if (HUMAN.has(e.origin.kind)) {
     state.grant = grantOf(e.text, state.lastAnswer);
-    // A prompt queued into a running turn does not end a review-pr run.
-    if (e.turnId === undefined) state.prWindow = false;
+    state.nudged = false;
+    // A prompt queued into a running turn neither ends a review-pr run nor
+    // replaces that turn's starting tree.
+    if (e.turnId === undefined) {
+      state.prWindow = false;
+      try {
+        const root = await ensureRoot($);
+        state.promptTree = root === null ? null : await worktreeTree($, root.top);
+      } catch {
+        // No starting tree means no nudge this message; the commit gate still holds.
+        state.promptTree = null;
+      }
+    }
   }
   return next(e);
+}
+
+// At the end of a main-loop turn that changed the tree, content no reviewer
+// has seen gets one prompt telling the agent to review it, so the agent does
+// not stop to ask the user whether to. Once per user message, and not while a
+// review is under way.
+async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<void> {
+  if (state.nudged || e.reason !== 'answer') return;
+  const root = state.root;
+  const since = state.promptTree;
+  if (!root || since === null) return;
+  // A leg that ended without a turn.complete would otherwise hold this off for good.
+  if (state.running.size > 0) {
+    const agents = await $.agent.list();
+    const live = new Set(agents.filter((a) => a.status === 'running').map((a) => a.id));
+    for (const id of state.running) if (!live.has(id)) state.running.delete(id);
+    if (state.running.size > 0) return;
+  }
+  const tree = await worktreeTree($, root.top);
+  if (tree === null || tree === since) return;
+  const touched = new Set(await reviewablePaths($, root.top, since, tree));
+  const c = await coverageOf($, root.top, await headOf($, root.top), tree);
+  if (c === null) return;
+  const rows = c.rows.filter((row) => touched.has(row.path));
+  if (uncoveredOf(rows).length === 0) return;
+  state.nudged = true;
+  const text = `review-cycle: this turn left changes no reviewer has seen (${explain({ ...c, rows })}). Invoke /review-cycle:review via the Skill tool now, then report back. Skip it only if the user's latest message said not to review, or your last message asked them something they must answer first.`;
+  // Not awaited: the prompt enters once this turn has ended.
+  Promise.resolve()
+    .then(() => $.prompt.submit({ text }))
+    .catch(() => {
+      state.nudged = false;
+    });
 }
 
 // The user's pick in the question dialog is their input as much as a typed
@@ -408,7 +461,11 @@ async function onAsk(
 
 function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {
   if (!e.agentId && e.skill === 'review-cycle:review-pr') state.prWindow = true;
-  if (!e.agentId && e.skill === 'review-cycle:review') state.prWindow = false;
+  if (!e.agentId && e.skill === 'review-cycle:review') {
+    state.prWindow = false;
+    // A review already under way needs no reminder to start one.
+    state.nudged = true;
+  }
   return next(e);
 }
 
@@ -433,6 +490,7 @@ async function onAgentSpawn(
   }
   const r = await next(e);
   if (isLeg && 'agentId' in r && r.agentId) {
+    if (!state.prWindow) state.running.add(r.agentId);
     if (spawnTree === null) {
       state.dropped.push(`${e.subagentType}: ${why}`);
     } else {
@@ -451,8 +509,15 @@ async function onTurnComplete(
 ): Promise<Output<HookFor<'turn.complete'>>> {
   if (!e.agentId) {
     state.lastAnswer = e.answer;
-    return next(e);
+    const r = await next(e);
+    try {
+      await nudgeReview($, e);
+    } catch {
+      // A missed nudge leaves the commit gate to refuse the unreviewed commit.
+    }
+    return r;
   }
+  state.running.delete(e.agentId);
   const leg = state.legs.get(e.agentId);
   const root = state.root;
   if (!leg?.counts || !root) return next(e);
@@ -707,10 +772,147 @@ async function parentTree($: $, root: string): Promise<string | null> {
   return p.exitCode === 0 ? treeOf($, root, p.stdout.trim()) : EMPTY_TREE;
 }
 
+type Refs = Map<string, string>;
+
+// Every ref that names a commit, directly or through a tag, by name. Symbolic
+// refs are left out: their reflog does not follow the ref they point at.
+async function refsOf($: $, root: string): Promise<Refs> {
+  const r = await run(
+    $,
+    [
+      'git',
+      'for-each-ref',
+      '--format=%(objectname)%09%(objecttype)%09%(*objecttype)%09%(symref)%09%(refname)',
+    ],
+    { cwd: root },
+  );
+  if (r.exitCode !== 0) {
+    throw new Error(`git for-each-ref failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  const refs: Refs = new Map();
+  for (const line of r.stdout.split('\n')) {
+    const [id, type, peeled, symref, name] = line.split('\t');
+    if (!id || !name || symref) continue;
+    if (type === 'commit' || peeled === 'commit') refs.set(name, id);
+  }
+  return refs;
+}
+
+// The reflog messages the command added to `ref`, newest first: the entries
+// after the one that set its starting value `was`. A fresh clone logs nothing
+// before a ref's first move, so a log that never reaches `was` is all new. A
+// ref the command created stops at `remote: renamed`: a renamed remote keeps
+// the old remote's entries below that line. At most 50 are read.
+async function reflogSince(
+  $: $,
+  root: string,
+  ref: string,
+  was: string | undefined,
+): Promise<string[]> {
+  const r = await run($, ['git', 'log', '-g', '-n', '50', '--format=%H %gs', ref, '--'], {
+    cwd: root,
+  });
+  if (r.exitCode !== 0) {
+    throw new Error(`git log -g ${ref} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  const messages: string[] = [];
+  for (const line of r.stdout.split('\n')) {
+    const space = line.indexOf(' ');
+    if (space === -1) break;
+    const message = line.slice(space + 1);
+    if (line.slice(0, space) === was) break;
+    if (was === undefined && message.startsWith('remote: renamed ')) break;
+    messages.push(message);
+  }
+  return messages;
+}
+
+// How git logs a ref a fetch or pull moved to commits that already existed.
+const FETCHED = /^(fetch|pull)\b.*: (fast-forward|storing (head|ref)|forced-update)$/i;
+
+type Start = { head: string; refs: Refs };
+type Moves = { pushed: string[]; fetched: string[] };
+
+// Refs the command moved: by a push (`pushed`, remote-tracking names, logged
+// `update by push`) or by a fetch (`fetched`, the commits they now name). A
+// push that updates no remote-tracking ref, deletes one, or leaves no reflog
+// is not seen.
+async function refMoves($: $, root: string, start: Start, after: Refs): Promise<Moves> {
+  const pushed: string[] = [];
+  const fetched: string[] = [];
+  for (const [ref, id] of after) {
+    if (start.refs.get(ref) === id) continue;
+    const log = await reflogSince($, root, ref, start.refs.get(ref));
+    if (ref.startsWith('refs/remotes/') && log.some((m) => m.startsWith('update by push'))) {
+      pushed.push(ref.slice('refs/remotes/'.length));
+    } else if (log.length > 0 && log.every((m) => FETCHED.test(m))) {
+      fetched.push(id);
+    }
+  }
+  return { pushed, fetched };
+}
+
+// The commits FETCH_HEAD names: every fetch writes it, a pull or a fetch by
+// URL included.
+async function fetchHead($: $, root: string): Promise<string[]> {
+  const p = await run(
+    $,
+    ['git', 'rev-parse', '--path-format=absolute', '--git-path', 'FETCH_HEAD'],
+    { cwd: root },
+  );
+  const path = p.stdout.trim();
+  if (p.exitCode !== 0 || !path || !(await $.fs.exists(path))) return [];
+  let text: string;
+  try {
+    text = await $.fs.read(path);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    throw new Error(`${path} could not be read: ${why}`, { cause: error });
+  }
+  return text.split('\n').flatMap((l) => /^[0-9a-f]{40,64}/.exec(l) ?? []);
+}
+
+// The commits the command made, oldest first: those `head` reaches that no ref
+// reached before it ran and no fetch brought in. A checkout, reset or
+// fast-forward makes none. FETCH_HEAD is not trusted after a push, since a
+// fetch following it names the pushed commits.
+async function newCommits(
+  $: $,
+  root: string,
+  head: string,
+  start: Start,
+  moves: Moves | null,
+): Promise<string[]> {
+  // Unknown moves could hide a push, so nothing a fetch named is trusted then.
+  const trusted = moves?.pushed.length === 0;
+  const fetched = trusted ? await fetchHead($, root) : [];
+  const known = new Set([
+    start.head,
+    ...start.refs.values(),
+    ...(moves?.fetched ?? []),
+    ...fetched,
+  ]);
+  known.delete(EMPTY_TREE);
+  const stdin = `${[head, ...[...known].map((id) => `^${id}`)].join('\n')}\n`;
+  // `head` is known to resolve, so a missing object here is a known commit the
+  // command pruned, which would otherwise fail the whole walk.
+  const r = await run($, ['git', 'rev-list', '--reverse', '--ignore-missing', '--stdin'], {
+    cwd: root,
+    stdin,
+  });
+  if (r.exitCode !== 0) {
+    throw new Error(`git rev-list failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  }
+  const lines = r.stdout.split('\n').filter((l) => l !== '');
+  const odd = lines.find((l) => sha(l) === null);
+  if (odd !== undefined) throw new Error(`git rev-list printed ${JSON.stringify(odd)}`);
+  return lines;
+}
+
 // Runs the command, then reports a commit the gate did not check (a script),
-// or one whose content changed after the check (a pre-commit hook restaging).
-// A history command records existing commits by design, so only consent
-// matters for it.
+// one whose content changed after the check (a pre-commit hook restaging),
+// and a push the user did not ask for. A history command records existing
+// commits by design, so only consent matters for it.
 async function watch(
   $: $,
   root: Repo | null,
@@ -719,48 +921,97 @@ async function watch(
   checked: 'commit' | 'history' | 'push' | 'unchecked',
 ): Promise<Output<BashHook>> {
   if (root === null) return next(e);
-  let before: string | null = null;
+  let start: Start | null = null;
   try {
-    before = await headOf($, root.top);
+    start = { head: await headOf($, root.top), refs: await refsOf($, root.top) };
   } catch {
-    // Reported below: without a starting HEAD nothing can be compared.
+    // Reported below: without a starting point nothing can be compared.
   }
   const r = await next(e);
   const notes: string[] = [];
-  try {
-    if (before === null) throw new Error('HEAD could not be read before the command ran');
-    const after = await headOf($, root.top);
-    if (after === EMPTY_TREE && before !== EMPTY_TREE) {
-      notes.push(
-        'review-cycle: HEAD no longer resolves to a commit after this command. Tell the user.',
-      );
-    } else if (after !== before) {
-      const short = after.slice(0, 12);
-      const tree = await treeOf($, root.top, after);
-      const baseTree = await treeOf($, root.top, before);
-      const c = tree && baseTree ? await coverageOf($, root.top, baseTree, tree) : null;
-      if (c === null) notes.push(`review-cycle could not check commit ${short}. Tell the user.`);
-      else if (checked !== 'history' && uncoveredOf(c.rows).length > 0) {
-        const why =
-          checked === 'commit'
-            ? "A pre-commit hook may have changed it after the gate's check."
-            : 'It did not go through the commit gate.';
-        notes.push(
-          `review-cycle: commit ${short} records content no reviewer saw (${explain(c)}). ${why} Tell the user.`,
-        );
-      }
-      if (!state.grant.commit) {
-        notes.push(
-          `review-cycle: commit ${short} landed without the user asking for one. Tell the user.`,
-        );
-      }
-    }
-  } catch (error) {
+  const failed = (what: string, error: unknown) => {
     const why = error instanceof Error ? error.message : String(error);
-    notes.push(`review-cycle could not check whether this command committed (${why}).`);
+    notes.push(
+      `review-cycle could not check whether this command ${what} (${why}). Tell the user.`,
+    );
+  };
+  if (start === null) {
+    failed('committed or pushed', new Error('HEAD and refs could not be read before it ran'));
+  } else {
+    let moves: Moves | null = null;
+    try {
+      moves = await refMoves($, root.top, start, await refsOf($, root.top));
+      if (moves.pushed.length > 0 && !state.grant.push) {
+        notes.push(
+          `review-cycle: this command pushed to ${moves.pushed.join(', ')} without the user asking for a push. Tell the user.`,
+        );
+      }
+    } catch (error) {
+      failed('pushed', error);
+    }
+    try {
+      notes.push(...(await commitNotes($, root.top, start, moves, checked)));
+    } catch (error) {
+      failed('committed', error);
+    }
   }
   if (notes.length === 0 || r.deny !== undefined) return r;
   return { ...r, context: [...(r.context ?? []), ...notes] };
+}
+
+async function commitNotes(
+  $: $,
+  root: string,
+  start: Start,
+  moves: Moves | null,
+  checked: 'commit' | 'history' | 'push' | 'unchecked',
+): Promise<string[]> {
+  const before = start.head;
+  const after = await headOf($, root);
+  if (after === EMPTY_TREE && before !== EMPTY_TREE) {
+    return ['review-cycle: HEAD no longer resolves to a commit after this command. Tell the user.'];
+  }
+  if (after === before) return [];
+  const made = await newCommits($, root, after, start, moves);
+  const oldest = made[0];
+  if (oldest === undefined) return [];
+  const notes: string[] = [];
+  const short = after.slice(0, 12);
+  if (moves === null) {
+    return [
+      `review-cycle could not tell whether commit ${short} was made by this command or fetched, since its refs could not be read. Tell the user.`,
+    ];
+  }
+  // Judged from the parent of the oldest new commit, so fetched commits the new
+  // ones were built on are not counted as theirs; a pull that merges still is.
+  const parent = await run($, ['git', 'rev-parse', '--verify', '-q', `${oldest}^`], { cwd: root });
+  const isRoot =
+    parent.exitCode === 1 && parent.stdout.trim() === '' && parent.stderr.trim() === '';
+  const base = isRoot ? EMPTY_TREE : parent.exitCode === 0 ? sha(parent.stdout) : null;
+  if (base === null) {
+    throw new Error(
+      `git rev-parse ${oldest}^ failed: ${firstLine(parent.stderr) || `exit ${parent.exitCode}`}`,
+    );
+  }
+  const tree = await treeOf($, root, after);
+  const baseTree = await treeOf($, root, base);
+  const c = tree && baseTree ? await coverageOf($, root, baseTree, tree) : null;
+  if (c === null) notes.push(`review-cycle could not check commit ${short}. Tell the user.`);
+  else if (checked !== 'history' && uncoveredOf(c.rows).length > 0) {
+    const why =
+      checked === 'commit'
+        ? "A pre-commit hook may have changed it after the gate's check."
+        : 'It did not go through the commit gate.';
+    notes.push(
+      `review-cycle: commit ${short} records content no reviewer saw (${explain(c)}). ${why} Tell the user.`,
+    );
+  }
+  if (!state.grant.commit) {
+    notes.push(
+      `review-cycle: commit ${short} landed without the user asking for one. Tell the user.`,
+    );
+  }
+  return notes;
 }
 
 // A digest of HEAD and every reviewable change against it, blob ids included:

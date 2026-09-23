@@ -184,6 +184,8 @@ type Kind =
   | { kind: 'cd'; dir: string | null }
   // `via` is a reserved word the command runs under, such as `if` or `!`.
   | { kind: 'git'; git: GitCall; via: string | null }
+  // Literal variable assignments with no substitution or redirect: they run nothing.
+  | { kind: 'assign' }
   // `words` are the command's words after assignments and reserved words.
   | { kind: 'other'; head: string; words: Word[] }
   // `always` refusals stand whatever the command's text mentions.
@@ -194,11 +196,14 @@ function basename(p: string): string {
 }
 
 // Git's global options before the subcommand. Only `-C` and `-c` are kept;
-// options that point git at a different repository are refused.
+// options that point git at a different repository are refused. A `-C` built
+// at run time is allowed only for a subcommand that neither commits nor could
+// be an alias, which git would look up in that directory.
 function gitCall(words: Word[], first: string | null): GitCall | { refuse: string } | null {
   const config: string[] = [];
   const dirs: string[] = [];
   if (first !== null) return { config, dirs, sub: first, args: words.slice(1) };
+  let dynamicDir = false;
   let i = 1;
   for (let w = words[i]; w !== undefined; w = words[i]) {
     if (w.dynamic)
@@ -208,8 +213,9 @@ function gitCall(words: Word[], first: string | null): GitCall | { refuse: strin
     const t = w.text;
     if (t === '-C' || t === '-c') {
       const v = words[i + 1];
-      if (!v || v.dynamic)
+      if (!v || (v.dynamic && t === '-c'))
         return { refuse: `git ${t} with a value built from a variable or substitution` };
+      dynamicDir ||= v.dynamic;
       if (t === '-C') dirs.push(v.text);
       else config.push('-c', v.text);
       i += 2;
@@ -227,10 +233,17 @@ function gitCall(words: Word[], first: string | null): GitCall | { refuse: strin
     } else if (w.pattern) {
       return { refuse: `git ${t}, a subcommand the shell would expand` };
     } else {
-      return { config, dirs, sub: t, args: words.slice(i + 1) };
+      const args = words.slice(i + 1);
+      if (dynamicDir && !reads(t, args) && !NEUTRAL.has(t))
+        return { refuse: 'git -C with a directory built from a variable or substitution' };
+      return { config, dirs, sub: t, args };
     }
   }
   return null;
+}
+
+function reads(sub: string, args: Word[]): boolean {
+  return READ_ONLY.has(sub) || (sub === 'config' && readsConfig(args));
 }
 
 function kindOf(st: Statement): Kind {
@@ -254,7 +267,12 @@ function kindOf(st: Statement): Kind {
     words = words.slice(1);
   }
   const [head, arg] = words;
-  if (head === undefined) return { kind: 'other', head: '', words };
+  if (head === undefined) {
+    // A substitution or redirect runs between the gate's check and the commit.
+    const inert = st.inner.length === 0 && !st.redirected;
+    if (assigned && via === null && inert) return { kind: 'assign' };
+    return { kind: 'other', head: via ?? '', words };
+  }
   if (head.dynamic) {
     return { kind: 'refuse', reason: 'a command name built from a variable or substitution' };
   }
@@ -274,6 +292,18 @@ function kindOf(st: Statement): Kind {
 
 function commits(sub: string): boolean {
   return sub === 'commit' || sub === 'push' || HISTORY.has(sub);
+}
+
+// A fast-forward pull records no commit. The last of `--ff`, `--no-ff` and
+// `--ff-only` wins, and a run-time word could be any; `merge --ff-only -s ours`
+// still records a merge, so merge is not included.
+function fastForwardOnly(g: GitCall): boolean {
+  if (g.sub !== 'pull' || g.args.some((w) => w.dynamic)) return false;
+  return g.args.findLast((w) => /^--(no-)?ff(-only)?$/.test(w.text))?.text === '--ff-only';
+}
+
+function records(g: GitCall): boolean {
+  return commits(g.sub) && !fastForwardOnly(g);
 }
 
 function textOf(st: Statement): string {
@@ -326,6 +356,7 @@ function runsGit(words: Word[]): string | null {
   }
   for (const g of gitCallsIn(words)) {
     if ('refuse' in g) return 'git with options the gate cannot read';
+    // Run through another program, a fast-forward's arguments go unread.
     if (commits(g.sub) || REFUSED.has(g.sub)) return `git ${g.sub}`;
   }
   return null;
@@ -436,12 +467,16 @@ function hidden(statements: Statement[], text: string, aliases: ShellAliases): s
       if (sub === 'subtree' && k.git.args.some((w) => /^(push|add|merge|pull)$/.test(w.text))) {
         return 'git subtree, which commits or pushes where the gate cannot judge it';
       }
-      if (commits(sub) || sub === 'add') {
+      if (records(k.git) || sub === 'add') {
         if (nested) return `git ${sub} inside a substitution, group or heredoc`;
         if (k.via) return `git ${sub} run through ${k.via}`;
         return null;
       }
-      if (!READ_ONLY.has(sub) && MENTION.test(own)) {
+      // A fast-forward's own `git pull` is not a mention; its arguments may be.
+      const judged = fastForwardOnly(k.git)
+        ? ` ${[...k.git.args.map((w) => w.text), ...st.heredocs.map((h) => h.body)].join(' ')}`
+        : own;
+      if (!READ_ONLY.has(sub) && MENTION.test(judged)) {
         return `git ${sub} running a git command that commits or pushes`;
       }
       return null;
@@ -655,7 +690,7 @@ export function possibleAliases(
     const k = kindOf(st);
     const calls = k.kind === 'git' ? [k.git] : k.kind === 'other' ? gitCallsIn(k.words) : [];
     for (const g of calls) {
-      if ('refuse' in g || READ_ONLY.has(g.sub) || commits(g.sub) || g.sub === 'add') continue;
+      if ('refuse' in g || reads(g.sub, g.args) || commits(g.sub) || g.sub === 'add') continue;
       const prefix = `alias.${g.sub}=`;
       const inline = g.config.find((c) => c.startsWith(prefix))?.slice(prefix.length) ?? null;
       out.push({ sub: g.sub, inline });
@@ -728,7 +763,7 @@ export function classify(command: string, aliases: ShellAliases = new Map()): Cl
   if (reason) return { kind: 'refuse', reason: `${reason}. ${SHAPE}` };
 
   const pairs = sts.map((st) => ({ st, k: kindOf(st) }));
-  const sensitive = pairs.some(({ k }) => k.kind === 'git' && commits(k.git.sub));
+  const sensitive = pairs.some(({ k }) => k.kind === 'git' && records(k.git));
   if (!sensitive) return { kind: 'none' };
 
   let base = '.';
@@ -748,6 +783,7 @@ export function classify(command: string, aliases: ShellAliases = new Map()): Cl
     if (st.group)
       return { kind: 'refuse', reason: `a group or function alongside a commit or push. ${SHAPE}` };
     if (k.kind === 'refuse') return { kind: 'refuse', reason: `${k.reason}. ${SHAPE}` };
+    if (k.kind === 'assign') continue;
     if (k.kind === 'cd') {
       if (i !== 0) return { kind: 'refuse', reason: `a cd after the first command. ${SHAPE}` };
       if (k.dir === null) {
@@ -762,13 +798,14 @@ export function classify(command: string, aliases: ShellAliases = new Map()): Cl
     if (k.kind === 'other')
       return {
         kind: 'refuse',
-        reason: `\`${k.head}\` alongside a commit or push. ${SHAPE}`,
+        reason: `${k.head ? `\`${k.head}\`` : 'an assignment with a substitution or redirect'} alongside a commit or push. ${SHAPE}`,
       };
     const g = k.git;
     const d = joinDir(base, g.dirs);
-    if (READ_ONLY.has(g.sub) || (g.sub === 'config' && readsConfig(g.args))) continue;
-    if (NEUTRAL.has(g.sub) && !commit && history === null && !push) {
-      if (MOVES_INDEX.has(g.sub)) movedIndex = g.sub;
+    if (reads(g.sub, g.args)) continue;
+    if ((NEUTRAL.has(g.sub) || fastForwardOnly(g)) && !commit && history === null && !push) {
+      // A pull moves HEAD, and `--squash` stages what it brings in.
+      if (MOVES_INDEX.has(g.sub) || g.sub === 'pull') movedIndex = g.sub;
       continue;
     }
     if (RESTAGE.has(g.sub)) {

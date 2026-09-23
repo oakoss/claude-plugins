@@ -67,6 +67,14 @@ describe('passes commands that do not commit or push', () => {
     'cd "$(git rev-parse --show-toplevel)" && rg -n \'commit\' plugins',
     '"$(git rev-parse --show-toplevel)/bin/run-bats" tests/commit-gate.bats',
     'git status\r\n',
+    'git -C ~/.code/github/scratch/rw-lab log --oneline -1',
+    'git -C "$DIR" status --short',
+    'git -C $DIR fetch origin',
+    'git checkout main && git pull --ff-only',
+    'git fetch && git pull --ff-only origin main',
+    'git pull --no-ff --ff-only',
+    'git -C $DIR config --get user.email',
+    'H=plugins/review-cycle && ls $H',
   ];
   for (const c of none) {
     test(JSON.stringify(c), () => {
@@ -202,6 +210,38 @@ describe('gates the accepted shapes', () => {
     expect(classify('g commit -m x', aliases)).toEqual(
       expect.objectContaining({ kind: 'gated', commit: PLAIN }),
     );
+  });
+  test('a statement of only assignments runs nothing, so it may precede a commit', () => {
+    for (const c of [
+      'MSG=/tmp/m && git commit -F "$MSG"',
+      'MSG=$TMPDIR/m && git commit -F "$MSG"',
+    ]) {
+      expect(classify(c), c).toEqual(expect.objectContaining({ kind: 'gated', commit: PLAIN }));
+    }
+  });
+  test('a refusal beside an assignment names the step it refuses', () => {
+    expect(readable('H=plugins && git add $H/a && git commit -F m')).toMatch(
+      /^git add with an argument built from a variable/,
+    );
+    expect(readable('ls && git commit -m x')).toMatch(/^`ls` alongside/);
+    expect(readable('X=$(date) && git commit -m x')).toMatch(
+      /^an assignment with a substitution or redirect alongside/,
+    );
+  });
+  test('a fast-forward pull is neutral before a push; a pull or merge that may merge is not', () => {
+    expect(classify('git pull --ff-only && git push')).toEqual(
+      expect.objectContaining({ kind: 'gated', history: null, push: true }),
+    );
+    for (const c of [
+      'git pull --ff-only --no-ff',
+      'git pull "$R" --ff-only',
+      'git merge --ff-only origin/main',
+      'git merge --ff-only -s ours origin/main',
+    ]) {
+      expect(classify(c), c).toEqual(
+        expect.objectContaining({ kind: 'gated', history: c.split(' ')[1] }),
+      );
+    }
   });
   test('everyday steps before the commit or push are allowed', () => {
     expect(classify('git checkout -b feat/x && git push -u origin feat/x')).toEqual(
@@ -536,6 +576,22 @@ describe('refuses every other shape that commits or pushes', () => {
     'git add --pathspec-from-file=list && git commit -m x',
     'git -C $DIR merge topic',
     'git -C a add x && git commit -m y',
+    'git -C $DIR push',
+    'git -C ~/repo ci -m x',
+    'git -c $KEY log',
+    'git -C',
+    "git pull --ff-only --upload-pack='git push x' ../other",
+    "timeout 30 git pull --ff-only --upload-pack='git push x' ../other",
+    'timeout 30 git pull --ff-only',
+    "git pull --ff-only <<'EOF'\ngit push origin main\nEOF",
+    'git config core.hooksPath /dev/null && git commit -m x',
+    'X=$(echo x >> a.ts) && git commit -am m',
+    'X=`touch a.ts` && git commit -m m',
+    'X=1 > a.ts && git commit -am m',
+    'X=$(git reset --soft HEAD~3) && git commit -m m',
+    'git pull --ff-only --squash && git commit -m x',
+    'git pull --ff-only && git commit -m x',
+    'x=$(git push) && git commit -m y',
   ];
   for (const c of refuse) {
     test(JSON.stringify(c), () => {
