@@ -1,8 +1,8 @@
 # review-cycle evals
 
 Local behavioral checks for the parts of the skill that are pure prose — the
-bats suites cover the hooks, but nothing else verifies the model actually
-follows the skill.
+unit and plugin tests cover the hooks module, but nothing else verifies the
+model actually follows the skill.
 
 The early-access gate is gone: the Claude Code changelog adds `claude plugin
 eval` under v2.1.269. Check for yourself rather than trusting this line, since

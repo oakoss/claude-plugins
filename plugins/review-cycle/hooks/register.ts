@@ -6,12 +6,14 @@ import type {
   MatchedHook,
   PromptOrigin,
   Register,
+  ToolCallResult,
 } from 'claude-code';
 
 import { aliasCommits, classify, possibleAliases, type Classification } from './command';
 import { grantOf, grantOfAnswers, NO_GRANT, type Grant } from './consent';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { parseShellAliases } from './shell';
+import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import {
   CONFIG_PATH,
   EMPTY_TREE,
@@ -509,6 +511,62 @@ async function onWrite(
   return next(e);
 }
 
+// The comment-slop scan runs after the tool, beside the gate's own Edit and
+// Write hooks and also when the gate is switched off.
+async function onEditSlop(
+  $: $,
+  e: Input<EditHook>,
+  next: NextOf<EditHook>,
+): Promise<Output<EditHook>> {
+  const r = await next(e);
+  return withSlop($, r, { path: e.file_path, text: e.new_string, replaced: e.old_string });
+}
+
+async function onWriteSlop(
+  $: $,
+  e: Input<WriteHook>,
+  next: NextOf<WriteHook>,
+): Promise<Output<WriteHook>> {
+  const r = await next(e);
+  return withSlop($, r, { path: e.file_path, text: e.content, replaced: null });
+}
+
+// A refused or failed call wrote nothing, so it is not scanned.
+async function withSlop<N extends string>(
+  $: $,
+  r: ToolCallResult<N>,
+  w: Omit<Written, 'file'>,
+): Promise<ToolCallResult<N>> {
+  if (r.deny !== undefined || r.isError === true) return r;
+  const note = await slopNote($, w);
+  return note === null ? r : { ...r, context: [...(r.context ?? []), note] };
+}
+
+// Never refuses: the write has already happened. Files outside a git
+// repository are not scanned.
+async function slopNote($: $, w: Omit<Written, 'file'>): Promise<string | null> {
+  const { path } = w;
+  if (skipsPath(path)) return null;
+  try {
+    const slash = path.lastIndexOf('/');
+    const dir = slash === -1 ? '.' : path.slice(0, slash) || '/';
+    const repo = await run($, ['git', '-C', dir, 'rev-parse', '--show-toplevel']);
+    if (repo.exitCode !== 0) {
+      if (repo.stderr.includes('not a git repository')) return null;
+      const why = firstLine(repo.stderr) || `exit ${repo.exitCode}`;
+      return `review-cycle: git failed (${why}); comment-slop scan skipped.`;
+    }
+    if (!(await $.fs.exists(path))) return null;
+    const { kind, size } = await $.fs.stat(path);
+    if (kind !== 'file' || size > MAX_BYTES) return null;
+    const findings = slopFindings({ ...w, file: await $.fs.read(path) });
+    return findings.length > 0 ? slopDirective(path, findings) : null;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return `review-cycle: comment-slop scan skipped (${why}).`;
+  }
+}
+
 // A settings file the gate could not read may be switching it off.
 function fileCheckFailed(path: string, next: Caught): { deny: string } | null {
   if (next.called || !isJsonPath(path)) return null;
@@ -803,6 +861,8 @@ function onBashError(
 
 export const register: Register = (on, options) => {
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
+  on('tool.call', { tool: 'Edit' }, onEditSlop);
+  on('tool.call', { tool: 'Write' }, onWriteSlop);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.
     on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatusOff);

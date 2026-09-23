@@ -13,7 +13,7 @@ One-time setup for using `review-cycle`. Run it once; re-running is safe and add
 
 Five named checks, each idempotent:
 
-1. **Gate prerequisites** — verifies `git` and `jq` are on `$PATH`, and that this Claude Code build loads hooks modules. The commit gate is a hooks module; where modules are off, it never loads and nothing is gated.
+1. **Gate prerequisites** — verifies `git` is on `$PATH`, and that this Claude Code build loads hooks modules. The commit gate is a hooks module; where modules are off, it never loads and nothing is gated.
 2. **Codex CLI** (optional) — verifies `codex --version` works
 3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
 4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
@@ -36,11 +36,10 @@ Remember whether we're inside a git repo. Project-scope options only apply when 
 
 ### Step 1.5: Gate prerequisites
 
-The commit gate runs `git` for every check, and the comment-slop hook reads its payload with `jq`. The gate is a hooks module, an early-access Claude Code feature; a build that has them off never loads it, and nothing is gated.
+The commit gate and the comment-slop check both run `git`. They live in a hooks module, an early-access Claude Code feature; a build with modules off never loads it, and nothing is gated.
 
 ```bash
 command -v git >/dev/null && echo "✓ git" || echo "⚠ git missing"
-command -v jq >/dev/null && echo "✓ jq" || echo "⚠ jq missing"
 ```
 
 Then call the `mcp__review-cycle__status` tool. The gate registers it when it loads, so:
@@ -48,10 +47,9 @@ Then call the `mcp__review-cycle__status` tool. The gate registers it when it lo
 - the tool answers → `✓ commit gate loaded`
 - the tool does not exist → `⚠ commit gate not loaded`. Either the gate is switched off (`review-cycle.enabled` in `/config`) or hooks modules are off in this build; for the latter, setting `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` to `1` in the `env` block of `~/.claude/settings.json` turns them on from the next session.
 
-For a missing tool, surface an install hint in the final summary:
+For a missing `git`, surface an install hint in the final summary:
 
-- `git`: macOS `xcode-select --install` or `brew install git`; Debian/Ubuntu `apt install git`
-- `jq`: macOS `brew install jq`; Debian/Ubuntu `apt install jq`
+- macOS `xcode-select --install` or `brew install git`; Debian/Ubuntu `apt install git`
 
 Continue with subsequent steps regardless — each one is independent.
 
@@ -141,7 +139,7 @@ Print a compact checklist of what was done. One line per item, single status gly
 
 ```text
 review-cycle init summary:
-  ✓ Prereqs: git, jq; commit gate loaded
+  ✓ Prereqs: git; commit gate loaded
   ✓ Codex CLI: codex-cli 0.130.0
   ✓ multi_agent enabled
   - Codex auth: no stored login — fine if you authenticate via OPENAI_API_KEY, else run codex login

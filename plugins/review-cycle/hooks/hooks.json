@@ -1,19 +1,4 @@
 {
-  "description": "review-cycle: refuses a commit unless a reviewer saw exactly what it records and the user asked for it; refuses a push the user did not ask for.",
-  "modules": ["./register.ts"],
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/posttool-slop.sh",
-            "timeout": 10,
-            "statusMessage": "review-cycle: scanning for comment slop"
-          }
-        ]
-      }
-    ]
-  }
+  "description": "review-cycle: refuses a commit unless a reviewer saw exactly what it records and the user asked for it; refuses a push the user did not ask for; flags comment slop in files the agent writes.",
+  "modules": ["./register.ts"]
 }
