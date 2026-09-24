@@ -260,6 +260,8 @@ In a single conversation turn, invoke ALL of the following:
 
    A question with no command behind it is still a topic. If you cannot name what would answer it, omit the question for that leg — send the prompt below with the `Settle this first...` sentence dropped — rather than manufacture one that only sounds specific.
 
+   **Keep a question about a guard inside the guard's stated scope.** Ask whether it catches the cases its documentation says it covers, not whether a leg can evade it. Shell syntax, encodings and environment tricks are open-ended: a leg sent to find a bypass always finds one, and each find spends an iteration on a case nobody meets by accident. Leave out evasions only a deliberate agent would write, especially ones the project documents as out of scope. A gap an ordinary command falls into, such as a release script that commits, is still a finding, whether or not the documentation lists it: the test is whether a well-meaning agent could make that mistake.
+
    Each spawn pattern:
 
    ```js

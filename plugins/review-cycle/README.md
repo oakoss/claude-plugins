@@ -93,6 +93,14 @@ New (this plugin):
 
 ## The commit gate
 
+### What it guards against
+
+The gate is there for a well-meaning agent that commits too early: before a review, or before you asked. It checks the commands agents write, such as `git commit`, `git add … && git commit`, a push, or an alias for one, before they run, and refuses one that names a commit or push in a shape it cannot read rather than guess. A command that commits from inside something the gate cannot see into, such as `npm version`, `make release` or a project script, is not checked beforehand: a commit it makes without a review or without your asking is reported after the command runs, so the agent tells you, but it is not refused. If the gate cannot read your shell aliases, an aliased commit is not checked, and the first command the gate lets through unchecked carries a note saying so.
+
+It is not a sandbox. An agent set on getting around it can: an obscure shell construct or an environment trick can run git where the gate does not look, and your own shell (`!`) is never stopped. For containment against an adversarial agent, use an OS-level sandbox; the gate's job is to make the careless path fail loudly, not to make evasion impossible. A gap an ordinary command falls into is a bug; one that needs a deliberately obscure command is out of scope.
+
+### How it works
+
 The gate is a hooks module (`hooks/register.ts`), not a shell script: it keeps what it observes in memory for the session, where no tool the agent holds can reach. It watches:
 
 - **Your prompts.** Only prompts the engine stamps as yours — typed at the terminal, from the Remote Control bridge, or the SDK host's own turn — can grant a commit or push. A grant lasts until your next prompt.
