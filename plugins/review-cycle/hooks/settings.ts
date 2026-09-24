@@ -87,7 +87,8 @@ export function applyEdit(
   return all ? text.replaceAll(old, replacement) : text.replace(old, () => replacement);
 }
 
-const CLAUDE_DIR = /\.claude\b|CLAUDE_CONFIG_DIR/i;
+// `.claude` itself: a plugin's `.claude-plugin/` holds no settings.
+const CLAUDE_DIR = /\.claude(?![-\w])|CLAUDE_CONFIG_DIR/i;
 const WRITES =
   /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|python3?|node|bun|deno|osascript)\b|\b(sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z]*i|--in-place)/;
 // Removing a marketplace uninstalls the plugins installed from it.
