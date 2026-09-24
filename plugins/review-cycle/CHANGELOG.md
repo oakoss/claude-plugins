@@ -4,6 +4,47 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.21.0 (2026-09-24)
+
+### Added
+
+### The gate asks you before a commit or push you did not ask for
+
+When your latest message does not ask for a commit or push, the gate no longer just refuses. It asks you in Claude Code's own dialog, with fixed choices: **Commit** / **Don't commit**, **Push** / **Don't push**, or **Commit and push** / **Don't**. It asks only once the review check has passed, so it never asks about a commit the review check already refuses. The question shows the whole command, every line of it, with any shell aliases it uses expanded, and how many reviewed files the commit records. Characters that could hide or reorder text are shown as `�`.
+
+- Picking the first choice allows that one command. The gate checks the review again once you answer, and refuses if what the commit records changed while the dialog was open.
+- **Don't…** refuses, and the gate does not ask about that verb again until your next message.
+- A message you send while the dialog is open, or while the gate re-checks after your answer, replaces the question, and nothing runs. The same holds for a command your typed request allowed: a newer message stops it if it has not started yet.
+- Text typed under "Type something." grants nothing. It is passed to the agent, and a retry asks again.
+- Esc, "Chat about this", and a `-p` run, where no one can answer, refuse as before. The refusal names the reason.
+- A command longer than 500 characters as shown is refused without asking, because the dialog could not show all of it. So is any command the gate would ask about when your shell defines an alias named `git`, since the gate reads `git` as git and could not show what the alias runs.
+- A command that is interrupted while the gate checks it does not run.
+- While one question is open, another command that needs one is refused rather than queued, and the agent is told to wait for the answer.
+
+The agent's own question dialogs no longer grant a commit or push. Reading the options the agent wrote let its wording decide what your pick meant: "Commit first (Recommended)" granted nothing, and one question that only mentioned a commit could veto another (cpl-gps). The gate compares your pick with its own labels exactly, and the agent can neither see the question nor answer it. A plugin that answers question dialogs on your behalf can still answer the gate's.
+
+Typed requests ("commit it", "ship it") still grant with no dialog, for the rest of your message.
+
+### Fixed
+
+### `[ … ]` beside a commit, push or pull no longer reads as a glob
+
+The commit gate refused a command such as `git pull --ff-only && [ -z "$x" ]` as "a command name the shell would expand": it treated any `[` or `{` in a word as the start of a pattern. The shell starts a bracket or brace pattern only when an unquoted `]` or `}` closes it in the same word, so a lone `[`, the test command, is an ordinary word. The gate now reads it that way, and `[ … ]` is judged exactly like `test …`. Words such as `[g]it` or `{a,b}.ts` are still patterns and still refused where they were.
+
+zsh's extended-glob characters now count as patterns too: `#`, `^`, and `~` inside a word. Under `setopt extendedglob`, `git{#` or `g#it` expands to `git`, so a command name or git subcommand using them is refused. Arguments such as `HEAD^` and `HEAD~1` are unaffected.
+
+### Aliases are checked from the first command of a session
+
+The gate used to read your shell aliases only from Claude Code's shell snapshot, which Claude Code writes only once a session's first Bash command has run. Until then, an aliased commit or push (`gcam "msg"`, `gp`) went unchecked, and every session opened with a note saying the aliases could not be read.
+
+The gate now reads the aliases itself when the session starts, the same way Claude Code builds its snapshot: `CLAUDE_CODE_SHELL`, else `$SHELL`, whichever names zsh or bash, else zsh, run as a login shell sourcing `~/.zshrc` or `~/.bashrc` with no input and `CLAUDECODE=1` set, then listing them with the same pipeline the snapshot uses; with no rc file there are no aliases, as in the snapshot. On a large zsh setup this took about 190 ms and returned the same 238 aliases as the snapshot. If the read fails, takes more than ten seconds, or the rc file never gets to the end of it, the gate falls back to the snapshot as before.
+
+Reading alias values is also more exact: zsh's quoting of a value that ends in a quote, a tab inside a value, and a value bash prints across several lines are now read as the shell reads them.
+
+### An alias after `time -p` is expanded
+
+bash reads the word after `time -p` as a command, so an alias there runs. The gate now expands it too: `time -p gcam "msg"` is judged as the commit it is, where before it passed unchecked. A reserved word such as `time` or `then` now counts only where the shell reads it as one, so `echo time gcam` no longer expands `gcam`.
+
 ## 0.20.0 (2026-09-23)
 
 ### Added

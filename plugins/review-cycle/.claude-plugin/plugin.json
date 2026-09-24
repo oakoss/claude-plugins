@@ -1,7 +1,7 @@
 {
   "name": "review-cycle",
   "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, and admits a commit only when you asked for it and a reviewer saw exactly what it records.",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "author": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",
