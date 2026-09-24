@@ -875,3 +875,57 @@ describe("the command as the gate's question shows it", () => {
     );
   });
 });
+
+// The refusal with the command it names left out, or the kind.
+function verdict(command: string): string {
+  const r = classify(command);
+  return r.kind === 'refuse' ? r.reason.replace(/^`[^`]+`/, '<cmd>') : r.kind;
+}
+
+describe('glob and brace patterns', () => {
+  test.each([
+    ['g*t commit -m x', 'a command name the shell would expand'],
+    ['[g]it commit -m x', 'a command name the shell would expand'],
+    ['git p[u]sh', 'a subcommand the shell would expand'],
+    ['git add {a,b}.ts && git commit -m x', 'brace expansion'],
+    // Quoted text inside a closed bracket or brace leaves it a pattern.
+    ['[g"h"]it commit -m x', 'a command name the shell would expand'],
+    ['git p[u"s"]h', 'a subcommand the shell would expand'],
+    ['git add {a,"b"}.ts && git commit -m x', 'brace expansion'],
+    // zsh's extended globs need no closer.
+    ['setopt extendedglob && git{# commit -m x', 'a command name the shell would expand'],
+    ['g#it commit -m x', 'a command name the shell would expand'],
+    ['^gxt commit -m x', 'a command name the shell would expand'],
+    ['g~xt commit -m x', 'a command name the shell would expand'],
+  ])('%s is refused', (command, reason) => {
+    const r = classify(command);
+    expect(r.kind).toBe('refuse');
+    expect(r.kind === 'refuse' && r.reason).toContain(reason);
+  });
+  test.each([
+    ['git pull -q --ff-only && [ -z "x" ]', 'git pull -q --ff-only && test -z "x"'],
+    ['[ -n "x" ] && git push', 'test -n "x" && git push'],
+  ])('%s reads as the test command does', (bracketed, plain) => {
+    expect(verdict(bracketed)).toBe(verdict(plain));
+    expect(verdict(bracketed)).not.toContain('would expand');
+  });
+  test('an unclosed bracket or brace is a plain word', () => {
+    expect(verdict('git p[ush')).not.toContain('would expand');
+    expect(classify('git add a{ && git commit -m x').kind).toBe('gated');
+  });
+  test.each([
+    ['[g"]"it commit -m x', 'none'],
+    ["[g']'it commit -m x", 'none'],
+    [String.raw`[g\]it commit -m x`, 'none'],
+    [']g[it commit -m x', 'none'],
+    ['git add {a,b"}".ts && git commit -m x', 'gated'],
+  ])('%s: a quoted or escaped closer leaves a plain word', (command, kind) => {
+    expect(classify(command).kind).toBe(kind);
+  });
+  test('a glob in a git add path is judged as usual', () => {
+    expect(classify('git add *.ts && git commit -m x').kind).toBe('gated');
+  });
+  test("zsh's extended-glob characters in an argument are left alone", () => {
+    expect(classify('git log HEAD^ && git show HEAD~1 && git push').kind).toBe('gated');
+  });
+});
