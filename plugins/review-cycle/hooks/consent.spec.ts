@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, grantOfAnswers } from './consent';
+import { grantOf } from './consent';
 
 const NONE = { commit: false, push: false };
 const COMMIT = { commit: true, push: false };
@@ -171,17 +171,6 @@ describe('an affirmative grants what the previous answer asked', () => {
     ]) {
       expect(grantOf('yes', q)).toEqual(NONE);
     }
-  });
-  test('a declined verb in one dialog answer wins over a grant in another', () => {
-    expect(
-      grantOfAnswers({
-        'Commit and push this?': 'Yes',
-        'Push now, or keep it local for now?': 'Keep it local',
-      }),
-    ).toEqual(COMMIT);
-    expect(grantOfAnswers({ 'Commit the change?': 'Review, then commit (Recommended)' })).toEqual(
-      COMMIT,
-    );
   });
   test('yes to a bare offer', () => {
     expect(grantOf('yes', 'Commit it?')).toEqual(COMMIT);

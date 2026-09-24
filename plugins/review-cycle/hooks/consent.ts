@@ -15,7 +15,7 @@ export type Grant = Readonly<{ commit: boolean; push: boolean }>;
 
 export const NO_GRANT: Grant = Object.freeze({ commit: false, push: false });
 
-type Verb = keyof Grant;
+export type Verb = keyof Grant;
 type MutableGrant = { commit: boolean; push: boolean };
 
 const REQUESTED: Record<string, Verb[]> = {
@@ -373,29 +373,6 @@ function asked(answer: string): Grant {
     for (const c of clauses(q)) grammarGrant(c.replace(CONTRAST, ''), OFFERED, OFFER_LEAD, g);
   }
   return Object.freeze(g);
-}
-
-// Answers the user picked in the question dialog, keyed by the question: each
-// is read against its own question, as a typed reply is against the last one.
-// A verb any answer turns down stays down, whatever another answer grants:
-// "Commit and push? Yes" beside "Push now or keep it local? Keep it local".
-export function grantOfAnswers(answers: Readonly<Record<string, unknown>>): Grant {
-  const granted: MutableGrant = { commit: false, push: false };
-  const declined: MutableGrant = { commit: false, push: false };
-  for (const [question, answer] of Object.entries(answers)) {
-    if (typeof answer !== 'string') continue;
-    // The dialog's own marker is not part of the answer.
-    const one = grantOf(answer.replace(/\s*\(recommended\)/i, ''), question);
-    const named = `${question} ${answer}`;
-    for (const verb of ['commit', 'push'] as const) {
-      if (one[verb]) granted[verb] = true;
-      else if (new RegExp(`\\b${verb}`, 'i').test(named)) declined[verb] = true;
-    }
-  }
-  return Object.freeze({
-    commit: granted.commit && !declined.commit,
-    push: granted.push && !declined.push,
-  });
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
