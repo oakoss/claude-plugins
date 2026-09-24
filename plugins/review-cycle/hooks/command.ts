@@ -85,10 +85,10 @@ const KEYWORDS = new Set([
 // conflict resolution instead, which is new content, so those are refused.
 const HISTORY = new Set(['merge', 'cherry-pick', 'revert', 'pull', 'rebase']);
 // A mention of a git command that commits or pushes.
-// `git` and the subcommand as separate words, so `pre-commit`, `.git/hooks/`
-// and `fix/merge-conflicts` do not count.
+// `git` and the subcommand as separate words, so `pre-commit`, `.git/hooks/`,
+// `fix/merge-conflicts` and helpers like `git merge-base` do not count.
 const MENTION =
-  /(^|[\s;&|('"`=/])git(\s+-\S+(\s+[^\s-]\S*)?)*\s+(commit|push|merge|cherry-pick|revert|am|pull|rebase)\b|(^|[\s;&|('"`=/])git-(commit|push|merge|cherry-pick|revert|am|pull|rebase)\b/;
+  /(^|[\s;&|('"`=/])git(\s+-\S+(\s+[^\s-]\S*)?)*\s+(commit|push|merge(?!-(base|tree|file)\b)|cherry-pick|revert|am|pull|rebase)\b|(^|[\s;&|('"`=/])git-(commit|push|merge(?!-(base|tree|file)\b)|cherry-pick|revert|am|pull|rebase)\b/;
 // sed's `e` command and s///e, and awk's system() and pipes, run shell code.
 const RUNS_SHELL: Record<string, RegExp> = {
   sed: /\/[gipIwmM0-9]*e[gipIwmM0-9]*(['"\s;}]|$)|(^|[\s;'"{])e(\s|$)/,
@@ -166,6 +166,7 @@ const READ_ONLY = new Set([
   'cat-file',
   'rev-list',
   'name-rev',
+  'merge-base',
 ]);
 // Author and committer identity, and GIT_TERMINAL_PROMPT; any other GIT_*
 // variable can point git at a different index, directory or object store than
