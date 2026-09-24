@@ -8,7 +8,7 @@ After you implement changes, `review-cycle` fans out parallel reviewers, applies
 
 The gate decides at commit time, from two questions:
 
-- **Did you ask for it?** The latest message you typed has to ask for a commit ("commit it", "ship it", "go ahead and commit") or answer yes to the agent's question about one, typed or picked in its question dialog. Pushes need the same. Messages from other sessions, background-task notifications and subagents never count.
+- **Did you ask for it?** The latest message you typed has to ask for a commit ("commit it", "ship it", "go ahead and commit") or answer yes to the agent's question about one. Pushes need the same. When it doesn't, the gate asks you itself, in a dialog with fixed choices (**Commit** / **Don't commit**, **Push** / **Don't push**), only once the review check has passed. The dialog shows the whole command, with any shell aliases it uses expanded, and picking the first choice allows that one command; the gate re-checks the review afterwards, and refuses if what the commit records changed while you were deciding. Turning it down stops the gate asking again until your next message, and a message you send while the dialog is open replaces the question. The agent's own question dialogs never grant anything. Messages from other sessions, background-task notifications and subagents never count, and a `-p` run, with no one to ask, is refused. Another plugin that answers question dialogs on your behalf can answer the gate's too.
 - **Did a reviewer see it?** Every path the commit records must hold content some review-cycle reviewer saw — unchanged from when that reviewer was spawned until it reported. An edit after the last review, an inline fix included, is unreviewed until a reviewer sees it again.
 
 Both answers come from what the gate watched in this session: which reviewers the engine spawned, what the working tree held when each started and finished, and which prompts you typed. None of it is a file, so there is nothing to mark, accept, or forge.
@@ -206,7 +206,13 @@ The gate did not load. Run `/review-cycle:init`: it reports whether the gate is 
 The refusal lists the paths and why. `edited after the last review` means content changed after the last reviewer saw it — an inline fix, cleanup, or an edit made while a reviewer was running. Run `/review-cycle:review` again; it scopes itself to what changed. `never reviewed` after a session restart is expected: the gate remembers reviews for the session only.
 
 **"The user's latest message doesn't ask for a commit."**
-Say so in your next message ("commit it"). A request made several prompts ago does not carry over, and neither does one relayed by another session.
+The gate asked and got no answer; the refusal names why, such as a dismissed dialog, or a `-p` run with no one to ask. To commit anyway, ask in your next message ("commit it"). A request made several prompts ago does not carry over, and neither does one relayed by another session.
+
+**"The user turned down the commit when the gate asked."**
+You picked **Don't commit**, so the gate does not ask again until your next message. Ask for the commit there if you changed your mind.
+
+**"This command is too long for the gate to show the user."**
+The gate shows the whole command in its dialog, and does not ask about one longer than 500 characters as shown. Ask for the commit in your message, or have the agent use a shorter commit message. The gate also does not ask when your shell defines an alias named `git`, since it could not show what that alias runs; ask in your message instead.
 
 **A commit landed and the agent reported unreviewed content.**
 Usually a pre-commit hook that rewrites files (a formatter) changed content after the gate checked it. Run the formatter before the review — the cycle's canonicalize phase does this when it can find the project's commands — or scope the hook to staged files.

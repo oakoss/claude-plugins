@@ -10,8 +10,14 @@ import type {
 } from 'claude-code';
 
 import { added, madeBy, MARK, type Entry } from './attribution';
-import { aliasCommits, classify, possibleAliases } from './command';
-import { grantOf, grantOfAnswers, NO_GRANT, type Grant } from './consent';
+import {
+  aliasCommits,
+  classify,
+  possibleAliases,
+  shownCommand,
+  type Classification,
+} from './command';
+import { grantOf, NO_GRANT, type Grant, type Verb } from './consent';
 import {
   coverageOf,
   firstLine,
@@ -77,6 +83,8 @@ type Leg = { type: string; counts: boolean; spawnTree: string | null; done: bool
 // prompt queued into the running turn updates it.
 type Message = {
   grant: Grant;
+  // Verbs the user turned down when the gate asked, so it does not ask again.
+  declined: Grant;
   // The working tree when it arrived; null when unreadable.
   tree: string | null;
   // Whether the agent was told to review since it arrived.
@@ -91,6 +99,10 @@ type GateState = {
   reviews: Review[];
   legs: Map<string, Leg>;
   message: Message;
+  // How many messages the user has typed, queued ones included.
+  messages: number;
+  // Whether the gate's question to the user is on screen.
+  asking: boolean;
   lastAnswer: string;
   // The user's shell aliases, which the Bash tool expands.
   shellAliases: Map<string, string>;
@@ -111,7 +123,9 @@ const state: GateState = {
   reviews: [],
   legs: new Map(),
   // No message yet, so nothing to nudge about.
-  message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
+  message: { grant: NO_GRANT, declined: NO_GRANT, tree: null, nudged: true, prWindow: false },
+  messages: 0,
+  asking: false,
   lastAnswer: '',
   shellAliases: new Map(),
   aliasError: null,
@@ -272,12 +286,14 @@ async function onPromptSubmit(
   next: NextOf<HookFor<'prompt.submit'>>,
 ): Promise<Output<HookFor<'prompt.submit'>>> {
   if (HUMAN.has(e.origin.kind)) {
+    state.messages++;
     const grant = grantOf(e.text, state.lastAnswer);
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
       // Updated in place: a pending nudge's rollback holds this record.
       state.message.grant = grant;
+      state.message.declined = NO_GRANT;
       state.message.nudged = false;
     } else {
       let tree: string | null = null;
@@ -287,7 +303,7 @@ async function onPromptSubmit(
       } catch {
         // No starting tree means no nudge this message; the commit gate still holds.
       }
-      state.message = { grant, tree, nudged: false, prWindow: false };
+      state.message = { grant, declined: NO_GRANT, tree, nudged: false, prWindow: false };
     }
   }
   return next(e);
@@ -332,31 +348,6 @@ async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<vo
     .catch(() => {
       message.nudged = false;
     });
-}
-
-// The user's pick in the question dialog is their input as much as a typed
-// prompt, and the engine, not the model, produces the result. The generated
-// types list no AskUserQuestion tool for a matcher to name, so this hook sees
-// every call and picks that one out itself.
-async function onAsk(
-  $: $,
-  e: Input<HookFor<'tool.call'>>,
-  next: NextOf<HookFor<'tool.call'>>,
-): Promise<Output<HookFor<'tool.call'>>> {
-  if ((e.tool as string) !== 'AskUserQuestion' || e.agentId) return next(e);
-  // Only the model's own question counts: another plugin's `$.ui.ask` raises
-  // the same dialog, asking about something else.
-  if (next.origin.plugin !== 'engine') return next(e);
-  // Answers the model supplied with the call are not the user's.
-  const supplied = (e as { answers?: unknown }).answers;
-  if (supplied !== undefined && supplied !== null) return next(e);
-  const r = await next(e);
-  if (r.deny !== undefined) return r;
-  const answers = (r.result as { answers?: unknown } | undefined)?.answers;
-  if (answers !== null && typeof answers === 'object') {
-    state.message.grant = grantOfAnswers(answers as Record<string, unknown>);
-  }
-  return r;
 }
 
 function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {
@@ -584,6 +575,9 @@ function onMonitorError(
 }
 
 async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise<Output<BashHook>> {
+  // A newer message overtakes anything decided from this one.
+  const message = state.messages;
+  let granted = state.message.grant;
   if (bashTouchesGate(e.command)) return deny(SWITCHED_BY_USER);
   await loadShellAliases($);
   const cls = classify(e.command, state.shellAliases);
@@ -637,32 +631,138 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
     );
   }
 
-  const commits = cls.commit !== null || cls.history !== null;
-  if ((commits && !state.message.grant.commit) || (cls.push && !state.message.grant.push)) {
-    const wants = [commits ? 'commit' : null, cls.push ? 'push' : null]
-      .filter(Boolean)
-      .join(' or ');
-    return deny(
-      `the user's latest message doesn't ask for a ${wants}. Ask them first; staging with git add needs no permission.`,
-    );
-  }
+  // Reviewed first, so the user is never asked about a commit the gate refuses.
+  const before = await reviewed($, root.top, cls);
+  if (typeof before === 'string') return deny(before);
 
-  if (cls.commit && !cls.commit.dryRun) {
-    const head = await headOf(gitOf($), root.top);
-    // An amend replaces HEAD, so what it records is judged against HEAD's parent.
-    const base =
-      cls.commit.amend && head !== EMPTY_TREE ? await parentTree(gitOf($), root.top) : head;
-    const prospect = await prospectTree(gitOf($), root.top, cls);
-    const c =
-      prospect && base ? await coverageOf(gitOf($), root.top, base, prospect, state.reviews) : null;
-    if (c === null) throw new Error('could not compute the tree this commit would record');
-    if (uncoveredOf(c.rows).length > 0) {
+  const commits = cls.commit !== null || cls.history !== null;
+  const verbs: Verb[] = [];
+  if (commits && !granted.commit) verbs.push('commit');
+  if (cls.push && !granted.push) verbs.push('push');
+  if (verbs.length > 0) {
+    const refusal = await ask($, e.command, verbs, before?.files ?? null, message, next.signal);
+    if (refusal !== null) return deny(refusal);
+    granted = withVerbs(granted, verbs);
+    // The dialog waits on a person, and the tree can change meanwhile.
+    const after = await reviewed($, root.top, cls);
+    if (typeof after === 'string') return deny(after);
+    if (verbs.includes('commit') && after?.tree !== before?.tree) {
       return deny(
-        `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then commit.`,
+        'what this commit records changed while the gate was asking the user, so the answer does not cover it. Run it again to ask about what it records now.',
       );
     }
   }
-  return watch($, root, e, next, cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push');
+  const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
+  return watch($, root, e, next, checked, granted, message);
+}
+
+// The tree a real commit would record and how many paths it changes, or the
+// refusal when a reviewer has not seen all of it; null for a command that
+// records no new content.
+async function reviewed(
+  $: $,
+  top: string,
+  cls: Extract<Classification, { kind: 'gated' }>,
+): Promise<{ tree: string; files: number } | string | null> {
+  if (!cls.commit || cls.commit.dryRun) return null;
+  const head = await headOf(gitOf($), top);
+  // An amend replaces HEAD, so what it records is judged against HEAD's parent.
+  const base = cls.commit.amend && head !== EMPTY_TREE ? await parentTree(gitOf($), top) : head;
+  const prospect = await prospectTree(gitOf($), top, cls);
+  const c =
+    prospect && base ? await coverageOf(gitOf($), top, base, prospect, state.reviews) : null;
+  if (prospect === null || c === null) {
+    throw new Error('could not compute the tree this commit would record');
+  }
+  if (uncoveredOf(c.rows).length > 0) {
+    return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then commit.`;
+  }
+  return { tree: prospect, files: c.rows.length };
+}
+
+function withVerbs(g: Grant, verbs: readonly Verb[]): Grant {
+  return Object.freeze({
+    commit: g.commit || verbs.includes('commit'),
+    push: g.push || verbs.includes('push'),
+  });
+}
+
+// Longer than this, a command is not shown in the dialog, so it is not asked about.
+const MAX_SHOWN = 500;
+
+// Fixed labels keep the agent's wording from deciding what a pick means. A second
+// question is refused, not queued: waiting would count against its hook's time limit.
+async function ask(
+  $: $,
+  command: string,
+  verbs: Verb[],
+  files: number | null,
+  message: number,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const wants = verbs.join(' and ');
+  const turned = verbs.filter((v) => state.message.declined[v]);
+  if (turned.length > 0) {
+    return `the user turned down the ${turned.join(' and ')} when the gate asked. Do not try it again unless their next message asks for it.`;
+  }
+  if (state.messages !== message) {
+    return `the user sent a new message while the gate was checking this ${wants}, so it did not ask them. Act on their message.`;
+  }
+  if (state.asking) {
+    return `the gate is already asking the user about another command, so it did not ask about this ${wants}. Wait for that answer, then run it again.`;
+  }
+  if (signal.aborted) {
+    return `the call was interrupted before the gate asked about the ${wants}, so it did not ask them.`;
+  }
+  // The reader leaves an alias for git itself unexpanded, so the dialog could
+  // not show what it runs.
+  if (state.shellAliases.has('git')) {
+    return `the user's shell defines an alias for git, so the gate cannot show them what this ${wants} runs and did not ask. Ask them in your reply; a request in their next message allows it.`;
+  }
+  const shown = shownCommand(command, state.shellAliases);
+  if (shown.length > MAX_SHOWN) {
+    return `this command is too long for the gate to show the user (${shown.length} characters; ${MAX_SHOWN} at most), so it did not ask them. Run the ${wants} as a shorter command, with a short -m message, or ask the user to run it.`;
+  }
+  const yes = verbs.length === 2 ? 'Commit and push' : verbs[0] === 'commit' ? 'Commit' : 'Push';
+  const no = verbs.length === 2 ? "Don't" : `Don't ${verbs[0]}`;
+  const what =
+    files === null || !verbs.includes('commit')
+      ? ''
+      : ` (${files} reviewed file${files === 1 ? '' : 's'})`;
+  let answer: string;
+  state.asking = true;
+  try {
+    const asked = $.ui.ask(`The agent wants to ${wants}${what}: ${shown}. Allow it?`, {
+      options: [yes, no],
+      header: 'review-cycle',
+    });
+    // The dialog outlives an abandoned call, and must not hold the next one off.
+    const abandoned = new Promise<never>((_, reject) => {
+      const stop = () => reject(new Error('the call was interrupted'));
+      if (signal.aborted) stop();
+      signal.addEventListener('abort', stop, { once: true });
+    });
+    void asked.catch(() => null);
+    void abandoned.catch(() => null);
+    answer = await Promise.race([asked, abandoned]);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return `the user's latest message doesn't ask for a ${wants}, and the gate got no answer when it asked them (${why}). Ask them first; staging with git add needs no permission.`;
+  } finally {
+    state.asking = false;
+  }
+  // An answer to a question the user's newer message has overtaken settles nothing.
+  if (state.messages !== message) {
+    return `the user sent a new message while the gate was asking about the ${wants}, so nothing ran. Act on their message.`;
+  }
+  if (answer === yes) return null;
+  if (answer === no) {
+    state.message.declined = withVerbs(state.message.declined, verbs);
+    return `the user turned down the ${wants} when the gate asked. Do not try it again unless their next message asks for it.`;
+  }
+  // Text typed under "Type something." is not a pick, so it grants nothing;
+  // the agent reads it, and a retry asks again.
+  return `the user answered the gate's question about the ${wants} with: ${JSON.stringify(answer)}. Nothing ran; act on what they said.`;
 }
 
 type Checked = 'commit' | 'history' | 'push' | 'unchecked';
@@ -685,6 +785,10 @@ async function watch(
   e: Input<BashHook>,
   next: NextOf<BashHook>,
   checked: Checked,
+  // What the user allowed for this call: their message, or their pick.
+  granted: Grant = state.message.grant,
+  // The message count `granted` was read at; a newer message stops the call.
+  message: number | null = null,
 ): Promise<Output<BashHook>> {
   if (root === null) return next(e);
   const git = gitOf($);
@@ -699,6 +803,15 @@ async function watch(
   } catch (error) {
     startError = error;
   }
+  if (message !== null && state.messages !== message) {
+    return deny(
+      'the user sent a new message while the gate was checking this command, so it did not run. Act on their message.',
+    );
+  }
+  // Past an abort the dispatch has moved on, so nothing would report what ran.
+  if (message !== null && next.signal.aborted) {
+    return deny('the call was interrupted while the gate was checking it, so it did not run.');
+  }
   const r = await next(e);
   const notes: string[] = [];
   const failed = (what: string, error: unknown) => {
@@ -712,7 +825,7 @@ async function watch(
   } else {
     try {
       const pushed = await pushedRefs(git, root.top, start.refs, await remoteRefs(git, root.top));
-      if (pushed.length > 0 && !state.message.grant.push) {
+      if (pushed.length > 0 && !granted.push) {
         notes.push(
           `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -721,7 +834,7 @@ async function watch(
       failed('pushed', error);
     }
     try {
-      notes.push(...(await commitNotes(git, root.top, start, checked)));
+      notes.push(...(await commitNotes(git, root.top, start, checked, granted)));
     } catch (error) {
       failed('committed', error);
     }
@@ -735,6 +848,7 @@ async function commitNotes(
   root: string,
   start: Start,
   checked: Checked,
+  granted: Grant,
 ): Promise<string[]> {
   const after = await headOf(git, root);
   if (after === EMPTY_TREE) {
@@ -784,7 +898,7 @@ async function commitNotes(
       `review-cycle: commit ${short} records content no reviewer saw (${explain(c)}). ${why} Tell the user.`,
     );
   }
-  if (!state.message.grant.commit) {
+  if (!granted.commit) {
     notes.push(
       `review-cycle: commit ${short} landed without the user asking for one. Tell the user.`,
     );
@@ -863,7 +977,11 @@ function onBashError(
   next: NextOf<BashHook> & Caught,
 ): ReturnType<CatchHandler<BashHook>> {
   if (next.called) return next(e);
-  const why = next.error.message ?? next.error.kind;
+  const why =
+    next.error.message ??
+    (next.error.kind === 'timeout'
+      ? 'it ran out of time; running it again may work'
+      : next.error.kind);
   const cls = classify(e.command, state.shellAliases);
   if (cls.kind === 'none' && possibleAliases(e.command, state.shellAliases).length === 0) {
     return withNote(
@@ -872,7 +990,7 @@ function onBashError(
     );
   }
   return deny(
-    `the gate failed while checking this command (${why}), so it is refused. The user can commit from their own terminal.`,
+    `the gate failed while checking this command (${why}), so it is refused. The user can run it from their own terminal.`,
   );
 }
 
@@ -890,7 +1008,6 @@ export const register: Register = (on, options) => {
   on('agent.spawn', onAgentSpawn);
   on('turn.complete', onTurnComplete);
   on('tool.call', { tool: 'Skill' }, onSkill);
-  on('tool.call', onAsk);
   on('tool.call', { tool: 'Bash' }, onBash).catch(onBashError);
   on('tool.call', { tool: 'Edit' }, onEdit).catch(onEditError);
   on('tool.call', { tool: 'Write' }, onWrite).catch(onWriteError);

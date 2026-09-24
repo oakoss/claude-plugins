@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { aliasCommits, classify, possibleAliases } from './command';
+import { aliasCommits, classify, possibleAliases, shownCommand } from './command';
 import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
 
 const HEREDOC_MESSAGE = `git commit -m "$(cat <<'EOF'
@@ -848,5 +848,30 @@ describe('the alias read mirrors the snapshot', () => {
     for (const c of ['f() { gp; }', 'function f { gp; }']) {
       expect(expanded(c, [['gp', 'git push']]), c).toBe(c.replace('gp', 'git push'));
     }
+  });
+});
+
+describe("the command as the gate's question shows it", () => {
+  const cases: [string, string][] = [
+    ['git push', 'git push'],
+    ['  git   push\t--tags  ', 'git push --tags'],
+    ['git status\r\ngit push\n', 'git status ⏎ git push'],
+    ['git status  \n\n   git push', 'git status ⏎ git push'],
+    ['git push origin 　main', 'git push origin main'],
+    ['git push origin main #‮​ x', 'git push origin main #�� x'],
+    ['git status git push', 'git status�git push'],
+    ['git status git push', 'git status�git push'],
+    ['git commit -m "a\u001B[2Jb"', 'git commit -m "a�[2Jb"'],
+  ];
+  for (const [command, want] of cases) {
+    test(JSON.stringify(command), () => {
+      expect(shownCommand(command)).toBe(want);
+    });
+  }
+  test('a shell alias is shown with its expansion', () => {
+    const aliases = new Map([['ship', 'git status; git push --force origin main']]);
+    expect(shownCommand('ship', aliases)).toBe(
+      'ship (aliases expanded: git status; git push --force origin main)',
+    );
   });
 });
