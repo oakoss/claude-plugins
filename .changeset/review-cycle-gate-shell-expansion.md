@@ -2,9 +2,7 @@
 review-cycle: patch
 ---
 
-### The gate reads a `git` shell alias and a `(` inside a word the way the shell does
-
-Two ways a commit or push could reach the shell without the gate judging it:
+The gate now reads a `git` shell alias and a `(` inside a word the way the shell does. These were two ways a commit or push could reach the shell without the gate judging it:
 
 - **A shell alias named `git`.** The gate read `git` as git whatever your shell aliased it to, so with `alias git='hub'`, or an alias that slips a push in before git, a commit you asked for ran something the gate never judged. The gate now expands an alias for `git` like any other alias, and judges the command on its expansion, which is what runs: `git='git --no-pager'` is judged as git with that option, and a push the alias adds needs your go-ahead. A command whose expansion no longer runs git as the gate reads it, such as `git='hub'` or git wrapped in `noglob`, is refused with `\git …` as the way to run git itself. Text `eval` reparses is read with the alias too, and a git alias the shell alias defines inline (`git='git -c alias.st=push'`, then `git st`) is looked up like any other. (cpl-8p4)
 - **A `(` inside a word.** The shell reader ended a word at any `(`, so zsh's grouping and bash's extglob forms slipped past: `/usr/bin/g(i)t push` runs git in plain zsh, and `@(git)` does under `extglob`, but the gate saw no git at all. A `(` inside a word now stays in it and marks it a pattern, so such a command name or git subcommand is refused, and a substitution inside the group (`x($(…))`, which zsh runs before it tries the glob) is judged like any other. zsh's glob qualifiers that run code for each match, `*(e:'cmd':)` and `*(+cmd)` with any delimiter, are not followed, so a command with such a group in a word is refused outright: its code can spell a commit in ways no check reads. A group with an unquoted `|`, such as `src/(core|base)/*.ts`, is an alternation, and a comparison such as `*(Lk+3)` runs no code; both read as before. The gate does not see such a qualifier inside a `${…}` expansion. A subshell, `name()` and `name=( … )` read as before. (cpl-w82)
