@@ -158,9 +158,15 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
       if (a.includes('--verify -q HEAD')) return ok(`${w.head}\n`);
       const tree = /rev-parse (\S+)\^\{tree\}/.exec(a);
       if (tree) return ok(`${treeId(w, w.commits[tree[1] ?? ''] ?? {})}\n`);
+      // The index digest: what is staged, which by default is HEAD's tree.
+      if (a.includes('git ls-files -s')) return ok(`${treeId(w, w.commits[w.head] ?? {})}\n`);
       if (a === 'mktemp') return ok('/tmp/scratch-index\n');
       if (a.includes('--git-path index')) return ok('/repo/.git/index\n');
-      if (a.includes('write-tree')) return ok(`${treeId(w, w.work)}\n`);
+      // A scratch index holds the working tree; the real one stages nothing.
+      if (a.includes('write-tree')) {
+        const staged = e.init?.env?.GIT_INDEX_FILE ? w.work : (w.commits[w.head] ?? {});
+        return ok(`${treeId(w, staged)}\n`);
+      }
       const show = /^git show (\S+):(\S+)$/.exec(a);
       if (show) {
         const text = filesOf(show[1] ?? '')[show[2] ?? ''];
@@ -2168,4 +2174,218 @@ describe("the gate's own question", () => {
     expect(w.asked ?? []).toEqual([]);
     expect(ran(await bash($, `git push origin ${'x'.repeat(484)}`))).toBe(true);
   });
+});
+
+// A leg still under way: spawned, not yet complete.
+async function legUnderWay($: any, type = 'review-cycle:code-reviewer'): Promise<string> {
+  spawns++;
+  const r = await $.agent.spawn({
+    tool_use_id: `c${spawns}`,
+    subagentType: type,
+    prompt: 'review',
+    description: 'review',
+    background: true,
+  });
+  return r.agentId;
+}
+async function reviewerChanges($: any): Promise<string[]> {
+  const r = await $.tool.call({ tool: 'mcp__review-cycle__status' });
+  return JSON.parse((r as { result: string }).result).reviewerChanges;
+}
+
+describe('reviewer containment', () => {
+  test('a reviewer edits outside the repository, not inside it', async ($, on) => {
+    fakeWorld(on);
+    const leg = await legUnderWay($);
+    const edit = (path: string, agentId?: string) =>
+      ($ as any).tool.call({
+        tool: 'Edit',
+        file_path: path,
+        old_string: 'a',
+        new_string: 'b',
+        ...(agentId ? { agentId } : {}),
+      });
+    expect(denied(await edit('/repo/a.ts', leg), 'do not edit the repository')).toBe(true);
+    const write = await ($ as any).tool.call({
+      tool: 'Write',
+      file_path: '/repo/new.ts',
+      content: 'x',
+      agentId: leg,
+    });
+    expect(denied(write, 'do not edit the repository')).toBe(true);
+    const notebook = await ($ as any).tool.call({
+      tool: 'NotebookEdit',
+      notebook_path: '/repo/n.ipynb',
+      new_source: 'x',
+      agentId: leg,
+    });
+    expect(denied(notebook, 'do not edit the repository')).toBe(true);
+    expect(ran(await edit('/tmp/copy/a.ts', leg))).toBe(true);
+    expect(ran(await edit('/repository/a.ts', leg))).toBe(true);
+    expect(ran(await edit('/repo/a.ts'))).toBe(true);
+    expect(ran(await edit('/repo/a.ts', 'general-purpose-1'))).toBe(true);
+  });
+  test('cleanup and finished reviewers edit freely', async ($, on) => {
+    fakeWorld(on);
+    const cleanup = await legUnderWay($, 'review-cycle:cleanup');
+    const edit = (agentId: string) =>
+      ($ as any).tool.call({
+        tool: 'Edit',
+        file_path: '/repo/a.ts',
+        old_string: 'a',
+        new_string: 'b',
+        agentId,
+      });
+    expect(ran(await edit(cleanup))).toBe(true);
+    const leg = await legUnderWay($);
+    await $.turn.complete({
+      answer: RECEIPT,
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'turn-done',
+      agentId: leg,
+      reason: 'answer',
+    });
+    expect(ran(await edit(leg))).toBe(true);
+  });
+  test("a reviewer's command that changes the repository is reported", async ($, on) => {
+    const w = fakeWorld(on);
+    // As `--show-scope -z` prints it: scope, then key and value, each ended by NUL.
+    let config = 'local\0core.bare\nfalse\0local\0x.demo\none\ntwo\0';
+    let global = 'global\0user.name\nme\0';
+    let staged = 'a'.repeat(40);
+    let branch = 'refs/heads/main\n';
+    w.git = (a) => {
+      if (a === 'git config --list --show-scope -z') return { stdout: `${global}${config}` };
+      if (a.includes('git ls-files -s')) return { stdout: staged };
+      if (a === 'git symbolic-ref -q HEAD') return { stdout: branch };
+      return null;
+    };
+    w.shell = (c) => {
+      if (c.startsWith('sed')) w.work['a.ts'] = 'two';
+      if (c.startsWith('git config user.email')) config += 'local\0user.email\nx@y\0';
+      if (c.startsWith('git add')) staged = 'b'.repeat(40);
+      if (c.startsWith('git switch')) branch = 'refs/heads/scratch\n';
+      if (c.startsWith('git reset')) w.head = 'd'.repeat(40);
+      if (c.startsWith('git config --global')) global = 'global\0user.name\nyou\0';
+      if (c.startsWith('git config x.demo')) config = config.replace('two', 'three');
+    };
+    const leg = await legUnderWay($);
+    const first = await bash($, "sed -i '' s/one/two/ a.ts", { agentId: leg });
+    expect(ran(first)).toBe(true);
+    expect(has(first.context ?? [], 'the working tree of the repository under review')).toBe(true);
+    // The gate's own note on the same call survives beside the reviewer's.
+    expect(has(first.context ?? [], "could not read the user's shell aliases")).toBe(true);
+    const clean = await bash($, 'cp -r . /tmp/copy', { agentId: leg });
+    expect(ran(clean) && (clean.context ?? []).length === 0).toBe(true);
+    for (const c of [
+      'git config --global user.name you',
+      'git config user.email x@y',
+      'git config x.demo one',
+      'git add a.ts',
+      'git switch -c scratch',
+    ]) {
+      await bash($, c, { agentId: leg });
+    }
+    await bash($, 'git reset --soft HEAD~1', { agentId: leg });
+    expect(await reviewerChanges($)).toEqual([
+      "review-cycle:code-reviewer: the working tree changed while `sed -i '' s/one/two/ a.ts` ran",
+      'review-cycle:code-reviewer: the local git config changed while `git config user.email x@y` ran',
+      'review-cycle:code-reviewer: the local git config changed while `git config x.demo one` ran',
+      'review-cycle:code-reviewer: the staged content changed while `git add a.ts` ran',
+      'review-cycle:code-reviewer: HEAD changed while `git switch -c scratch` ran',
+      'review-cycle:code-reviewer: HEAD changed while `git reset --soft HEAD~1` ran',
+    ]);
+  });
+  test("the main session's commands are not compared", async ($, on) => {
+    const w = fakeWorld(on);
+    w.shell = () => {
+      w.work['a.ts'] = 'two';
+    };
+    const r = await bash($, 'echo hi > a.ts');
+    expect(ran(r) && !has(r.context ?? [], 'changed while')).toBe(true);
+    expect(await reviewerChanges($)).toEqual([]);
+  });
+  test('an unreadable part is said, and the readable parts are still compared', async ($, on) => {
+    const w = fakeWorld(on);
+    const leg = await legUnderWay($);
+    let reads = 0;
+    // Readable before the command, unreadable after it.
+    w.fail = (a) => a === 'git rev-parse --verify -q HEAD' && ++reads > 1;
+    w.shell = () => {
+      w.work['a.ts'] = 'two';
+    };
+    const r = await bash($, 'ls', { agentId: leg });
+    expect(has(r.context ?? [], 'could not check whether this command changed HEAD')).toBe(true);
+    expect(await reviewerChanges($)).toEqual([
+      'review-cycle:code-reviewer: the working tree changed while `ls` ran',
+      'review-cycle:code-reviewer: could not check HEAD while `ls` ran',
+    ]);
+  });
+  test('an unreadable HEAD is said, not reported as a change', async ($, on) => {
+    const w = fakeWorld(on);
+    const leg = await legUnderWay($);
+    w.fail = (a) => a === 'git rev-parse --verify -q HEAD';
+    const r = await bash($, 'ls', { agentId: leg });
+    expect(ran(r)).toBe(true);
+    expect(has(r.context ?? [], 'could not check whether this command changed HEAD')).toBe(true);
+  });
+  test('a repository the gate cannot find refuses reviewer edits and keeps its refusals', async ($, on) => {
+    fakeWorld(on, { fail: (a) => a.includes('--show-toplevel') });
+    const leg = await legUnderWay($);
+    const edit = await ($ as any).tool.call({
+      tool: 'Edit',
+      file_path: '/repo/a.ts',
+      old_string: 'a',
+      new_string: 'b',
+      agentId: leg,
+    });
+    expect(denied(edit, 'could not find the repository under review')).toBe(true);
+    const off = await bash($, 'claude plugin disable review-cycle', { agentId: leg });
+    expect(denied(off, 'only by the user')).toBe(true);
+    // The gate's own failure handler answers the call; the record says why.
+    expect(ran(await bash($, 'ls', { agentId: leg }))).toBe(true);
+    expect(await reviewerChanges($)).toEqual([
+      'review-cycle:code-reviewer: could not check HEAD, the staged content, the working tree, the local git config (git rev-parse failed: fatal: injected) while `ls` ran',
+    ]);
+  });
+  test('a background command is said to be checked only until it returns', async ($, on) => {
+    fakeWorld(on);
+    const leg = await legUnderWay($);
+    const r = await bash($, 'pnpm test', { agentId: leg, run_in_background: true });
+    expect(has(r.context ?? [], 'runs in the background')).toBe(true);
+  });
+  test('a detached or unborn HEAD is read, not said unreadable', async ($, on) => {
+    const w = fakeWorld(on);
+    const leg = await legUnderWay($);
+    for (const [argv, why] of [
+      ['git symbolic-ref -q HEAD', 'detached'],
+      ['git rev-parse --verify -q HEAD', 'unborn'],
+    ] as const) {
+      w.git = (a) => (a === argv ? { exitCode: 1, stdout: '' } : null);
+      const r = await bash($, `echo ${why}`, { agentId: leg });
+      expect(ran(r) && !has(r.context ?? [], 'could not check')).toBe(true);
+    }
+    // Both reads exiting 1 is no state git has: a read that failed.
+    w.git = (a) =>
+      a.startsWith('git rev-parse --verify -q HEAD') || a === 'git symbolic-ref -q HEAD'
+        ? { exitCode: 1, stdout: '' }
+        : null;
+    const r = await bash($, 'ls', { agentId: leg });
+    expect(has(r.context ?? [], 'could not check whether this command changed HEAD')).toBe(true);
+  });
+  for (const [argv, part] of [
+    ['ls-files -s', 'the staged content'],
+    ['git config --list --show-scope', 'the local git config'],
+  ] as const) {
+    test(`unreadable ${part} is said`, async ($, on) => {
+      const w = fakeWorld(on);
+      const leg = await legUnderWay($);
+      w.fail = (a) => a.includes(argv);
+      const r = await bash($, 'ls', { agentId: leg });
+      expect(has(r.context ?? [], `could not check whether this command changed ${part}`)).toBe(
+        true,
+      );
+    });
+  }
 });
