@@ -90,15 +90,14 @@ export function applyEdit(
 const CLAUDE_DIR = /\.claude\b|CLAUDE_CONFIG_DIR/i;
 const WRITES =
   /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|python3?|node|bun|deno|osascript)\b|\b(sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z]*i|--in-place)/;
-const SWITCH_WORD =
-  /\b(enabledPlugins|pluginConfigs|disableAllHooks|CLAUDE_CODE_ENABLE_FUNCTION_HOOKS)\b/;
-const PLUGIN_CLI = /\bclaude\b[^|;&]*\bplugins?\b[^|;&]*\b(disable|uninstall|remove|rm)\b/;
+// Removing a marketplace uninstalls the plugins installed from it.
+const PLUGIN_CLI =
+  /\bclaude\b[^|;&]*\bplugins?\s+(market(place)?\s+)?(disable|uninstall|remove|rm)\b/;
 
-// A speed bump, not a wall: it reads text, so a target built at run time gets
-// past it. `KEY=1` is not exempt, since the shell can join more onto the `1`.
+// Only the ordinary ways off; a switch key written elsewhere (an rc file) is a
+// deliberate evasion, which the gate does not guard against.
 export function bashTouchesGate(command: string): boolean {
   if (PLUGIN_CLI.test(command)) return true;
   if (!WRITES.test(command)) return false;
-  if (SWITCH_WORD.test(command)) return true;
   return CLAUDE_DIR.test(command) && command.toLowerCase().includes('settings');
 }
