@@ -81,10 +81,10 @@ describe('with the gate switched off', () => {
 });
 
 describe('with the gate on', () => {
-  test('the gate and the slop check both hook Edit and Write', () => {
+  test('the slop check, reviewer containment and the switch guard all hook Edit and Write', () => {
     const hooks = load(true);
-    expect(hooks.get('tool.call:Edit')).toHaveLength(2);
-    expect(hooks.get('tool.call:Write')).toHaveLength(2);
+    expect(hooks.get('tool.call:Edit')).toHaveLength(3);
+    expect(hooks.get('tool.call:Write')).toHaveLength(3);
   });
   test('an edit or write to its own switch is refused, whichever hook runs first', async () => {
     const hooks = load(true);

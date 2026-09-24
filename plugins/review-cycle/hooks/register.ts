@@ -18,6 +18,7 @@ import {
   type Classification,
 } from './command';
 import { grantOf, NO_GRANT, type Grant, type Verb } from './consent';
+import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import {
   coverageOf,
   firstLine,
@@ -68,6 +69,7 @@ type StatusHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__status' }
 type ConfigHook = MatchedHook<'config.set', { key: 'review-cycle.enabled' }>;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
+type NotebookHook = MatchedHook<'tool.call', { tool: 'NotebookEdit' }>;
 type MonitorHook = MatchedHook<'tool.call', { tool: 'Monitor' }>;
 type Input<H> = H extends ($: never, e: infer E, next: never) => unknown ? E : never;
 type NextOf<H> = H extends ($: never, e: never, next: infer N) => unknown ? N : never;
@@ -116,6 +118,8 @@ type GateState = {
   dropped: string[];
   // How many of `dropped` predate the latest recorded review.
   droppedSince: number;
+  // What reviewers' commands changed in the repository under review.
+  reviewerChanges: string[];
 };
 
 const state: GateState = {
@@ -134,6 +138,7 @@ const state: GateState = {
   ownRead: undefined,
   dropped: [],
   droppedSince: 0,
+  reviewerChanges: [],
 };
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -439,6 +444,58 @@ async function currentText($: $, path: string): Promise<string | null> {
   return (await $.fs.exists(path)) ? $.fs.read(path) : null;
 }
 
+function runningLeg(agentId: string | undefined): Leg | null {
+  const leg = agentId === undefined ? undefined : state.legs.get(agentId);
+  return leg && !leg.done ? leg : null;
+}
+
+// A reviewer changing the tree it reviews voids its own review and can land in
+// the user's commit; scratch work belongs outside the repository.
+async function containedEdit(
+  $: $,
+  agentId: string | undefined,
+  path: string,
+): Promise<{ deny: string } | null> {
+  if (runningLeg(agentId) === null) return null;
+  let root: Repo | null;
+  try {
+    root = await ensureRoot($);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return deny(
+      `the gate could not find the repository under review (${why}), so it refuses a reviewer's edits. Report back instead.`,
+    );
+  }
+  if (root === null || !insideRepo(path, root.top)) return null;
+  return deny(
+    `reviewers do not edit the repository under review (${root.top}). Copy what you need into a private directory from mktemp -d and change the copy.`,
+  );
+}
+
+async function onEditContained(
+  $: $,
+  e: Input<EditHook>,
+  next: NextOf<EditHook>,
+): Promise<Output<EditHook>> {
+  return (await containedEdit($, e.agentId, e.file_path)) ?? next(e);
+}
+
+async function onWriteContained(
+  $: $,
+  e: Input<WriteHook>,
+  next: NextOf<WriteHook>,
+): Promise<Output<WriteHook>> {
+  return (await containedEdit($, e.agentId, e.file_path)) ?? next(e);
+}
+
+async function onNotebookEdit(
+  $: $,
+  e: Input<NotebookHook>,
+  next: NextOf<NotebookHook>,
+): Promise<Output<NotebookHook>> {
+  return (await containedEdit($, e.agentId, e.notebook_path)) ?? next(e);
+}
+
 async function onEdit($: $, e: Input<EditHook>, next: NextOf<EditHook>): Promise<Output<EditHook>> {
   if (!isJsonPath(e.file_path)) return next(e);
   const before = await currentText($, e.file_path);
@@ -574,7 +631,60 @@ function onMonitorError(
   );
 }
 
+// A reviewer's Bash is not refused, since it cannot be read for where it
+// writes; the repository is compared around it instead, and what changed is
+// put to the reviewer and kept for the status tool.
 async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise<Output<BashHook>> {
+  const leg = runningLeg(e.agentId);
+  if (!leg) return judgeBash($, e, next);
+  let root: Repo | null = null;
+  let lookup: string | null = null;
+  try {
+    root = await ensureRoot($);
+  } catch (error) {
+    lookup = error instanceof Error ? error.message : String(error);
+  }
+  if (root === null && lookup === null) return judgeBash($, e, next);
+  const capture = async (): Promise<Capture> => {
+    if (root === null) return { state: UNREAD, why: lookup };
+    try {
+      return { state: await repoStateOf(gitOf($), root.top), why: null };
+    } catch (error) {
+      return { state: UNREAD, why: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const before = await capture();
+  const report = async (): Promise<string[]> => {
+    const { notes, records } = containmentReport({
+      type: leg.type,
+      command: e.command,
+      before,
+      after: await capture(),
+      background: e.run_in_background === true,
+    });
+    state.reviewerChanges.push(...records);
+    return notes;
+  };
+  let r: Output<BashHook>;
+  try {
+    r = await judgeBash($, e, next);
+  } catch (error) {
+    // The gate's failure handler answers a call that threw, so no note can
+    // ride along; the record still reaches the status tool. A separate hook
+    // would never see this case, which is why the comparison wraps the gate.
+    await report();
+    throw error;
+  }
+  if (r.deny !== undefined) return r;
+  const notes = await report();
+  return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
+}
+
+async function judgeBash(
+  $: $,
+  e: Input<BashHook>,
+  next: NextOf<BashHook>,
+): Promise<Output<BashHook>> {
   // A newer message overtakes anything decided from this one.
   const message = state.messages;
   let granted = state.message.grant;
@@ -913,6 +1023,7 @@ async function onStatus(
     lastReviewedTree: last?.trees[0] ?? null,
     reviews: state.reviews.length,
     droppedReviews: state.dropped,
+    reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,
     consent: state.message.grant,
     error: null,
@@ -1004,8 +1115,11 @@ export const register: Register = (on, options) => {
   on('turn.complete', onTurnComplete);
   on('tool.call', { tool: 'Skill' }, onSkill);
   on('tool.call', { tool: 'Bash' }, onBash).catch(onBashError);
+  on('tool.call', { tool: 'Edit' }, onEditContained);
+  on('tool.call', { tool: 'Write' }, onWriteContained);
   on('tool.call', { tool: 'Edit' }, onEdit).catch(onEditError);
   on('tool.call', { tool: 'Write' }, onWrite).catch(onWriteError);
+  on('tool.call', { tool: 'NotebookEdit' }, onNotebookEdit);
   on('tool.call', { tool: 'Monitor' }, onMonitor).catch(onMonitorError);
   on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatus);
 };
