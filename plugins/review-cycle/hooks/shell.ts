@@ -307,6 +307,8 @@ class Lexer {
     let text = '';
     let dynamic = false;
     let pattern = false;
+    let bracket = false;
+    let brace = false;
     const start = this.i;
     while (this.i < this.s.length) {
       const c = this.ch();
@@ -360,7 +362,14 @@ class Lexer {
         dynamic = true;
       } else {
         if (c === '~' && this.i === start) dynamic = true;
-        if (/[*?[{]/.test(c)) pattern = true;
+        // `[` and `{` start a pattern only once an unquoted `]` or `}` closes
+        // it, so `[`, the test command, stays a plain word. zsh's extended
+        // globs (`#`, `^`, `~` inside a word) need no closer.
+        if (c === '*' || c === '?' || c === '#' || c === '^' || (c === '~' && this.i !== start))
+          pattern = true;
+        else if (c === '[') bracket = true;
+        else if (c === '{') brace = true;
+        else if ((c === ']' && bracket) || (c === '}' && brace)) pattern = true;
         text += c;
         this.i++;
       }
