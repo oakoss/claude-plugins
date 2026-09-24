@@ -1906,11 +1906,29 @@ describe("the gate's own question", () => {
       expect(ran).toEqual([]);
     },
   );
-  test('a shell alias for git is not asked about', async ($, on) => {
+  test('a shell alias that runs another program for git is refused before asking', async ($, on) => {
     const w = fakeWorld(on, { dialog: pickFirst, shellAliases: "alias -- git='hub'\n" });
     await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'defines an alias for git')).toBe(true);
+    expect(denied(await bash($, 'git push'), '`git` is a shell alias here (for `hub`)')).toBe(true);
     expect(w.asked ?? []).toEqual([]);
+    expect(ran(await bash($, String.raw`\git push`))).toBe(true);
+    expect(w.asked?.[0]?.question).toBe(String.raw`The agent wants to push: \git push. Allow it?`);
+  });
+  test('a shell alias for git that adds a committing inline alias is refused', async ($, on) => {
+    fakeWorld(on, { shellAliases: "alias -- git='git -c alias.st=push'\n" });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git st'), 'is an alias that commits or pushes')).toBe(true);
+  });
+  test('a shell alias that only adds git options is asked about, expanded', async ($, on) => {
+    const w = fakeWorld(on, {
+      dialog: pickFirst,
+      shellAliases: "alias -- git='git --no-pager'\n",
+    });
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    expect(w.asked?.[0]?.question).toBe(
+      'The agent wants to push: git push (aliases expanded: git --no-pager push). Allow it?',
+    );
   });
   test('a message while the gate resolves the repository stops the question', async ($, on) => {
     let armed = false;

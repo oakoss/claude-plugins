@@ -10,7 +10,14 @@
 // a quoted heredoc into `cat`. Handed to anything that runs code — a shell,
 // an interpreter, `xargs`, `find -exec` — it is refused.
 
-import { assignmentName, parse, type ShellAliases, type Statement, type Word } from './shell';
+import {
+  assignmentName,
+  parse,
+  QUALIFIER,
+  type ShellAliases,
+  type Statement,
+  type Word,
+} from './shell';
 
 function readsConfig(args: Word[]): boolean {
   return args.some((w) => /^(--get(-all|-regexp)?|--list|-l)$/.test(w.text));
@@ -683,6 +690,20 @@ export function possibleAliases(
   command: string,
   aliases: ShellAliases = new Map(),
 ): { sub: string; inline: string | null }[] {
+  // Read twice: with git as itself, so `git ci` is looked up even under
+  // `git='hub'`, and through the `git` alias, which can add its own `-c alias.<sub>=…`.
+  const out = aliasCallsIn(command, withoutGit(aliases));
+  if (!aliases.has('git')) return out;
+  for (const a of aliasCallsIn(command, aliases)) {
+    if (!out.some((o) => o.sub === a.sub && o.inline === a.inline)) out.push(a);
+  }
+  return out;
+}
+
+function aliasCallsIn(
+  command: string,
+  aliases: ShellAliases,
+): { sub: string; inline: string | null }[] {
   const parsed = parse(command, aliases);
   if ('error' in parsed) return [];
   const out: { sub: string; inline: string | null }[] = [];
@@ -744,9 +765,43 @@ function execs(w: Word): boolean {
   return /^(--exec(=|$)|-[a-zA-Z]*x[a-zA-Z]*$)/.test(w.text);
 }
 
+function withoutGit(aliases: ShellAliases): ShellAliases {
+  if (!aliases.has('git')) return aliases;
+  const own = new Map(aliases);
+  own.delete('git');
+  return own;
+}
+
+// A shell alias for git itself can run anything in git's place, or more than
+// git. A command that reaches it is judged on its expansion, which is what
+// runs; one whose expansion does not read as git is refused.
 export function classify(command: string, aliases: ShellAliases = new Map()): Classification {
+  const git = aliases.get('git');
+  const own = withoutGit(aliases);
+  const plain = judge(command, own);
+  // Read both ways: `eval` reparses its text, so whether the alias is reached
+  // cannot be told from the outer command.
+  if (git === undefined || plain.kind === 'refuse') return plain;
+  const expanded = judge(command, aliases);
+  if (expanded.kind === 'gated' || (plain.kind === 'none' && expanded.kind === 'none')) {
+    return expanded;
+  }
+  return {
+    kind: 'refuse',
+    reason: `\`git\` is a shell alias here (for \`${git}\`), so git would not run as the gate reads it. Run \`\\git …\` so git runs as itself`,
+  };
+}
+
+function judge(command: string, aliases: ShellAliases): Classification {
   const parsed = parse(command, aliases);
   if ('error' in parsed) {
+    // The qualifier's code can spell a commit any way, so nothing around it is read.
+    if (parsed.error === QUALIFIER) {
+      return {
+        kind: 'refuse',
+        reason: `${QUALIFIER}, which the gate does not read. Run the command without it`,
+      };
+    }
     // The shell joins a backslash-newline before it reads anything.
     const flat = command.replaceAll('\\\n', '');
     const tokens = flat.split(/[^\w.:@+-]+/);

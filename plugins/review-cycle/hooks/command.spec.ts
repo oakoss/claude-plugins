@@ -420,9 +420,59 @@ describe('gates the accepted shapes', () => {
     expect(classify("bash -c 'gp'", aliases).kind).toBe('refuse');
     expect(classify("bash -c 'ls -la'")).toEqual({ kind: 'none' });
   });
-  test('an alias for git itself is still git', () => {
-    const aliases = new Map([['git', 'hub']]);
-    expect(classify('git push', aliases)).toEqual(expect.objectContaining({ push: true }));
+  test('an alias for git itself that runs something else is refused', () => {
+    const hub = new Map([['git', 'hub']]);
+    for (const command of ['git push', 'git commit -m x', 'git pull']) {
+      const r = classify(command, hub);
+      expect(r.kind === 'refuse' && r.reason).toContain('`git` is a shell alias here (for `hub`)');
+    }
+    expect(classify('git status', hub)).toEqual({ kind: 'none' });
+    expect(classify(String.raw`\git push`, hub)).toEqual(expect.objectContaining({ push: true }));
+  });
+  test('an alias for git itself is judged on its expansion, a hidden push included', () => {
+    const sneaky = new Map([['git', 'git push origin main && git']]);
+    expect(classify('git status', sneaky)).toEqual(expect.objectContaining({ push: true }));
+    // Expanded it is a commit after a push, which no reading admits.
+    expect(classify('git commit -m x', sneaky).kind).toBe('refuse');
+    // eval reparses its text, where the alias expands.
+    expect(classify('eval git status', sneaky).kind).not.toBe('none');
+    expect(classify('git status', new Map([['git', 'command git push; git']])).kind).toBe('refuse');
+  });
+  test('a command refused for another reason keeps that reason when git is an alias', () => {
+    const r = classify('git commit -m x | cat', new Map([['git', 'hub']]));
+    expect(r.kind === 'refuse' && r.reason).toContain('joined with `|`');
+  });
+  test('a git alias lookup reads git as itself when git is a shell alias', () => {
+    expect(possibleAliases('git ci', new Map([['git', 'hub']]))).toEqual([
+      { sub: 'ci', inline: null },
+    ]);
+  });
+  test('a +cmd qualifier naming an alias that pushes is refused', () => {
+    const r = classify('echo *(+gp)', new Map([['gp', 'git push']]));
+    expect(r.kind).toBe('refuse');
+  });
+  test('an alternation is not read as qualifiers', () => {
+    expect(classify('git add src/(core|base)/*.ts && git commit -m x').kind).toBe('gated');
+    expect(classify('git add ./(package|tsconfig).json && git commit -m x').kind).toBe('gated');
+    expect(classify('git status src/(core|base)')).toEqual({ kind: 'none' });
+    expect(classify('git add x(e|f) && git commit -m x').kind).toBe('gated');
+  });
+  test('a qualifier that runs code is refused even when no git shows', () => {
+    expect(classify("ls *(e:'true':)").kind).toBe('refuse');
+  });
+  test('a qualifier with a size or time comparison runs no code', () => {
+    expect(classify('ls *(Lk+3)')).toEqual({ kind: 'none' });
+    expect(classify('ls *(.om[1,3])')).toEqual({ kind: 'none' });
+  });
+  test('a git alias lookup sees an inline alias the shell alias adds', () => {
+    expect(possibleAliases('git st', new Map([['git', 'git -c alias.st=push']]))).toContainEqual({
+      sub: 'st',
+      inline: 'push',
+    });
+  });
+  test('an alias for git itself that wraps git in a refused runner is refused', () => {
+    const r = classify('git commit -m x', new Map([['git', 'noglob git']]));
+    expect(r.kind === 'refuse' && r.reason).toContain('Run `\\git …`');
   });
   test('an alias after a part that cannot be read still counts', () => {
     const aliases = new Map([['gp', 'git push']]);
@@ -897,6 +947,48 @@ describe('glob and brace patterns', () => {
     ['g#it commit -m x', 'a command name the shell would expand'],
     ['^gxt commit -m x', 'a command name the shell would expand'],
     ['g~xt commit -m x', 'a command name the shell would expand'],
+    // A parenthesis inside a word is a zsh group or an extglob.
+    ['/usr/bin/g(i)t push', 'a command name the shell would expand'],
+    ['/usr/bin/(git|gxt) commit -m x', 'a command name the shell would expand'],
+    ['git(N) commit -m x', 'a command name the shell would expand'],
+    ['@(git) commit -m x', 'a command name the shell would expand'],
+    ['+(g)it push', 'a command name the shell would expand'],
+    ['gi!(x)t commit -m x', 'a command name the shell would expand'],
+    ['git p(u)sh', 'a subcommand the shell would expand'],
+    ['git s@(t)atus && git push', 'a subcommand the shell would expand'],
+    ['g(i)t push', 'a command name the shell would expand'],
+    ['/usr/bin/g(i)t commit -m x', 'a command name the shell would expand'],
+    ['git(.) commit -m x', 'a command name the shell would expand'],
+    ['!(x) commit -m x', 'a command name the shell would expand'],
+    ['g@(i)t push', 'a command name the shell would expand'],
+    ['gi(#c1)t push', 'a command name the shell would expand'],
+    ['git s(t)atus && git push', 'a subcommand the shell would expand'],
+    // The shell still runs a substitution inside the group.
+    ['ls x($(git push))', ''],
+    ['echo @($(git push))', ''],
+    ['ls x(`git push`)', ''],
+    ['ls x("$(git push)")', ''],
+    ['ls x(a|$(git push))', ''],
+    ['ls x(<(git push))', ''],
+    ['echo $(ls x($(git push)))', ''],
+    ['git status x($(git push))', ''],
+    ['git commit -m x($(git push))', ''],
+    // zsh's code-running glob qualifiers.
+    ["git add *(e:'git push':) && git commit -m x", 'a zsh glob qualifier that runs code'],
+    ["ls *(e:'git push':)", 'a zsh glob qualifier that runs code'],
+    [String.raw`git add *(eXgit\ pushX) && git commit -m x`, 'a zsh glob qualifier that runs code'],
+    [String.raw`ls *(e1git\ push1)`, 'a zsh glob qualifier that runs code'],
+    [String.raw`ls a(#qeXgit\ pushX)(#qN)`, 'a zsh glob qualifier that runs code'],
+    // Quote removal and brace expansion can leave the group last in a word.
+    ["ls *(e:'git push':)''", 'a zsh glob qualifier that runs code'],
+    ['ls *(e:\'git push\':)""', 'a zsh glob qualifier that runs code'],
+    ["ls *(e:'git push':)$(true)", 'a zsh glob qualifier that runs code'],
+    ["ls {x,*(e:'git push':)}", 'a zsh glob qualifier that runs code'],
+    ["git add *(e:'git push':)'' && git commit -m x", 'a zsh glob qualifier that runs code'],
+    // A quoted `|` is text inside the qualifier, not an alternation.
+    ["ls *(e:'true | git push':)", 'a zsh glob qualifier that runs code'],
+    [String.raw`ls *(e.git\ push.)`, 'a zsh glob qualifier that runs code'],
+    [String.raw`printf '%s\n' *(Ne:'git push':)`, 'a zsh glob qualifier that runs code'],
   ])('%s is refused', (command, reason) => {
     const r = classify(command);
     expect(r.kind).toBe('refuse');
@@ -924,6 +1016,12 @@ describe('glob and brace patterns', () => {
   });
   test('a glob in a git add path is judged as usual', () => {
     expect(classify('git add *.ts && git commit -m x').kind).toBe('gated');
+  });
+  test('a subshell, a function definition and an array still parse as before', () => {
+    expect(verdict('(git status) && git push')).toContain('a group or function');
+    expect(classify('f() { :; }')).toEqual({ kind: 'none' });
+    expect(verdict('xs=(a b) && git push')).toContain('a group or function');
+    expect(classify('git commit -m "fix(scope): x"').kind).toBe('gated');
   });
   test("zsh's extended-glob characters in an argument are left alone", () => {
     expect(classify('git log HEAD^ && git show HEAD~1 && git push').kind).toBe('gated');
