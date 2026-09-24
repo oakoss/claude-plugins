@@ -4,6 +4,44 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.22.0 (2026-09-24)
+
+### Added
+
+Reviewers can no longer quietly change the repository they are reviewing.
+
+- **Edits are refused.** While a `review-cycle:*` reviewer runs, the gate refuses its Edit, Write and NotebookEdit calls on paths inside the repository. The refusal tells the reviewer to copy what it needs into a private `mktemp -d` directory. Scratch work outside the repository, in `/tmp` for example, is unaffected. So are `review-cycle:cleanup`, which edits by design, and the main session.
+- **Bash changes are reported.** Before and after each reviewer command, the gate compares HEAD's commit and branch, the staged entries, the working tree, and the local and worktree git config. When one of them changed, the reviewer is asked to put back a change it made and to say so in its report, and the status tool lists the change under `reviewerChanges`. Until now, a reviewer that ran `sed -i` on a source file, switched branches or set a local `user.email` went unnoticed unless the review's own snapshot comparison caught it.
+
+The status tool lists anything it could not check. A background command is compared only until it returns.
+
+### Fixed
+
+The commit gate no longer refuses three kinds of ordinary command.
+
+- `git merge-base`, `git merge-tree` and `git merge-file` no longer count as a `git merge`. A command like `git diff $(git merge-base main HEAD)`, or a script that mentions one, used to be refused. None of them makes a commit.
+- The settings guard no longer refuses a Bash command just because it writes something and names a switch key, such as `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test … > out.log`, or a Python heredoc that mentions `enabledPlugins`. The only case that rule covered was writing a switch into a shell rc file, which is a deliberate evasion outside what the gate guards against.
+- The plugin-CLI check now reads only the verb after `claude plugin` or `claude plugin marketplace`. Before, `claude --plugin-dir ./plugins/review-cycle -p "remove the dead code"` was refused because the prompt contains "remove".
+
+The gate still refuses `claude plugin disable`, `uninstall` or `remove`, a marketplace removal, and a write to a Claude `settings…` file.
+
+The gate now reads a `git` shell alias and a `(` inside a word the way the shell does. These were two ways a commit or push could reach the shell without the gate judging it:
+
+- **A shell alias named `git`.** The gate read `git` as git whatever your shell aliased it to, so with `alias git='hub'`, or an alias that slips a push in before git, a commit you asked for ran something the gate never judged. The gate now expands an alias for `git` like any other alias, and judges the command on its expansion, which is what runs: `git='git --no-pager'` is judged as git with that option, and a push the alias adds needs your go-ahead. A command whose expansion no longer runs git as the gate reads it, such as `git='hub'` or git wrapped in `noglob`, is refused with `\git …` as the way to run git itself. Text `eval` reparses is read with the alias too, and a git alias the shell alias defines inline (`git='git -c alias.st=push'`, then `git st`) is looked up like any other. (cpl-8p4)
+- **A `(` inside a word.** The shell reader ended a word at any `(`, so zsh's grouping and bash's extglob forms slipped past: `/usr/bin/g(i)t push` runs git in plain zsh, and `@(git)` does under `extglob`, but the gate saw no git at all. A `(` inside a word now stays in it and marks it a pattern, so such a command name or git subcommand is refused, and a substitution inside the group (`x($(…))`, which zsh runs before it tries the glob) is judged like any other. zsh's glob qualifiers that run code for each match, `*(e:'cmd':)` and `*(+cmd)` with any delimiter, are not followed, so a command with such a group in a word is refused outright: its code can spell a commit in ways no check reads. A group with an unquoted `|`, such as `src/(core|base)/*.ts`, is an alternation, and a comparison such as `*(Lk+3)` runs no code; both read as before. The gate does not see such a qualifier inside a `${…}` expansion. A subshell, `name()` and `name=( … )` read as before. (cpl-w82)
+
+The gate's question no longer refuses outright when your shell defines an alias for `git`; it shows the expansion like any other alias's.
+
+Review cycles converge sooner. From iteration 2, a finding reopens the loop only in two cases: it shows one of the cycle's own fixes is wrong (at any severity), or it rates important or above on its leg's scale. A finding with no rating counts as important. Any other finding is listed as deferred for you to decide on: a Codex `medium` or `low`, a Suggestion, or a test-gap rating under 7. Until now, each iteration's test-coverage leg could find one more unpinned guard, and pinning it bought another round. From iteration 2, that leg asks only about the guards the cycle's fixes added.
+
+When a reviewer changed the repository, the summary now names who did it. The review reads the entries the gate's `reviewerChanges` record gained since that fan-out's snapshot. A change with no new entry most likely came from the Codex leg, which the gate does not watch.
+
+The settings guard no longer treats a plugin's `.claude-plugin/` directory as Claude's `.claude` directory. So a command such as `cp plugins/review-cycle/.claude-plugin/plugin.json plugins/review-cycle/hooks/settings.ts /tmp/copy/` now runs. Before, it was refused because it named `.claude` and "settings" together, which happens constantly in a plugin repository. Every write to a real `.claude` settings file is refused as before.
+
+The README now says what the commit gate guards against. The gate is there for a well-meaning agent that commits too early, before a review or before you asked, in the commands agents actually write. The README now says so under "What it guards against": what is checked before it runs, what is only reported afterwards (a commit made inside `npm version`, `make release` or a project script), and what is out of scope (an obscure shell construct or an environment trick, and your own `!` shell). It points to an OS-level sandbox for containing an adversarial agent.
+
+The review skill also keeps a reviewer's question about a guard inside what the guard claims to cover: it asks whether the guard catches the cases it documents, not whether a reviewer can find a way around it. A reviewer sent to hunt for a bypass always finds one, and each find costs a review iteration on a case no agent meets by accident. A gap an ordinary command falls into is still a finding.
+
 ## 0.21.0 (2026-09-24)
 
 ### Added
