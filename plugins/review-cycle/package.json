@@ -1,6 +1,6 @@
 {
   "name": "review-cycle",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "private": true,
   "description": "Version anchor only; the manifest users install is .claude-plugin/plugin.json, which the release tool keeps in step."
 }
