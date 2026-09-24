@@ -61,6 +61,8 @@ const COMMAND_START = new Set([
 const MAX_DEPTH = 50;
 const MAX_EXPANSIONS = 10_000;
 
+export const QUALIFIER = 'a zsh glob qualifier that runs code';
+
 function newBudget(): { left: number } {
   return { left: MAX_EXPANSIONS };
 }
@@ -207,12 +209,11 @@ class Lexer {
     return out;
   }
 
-  // The alias the word just read from `from` names, as written: a quoted or
-  // escaped name (`'gp'`, `\gp`) names none. An alias for `git` itself is
-  // left alone, so `git` stays git whatever program it stands for.
+  // The alias named by the word read from `from`, as written: a quoted or
+  // escaped name (`'gp'`, `\gp`) names none.
   private aliasName(from: number): string | null {
     const raw = this.s.slice(from, this.i).replaceAll('\\\n', '');
-    return raw !== 'git' && this.aliases.has(raw) ? raw : null;
+    return this.aliases.has(raw) ? raw : null;
   }
 
   // Whether the next word is read as a command: nothing but assignments since
@@ -320,6 +321,27 @@ class Lexer {
         dynamic = true;
         continue;
       }
+      // A `(` inside a word is a zsh group or a ksh/bash extglob (`g(i)t`,
+      // `@(git)`), so it stays in the word as a pattern. `name()` defines a
+      // function; a statement's leading `(` never reaches here.
+      if (c === '(' && this.ch(1) !== ')') {
+        const end = this.closing(this.i, '(', ')');
+        const body = this.s.slice(this.i + 1, end - 1);
+        // A group with no unquoted `|` can be zsh glob qualifiers, whose `e`
+        // and `+name` run code. Where it sits is not checked: quote removal
+        // and brace expansion can still leave it last in a word.
+        const bare = body.replaceAll(/'[^']*'|"(?:\\.|[^"\\])*"|\\./g, '');
+        if (!bare.includes('|') && /e|\+[A-Za-z_]/.test(body)) throw new Error(QUALIFIER);
+        // The shell still runs a substitution inside the group: `x($(cmd))`.
+        if (/[$`<>]/.test(body)) {
+          cur.inner.push(new Lexer(body, this.aliases, this.budget).list(false));
+          dynamic = true;
+        }
+        text += this.s.slice(this.i, end);
+        this.i = end;
+        pattern = true;
+        continue;
+      }
       if (/[\s;&|<>()]/.test(c)) break;
       if (c === '\\') {
         if (this.ch(1) === '\n') {
@@ -385,7 +407,7 @@ class Lexer {
     throw new Error("unterminated $'");
   }
 
-  // The index just past the bracket closing the one at `open`.
+  // The index past the bracket closing the one at `open`.
   private closing(open: number, left: string, right: string): number {
     let depth = 0;
     for (let j = open; j < this.s.length; j++) {

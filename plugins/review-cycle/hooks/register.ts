@@ -714,11 +714,6 @@ async function ask(
   if (signal.aborted) {
     return `the call was interrupted before the gate asked about the ${wants}, so it did not ask them.`;
   }
-  // The reader leaves an alias for git itself unexpanded, so the dialog could
-  // not show what it runs.
-  if (state.shellAliases.has('git')) {
-    return `the user's shell defines an alias for git, so the gate cannot show them what this ${wants} runs and did not ask. Ask them in your reply; a request in their next message allows it.`;
-  }
   const shown = shownCommand(command, state.shellAliases);
   if (shown.length > MAX_SHOWN) {
     return `this command is too long for the gate to show the user (${shown.length} characters; ${MAX_SHOWN} at most), so it did not ask them. Run the ${wants} as a shorter command, with a short -m message, or ask the user to run it.`;
