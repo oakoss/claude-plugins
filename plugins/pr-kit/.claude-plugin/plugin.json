@@ -5,18 +5,10 @@
   "author": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",
-    "url": "https://oakoss.dev"
+    "url": "https://github.com/oakoss"
   },
   "license": "MIT",
   "repository": "https://github.com/oakoss/claude-plugins",
   "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/pr-kit",
-  "keywords": [
-    "pull-request",
-    "github",
-    "gh",
-    "ci",
-    "merge-conflicts",
-    "code-review",
-    "workflow"
-  ]
+  "keywords": ["pull-request", "github", "gh", "ci", "merge-conflicts", "code-review", "workflow"]
 }

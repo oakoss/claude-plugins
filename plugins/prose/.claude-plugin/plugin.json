@@ -5,17 +5,10 @@
   "author": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",
-    "url": "https://oakoss.dev"
+    "url": "https://github.com/oakoss"
   },
   "license": "MIT",
   "repository": "https://github.com/oakoss/claude-plugins",
   "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/prose",
-  "keywords": [
-    "writing",
-    "output-style",
-    "documentation",
-    "tech-writing",
-    "de-slop",
-    "style-guide"
-  ]
+  "keywords": ["writing", "output-style", "documentation", "tech-writing", "de-slop", "style-guide"]
 }

@@ -1,6 +1,6 @@
 # Oak OSS — Claude Code plugins
 
-Curated [Claude Code](https://code.claude.com) plugins published by [Oak OSS](https://oakoss.dev).
+Curated [Claude Code](https://code.claude.com) plugins published by [Oak OSS](https://github.com/oakoss).
 
 ## Available plugins
 
