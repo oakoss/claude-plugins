@@ -92,36 +92,59 @@ export async function reviewablePaths(
   return [...new Set([...nulList(main.stdout), ...nulList(cfg.stdout)])];
 }
 
+// Runs one step and names it in any failure: git's own first error line, or
+// the runner's reason when it could not run the step at all (a timeout).
+async function must(name: string, run: Promise<Run>): Promise<Run> {
+  let r: Run;
+  try {
+    r = await run;
+  } catch (error) {
+    throw new Error(`${name} failed: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
+  }
+  if (r.exitCode !== 0)
+    throw new Error(`${name} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
+  return r;
+}
+
 // A tree built in a scratch copy of the index, so the real index is never
 // touched. `prepare` stages into it; its commands see GIT_INDEX_FILE.
 async function scratchTree(
   git: Git,
   root: string,
-  prepare: (env: Record<string, string>) => Promise<boolean>,
-): Promise<string | null> {
-  const mk = await git(['mktemp'], { cwd: root });
+  prepare: (env: Record<string, string>) => Promise<void>,
+): Promise<string> {
+  const mk = await must('mktemp', git(['mktemp'], { cwd: root }));
   const scratch = mk.stdout.trim();
-  if (mk.exitCode !== 0 || !scratch) return null;
+  if (!scratch) throw new Error('mktemp printed no path');
   const env = { GIT_INDEX_FILE: scratch };
   try {
-    const idx = await git(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'index'], {
-      cwd: root,
-    });
-    const cp = await git(
-      [
-        'sh',
-        '-c',
-        'if [ -f "$1" ]; then cp "$1" "$2"; else rm -f "$2"; fi',
-        'sh',
-        idx.stdout.trim(),
-        scratch,
-      ],
-      { cwd: root },
+    const idx = await must(
+      'git rev-parse --git-path index',
+      git(['git', 'rev-parse', '--path-format=absolute', '--git-path', 'index'], { cwd: root }),
     );
-    if (idx.exitCode !== 0 || cp.exitCode !== 0) return null;
-    if (!(await prepare(env))) return null;
-    const wt = await git(['git', 'write-tree'], { cwd: root, env });
-    return wt.exitCode === 0 ? sha(wt.stdout) : null;
+    await must(
+      'copying the index',
+      git(
+        [
+          'sh',
+          '-c',
+          'if [ -f "$1" ]; then cp "$1" "$2"; else rm -f "$2"; fi',
+          'sh',
+          idx.stdout.trim(),
+          scratch,
+        ],
+        { cwd: root },
+      ),
+    );
+    await prepare(env);
+    const wt = await must('git write-tree', git(['git', 'write-tree'], { cwd: root, env }));
+    const tree = sha(wt.stdout);
+    if (tree === null) {
+      throw new Error(`git write-tree printed no tree id: ${firstLine(wt.stdout) || '(nothing)'}`);
+    }
+    return tree;
   } finally {
     try {
       await git(['rm', '-f', scratch], { cwd: root });
@@ -131,10 +154,9 @@ async function scratchTree(
   }
 }
 
-export async function worktreeTree(git: Git, root: string): Promise<string | null> {
+export async function worktreeTree(git: Git, root: string): Promise<string> {
   return scratchTree(git, root, async (env) => {
-    const add = await git(['git', 'add', '-A'], { cwd: root, env });
-    return add.exitCode === 0;
+    await must('git add -A', git(['git', 'add', '-A'], { cwd: root, env }));
   });
 }
 
@@ -144,15 +166,13 @@ export async function prospectTree(
   git: Git,
   root: string,
   cls: Extract<Classification, { kind: 'gated' }>,
-): Promise<string | null> {
+): Promise<string> {
   return scratchTree(git, root, async (env) => {
     for (const argv of cls.adds) {
-      const add = await git(['git', '-C', cls.dir, ...argv], { env });
-      if (add.exitCode !== 0) return false;
+      await must('git add', git(['git', '-C', cls.dir, ...argv], { env }));
     }
-    if (!cls.commit?.all) return true;
-    const update = await git(['git', ...cls.commit.config, 'add', '-u'], { cwd: root, env });
-    return update.exitCode === 0;
+    if (!cls.commit?.all) return;
+    await must('git add -u', git(['git', ...cls.commit.config, 'add', '-u'], { cwd: root, env }));
   });
 }
 

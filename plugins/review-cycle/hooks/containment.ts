@@ -30,7 +30,9 @@ const PARTS: Record<keyof RepoState, string> = {
 const INDEX_DIGEST =
   'list=$(git ls-files -s) || exit 2; printf %s "$list" | git hash-object --stdin';
 
-export async function repoStateOf(git: Git, root: string): Promise<RepoState> {
+// A working tree git could not build is unreadable alone, so the other parts
+// are still compared, and its reason is kept.
+export async function repoStateOf(git: Git, root: string): Promise<Capture> {
   const opts = { cwd: root };
   // rev-parse exits 1 on an unborn branch, symbolic-ref on a detached HEAD;
   // both exiting 1 is a read that failed, since a killed child reads as 1.
@@ -41,12 +43,18 @@ export async function repoStateOf(git: Git, root: string): Promise<RepoState> {
   const headRead =
     (commit.exitCode === 0 && branch.exitCode <= 1) ||
     (commit.exitCode === 1 && branch.exitCode === 0);
-  return {
+  let why: string | null = null;
+  const work = await worktreeTree(git, root).catch((error: unknown) => {
+    why = error instanceof Error ? error.message : String(error);
+    return null;
+  });
+  const state: RepoState = {
     head: headRead ? `${commit.stdout.trim()} ${branch.stdout.trim()}` : null,
     index: index.exitCode === 0 ? sha(index.stdout) : null,
-    work: await worktreeTree(git, root),
+    work,
     config: config.exitCode === 0 ? ownConfig(config.stdout) : null,
   };
+  return { state, why };
 }
 
 // `-z` prints scope, then `key\nvalue`, each ended by NUL, so a value that
