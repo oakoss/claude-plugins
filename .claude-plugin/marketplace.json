@@ -5,7 +5,7 @@
   "owner": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",
-    "url": "https://oakoss.dev"
+    "url": "https://github.com/oakoss"
   },
   "plugins": [
     {
@@ -15,7 +15,7 @@
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
-        "url": "https://oakoss.dev"
+        "url": "https://github.com/oakoss"
       },
       "category": "development",
       "source": "./plugins/review-cycle",
@@ -29,7 +29,7 @@
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
-        "url": "https://oakoss.dev"
+        "url": "https://github.com/oakoss"
       },
       "category": "development",
       "source": "./plugins/pr-kit",
@@ -51,7 +51,7 @@
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
-        "url": "https://oakoss.dev"
+        "url": "https://github.com/oakoss"
       },
       "category": "productivity",
       "source": "./plugins/prose",

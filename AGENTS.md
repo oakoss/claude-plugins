@@ -63,7 +63,7 @@ Plugin `plugin.json` must include:
 - `name` — kebab-case, matches the directory name
 - `description` — one sentence, fits in a plugin listing card
 - `version` — semver, bumped on every release that should propagate as an update
-- `author` — set to `Oak OSS` with `hello@oakoss.dev` for consistency across plugins
+- `author` — set to `Oak OSS` with `hello@oakoss.dev` and `url` `https://github.com/oakoss` for consistency across plugins (`oakoss.dev` has mail but no website)
 - `license` — typically `MIT`
 - `repository` — `https://github.com/oakoss/claude-plugins`
 - `homepage` — link to the plugin's subdir on GitHub
