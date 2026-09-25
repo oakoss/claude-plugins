@@ -793,6 +793,42 @@ export function classify(command: string, aliases: ShellAliases = new Map()): Cl
   };
 }
 
+// A filter that reads the pipe to its end and runs nothing: `tail` with a
+// count, or `wc` with its counting flags. Anything that may stop reading early
+// (`head`, `grep -q`, a file operand) can kill a hook still printing, so git
+// aborts while the pipeline reports success.
+// One count: from the start (`+N`), or a nonzero last-N. GNU `tail` exits at
+// once on a zero count and BSD `tail` on a second count, neither reading.
+const COUNT = String.raw`(\+\d{1,9}|0*[1-9]\d{0,8})`;
+const TAIL_ONE = new RegExp(`^(-0*[1-9]\\d{0,8}|-[nc]${COUNT}|--(lines|bytes)=${COUNT})$`);
+const TAIL_COUNT = new RegExp(`^${COUNT}$`);
+
+function readsToEnd(head: string, args: string[]): boolean {
+  if (head === 'wc') return args.every((a) => /^-[lcwm]+$/.test(a));
+  if (head !== 'tail' || args.length > 2) return false;
+  const [a, b] = args;
+  if (a === undefined) return true;
+  if (b === undefined) return TAIL_ONE.test(a);
+  return (a === '-n' || a === '-c') && TAIL_COUNT.test(b);
+}
+
+// `op` is the operator after a statement, so a filter fed by a pipe is one
+// whose predecessor ends in `|`; one ending in `&` would run the whole
+// pipeline in the background, past the gate's check after the command.
+function isOutputFilter({ st, k }: { st: Statement; k: Kind }, fed: Statement): boolean {
+  return (
+    fed.op === '|' &&
+    st.op !== '&' &&
+    k.kind === 'other' &&
+    !st.redirected &&
+    st.inner.length === 0 &&
+    readsToEnd(
+      k.head,
+      k.words.slice(1).map((w) => w.text),
+    )
+  );
+}
+
 function judge(command: string, aliases: ShellAliases): Classification {
   const parsed = parse(command, aliases);
   if ('error' in parsed) {
@@ -818,9 +854,18 @@ function judge(command: string, aliases: ShellAliases): Classification {
   const reason = hidden(sts, parsed.text, aliases);
   if (reason) return { kind: 'refuse', reason: `${reason}. ${SHAPE}` };
 
-  const pairs = sts.map((st) => ({ st, k: kindOf(st) }));
-  const sensitive = pairs.some(({ k }) => k.kind === 'git' && records(k.git));
+  const all = sts.map((st) => ({ st, k: kindOf(st) }));
+  const sensitive = all.some(({ k }) => k.kind === 'git' && records(k.git));
   if (!sensitive) return { kind: 'none' };
+  // A pipe into a plain output filter at the very end reads what the commit or
+  // push printed and runs nothing, so it is set aside before judging.
+  let end = all.length;
+  while (end > 1 && isOutputFilter(all[end - 1]!, all[end - 2]!.st)) end--;
+  const pairs = all.slice(0, end);
+  if (end < all.length) {
+    const tail = pairs[end - 1]!;
+    pairs[end - 1] = { ...tail, st: { ...tail.st, op: '' } };
+  }
 
   let base = '.';
   let dir: string | null = null;
