@@ -15,7 +15,18 @@ git status --porcelain
 git diff --name-only --diff-filter=U
 ```
 
-`$ARGUMENTS` is natural language. `against <ref>` (or a bare ref) tells you what is being merged in, which helps you reason about which side is "theirs"; with no argument, resolve whatever conflict markers exist in the working tree.
+`$ARGUMENTS` is natural language. `against <ref>` (or a bare ref) names the other side of the conflict. With no argument, resolve whatever conflict markers exist in the working tree.
+
+### Which side is "ours"
+
+Run `git status` first and check its first lines for `rebase in progress`, because a rebase swaps the sides:
+
+| Operation | `ours` (`:2:`, `<<<<<<< HEAD`) | `theirs` (`:3:`, `>>>>>>>`) |
+| --- | --- | --- |
+| `git merge <ref>` | your branch | `<ref>`, the branch coming in |
+| `git rebase <ref>` | `<ref>`, the upstream you are replaying onto | **your own commit** being replayed |
+
+During a rebase, `git checkout --theirs` keeps your work and `--ours` keeps the upstream. If you apply the merge reading to a rebase, you resolve every conflict backwards, and a passing build does not catch it.
 
 ## Resolve each conflict
 
@@ -55,12 +66,16 @@ If validation fails, the resolution is wrong — fix it, don't paper over it.
 
 ## Finish
 
+Some conflicts leave no markers: binary files, symlinks, and paths one side deleted or both sides renamed. `git add` stages whatever the working tree holds. For a binary or a symlink that is the `ours` copy, which during a rebase is the upstream, not your commit. Before staging, take every path from `git diff --name-only --diff-filter=U` that has no text markers and decide it explicitly. Keep a side's version with `git checkout --ours -- <path>` or `git checkout --theirs -- <path>`, or drop the path with `git rm <path>`. A side that has no version of the path fails the checkout with `does not have our version` or `does not have their version`. Name each choice in the report. The checks below can't see these conflicts. A submodule conflict is out of scope: `git checkout --ours` and `--theirs` exit 0 on it and change nothing, so stop and hand it back to the user.
+
 ```bash
 git add <resolved files>
-git diff --cached --check   # fails if any conflict markers remain
+git diff --name-only --diff-filter=U                                # paths still unmerged
+git grep -nE '^(<{7,}|\|{7,}|>{7,})( |$)|^={7,}$' -- ':/'           # markers in the working tree
+git grep --cached -nE '^(<{7,}|\|{7,}|>{7,})( |$)|^={7,}$' -- ':/'  # markers in what you staged
 ```
 
-Confirm no `<<<<<<<`, `=======`, or `>>>>>>>` markers survive anywhere. Then report.
+All three commands must print nothing. `-- ':/'` searches the whole repository from any directory, and `{7,}` covers the diff3 `|||||||` line and a `conflict-marker-size` above the default of 7. A smaller size needs its own pattern. The working-tree search covers the file you forgot to stage, and the `--cached` one covers a file you staged before fixing it. `git grep` exits 1 when it finds nothing. An exit of 128 or a `fatal:` line means the search did not run, so the check failed. `git diff --cached --check` is not a substitute: it reads only staged content and also fails on trailing whitespace. A line of only `=` signs can be a Markdown or reStructuredText heading underline, so read each hit before you treat it as a marker. Then report.
 
 ## Output
 

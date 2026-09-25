@@ -25,16 +25,17 @@ Pull the three sources of feedback; they live in different places:
 ```bash
 # Inline review threads WITH resolution state — use GraphQL. The REST
 # pulls/comments endpoint omits isResolved, so it can't tell you what's
-# already been addressed.
-gh api graphql -F owner=<owner> -F repo=<repo> -F pr=<number> -f query='
-  query($owner:String!,$repo:String!,$pr:Int!){
+# already been addressed. --paginate follows $endCursor until every thread is
+# read; --slurp returns one JSON array holding every page.
+gh api graphql --paginate --slurp -F owner=<owner> -F repo=<repo> -F pr=<number> -f query='
+  query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$pr){
-        reviewThreads(first:100){
+        reviewThreads(first:100,after:$endCursor){
           pageInfo{hasNextPage endCursor}
           nodes{
-            isResolved isOutdated
-            comments(first:50){pageInfo{hasNextPage} nodes{path line body author{login}}}
+            id isResolved isOutdated
+            comments(first:50){pageInfo{hasNextPage} nodes{path line originalLine body author{login}}}
           }
         }
       }
@@ -48,9 +49,27 @@ gh pr view <number> --json reviews
 gh pr view <number> --json comments
 ```
 
-The caps (100 threads, 50 comments per thread) cover most PRs; if either `pageInfo.hasNextPage` is true, page with `after: <endCursor>` until every thread — and every comment within a long thread — is read. Summarizing from a truncated set can silently drop a blocking thread or the latest ask in a busy one.
+`--paginate` covers the thread list, but not the comments inside a thread. If a thread's `comments.pageInfo.hasNextPage` is true, re-read that thread by its `id`. This query starts from the first comment, so use its result in place of the thread's comments:
 
-Skip threads where `isResolved` is true (already addressed) or `isOutdated` is true (the referenced code has since changed) — don't re-surface those as open work.
+```bash
+gh api graphql --paginate --slurp -F thread=<thread id> -f query='
+  query($thread:ID!,$endCursor:String){
+    node(id:$thread){
+      ... on PullRequestReviewThread{
+        comments(first:50,after:$endCursor){
+          pageInfo{hasNextPage endCursor}
+          nodes{path line originalLine body author{login}}
+        }
+      }
+    }
+  }'
+```
+
+If you summarize a busy thread from only its first 50 comments, you can miss the reviewer's latest ask.
+
+Skip threads where `isResolved` is true. A person marked those addressed.
+
+Keep a thread that has `isOutdated` true and `isResolved` false. Outdated means a later push changed the code the comment was left on. It does not mean the reviewer's concern was addressed, and nobody resolved the thread. List it under **Possibly stale — verify**, not as done. Its `line` is null, so locate it by `originalLine`.
 
 ## Group and prioritize
 
@@ -60,7 +79,7 @@ Collapse the raw feedback into one action list. For each item, capture the file:
 2. **Should address** — substantive suggestions the reviewer expects a response to.
 3. **Optional / nits** — style preferences, "could also," praise.
 
-Don't pad the list. Merge duplicate threads that ask for the same thing. Drop resolved/outdated threads.
+Don't pad the list. Merge duplicate threads that ask for the same thing. Drop resolved threads.
 
 ## Output
 
@@ -75,6 +94,9 @@ Should address (N):
 
 Optional / nits (N):
   - file:line — <ask> (@reviewer)
+
+Possibly stale — verify (N):
+  - file:originalLine — <ask> (@reviewer) — outdated, never resolved
 
 Open questions (still need an answer):
   - <question> (@reviewer)
