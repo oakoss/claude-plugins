@@ -180,6 +180,12 @@ jobs:
       # (verified against an empty HOME and config dir). Installed unpinned:
       # the validate contract is stable, and a break from a CLI update should
       # surface here loudly rather than age silently behind a pin.
+      #
+      # On the runner's Node, before pnpm/setup, on purpose: the CLI is a native
+      # binary (bin `claude.exe`), so only its postinstall runs on Node. After
+      # pnpm/setup, `npm` would run on pnpm's npm-less Node, whose real path is
+      # in pnpm's store, and would put `claude` in a global folder off PATH
+      # (measured on macOS).
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
