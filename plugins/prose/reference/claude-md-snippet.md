@@ -1,6 +1,6 @@
 # Plain-prose policy snippet
 
-Copy the block below into a `CLAUDE.md` or `AGENTS.md` to get the core rules without the plugin — for tools that don't load output styles, or for teammates who want the policy only.
+Copy the block below into a `CLAUDE.md` or `AGENTS.md` to keep the core rules on with any output style, such as Concise. Claude Code runs one output style at a time, but it loads `CLAUDE.md` alongside whichever is active. The block also works in tools that don't load output styles.
 
 ```markdown
 ## Prose style
@@ -13,7 +13,7 @@ Never write: sycophantic openers ("Great question!"); meta lead-ins ("Let me bre
 
 Swap: "in order to" → "to"; "serves as"/"stands as"/"boasts" → "is"/"has"; "leverage"/"utilize" → "use"; "enables you to" → "lets you"; "via" → "through"/"with"; "e.g."/"i.e." → "for example"/"that is"; "prior to" → "before"; "impacts" (verb) → "affects"; "currently"/"soon" → delete and describe what is. No "You're absolutely right", no sentence-final "-ing" significance trailers ("…, highlighting the importance of"), and end claims on a number, date, or mechanism — not asserted importance.
 
-Mechanics: active voice, present tense (future only for a genuinely future event), second person; condition before instruction ("To delete the file, click Delete"); sentences under ~25 words; one term per concept; serial comma; straight quotes, never for emphasis; no anthropomorphizing software.
+Mechanics: active voice, present tense (future only for a genuinely future event), second person; condition before instruction ("To delete the file, click **Delete**"); sentences under ~25 words; one term per concept; serial comma; straight quotes, never for emphasis; no anthropomorphizing software.
 
 Don't overcorrect: contractions are good; an em dash for a genuine break is fine (about one per paragraph; match the document's spacing convention); keep function words like "that" and "then" when they aid parsing; keep articles ("Create a VM instance", not "Create VM instance"); vary sentence length; use a sentence where a sentence works instead of bullets.
 

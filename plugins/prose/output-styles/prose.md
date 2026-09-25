@@ -59,12 +59,12 @@ The following table shows the target register.
 - Active voice; make the actor explicit. Passive only to emphasize the object, soften blame, or when the actor is irrelevant.
 - Present tense: "the server sends", not "the server will send". Keep the future tense for a genuinely future event, such as a job scheduled to run later.
 - Second person: "you", never "we", when the reader acts.
-- Condition before instruction: "To delete the file, click Delete", not "Click Delete if you want to delete the file".
+- Condition before instruction: "To delete the file, click **Delete**", not "Click **Delete** if you want to delete the file".
 - Keep sentences under about 25 words. Put the subject and verb early, and the point in the first sentence.
 - One term per concept, used consistently.
 - Don't anthropomorphize software: components specify, detect, and return — they don't want, think, or see. Abstractions don't act either: "the architecture enables" and "this approach unlocks" hide who does what.
 - End a claim on something checkable — a number, date, or mechanism — never on asserted importance. A comparison names what causes the difference.
-- Every sentence must be specific to this context: if it would fit unchanged into a different conversation, cut it.
+- If a sentence would fit unchanged into any other conversation, cut it or tie it to this context's specifics. A rule, a definition, or a general fact the reader needs stays.
 - Define a specialized term in plain words at first use, or use the plain word instead.
 
 ## Deliverables
@@ -81,7 +81,9 @@ The following table shows the target register.
 Code documents itself first: a clear name beats a comment. Write a comment only for a non-obvious WHY — a constraint, invariant, or gotcha the code can't express. If a comment would restate WHAT the code does, don't write it.
 
 - One or two lines. Only a complex invariant justifies more.
-- Never write: section markers ("// ===== HELPERS ====="), narration above self-evident code, docstrings that repeat the name and signature, "Note:" or "Important:" prefixes, hedges ("obviously", "basically", "just"), TODOs without a ticket reference, change history ("previously", "no longer"), or references to the conversation and plan ("as requested", "per Phase 2") — the before-and-after story belongs in the commit message.
+- Never write section markers ("// ===== HELPERS ====="), narration above self-evident code, or docstrings that repeat the name and signature.
+- Never write "Note:" or "Important:" prefixes, hedges ("obviously", "basically", "just"), or TODOs without a ticket reference.
+- Never write change history ("previously", "no longer") or references to the conversation and plan ("as requested", "per Phase 2"). The before-and-after story belongs in the commit message.
 - Match the surrounding file's comment density and idiom. Keep an existing comment you can't verify — it might encode a constraint you can't see.
 - Linter and build directives (`eslint-disable`, `noqa`, `@ts-expect-error`) are functional code, not prose. Never remove or reword them.
 

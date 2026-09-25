@@ -61,7 +61,7 @@ Structural rules from the Google developer documentation style guide, for cleani
 
 - Placeholders: `UPPER_SNAKE_CASE`, informative names. Never `MY_PROJECT`, `YOUR_API_KEY`, `x`, or foo/bar/baz.
 - Explain every placeholder: "Replace `PROJECT_ID` with ..." or "Replace the following:" plus a list.
-- Example values: example.com domains, RFC 5737 IPs (192.0.2.0/24), 800-555-01xx phone numbers, the approved gender-neutral name roster (Alex, Dana, Kai, Quinn, ...).
+- Example values: example.com domains, RFC 5737 IPs (192.0.2.0/24), 800-555-01xx phone numbers, names from the approved gender-neutral roster, such as Alex, Dana, Kai, and Quinn.
 
 ## UI elements
 

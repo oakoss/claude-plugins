@@ -353,3 +353,30 @@ test('the two rules a mutation run inverted are anchored', () => {
   expectContains(STYLE, '- Exclamation points.');
   expectContains(SKILL, 'Never run regex replacements');
 });
+
+test('the worked examples follow the rules they illustrate', () => {
+  // An example that breaks its own rule gets "fixed" by the cleanup skill.
+  // These pin the fixed text; a general rule checker fails valid prose.
+  for (const rel of [STYLE, SKILL, SNIPPET]) expectContains(rel, 'click **Delete**');
+  for (const rel of [STYLE, SKILL]) expectContains(rel, 'Click **Delete** if');
+  expectContains(MECHANICS, 'such as Alex, Dana, Kai, and Quinn.');
+  expectContains(STYLE, '- Never write section markers (');
+  expectContains(STYLE, '- Never write "Note:" or "Important:" prefixes');
+  expectContains(STYLE, '- Never write change history (');
+});
+
+test('the generic-sentence test keeps what the reader needs', () => {
+  // Read literally, the unqualified test deleted the style's own rules.
+  expectContains(STYLE, 'or tie it to this context');
+  expectContains(STYLE, 'A rule, a definition, or a general fact the reader needs stays.');
+  expectContains(SKILL, 'a rule, a definition, or a general fact the reader needs stays');
+});
+
+test('the README gives the measured way to select the style', () => {
+  expectContains('README.md', '`/output-style prose:Prose`');
+  expectContains('README.md', '`/output-style prose` fails with `Unknown output style "prose"`');
+  expectContains('README.md', 'to **prose:Prose**');
+  expectContains('README.md', '`"outputStyle": "prose:Prose"`');
+  expectContains('README.md', "save the choice to the project's `.claude/settings.local.json`");
+  expectContains('README.md', 'without `/clear` or a new session');
+});

@@ -6,7 +6,6 @@ description: >
 license: MIT
 metadata:
   author: oakoss
-  version: '1.0'
 ---
 
 # Prose cleanup
@@ -47,7 +46,7 @@ Delete these outright — the sentence rarely needs them:
 | Sentences ending in asserted importance | End on a number, date, or mechanism |
 | Vague comparisons ("X is better than Y") | Name what causes the difference |
 | "The architecture enables…", "this approach unlocks…" | Give the sentence a concrete subject that acts |
-| Sentences that would fit unchanged in any other document | Cut, or tie them to this document's specifics |
+| Sentences that would fit unchanged in any other document | Cut, or tie them to this document's specifics; a rule, a definition, or a general fact the reader needs stays |
 | "best", "simplest", "fastest", "always", "never" in a claim about behavior | A verifiable claim, or delete — an imperative ("never bypass hooks") is a rule, and stays |
 | "ensures", "guarantees" | Keep only if literally true; otherwise "helps", or state the actual behavior |
 | "prevents attacks", "is secure" | "helps protect against", "is designed to" — the next incident invalidates a security absolute |
