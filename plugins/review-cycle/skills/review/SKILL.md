@@ -152,7 +152,7 @@ Before reviewing, bring the tree to the project's canonical state so reviewers s
 
 **Use the project's own checks — don't invent commands.** Source them from context you most likely already have: `CLAUDE.md` / `AGENTS.md`, the pre-commit config (`lefthook.yml`, `.husky/`, `.pre-commit-config.yaml`), `package.json` scripts, a `justfile` / `Makefile` / `Taskfile.yml` / `mise.toml`, or the CI workflow. If none is discoverable, skip this phase and note "no project checks found" in the summary.
 
-1. **Auto-fixers (mutating)** — formatters and `lint --fix`. Run them and keep the result, scoped to the changed fileset so unrelated files aren't swept into the diff. (If the project's convention is genuinely whole-tree, follow it.)
+1. **Auto-fixers (mutating)** — formatters and `lint --fix`. Run them and keep the result, scoped to the changed fileset so unrelated files aren't swept into the diff. (If the project's convention is genuinely whole-tree, follow it.) **Cover every file type the pre-commit hook rewrites, not only those a check script covers.** Read the hook config's globs: a `format:check` script that checks only TypeScript says nothing about the JSON the hook formats at commit, and a commit it rewrites records content no reviewer saw. Point a formatter at the changed files it handles, never at a directory: it may reformat other file types there in a style the project does not use.
 2. **Read-only checks** — typecheck and fast/affected tests. Fold any failures into the review findings; the fix-vs-defer policy applies. Do NOT run a slow full suite on every review — surface it as "run `<cmd>` before merging" instead.
 
 Fail-open: a missing tool or a check that errors out is noted and skipped, never blocks the review.

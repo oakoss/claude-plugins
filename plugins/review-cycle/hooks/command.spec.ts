@@ -150,6 +150,29 @@ describe('gates the accepted shapes', () => {
       expect.objectContaining({ commit: { ...PLAIN, dryRun: true } }),
     );
   });
+  test('a trailing pipe into tail or wc is judged like the command before it', () => {
+    expect(classify('git push 2>&1 | tail -3')).toEqual(
+      expect.objectContaining({ kind: 'gated', push: true }),
+    );
+    expect(classify('git commit -m x | tail -n 5')).toEqual(
+      expect.objectContaining({ kind: 'gated', commit: PLAIN }),
+    );
+    expect(classify('git add -A && git commit -m x 2>&1 | tail -n20 | wc -l')).toEqual(
+      expect.objectContaining({ kind: 'gated', adds: [['add', '-A']] }),
+    );
+    for (const tail of [
+      'tail',
+      'tail -c 200',
+      'tail --lines=5',
+      'tail -n +2',
+      'tail -n +0',
+      'tail -05',
+      'wc',
+      'wc -lw',
+    ]) {
+      expect(classify(`git push | ${tail}`)).toEqual(expect.objectContaining({ kind: 'gated' }));
+    }
+  });
   test('read-only git around the commit', () => {
     expect(
       classify('git status && git add -A && git commit -m x && git log -1 --format=%G?'),
@@ -447,7 +470,7 @@ describe('gates the accepted shapes', () => {
     expect(classify('git status', new Map([['git', 'command git push; git']])).kind).toBe('refuse');
   });
   test('a command refused for another reason keeps that reason when git is an alias', () => {
-    const r = classify('git commit -m x | cat', new Map([['git', 'hub']]));
+    const r = classify('git commit -m x | tee log', new Map([['git', 'hub']]));
     expect(r.kind === 'refuse' && r.reason).toContain('joined with `|`');
   });
   test('a git alias lookup reads git as itself when git is a shell alias', () => {
@@ -559,6 +582,38 @@ describe('refuses every other shape that commits or pushes', () => {
     "FOO=1 bash -c 'git commit -m x'",
     "eval 'git commit -m x'",
     'echo x | git commit -F -',
+    'git push | sh',
+    'git commit -m x | tee log',
+    "git push | sed -e 's/x/y/'",
+    'git commit -m x | xargs git push',
+    'git push | tail -3 > out',
+    'git push | tail $(git commit -m y)',
+    'git commit -m x | tail -3 && git push',
+    'git commit -m x | grep -q done || git push',
+    'git commit -m x && tail -3 log',
+    // Backgrounded, the pipeline outlives the gate's check after the command.
+    'git commit -m x | tail -3 &',
+    'git push | cat &',
+    'git commit -m x & tail -1 a | wc -l',
+    'git commit -m x || tail -1 log | wc -l',
+    // A reader that may stop early, or read a file instead of the pipe, can
+    // kill a hook mid-run.
+    'git commit -m x | head -1',
+    'git push | grep -v hint',
+    'git push | cat',
+    'git commit -m x | tail -3 log.txt',
+    'git commit -m x | tail -f',
+    'git commit -m x | tail -n $N',
+    'git commit -m x | tail -n',
+    'git commit -m x | wc -l file',
+    'git commit -m x | wc -L',
+    'git commit -m x | tail -0',
+    'git commit -m x | tail -n 0',
+    'git commit -m x | tail -c0',
+    'git commit -m x | tail --bytes=0',
+    'git commit -m x | tail -n 5 -n 3',
+    'git commit -m x | tail -5 -3',
+    'git commit -m x | tail -n 5 log',
     'git commit -m x || true',
     'git commit -m x &',
     '(git commit -m x)',
