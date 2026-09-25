@@ -1,7 +1,7 @@
 {
   "name": "prose",
   "description": "Plain technical prose for Claude: an output style, a CLAUDE.md snippet, and a cleanup skill that remove AI filler, distilled from the Google developer style guide.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",

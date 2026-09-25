@@ -1,6 +1,6 @@
 {
   "name": "pr-kit",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Version anchor only; the manifest users install is .claude-plugin/plugin.json, which the release tool keeps in step."
 }
