@@ -15,7 +15,16 @@
 #
 # The glob takes both suffixes: a workflow named `*.yaml` is otherwise linted
 # with no waiver at all.
+#
+# `concurrency.queue` is documented in GitHub's workflow syntax reference
+# (`single`, the default, or `max`), and 1.7.12 does not know it either. The
+# waiver names the one key, in the one file that uses it, so a misspelled key
+# or `queue` anywhere else is still reported. Its value goes unchecked here;
+# GitHub rejects a bad one, or `max` with `cancel-in-progress: true`.
 paths:
   .github/workflows/**/*.y*ml:
     ignore:
       - 'specifying action "\$/\.github/actions/app-token" in invalid format because ref is missing'
+  .github/workflows/release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

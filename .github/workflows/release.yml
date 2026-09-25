@@ -14,10 +14,13 @@ permissions:
 # `release` runs can both read the same version as untagged before either
 # pushes, and oakum's tag-collision refusal is the only thing between that and
 # a wrong release. Cancelling is off — a cancelled release can leave some of
-# the three tags pushed.
+# the three tags pushed. By default GitHub also cancels a run still pending in
+# the group when a newer one queues; `queue: max` keeps every pending run, so
+# each push is released from its own commit rather than by a later one.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Runs in parallel with `release`, not before it: there is no plan step to
