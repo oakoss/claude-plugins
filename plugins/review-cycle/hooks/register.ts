@@ -333,7 +333,7 @@ async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<vo
     if (pending.some(([, leg]) => !leg.done)) return;
   }
   const tree = await worktreeTree(gitOf($), root.top);
-  if (tree === null || tree === since) return;
+  if (tree === since) return;
   const touched = new Set(await reviewablePaths(gitOf($), root.top, since, tree));
   const c = await coverageOf(
     gitOf($),
@@ -424,7 +424,6 @@ async function onTurnComplete(
   }
   try {
     const tree = await worktreeTree(gitOf($), root.top);
-    if (tree === null) throw new Error('the working tree could not be read when it finished');
     const head = await headOf(gitOf($), root.top);
     const reviewedPaths = await reviewablePaths(gitOf($), root.top, head, tree);
     if (reviewedPaths === null) throw new Error('the paths it reviewed could not be listed');
@@ -648,7 +647,7 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   const capture = async (): Promise<Capture> => {
     if (root === null) return { state: UNREAD, why: lookup };
     try {
-      return { state: await repoStateOf(gitOf($), root.top), why: null };
+      return await repoStateOf(gitOf($), root.top);
     } catch (error) {
       return { state: UNREAD, why: error instanceof Error ? error.message : String(error) };
     }
@@ -778,11 +777,14 @@ async function reviewed(
   const head = await headOf(gitOf($), top);
   // An amend replaces HEAD, so what it records is judged against HEAD's parent.
   const base = cls.commit.amend && head !== EMPTY_TREE ? await parentTree(gitOf($), top) : head;
+  if (base === null)
+    throw new Error("could not read the tree of HEAD's parent, which an amend replaces");
   const prospect = await prospectTree(gitOf($), top, cls);
-  const c =
-    prospect && base ? await coverageOf(gitOf($), top, base, prospect, state.reviews) : null;
-  if (prospect === null || c === null) {
-    throw new Error('could not compute the tree this commit would record');
+  const c = await coverageOf(gitOf($), top, base, prospect, state.reviews);
+  if (c === null) {
+    const against =
+      base === EMPTY_TREE ? 'the empty tree' : cls.commit.amend ? "HEAD's parent" : 'HEAD';
+    throw new Error(`could not compare the tree this commit would record with ${against}`);
   }
   if (uncoveredOf(c.rows).length > 0) {
     return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then commit.`;
@@ -1027,20 +1029,20 @@ async function onStatus(
     shellAliases: state.aliasError ?? state.shellAliases.size,
     consent: state.message.grant,
     error: null,
+    worktreeTree: null,
   };
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
     const head = await headOf(gitOf($), root.top);
     const tree = await worktreeTree(gitOf($), root.top);
-    const c = tree ? await coverageOf(gitOf($), root.top, head, tree, state.reviews) : null;
+    const c = await coverageOf(gitOf($), root.top, head, tree, state.reviews);
     status.worktreeTree = tree;
-    status.snapshot = tree ? await snapshotOf(gitOf($), root.top, head, tree) : null;
+    status.snapshot = await snapshotOf(gitOf($), root.top, head, tree);
     status.changed = c?.rows.length ?? null;
     status.uncovered = c ? uncoveredOf(c.rows) : null;
     status.unreadReviews = c?.unread ?? null;
-    if (tree === null) status.error = 'could not build the working tree';
-    else if (c === null) status.error = 'could not diff the working tree';
+    if (c === null) status.error = 'could not diff the working tree';
   } catch (error) {
     status.error = error instanceof Error ? error.message : String(error);
   }

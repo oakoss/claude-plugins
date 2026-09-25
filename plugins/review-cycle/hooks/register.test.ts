@@ -16,6 +16,8 @@ type World = {
   }[];
   aliases: string;
   fail: (argv: string) => boolean;
+  // Makes $.process.run itself reject, as a timeout does.
+  reject?: (argv: string) => boolean;
   // Answers a git call itself, ahead of the scripted git.
   git?: (argv: string) => Partial<Run> | null | undefined;
   // Answers an Edit or Write itself, after it wrote `files`; null keeps the
@@ -137,6 +139,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
         return { value: { stderr: r.exitCode === 0 ? '' : 'zsh: not found', ...r, stdout } };
       }
       const a = e.argv.join(' ');
+      if (w.reject?.(a)) return { deny: 'timed out' };
       if (w.fail(a)) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: injected' } };
       const own = w.git?.(a);
       if (own) return { value: { exitCode: 0, stdout: '', stderr: '', ...own } };
@@ -517,6 +520,26 @@ describe('reviewed?', () => {
     });
     await say($, 'commit it');
     expect(denied(await bash($, 'git commit -am x'), 'never reviewed')).toBe(true);
+  });
+  test('a tree the check cannot build is refused with the git error that stopped it', async ($, on) => {
+    let judging = false;
+    fakeWorld(on, { fail: (a) => judging && a === 'git write-tree' });
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(
+      denied(await bash($, 'git commit -am x'), 'git write-tree failed: fatal: injected'),
+    ).toBe(true);
+  });
+  test("a replayed git add that fails is refused with git's error", async ($, on) => {
+    let judging = false;
+    fakeWorld(on, { fail: (a) => judging && a === 'git -C . add a.ts' });
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(
+      denied(await bash($, 'git add a.ts && git commit -m x'), 'git add failed: fatal: injected'),
+    ).toBe(true);
   });
   test('a reviewed tree git cannot diff covers nothing', async ($, on) => {
     let judging = false;
@@ -1322,15 +1345,35 @@ describe('what the gate reports', () => {
   });
 });
 
-describe('failures while judging a commit refuse it', () => {
-  const failures: [string, (a: string) => boolean][] = [
-    ['the changed-path diff', (a) => a.includes('diff-tree') && a.includes(' -- . ')],
-    ['write-tree', (a) => a.includes('write-tree')],
-    ['the replayed add', (a) => a === 'git -C . add -A'],
-    ['add -u for commit -a', (a) => a === 'git add -u'],
-    ['reading HEAD', (a) => a === 'git rev-parse --verify -q HEAD^{commit}'],
+describe('failures while judging a commit refuse it, naming the cause', () => {
+  const failures: [string, (a: string) => boolean, string][] = [
+    [
+      'the changed-path diff',
+      (a) => a.includes('diff-tree') && a.includes(' -- . '),
+      // Closed by the refusal's `)`, so `HEAD's parent` does not match.
+      'could not compare the tree this commit would record with HEAD)',
+    ],
+    ['write-tree', (a) => a === 'git write-tree', 'git write-tree failed: fatal: injected'],
+    ['the replayed add', (a) => a === 'git -C . add -A', 'git add failed: fatal: injected'],
+    ['add -u for commit -a', (a) => a === 'git add -u', 'git add -u failed: fatal: injected'],
+    [
+      'reading HEAD',
+      (a) => a === 'git rev-parse --verify -q HEAD^{commit}',
+      'git rev-parse HEAD failed: fatal: injected',
+    ],
+    ['mktemp', (a) => a === 'mktemp', 'mktemp failed: fatal: injected'],
+    [
+      'the index path',
+      (a) => a.includes('--git-path index'),
+      'git rev-parse --git-path index failed: fatal: injected',
+    ],
+    [
+      'the index copy',
+      (a) => a.startsWith('sh -c') && a.includes('/repo/.git/index'),
+      'copying the index failed: fatal: injected',
+    ],
   ];
-  for (const [name, fail] of failures) {
+  for (const [name, fail, cause] of failures) {
     test(name, async ($, on) => {
       let judging = false;
       const w = fakeWorld(on);
@@ -1342,9 +1385,112 @@ describe('failures while judging a commit refuse it', () => {
         $,
         name === 'the replayed add' ? 'git add -A && git commit -m x' : 'git commit -am x',
       );
-      expect(ran(r)).toBe(false);
+      expect(denied(r, cause)).toBe(true);
     });
   }
+  test('a write-tree that prints no tree id says what it printed', async ($, on) => {
+    let judging = false;
+    const w = fakeWorld(on);
+    w.git = (a) => (judging && a === 'git write-tree' ? { stdout: 'garbage\n' } : null);
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(denied(await bash($, 'git commit -am x'), 'printed no tree id: garbage')).toBe(true);
+  });
+  test('a step that fails with no error output gives its exit code', async ($, on) => {
+    let judging = false;
+    const w = fakeWorld(on);
+    w.git = (a) =>
+      judging && a === 'git write-tree' ? { exitCode: 128, stdout: '', stderr: '' } : null;
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(denied(await bash($, 'git commit -am x'), 'git write-tree failed: exit 128')).toBe(true);
+  });
+  test('an amend whose parent tree cannot be read says so', async ($, on) => {
+    const head = 'c'.repeat(40);
+    const parent = 'b'.repeat(40);
+    let judging = false;
+    const w = fakeWorld(on, {
+      work: { 'a.ts': 'one' },
+      commits: { [head]: { 'a.ts': 'one' }, [parent]: { 'a.ts': 'zero' } },
+      parents: { [head]: parent },
+    });
+    w.fail = (a) => judging && a === `git rev-parse ${parent}^{tree}`;
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(
+      denied(
+        await bash($, 'git commit --amend --no-edit'),
+        "could not read the tree of HEAD's parent",
+      ),
+    ).toBe(true);
+  });
+  test('a failed add -A builds no working tree, and says why', async ($, on) => {
+    const w = fakeWorld(on);
+    w.fail = (a) => a === 'git add -A';
+    const r = await ($ as any).tool.call({ tool: 'mcp__review-cycle__status' });
+    const status = JSON.parse((r as { result: string }).result);
+    expect(status.worktreeTree).toBe(null);
+    expect(status.error).toBe('git add -A failed: fatal: injected');
+  });
+  test("a reviewer whose finishing tree cannot be built is dropped with git's reason", async ($, on) => {
+    let finishing = false;
+    fakeWorld(on, { fail: (a) => finishing && a === 'git add -A' });
+    await review($, {
+      during: () => {
+        finishing = true;
+      },
+    });
+    const r = await ($ as any).tool.call({ tool: 'mcp__review-cycle__status' });
+    const status = JSON.parse((r as { result: string }).result);
+    expect(status.droppedReviews).toEqual([
+      'review-cycle:code-reviewer: git add -A failed: fatal: injected',
+    ]);
+  });
+  test("a failed comparison on an amend names HEAD's parent", async ($, on) => {
+    const head = 'c'.repeat(40);
+    const parent = 'b'.repeat(40);
+    let judging = false;
+    const w = fakeWorld(on, {
+      work: { 'a.ts': 'one' },
+      commits: { [head]: { 'a.ts': 'one' }, [parent]: { 'a.ts': 'zero' } },
+      parents: { [head]: parent },
+    });
+    w.fail = (a) => judging && a.includes('diff-tree') && a.includes(' -- . ');
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(
+      denied(
+        await bash($, 'git commit --amend --no-edit'),
+        "could not compare the tree this commit would record with HEAD's parent",
+      ),
+    ).toBe(true);
+  });
+  test('a failed comparison on an unborn branch names the empty tree', async ($, on) => {
+    let judging = false;
+    const w = fakeWorld(on, { headMissing: true, work: { 'a.ts': 'one' } });
+    w.fail = (a) => judging && a.includes('diff-tree') && a.includes(' -- . ');
+    await review($);
+    await say($, 'commit it');
+    judging = true;
+    expect(
+      denied(
+        await bash($, 'git add -A && git commit -m first'),
+        'could not compare the tree this commit would record with the empty tree',
+      ),
+    ).toBe(true);
+  });
+  test('a runner that rejects is named by its step, and not read as unreadable', async ($, on) => {
+    const w = fakeWorld(on);
+    w.reject = (a) => a === 'git write-tree';
+    const r = await ($ as any).tool.call({ tool: 'mcp__review-cycle__status' });
+    const status = JSON.parse((r as { result: string }).result);
+    expect(status.error).toContain('git write-tree failed');
+    expect(status.error).toContain('timed out');
+  });
 });
 
 describe('what a commit records', () => {
@@ -2305,6 +2451,21 @@ describe('reviewer containment', () => {
     const r = await bash($, 'echo hi > a.ts');
     expect(ran(r) && !has(r.context ?? [], 'changed while')).toBe(true);
     expect(await reviewerChanges($)).toEqual([]);
+  });
+  test('a working tree that cannot be built leaves the other parts compared', async ($, on) => {
+    const w = fakeWorld(on);
+    const leg = await legUnderWay($);
+    let config = 'local\0core.bare\nfalse\0';
+    w.git = (a) => (a === 'git config --list --show-scope -z' ? { stdout: config } : null);
+    w.fail = (a) => a === 'git add -A';
+    w.shell = () => {
+      config += 'local\0user.email\nx@y\0';
+    };
+    await bash($, 'git config user.email x@y', { agentId: leg });
+    expect(await reviewerChanges($)).toEqual([
+      'review-cycle:code-reviewer: the local git config changed while `git config user.email x@y` ran',
+      'review-cycle:code-reviewer: could not check the working tree (git add -A failed: fatal: injected) while `git config user.email x@y` ran',
+    ]);
   });
   test('an unreadable part is said, and the readable parts are still compared', async ($, on) => {
     const w = fakeWorld(on);
