@@ -11,7 +11,7 @@
     {
       "name": "review-cycle",
       "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, and admits a commit only when you asked for it and a reviewer saw exactly what it records.",
-      "version": "0.22.0",
+      "version": "0.22.1",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
@@ -25,7 +25,7 @@
     {
       "name": "pr-kit",
       "description": "Pull-request workflow toolkit: summarize review feedback, resolve merge conflicts, make diffs reviewable, and drive CI to green — gate-aware, with no unreviewed commits.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
@@ -47,7 +47,7 @@
     {
       "name": "prose",
       "description": "Plain technical prose for Claude: an output style, a CLAUDE.md snippet, and a cleanup skill that remove AI filler, distilled from the Google developer style guide.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",

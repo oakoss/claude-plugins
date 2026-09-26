@@ -4,6 +4,21 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.22.1 (2026-09-25)
+
+### Fixed
+
+A commit or push can now end in a pipe into `tail` or `wc`. For example, `git push 2>&1 | tail -3` or `git commit -F msg | tail -n 20 | wc -l` is judged exactly as it would be without the pipe, where it used to be refused, and you had to run it again without the pipe. `tail` may take one line or byte count, nonzero or `+N`, and `wc` its counting flags (`-l`, `-c`, `-w`, `-m`), so both read everything git printed. Some shapes are still refused:
+
+- a filter that may stop reading early or read a file instead, such as `head`, `grep`, `cat file`, `tail -3 log` or `tail -n 0`, which can kill a pre-commit hook still printing, so git aborts while the pipeline reports success;
+- a filter that can run or write something, such as `sh`, `sed`, `tee` or `xargs`;
+- a pipeline backgrounded with `&`, which would outlive the gate's check after the command;
+- any other command joined to a commit by a pipe.
+
+The review skill's canonicalize phase now formats every file type your pre-commit hook rewrites, not only the ones a check script covers. It reads the hook config's globs, so a commit no longer records a reformatted JSON file that no reviewer saw.
+
+When the commit gate cannot build the tree a commit would record, its refusal now says why. It names the step that failed and git's own first error line, such as `git write-tree failed: fatal: …` or `git add failed: fatal: …`. When no error line is printed, it gives the exit code, and a step that timed out is named too. An amend whose parent commit can't be read says so, and a failed comparison names what it compared against. The status tool and the list of reviews that did not count give the same reasons, where they used to say only that the working tree could not be read. Until now the refusal said only "could not compute the tree this commit would record". That was puzzling after you picked Commit in the gate's question, since the check re-runs and the approval is used up with no reason given. (cpl-35t)
+
 ## 0.22.0 (2026-09-24)
 
 ### Added
