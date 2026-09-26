@@ -69,6 +69,10 @@ type World = {
   fsFails?: boolean;
   // Every prompt that reached the session, the plugin's own included.
   prompts?: string[];
+  // Every tool the plugin registered, by short name.
+  registered?: string[];
+  // Makes registering this tool fail.
+  registerFails?: string;
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -102,6 +106,13 @@ function treeId(w: World, files: Record<string, string>): string {
   const id = (w.trees.size + 1).toString(16).padStart(40, 'e');
   w.trees.set(id, { ...files });
   return id;
+}
+
+// A stand-in blob id: the same content always gets the same one.
+function blobOf(content: string): string {
+  let h = 0;
+  for (const ch of content) h = (Math.imul(h, 31) + (ch.codePointAt(0) ?? 0)) >>> 0;
+  return h.toString(16).padStart(8, '0').repeat(5);
 }
 
 function ok(stdout = '') {
@@ -169,6 +180,12 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
       if (a.includes('write-tree')) {
         const staged = e.init?.env?.GIT_INDEX_FILE ? w.work : (w.commits[w.head] ?? {});
         return ok(`${treeId(w, staged)}\n`);
+      }
+      const lsTree = /^git --literal-pathspecs ls-tree -r -z (\S+) -- (.+)$/.exec(a);
+      if (lsTree) {
+        const files = filesOf(lsTree[1] ?? '');
+        const hits = (lsTree[2] ?? '').split(' ').filter((p) => files[p] !== undefined);
+        return ok(hits.map((p) => `100644 blob ${blobOf(files[p] ?? '')}\t${p}\0`).join(''));
       }
       const show = /^git show (\S+):(\S+)$/.exec(a);
       if (show) {
@@ -257,9 +274,11 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     const path = typeof e === 'string' ? e : (e.path ?? '');
     return { value: w.files?.[path] !== undefined };
   });
-  on('tool.register', ($: unknown, e: { name: string }) => ({
-    value: { tool: `mcp__review-cycle__${e.name}` },
-  }));
+  on('tool.register', ($: unknown, e: { name: string }) => {
+    if (e.name === w.registerFails) return { deny: 'registry closed' };
+    (w.registered ??= []).push(e.name);
+    return { value: { tool: `mcp__review-cycle__${e.name}` } };
+  });
   on('fs.stat', ($: unknown, e: { path?: string } | string) => {
     const path = typeof e === 'string' ? e : (e.path ?? '');
     const text = w.files?.[path];
@@ -1199,6 +1218,205 @@ describe('the status tool', () => {
     expect(status.consent).toEqual({ commit: true, push: false });
     expect(status.error).toBe(null);
     expect(status.snapshot).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// A store per test, and a fixed clock: 2026-09-26. `clock.sleep` never ends
+// unless `hangFirstGet`, where it ends at once so the record waiting on the
+// stuck one goes ahead without a real wait.
+function fakeStore(
+  on: any,
+  opts: {
+    refuse?: string;
+    readFails?: string;
+    hangFirstGet?: boolean;
+  } = {},
+): Map<string, unknown> {
+  const store = new Map<string, unknown>();
+  let gets = 0;
+  on('store.get', ($: unknown, e: { key: string }) => {
+    if (opts.hangFirstGet && gets++ === 0) return pending();
+    return opts.readFails ? { deny: opts.readFails } : { value: structuredClone(store.get(e.key)) };
+  });
+  on('store.set', ($: unknown, e: { key: string; value: unknown }) => {
+    if (opts.refuse) return { deny: opts.refuse };
+    store.set(e.key, structuredClone(e.value));
+    return { value: undefined };
+  });
+  on('store.keys', () => ({ value: [...store.keys()] }));
+  on('store.delete', ($: unknown, e: { key: string }) => {
+    store.delete(e.key);
+    return { value: undefined };
+  });
+  on('clock.now', () => ({ value: NOW }));
+  on('clock.sleep', () => (opts.hangFirstGet ? { value: undefined } : pending()));
+  return store;
+}
+
+const NOW = Date.UTC(2026, 8, 26, 12);
+
+// A promise that never settles.
+function pending(): Promise<never> {
+  return new Promise<never>((resolve) => {
+    void resolve;
+  });
+}
+
+async function ledger($: any, input: object = {}): Promise<any> {
+  const r = await $.tool.call({ tool: 'mcp__review-cycle__ledger', ...input });
+  return (r as { result: string }).result;
+}
+
+async function record($: any, input: object): Promise<string> {
+  const r = await $.tool.call({ tool: 'mcp__review-cycle__ledger_record', ...input });
+  return (r as { result: string }).result;
+}
+
+const DEFERRED = {
+  path: 'a.ts',
+  line: 3,
+  kind: 'deferred',
+  finding: 'retry has no cap',
+  reason: 'needs a new dependency',
+  source: 'silent-failure-hunter',
+};
+const KEY = 'ledger:/repo/.git';
+
+describe('the findings ledger', () => {
+  test('both tools are registered at session start', async ($, on) => {
+    const w = fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    expect(w.registered).toEqual(expect.arrayContaining(['status', 'ledger', 'ledger_record']));
+  });
+  test('a ledger tool that cannot register leaves the gate set up', async ($, on) => {
+    const w = fakeWorld(on, { registerFails: 'ledger' });
+    await ($ as any).session.start({ source: 'startup' });
+    expect(w.registered).toContain('status');
+  });
+  test('an entry recorded is read back with its blob, unchanged until the file is', async ($, on) => {
+    const w = fakeWorld(on);
+    const store = fakeStore(on);
+    expect(JSON.parse(await record($, { entries: [DEFERRED] }))).toEqual({
+      added: 1,
+      updated: 0,
+      resolved: 0,
+      kept: 0,
+      gone: 0,
+      unknown: [],
+      evicted: 0,
+      total: 1,
+    });
+    expect([...store.keys()]).toEqual([KEY]);
+    expect((store.get(KEY) as { updated: number }).updated).toBe(NOW);
+    const read = JSON.parse(await ledger($, { paths: ['a.ts'] }));
+    const blob = blobOf('one');
+    expect(read).toEqual({
+      total: 1,
+      unreadable: 0,
+      entries: [
+        {
+          ...DEFERRED,
+          id: expect.stringMatching(/^[0-9a-f]{8}$/),
+          blob,
+          date: '2026-09-26',
+          current: blob,
+          changed: false,
+          stale: false,
+        },
+      ],
+    });
+    w.work['a.ts'] = 'two';
+    const after = JSON.parse(await ledger($)).entries[0];
+    expect(after).toMatchObject({ blob, current: blobOf('two'), changed: true });
+    delete w.work['a.ts'];
+    expect(JSON.parse(await ledger($)).entries[0]).toMatchObject({ current: null, changed: true });
+    expect(JSON.parse(await ledger($, { paths: ['b.ts'] }))).toEqual({
+      total: 1,
+      unreadable: 0,
+      entries: [],
+    });
+  });
+  test('a working tree git cannot list is said on read, and records nothing', async ($, on) => {
+    const w = fakeWorld(on);
+    fakeStore(on);
+    await record($, { entries: [DEFERRED] });
+    w.fail = (a) => a.includes('ls-tree');
+    expect(JSON.parse(await ledger($)).note).toMatch(/git ls-tree failed: fatal: injected\)$/);
+    expect(await record($, { entries: [{ ...DEFERRED, finding: 'x' }] })).toBe(
+      'review-cycle ledger: nothing recorded: git ls-tree failed: fatal: injected',
+    );
+  });
+  test('resolve removes an entry', async ($, on) => {
+    fakeWorld(on);
+    fakeStore(on);
+    await record($, { entries: [DEFERRED] });
+    const [entry] = JSON.parse(await ledger($)).entries;
+    expect(JSON.parse(await record($, { resolve: [entry.id] }))).toMatchObject({
+      resolved: 1,
+      total: 0,
+    });
+  });
+  test('two records at once both land', async ($, on) => {
+    fakeWorld(on);
+    fakeStore(on);
+    await Promise.all([
+      record($, { entries: [DEFERRED] }),
+      record($, { entries: [{ ...DEFERRED, finding: 'another' }] }),
+    ]);
+    expect(JSON.parse(await ledger($)).total).toBe(2);
+  });
+  test('a record stuck on the store makes the next one refuse, not race it', async ($, on) => {
+    fakeWorld(on);
+    const store = fakeStore(on, { hangFirstGet: true });
+    void record($, { entries: [DEFERRED] });
+    expect(await record($, { entries: [{ ...DEFERRED, finding: 'next' }] })).toBe(
+      'review-cycle ledger: nothing recorded: an earlier record has not finished after 5 seconds',
+    );
+    // Still stuck, so a third waits on it too rather than on the refused second.
+    expect(await record($, { entries: [{ ...DEFERRED, finding: 'third' }] })).toMatch(
+      /has not finished after 5 seconds$/,
+    );
+    expect(store.size).toBe(0);
+  });
+  test('an invalid batch records nothing and says why', async ($, on) => {
+    fakeWorld(on);
+    const store = fakeStore(on);
+    const r = await record($, { entries: [DEFERRED, { ...DEFERRED, path: './' }] });
+    expect(r).toBe('review-cycle ledger: nothing recorded: entries[1]: path is empty');
+    expect(store.size).toBe(0);
+  });
+  test('a store that refuses the write is reported, not swallowed', async ($, on) => {
+    fakeWorld(on);
+    fakeStore(on, { refuse: 'store over 4 MiB' });
+    expect(await record($, { entries: [DEFERRED] })).toMatch(
+      /^review-cycle ledger: nothing recorded: .*4 MiB/,
+    );
+  });
+  test('a store that cannot be read is reported, not read as empty', async ($, on) => {
+    fakeWorld(on);
+    fakeStore(on, { readFails: 'EIO' });
+    expect(await ledger($)).toMatch(/^review-cycle ledger: could not be read: .*EIO/);
+    expect(await record($, { entries: [DEFERRED] })).toMatch(/nothing recorded: .*EIO/);
+  });
+  test('outside a repository, both tools say so', async ($, on) => {
+    fakeWorld(on, {
+      git: (a) =>
+        a.includes('--show-toplevel')
+          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          : null,
+    });
+    fakeStore(on);
+    expect(await ledger($)).toBe('review-cycle ledger: not in a git repository.');
+    expect(await record($, { entries: [DEFERRED] })).toBe(
+      'review-cycle ledger: not in a git repository; nothing recorded.',
+    );
+  });
+  test('paths that are not a list of strings are refused', async ($, on) => {
+    fakeWorld(on);
+    fakeStore(on);
+    for (const paths of ['a.ts', [1]]) {
+      expect(await ledger($, { paths })).toContain('`paths` must be an array');
+    }
   });
 });
 
