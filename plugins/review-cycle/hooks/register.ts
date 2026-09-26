@@ -40,6 +40,8 @@ import {
   type Repo,
   type Run,
 } from './git';
+import { KINDS, parseRecord, type Recording } from './ledger';
+import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
@@ -66,6 +68,8 @@ type $ = EngineInterface;
 type BashHook = MatchedHook<'tool.call', { tool: 'Bash' }>;
 type SkillHook = MatchedHook<'tool.call', { tool: 'Skill' }>;
 type StatusHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__status' }>;
+type LedgerHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger' }>;
+type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_record' }>;
 type ConfigHook = MatchedHook<'config.set', { key: 'review-cycle.enabled' }>;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
@@ -120,6 +124,8 @@ type GateState = {
   droppedSince: number;
   // What reviewers' commands changed in the repository under review.
   reviewerChanges: string[];
+  // False when the user switched the gate off; the ledger is still served.
+  gateOn: boolean;
 };
 
 const state: GateState = {
@@ -139,6 +145,7 @@ const state: GateState = {
   dropped: [],
   droppedSince: 0,
   reviewerChanges: [],
+  gateOn: true,
 };
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -265,6 +272,8 @@ async function onSessionStart(
   e: Input<HookFor<'session.start'>>,
   next: NextOf<HookFor<'session.start'>>,
 ): Promise<Output<HookFor<'session.start'>>> {
+  await registerLedger($);
+  if (!state.gateOn) return next(e);
   try {
     await ensureRoot($);
   } catch {
@@ -1049,6 +1058,145 @@ async function onStatus(
   return { result: JSON.stringify(status, null, 2) };
 }
 
+// The ledger gates nothing, so its tools are served whether or not the gate is on.
+async function registerLedger($: $): Promise<void> {
+  try {
+    await $.tool.register({
+      name: 'ledger',
+      description:
+        'Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, `date` (when a cycle last settled it), `blob` (the file as the last cycle to carry it reviewed it), `current` (the file now), `changed` (whether the two differ; null when the working tree could not be read), and `stale` (settled more than 90 days ago). `unreadable` counts stored entries this version cannot read; the next record drops them. Pass `paths` to get only the entries for those repository-relative paths. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: { paths: { type: 'array', items: { type: 'string' } } },
+      },
+    });
+    await $.tool.register({
+      name: 'ledger_record',
+      description:
+        "Records what a review cycle settled without fixing into this repository's findings ledger. `entries` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at 400 characters, and the same finding at the same path replaces its entry. `keep` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. `resolve` removes entries by id. The ledger keeps the newest 100 entries, and ledgers for the 10 most recently recorded repositories.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: 'Repository-relative path.' },
+                line: { type: ['integer', 'null'], minimum: 1 },
+                kind: { type: 'string', enum: [...KINDS] },
+                finding: { type: 'string' },
+                reason: {
+                  type: 'string',
+                  description:
+                    'Why it was not fixed: the deferral criterion, the measurement or documentation that rebutted it, or why it was left alone.',
+                },
+                source: { type: 'string', description: 'The reviewer that raised it.' },
+              },
+              required: ['path', 'kind', 'finding', 'reason', 'source'],
+            },
+          },
+          resolve: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Ids of entries to remove.',
+          },
+          keep: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Ids of carried entries settled again unchanged.',
+          },
+        },
+      },
+    });
+  } catch {
+    // Without the tools the skill says the ledger was unavailable.
+  }
+}
+
+function storeOf($: $): Store {
+  return {
+    get: (key) => $.store.get(key),
+    set: (key, value) => $.store.set(key, value),
+    keys: () => $.store.keys(),
+    delete: (key) => $.store.delete(key),
+  };
+}
+
+async function onLedger(
+  $: $,
+  e: Input<LedgerHook>,
+  _next: NextOf<LedgerHook>,
+): Promise<Output<LedgerHook>> {
+  const paths = (e as { paths?: unknown }).paths;
+  if (paths !== undefined && !(Array.isArray(paths) && paths.every((p) => typeof p === 'string'))) {
+    return {
+      result: 'review-cycle ledger: `paths` must be an array of repository-relative paths.',
+    };
+  }
+  try {
+    const root = await ensureRoot($);
+    if (!root) return { result: 'review-cycle ledger: not in a git repository.' };
+    const blobs = (ps: string[]) => blobsAt(gitOf($), root.top, ps);
+    const status = await readLedger(storeOf($), blobs, root.common, paths, await $.clock.now());
+    return { result: JSON.stringify(status, null, 2) };
+  } catch (error) {
+    return {
+      result: `review-cycle ledger: could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+// Records run one at a time: each reads the ledger, merges, and writes it
+// back. A record waits for the one before it for at most this long and then
+// refuses, so a store call that never settles cannot hang every later record,
+// nor finish late over one that ran past it. Well under the hook's 10-second
+// budget, which the sleep spends: a wait that reached it would lose the
+// refusal to the engine's own answer.
+const RECORD_WAIT_MS = 5000;
+let recording: Promise<unknown> = Promise.resolve();
+
+async function onLedgerRecord(
+  $: $,
+  e: Input<RecordHook>,
+  _next: NextOf<RecordHook>,
+): Promise<Output<RecordHook>> {
+  const rec = parseRecord(e);
+  if ('error' in rec) return { result: `review-cycle ledger: nothing recorded: ${rec.error}` };
+  const before = recording;
+  const ready = Promise.race([
+    before.then(
+      () => true,
+      () => true,
+    ),
+    $.clock.sleep(RECORD_WAIT_MS).then(() => false),
+  ]);
+  const task = ready.then((go) =>
+    go
+      ? recordNow($, rec)
+      : {
+          result: `review-cycle ledger: nothing recorded: an earlier record has not finished after ${RECORD_WAIT_MS / 1000} seconds`,
+        },
+  );
+  recording = Promise.allSettled([before, task]);
+  return task;
+}
+
+async function recordNow($: $, rec: Recording): Promise<Output<RecordHook>> {
+  try {
+    const root = await ensureRoot($);
+    if (!root) return { result: 'review-cycle ledger: not in a git repository; nothing recorded.' };
+    const blobs = (ps: string[]) => blobsAt(gitOf($), root.top, ps);
+    return {
+      result: await recordInto(storeOf($), blobs, root.common, rec, await $.clock.now()),
+    };
+  } catch (error) {
+    return {
+      result: `review-cycle ledger: nothing recorded: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 function onStatusOff(
   _$: $,
   _e: Input<StatusHook>,
@@ -1103,15 +1251,18 @@ function onBashError(
 }
 
 export const register: Register = (on, options) => {
+  state.gateOn = options.enabled !== false;
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
   on('tool.call', { tool: 'Edit' }, onEditSlop);
   on('tool.call', { tool: 'Write' }, onWriteSlop);
+  on('session.start', onSessionStart);
+  on('tool.call', { tool: 'mcp__review-cycle__ledger' }, onLedger);
+  on('tool.call', { tool: 'mcp__review-cycle__ledger_record' }, onLedgerRecord);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.
     on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatusOff);
     return;
   }
-  on('session.start', onSessionStart);
   on('prompt.submit', onPromptSubmit);
   on('agent.spawn', onAgentSpawn);
   on('turn.complete', onTurnComplete);

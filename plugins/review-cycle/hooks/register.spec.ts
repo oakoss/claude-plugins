@@ -80,6 +80,25 @@ describe('with the gate switched off', () => {
   });
 });
 
+describe('the findings ledger with the gate off', () => {
+  test('its tools are served and registered, and nothing of the gate starts', async () => {
+    const hooks = load(false);
+    expect(hooks.has('tool.call:mcp__review-cycle__ledger')).toBe(true);
+    expect(hooks.has('tool.call:mcp__review-cycle__ledger_record')).toBe(true);
+    const registered: string[] = [];
+    const runs: unknown[] = [];
+    const $$ = {
+      tool: { register: (t: { name: string }) => Promise.resolve(void registered.push(t.name)) },
+      process: { run: (...a: unknown[]) => Promise.resolve(void runs.push(a)) },
+    };
+    const [start] = hooks.get('session.start:') ?? [];
+    const out = await start?.($$, { source: 'startup' }, (e: unknown) => Promise.resolve({ e }));
+    expect(out).toEqual({ e: { source: 'startup' } });
+    expect(registered).toEqual(['ledger', 'ledger_record']);
+    expect(runs).toEqual([]);
+  });
+});
+
 describe('with the gate on', () => {
   test('the slop check, reviewer containment and the switch guard all hook Edit and Write', () => {
     const hooks = load(true);
