@@ -356,12 +356,18 @@ async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<vo
   if (uncoveredOf(rows).length === 0) return;
   message.nudged = true;
   const text = `review-cycle: this turn left changes no reviewer has seen (${explain({ ...c, rows })}). Invoke /review-cycle:review via the Skill tool now, then report back. Skip it only if the user's latest message said not to review, or your last message asked them something they must answer first.`;
-  // Not awaited: the prompt enters once this turn has ended.
+  // Not awaited: the prompt enters once this turn has ended. A hook's refusal
+  // resolves with `drop` rather than rejecting.
   Promise.resolve()
     .then(() => $.prompt.submit({ text }))
-    .catch(() => {
-      message.nudged = false;
-    });
+    .then(
+      (r) => {
+        if (r.drop !== undefined) message.nudged = false;
+      },
+      () => {
+        message.nudged = false;
+      },
+    );
 }
 
 function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {

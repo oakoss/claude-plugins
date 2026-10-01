@@ -335,7 +335,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   on('prompt.submit', async ($: unknown, e: { text: string }) => {
     if (w.submitFails && e.text.startsWith('review-cycle:')) {
       await w.submitGate;
-      throw new Error('refused');
+      return { drop: 'refused' };
     }
     (w.prompts ??= []).push(e.text);
     return { text: e.text };
