@@ -7,14 +7,12 @@
 
 const PLUGIN = /^review-cycle(@|$)/;
 const SWITCHES = ['enabledPlugins', 'pluginConfigs'] as const;
-// Keys outside the plugin tables that can stop the gate from loading.
+// The key outside the plugin tables that stops every installed mod loading.
 const HOOKS_OFF = 'disableAllHooks';
-const MODULES_ENV = 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS';
 
 // Every line of text naming a switch, for files `JSON.parse` rejects: Claude
 // Code may still read one with a byte-order mark, comments or a trailing comma.
-const SWITCH_TEXT =
-  /"(enabledPlugins|pluginConfigs|disableAllHooks|CLAUDE_CODE_ENABLE_FUNCTION_HOOKS|review-cycle[^"]*)"[^\n]*/g;
+const SWITCH_TEXT = /"(enabledPlugins|pluginConfigs|disableAllHooks|review-cycle[^"]*)"[^\n]*/g;
 
 export function isJsonPath(path: string): boolean {
   return /\.json[c5]?$/i.test(path);
@@ -50,12 +48,6 @@ function gateEntries(text: string): string | null {
     }
   }
   if (parsed[HOOKS_OFF] !== undefined) entries.push([HOOKS_OFF, '', parsed[HOOKS_OFF]]);
-  const env = parsed.env;
-  if (env !== undefined) {
-    const table = objectOf(env);
-    const value = table === null ? env : table[MODULES_ENV];
-    if (value !== undefined) entries.push(['env', MODULES_ENV, value]);
-  }
   return JSON.stringify(
     entries.toSorted((a, b) => `${a[0]}\0${a[1]}`.localeCompare(`${b[0]}\0${b[1]}`)),
   );
