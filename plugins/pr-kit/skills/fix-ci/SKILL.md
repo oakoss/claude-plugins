@@ -33,9 +33,9 @@ Each round:
    For an external check, follow its `link` to find the failing command or service.
 3. **Apply the smallest safe fix** for that one cause. Don't batch unrelated fixes into one round — one cause at a time keeps each push diagnosable.
 4. **Review before it leaves your machine.** Route the fix through your review gate so it's never pushed unreviewed:
-   - If `review-cycle` is installed: invoke `/review-cycle:review` via the Skill tool. It reviews and applies fixes, and it tiers a one-line lint correction down to a light pass. Its commit gate then admits the commit only if a reviewer saw exactly what it records and the user asked for a commit or push.
+   - If `review-cycle` is installed: invoke `/review-cycle:review` via the Skill tool. It reviews and applies fixes, and it tiers a one-line lint correction down to a light pass. Its commit gate then admits the commit only if a reviewer saw exactly what it records, and the push only if the user asked for one.
    - If not: show the diff and get the user's OK before pushing.
-5. **Stage, commit, and push.** `git add` the reviewed files, then commit and push — never `--no-verify`. Edit nothing between the review and the commit: an edit after the review is content no reviewer saw. With review-cycle installed, the gate also needs the user's latest message to ask for the commit and push; "fix CI" does not, so ask once — "commit and push the fixes each round?" — before the first commit. A yes covers every round until the user next writes.
+5. **Stage, commit, and push.** `git add` the reviewed files, then commit and push — never `--no-verify`. Edit nothing between the review and the commit: an edit after the review is content no reviewer saw. With review-cycle installed, the gate also needs the user's latest message to ask for the push; "fix CI" does not, so before the first push, end your answer with this question, word for word and unquoted: Should I commit and push the fixes? The gate reads only the last lines of your answer, and a yes covers every round until the user next writes.
 6. **Re-check** the full set and repeat, within the round cap below.
 
 ## Guardrails

@@ -1,13 +1,13 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer alone; the rest get the full conditional fan-out). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies and loops until a pass applies no fixes, because a commit is admitted only for content a reviewer saw. Then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state, and confirms every changed path is covered. Commits only when the user asked for a commit.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer alone; the rest get the full conditional fan-out). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies and loops until a pass applies no fixes, because a commit is admitted only for content a reviewer saw. Then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state, and confirms every changed path is covered. Commits a clean result unless the user held off; pushes only when they asked.
 argument-hint: "[against <ref>] [max <n>] [effort <level>]"
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
 
 # Review cycle
 
-Automated multi-agent review cycle on uncommitted changes. Invoke it with `/review-cycle:review`, or via the Skill tool before a commit: review-cycle's commit gate admits a commit only when the user asked for one and a reviewer saw exactly what it records. The gate keeps what each reviewer saw in the session's memory, so a review from an earlier session does not count.
+Automated multi-agent review cycle on uncommitted changes. Invoke it with `/review-cycle:review`, or via the Skill tool before a commit: review-cycle's commit gate admits a commit only when a reviewer saw exactly what it records, and a push only when the user asked for one. The gate keeps what each reviewer saw in the session's memory, so a review from an earlier session does not count.
 
 ## Embedded policies
 
@@ -475,11 +475,13 @@ Final state: clean / N findings remain
 
 ### Phase 10: Finish
 
-The cycle does not commit on its own account. If the user asked for a commit and review led up to it, make that commit now, as its own Bash call — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). The gate admits it only if the user's latest message asked for a commit and every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command. Otherwise, stop after the summary.
+When the final state is clean and every path is covered, commit the reviewed work now, as its own Bash call — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). Skip the commit and stop after the summary when the user's message held off a commit ("don't commit", "not yet"), or when findings remain that need their decision. The gate admits a commit only if every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command.
+
+Push only when the user's latest message asked for one ("push it", "ship it"). After "ship it", also open the pull request.
 
 ## Things to NOT do
 
-- Do NOT commit unless the user asked for one. The gate refuses it anyway; asking is the user's decision to make.
+- Do NOT push unless the user asked for one. Without a request, the gate interrupts them with a dialog.
 - Do NOT let the Codex leg's status go unreported. Absent is fine and gets named; broken mid-run gets named louder.
 - Do NOT pass `name:` when spawning any review subagent, in either the Phase 3 loop fan-out or the Phase 7 post-loop pass. A named background agent parks as `idle` awaiting messages instead of completing and returning its report, so its findings never arrive — and Phase 7 has no watchdog to notice.
 - Do NOT auto-create beads or trekker tickets for deferred findings.

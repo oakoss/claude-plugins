@@ -17,7 +17,7 @@ import {
   shownCommand,
   type Classification,
 } from './command';
-import { grantOf, NO_GRANT, type Grant, type Verb } from './consent';
+import { grantOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import {
   coverageOf,
@@ -89,8 +89,8 @@ type Leg = { type: string; counts: boolean; spawnTree: string | null; done: bool
 // prompt queued into the running turn updates it.
 type Message = {
   grant: Grant;
-  // Verbs the user turned down when the gate asked, so it does not ask again.
-  declined: Grant;
+  // Whether the user turned down a push when the gate asked, so it does not ask again.
+  declined: boolean;
   // The working tree when it arrived; null when unreadable.
   tree: string | null;
   // Whether the agent was told to review since it arrived.
@@ -133,7 +133,7 @@ const state: GateState = {
   reviews: [],
   legs: new Map(),
   // No message yet, so nothing to nudge about.
-  message: { grant: NO_GRANT, declined: NO_GRANT, tree: null, nudged: true, prWindow: false },
+  message: { grant: NO_GRANT, declined: false, tree: null, nudged: true, prWindow: false },
   messages: 0,
   asking: false,
   lastAnswer: '',
@@ -285,7 +285,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'status',
       description:
-        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether the user's latest message asked for a commit or push. Read-only.",
+        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether the user's latest message asked for a push. Read-only.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -307,7 +307,7 @@ async function onPromptSubmit(
     if (e.turnId !== undefined) {
       // Updated in place: a pending nudge's rollback holds this record.
       state.message.grant = grant;
-      state.message.declined = NO_GRANT;
+      state.message.declined = false;
       state.message.nudged = false;
     } else {
       let tree: string | null = null;
@@ -317,7 +317,7 @@ async function onPromptSubmit(
       } catch {
         // No starting tree means no nudge this message; the commit gate still holds.
       }
-      state.message = { grant, declined: NO_GRANT, tree, nudged: false, prWindow: false };
+      state.message = { grant, declined: false, tree, nudged: false, prWindow: false };
     }
   }
   return next(e);
@@ -749,39 +749,29 @@ async function judgeBash(
     );
   }
 
-  // Reviewed first, so the user is never asked about a commit the gate refuses.
-  const before = await reviewed($, root.top, cls);
-  if (typeof before === 'string') return deny(before);
+  // A commit needs only a review: it stays local, and undoing one costs a reset.
+  const unreviewed = await reviewed($, root.top, cls);
+  if (unreviewed !== null) return deny(unreviewed);
 
-  const commits = cls.commit !== null || cls.history !== null;
-  const verbs: Verb[] = [];
-  if (commits && !granted.commit) verbs.push('commit');
-  if (cls.push && !granted.push) verbs.push('push');
-  if (verbs.length > 0) {
-    const refusal = await ask($, e.command, verbs, before?.files ?? null, message, next.signal);
+  if (cls.push && !granted.push) {
+    const refusal = await ask($, e.command, message, next.signal);
     if (refusal !== null) return deny(refusal);
-    granted = withVerbs(granted, verbs);
+    granted = Object.freeze({ ...granted, push: true });
     // The dialog waits on a person, and the tree can change meanwhile.
     const after = await reviewed($, root.top, cls);
-    if (typeof after === 'string') return deny(after);
-    if (verbs.includes('commit') && after?.tree !== before?.tree) {
-      return deny(
-        'what this commit records changed while the gate was asking the user, so the answer does not cover it. Run it again to ask about what it records now.',
-      );
-    }
+    if (after !== null) return deny(after);
   }
   const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
   return watch($, root, e, next, checked, granted, message);
 }
 
-// The tree a real commit would record and how many paths it changes, or the
-// refusal when a reviewer has not seen all of it; null for a command that
-// records no new content.
+// The refusal when a reviewer has not seen all of what a real commit would
+// record; null otherwise.
 async function reviewed(
   $: $,
   top: string,
   cls: Extract<Classification, { kind: 'gated' }>,
-): Promise<{ tree: string; files: number } | string | null> {
+): Promise<string | null> {
   if (!cls.commit || cls.commit.dryRun) return null;
   const head = await headOf(gitOf($), top);
   // An amend replaces HEAD, so what it records is judged against HEAD's parent.
@@ -798,14 +788,7 @@ async function reviewed(
   if (uncoveredOf(c.rows).length > 0) {
     return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then commit.`;
   }
-  return { tree: prospect, files: c.rows.length };
-}
-
-function withVerbs(g: Grant, verbs: readonly Verb[]): Grant {
-  return Object.freeze({
-    commit: g.commit || verbs.includes('commit'),
-    push: g.push || verbs.includes('push'),
-  });
+  return null;
 }
 
 // Longer than this, a command is not shown in the dialog, so it is not asked about.
@@ -816,39 +799,31 @@ const MAX_SHOWN = 500;
 async function ask(
   $: $,
   command: string,
-  verbs: Verb[],
-  files: number | null,
   message: number,
   signal: AbortSignal,
 ): Promise<string | null> {
-  const wants = verbs.join(' and ');
-  const turned = verbs.filter((v) => state.message.declined[v]);
-  if (turned.length > 0) {
-    return `the user turned down the ${turned.join(' and ')} when the gate asked. Do not try it again unless their next message asks for it.`;
+  if (state.message.declined) {
+    return 'the user turned down the push when the gate asked. Do not try it again unless their next message asks for it.';
   }
   if (state.messages !== message) {
-    return `the user sent a new message while the gate was checking this ${wants}, so it did not ask them. Act on their message.`;
+    return 'the user sent a new message while the gate was checking this push, so it did not ask them. Act on their message.';
   }
   if (state.asking) {
-    return `the gate is already asking the user about another command, so it did not ask about this ${wants}. Wait for that answer, then run it again.`;
+    return 'the gate is already asking the user about another command, so it did not ask about this push. Wait for that answer, then run it again.';
   }
   if (signal.aborted) {
-    return `the call was interrupted before the gate asked about the ${wants}, so it did not ask them.`;
+    return 'the call was interrupted before the gate asked about the push, so it did not ask them.';
   }
   const shown = shownCommand(command, state.shellAliases);
   if (shown.length > MAX_SHOWN) {
-    return `this command is too long for the gate to show the user (${shown.length} characters; ${MAX_SHOWN} at most), so it did not ask them. Run the ${wants} as a shorter command, with a short -m message, or ask the user to run it.`;
+    return `this command is too long for the gate to show the user (${shown.length} characters; ${MAX_SHOWN} at most), so it did not ask them. Run the push as a shorter command or ask the user to run it.`;
   }
-  const yes = verbs.length === 2 ? 'Commit and push' : verbs[0] === 'commit' ? 'Commit' : 'Push';
-  const no = verbs.length === 2 ? "Don't" : `Don't ${verbs[0]}`;
-  const what =
-    files === null || !verbs.includes('commit')
-      ? ''
-      : ` (${files} reviewed file${files === 1 ? '' : 's'})`;
+  const yes = 'Push';
+  const no = "Don't push";
   let answer: string;
   state.asking = true;
   try {
-    const asked = $.ui.ask(`The agent wants to ${wants}${what}: ${shown}. Allow it?`, {
+    const asked = $.ui.ask(`The agent wants to push: ${shown}. Allow it?`, {
       options: [yes, no],
       header: 'review-cycle',
     });
@@ -863,22 +838,22 @@ async function ask(
     answer = await Promise.race([asked, abandoned]);
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
-    return `the user's latest message doesn't ask for a ${wants}, and the gate got no answer when it asked them (${why}). Ask them first; staging with git add needs no permission.`;
+    return `the user's latest message doesn't ask for a push, and the gate got no answer when it asked them (${why}). Ask them first.`;
   } finally {
     state.asking = false;
   }
   // An answer to a question the user's newer message has overtaken settles nothing.
   if (state.messages !== message) {
-    return `the user sent a new message while the gate was asking about the ${wants}, so nothing ran. Act on their message.`;
+    return 'the user sent a new message while the gate was asking about the push, so nothing ran. Act on their message.';
   }
   if (answer === yes) return null;
   if (answer === no) {
-    state.message.declined = withVerbs(state.message.declined, verbs);
-    return `the user turned down the ${wants} when the gate asked. Do not try it again unless their next message asks for it.`;
+    state.message.declined = true;
+    return 'the user turned down the push when the gate asked. Do not try it again unless their next message asks for it.';
   }
   // Text typed under "Type something." is not a pick, so it grants nothing;
   // the agent reads it, and a retry asks again.
-  return `the user answered the gate's question about the ${wants} with: ${JSON.stringify(answer)}. Nothing ran; act on what they said.`;
+  return `the user answered the gate's question about the push with: ${JSON.stringify(answer)}. Nothing ran; act on what they said.`;
 }
 
 type Checked = 'commit' | 'history' | 'push' | 'unchecked';
@@ -893,7 +868,7 @@ const MAX_ADDED = 200;
 // Runs the command, then reports a commit the gate did not check (a script),
 // one whose content changed after the check (a pre-commit hook restaging),
 // and a push the user did not ask for. A history command records existing
-// commits by design, so only consent matters for it. A commit made in another
+// commits by design, so it is not judged on review. A commit made in another
 // worktree is not seen: each worktree has its own HEAD.
 async function watch(
   $: $,
@@ -950,7 +925,7 @@ async function watch(
       failed('pushed', error);
     }
     try {
-      notes.push(...(await commitNotes(git, root.top, start, checked, granted)));
+      notes.push(...(await commitNotes(git, root.top, start, checked)));
     } catch (error) {
       failed('committed', error);
     }
@@ -964,7 +939,6 @@ async function commitNotes(
   root: string,
   start: Start,
   checked: Checked,
-  granted: Grant,
 ): Promise<string[]> {
   const after = await headOf(git, root);
   if (after === EMPTY_TREE) {
@@ -1014,11 +988,6 @@ async function commitNotes(
       `review-cycle: commit ${short} records content no reviewer saw (${explain(c)}). ${why} Tell the user.`,
     );
   }
-  if (!granted.commit) {
-    notes.push(
-      `review-cycle: commit ${short} landed without the user asking for one. Tell the user.`,
-    );
-  }
   return notes;
 }
 
@@ -1036,7 +1005,7 @@ async function onStatus(
     droppedReviews: state.dropped,
     reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,
-    consent: state.message.grant,
+    pushRequested: state.message.grant.push,
     error: null,
     worktreeTree: null,
   };
