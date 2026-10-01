@@ -27,6 +27,8 @@ export type Statement = {
   heredocs: Heredoc[];
   // Set when the statement redirects to or from anything, a file or a descriptor.
   redirected: boolean;
+  // The files the statement's output redirects write: `> f`, `>> f`, `&> f`.
+  writes: Word[];
   op: Op;
   // Alias names among the words that were not expanded, because they stood
   // where this reader does not look for a command. The shell may still run
@@ -35,7 +37,9 @@ export type Statement = {
 };
 
 // `text` is the command with its aliases expanded, as far as reading got.
-export type Parsed = { statements: Statement[]; text: string } | { error: string; text: string };
+export type Parsed =
+  | { statements: Statement[]; text: string; bareWrites: Word[] }
+  | { error: string; text: string };
 
 // Shell aliases the Bash tool expands: name to replacement text.
 export type ShellAliases = ReadonlyMap<string, string>;
@@ -63,8 +67,12 @@ const MAX_EXPANSIONS = 10_000;
 
 export const QUALIFIER = 'a zsh glob qualifier that runs code';
 
-function newBudget(): { left: number } {
-  return { left: MAX_EXPANSIONS };
+// What every reader of one command shares, nested readers included: the
+// expansion budget, and the files written by a redirect that stands alone.
+type Shared = { left: number; bareWrites: Word[] };
+
+function newBudget(): Shared {
+  return { left: MAX_EXPANSIONS, bareWrites: [] };
 }
 
 export function assignmentName(w: Word): string | null {
@@ -79,6 +87,7 @@ export function statement(): Statement {
     group: false,
     heredocs: [],
     redirected: false,
+    writes: [],
     op: '',
     aliases: [],
   };
@@ -105,7 +114,7 @@ class Lexer {
   constructor(
     public s: string,
     private readonly aliases: ShellAliases = new Map(),
-    private readonly budget: { left: number } = newBudget(),
+    readonly budget: Shared = newBudget(),
   ) {}
 
   private ch(k = 0): string {
@@ -123,6 +132,8 @@ class Lexer {
     const end = (op: Op) => {
       cur.op = op;
       if (cur.words.length > 0 || cur.group || cur.inner.length > 0) out.push(cur);
+      // `> file` alone truncates the file; it runs nothing, so it is no statement.
+      else this.budget.bareWrites.push(...cur.writes);
       cur = statement();
     };
     while (this.i < this.s.length) {
@@ -280,7 +291,8 @@ class Lexer {
       while (/[0-9-]/.test(this.ch())) this.i++;
       return;
     }
-    this.word(cur);
+    const target = this.word(cur);
+    if (op.includes('>')) cur.writes.push(target);
   }
 
   // Heredoc bodies start on the line after their operator. An unquoted body
@@ -537,11 +549,7 @@ function decodeListing(body: string): string {
 
 // The command lists substituted into text that is not itself a command: the
 // body of `${…}`, `$((…))` or an unquoted heredoc.
-function substitutionsIn(
-  text: string,
-  aliases: ShellAliases,
-  budget?: { left: number },
-): Statement[] {
+function substitutionsIn(text: string, aliases: ShellAliases, budget?: Shared): Statement[] {
   const found: Statement[] = [];
   for (let j = 0; j < text.length; j++) {
     const at = text[j];
@@ -563,7 +571,7 @@ export function parse(command: string, aliases: ShellAliases = new Map()): Parse
   const lexer = new Lexer(command, aliases);
   try {
     const statements = lexer.list(false);
-    return { statements, text: lexer.s };
+    return { statements, text: lexer.s, bareWrites: lexer.budget.bareWrites };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error), text: lexer.s };
   }

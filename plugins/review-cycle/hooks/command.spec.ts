@@ -92,6 +92,11 @@ describe('passes commands that do not commit or push', () => {
 });
 
 describe('gates the accepted shapes', () => {
+  // A redirect with no command runs nothing, so it is no step of the commit.
+  test('a redirect standing alone beside a commit', () => {
+    expect(classify('> notes.md && git commit -m x').kind).toBe('gated');
+    expect(classify('git commit -m x && > notes.md').kind).toBe('gated');
+  });
   test('lone commit', () => {
     expect(classify("git commit -m 'feat: x'")).toEqual({
       kind: 'gated',

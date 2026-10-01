@@ -1079,7 +1079,10 @@ describe('the switch in settings files', () => {
   test('a Bash command that edits the switch is refused', async ($, on) => {
     fakeWorld(on);
     await say($, 'commit it');
-    const r = await bash($, `jq '.enabledPlugins["review-cycle@oakoss"]=false' ${SETTINGS} > t`);
+    const r = await bash(
+      $,
+      `jq '.enabledPlugins["review-cycle@oakoss"]=false' ${SETTINGS} > t && mv t ${SETTINGS}`,
+    );
     expect(denied(r, 'only by the user')).toBe(true);
     expect(denied(await bash($, 'claude plugin disable review-cycle'), 'only by the user')).toBe(
       true,
