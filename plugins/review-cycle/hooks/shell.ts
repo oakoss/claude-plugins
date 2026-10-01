@@ -473,20 +473,36 @@ const ANSI_C: Record<string, string> = {
   v: '\v',
 };
 
-// The value bash gives a `$'…'` word: `$'co\x6dmit'` is `commit`.
-function decodeAnsiC(body: string): string {
-  return body.replaceAll(
-    /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|.)/g,
-    (_, esc: string) => {
-      const kind = esc[0] ?? '';
-      if (kind === 'x' || kind === 'u' || kind === 'U') {
-        return String.fromCodePoint(Number.parseInt(esc.slice(1), 16));
-      }
-      if (/[0-7]/.test(kind)) return String.fromCodePoint(Number.parseInt(esc, 8));
-      if (kind === 'c') return String.fromCodePoint((esc.codePointAt(1) ?? 0) & 31);
-      return ANSI_C[kind] ?? kind;
-    },
-  );
+const ANSI_ESCAPE = /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|.)/g;
+// zsh lists a control byte in an alias value as `\C-M`, DEL as `\C-?`, and a
+// byte with the high bit as `\M-` before either form; bash never writes these.
+const ZSH_ESCAPE =
+  /\\(M-\\C-.|M-\\[tn]|M-.|C-.|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|.)/g;
+
+function zshControl(c: string): number {
+  return c === '?' ? 127 : (c.codePointAt(0) ?? 0) & 31;
+}
+
+// The value bash gives a `$'…'` word: `$'co\x6dmit'` is `commit`. `zsh` also
+// reads the notation zsh's alias listing uses.
+function decodeAnsiC(body: string, zsh = false): string {
+  return body.replaceAll(zsh ? ZSH_ESCAPE : ANSI_ESCAPE, (_, esc: string) => {
+    if (esc.startsWith(String.raw`M-\C-`))
+      return String.fromCodePoint(0x80 | zshControl(esc[5] ?? ''));
+    // zsh lists 0x89 and 0x8a as `\M-\t` and `\M-\n`, reading them back so.
+    if (/^M-\\[tn]$/.test(esc)) return String.fromCodePoint(0x80 | (esc[3] === 't' ? 9 : 10));
+    if (esc.startsWith('M-')) return String.fromCodePoint(0x80 | (esc.codePointAt(2) ?? 0));
+    if (esc.startsWith('C-')) return String.fromCodePoint(zshControl(esc[2] ?? ''));
+    const kind = esc[0] ?? '';
+    if (kind === 'x' || kind === 'u' || kind === 'U') {
+      return String.fromCodePoint(Number.parseInt(esc.slice(1), 16));
+    }
+    if (/[0-7]/.test(kind)) return String.fromCodePoint(Number.parseInt(esc, 8));
+    if (kind === 'c') return String.fromCodePoint((esc.codePointAt(1) ?? 0) & 31);
+    // The Bash tool may run zsh, which drops the backslash of an escape it
+    // does not know: `$'c\ommit'` runs as `commit`. bash would keep it.
+    return ANSI_C[kind] ?? kind;
+  });
 }
 
 // The command lists substituted into text that is not itself a command: the
@@ -577,11 +593,15 @@ export function aliasShell(
   return { path, rc: shellKind(path) === 'bash' ? '.bashrc' : '.zshrc' };
 }
 
-// Where the ANSI-C quoted text opened at `from` closes.
+// The close of a `$'…'` in an alias listing. zsh does not escape the byte after
+// `\C-` or `\M-`, so `$'a\C-\'` and `$'x\M-'y'` end at their last quote.
 function ansiEnd(s: string, from: number): number {
   for (let j = from; j < s.length; j++) {
-    if (s[j] === '\\') j++;
-    else if (s[j] === "'") return j;
+    if (s[j] === '\\') {
+      if (s.startsWith(String.raw`\M-\C-`, j)) j += 6;
+      else if (s.startsWith(String.raw`\M-`, j) || s.startsWith(String.raw`\C-`, j)) j += 3;
+      else j++;
+    } else if (s[j] === "'") return j;
   }
   return s.length;
 }
@@ -620,7 +640,7 @@ function unquoteWord(s: string): string {
   while (i < s.length) {
     if (s.startsWith("$'", i)) {
       const end = ansiEnd(s, i + 2);
-      out += decodeAnsiC(s.slice(i + 2, end));
+      out += decodeAnsiC(s.slice(i + 2, end), true);
       i = end + 1;
     } else if (s[i] === "'") {
       const end = s.indexOf("'", i + 1);
