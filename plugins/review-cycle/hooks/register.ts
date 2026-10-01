@@ -6,6 +6,7 @@ import type {
   MatchedHook,
   PromptOrigin,
   Register,
+  Timer,
   ToolCallResult,
 } from 'claude-code';
 
@@ -45,6 +46,7 @@ import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
+import { sweep } from './sweep';
 import {
   EMPTY_TREE,
   describeUncovered,
@@ -70,6 +72,8 @@ type SkillHook = MatchedHook<'tool.call', { tool: 'Skill' }>;
 type StatusHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__status' }>;
 type LedgerHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger' }>;
 type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_record' }>;
+type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch' }>;
+type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type ConfigHook = MatchedHook<'config.set', { key: 'review-cycle.enabled' }>;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
@@ -83,7 +87,19 @@ const HUMAN = new Set<PromptOrigin['kind']>(['composer', 'bridge', 'sdk']);
 
 // `spawnTree` is null when the tree could not be read as the leg started; such
 // a leg reviews nothing, but it is still under way until `done`.
-type Leg = { type: string; counts: boolean; spawnTree: string | null; done: boolean };
+type Leg = {
+  type: string;
+  counts: boolean;
+  spawnTree: string | null;
+  done: boolean;
+  // Fires once the leg outlives its budget; cancelled when it finishes.
+  timer: Timer | null;
+  capped: boolean;
+};
+
+// Measured 2026-09-19 over 138 legs: a fan-out's slowest leg had a median of
+// 16 minutes and the slowest normal leg type 25; runaways ran 60 to 70.
+const LEG_BUDGET_MS = 30 * 60_000;
 
 // What the user's latest message settled: a fresh message replaces it, a
 // prompt queued into the running turn updates it.
@@ -120,6 +136,12 @@ type GateState = {
   ownRead: Promise<string | null> | undefined;
   // Reviews that ran but could not be recorded, and why.
   dropped: string[];
+  // Legs that outlived their budget this cycle, which the session was asked to stop.
+  capped: string[];
+  // Scratch directories made for review cycles and not yet swept.
+  scratch: string[];
+  // Whether the sweep tool registered; scratch makes nothing without it.
+  sweepServed: boolean;
   // How many of `dropped` predate the latest recorded review.
   droppedSince: number;
   // What reviewers' commands changed in the repository under review.
@@ -143,6 +165,9 @@ const state: GateState = {
   aliasesLoaded: false,
   ownRead: undefined,
   dropped: [],
+  capped: [],
+  scratch: [],
+  sweepServed: false,
   droppedSince: 0,
   reviewerChanges: [],
   gateOn: true,
@@ -273,6 +298,7 @@ async function onSessionStart(
   next: NextOf<HookFor<'session.start'>>,
 ): Promise<Output<HookFor<'session.start'>>> {
   await registerLedger($);
+  await registerScratch($);
   if (!state.gateOn) return next(e);
   try {
     await ensureRoot($);
@@ -403,9 +429,44 @@ async function onAgentSpawn(
   if (isLeg && 'agentId' in r && r.agentId) {
     if (spawnTree === null) state.dropped.push(`${e.subagentType}: ${why}`);
     const counts = !state.message.prWindow;
-    state.legs.set(r.agentId, { type: e.subagentType, counts, spawnTree, done: false });
+    const leg: Leg = {
+      type: e.subagentType,
+      counts,
+      spawnTree,
+      done: false,
+      timer: null,
+      capped: false,
+    };
+    state.legs.set(r.agentId, leg);
+    const id = r.agentId;
+    leg.timer = $.clock.after(LEG_BUDGET_MS, () => overBudget($, id, leg));
   }
   return r;
+}
+
+// The orchestrator waits on notifications, and a leg that keeps working sends
+// none, so the gate keeps the clock and asks the session to stop the leg.
+function overBudget($: $, agentId: string, leg: Leg): void {
+  if (leg.done || leg.capped) return;
+  leg.capped = true;
+  const minutes = LEG_BUDGET_MS / 60_000;
+  state.capped.push(`${leg.type} (agent ${agentId}): still running after ${minutes} minutes`);
+  const text = `review-cycle: reviewer leg ${leg.type} (agent ${agentId}) has run past its ${minutes}-minute budget. Stop it with the TaskStop tool, continue the cycle without it, and list it under "Reviewers capped (over budget)" in the summary.`;
+  Promise.resolve()
+    .then(() => $.prompt.submit({ text }))
+    .then(
+      (r) => {
+        if (r.drop !== undefined)
+          state.capped.push(
+            `${leg.type} (agent ${agentId}): the request to stop it was refused (${r.drop})`,
+          );
+      },
+      (error: unknown) => {
+        state.capped.push(
+          `${leg.type} (agent ${agentId}): the request to stop it failed (${error instanceof Error ? error.message : String(error)})`,
+        );
+      },
+    );
 }
 
 // A leg's completion is the review event: the tree it saw is the working tree
@@ -426,9 +487,14 @@ async function onTurnComplete(
     return r;
   }
   const leg = state.legs.get(e.agentId);
-  if (leg) leg.done = true;
+  if (leg) {
+    leg.done = true;
+    leg.timer?.cancel();
+  }
   const root = state.root;
   if (!leg?.counts || leg.spawnTree === null || !root) return next(e);
+  // A capped leg is already reported as capped, not as a dropped review.
+  if (leg.capped && (e.isAborted || e.reason !== 'answer')) return next(e);
   if (e.isAborted || e.reason !== 'answer') {
     state.dropped.push(`${leg.type}: it did not finish (${e.isAborted ? 'aborted' : e.reason})`);
     return next(e);
@@ -1009,6 +1075,7 @@ async function onStatus(
     lastReviewedTree: last?.trees[0] ?? null,
     reviews: state.reviews.length,
     droppedReviews: state.dropped,
+    cappedReviews: state.capped,
     reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,
     pushRequested: state.message.grant.push,
@@ -1031,6 +1098,97 @@ async function onStatus(
     status.error = error instanceof Error ? error.message : String(error);
   }
   return { result: JSON.stringify(status, null, 2) };
+}
+
+// A leg that stalls, is dropped or dies cleans up nothing, so the cycle gives
+// every leg one parent directory and sweeps it when the cycle ends. Served
+// whether or not the gate is on: it gates nothing.
+async function registerScratch($: $): Promise<void> {
+  try {
+    await $.tool.register({
+      name: 'scratch',
+      description:
+        "Makes this review cycle's scratch directory and returns its path. Every reviewer leg makes its private directory inside it with mktemp -d <path>/leg.XXXXXX, so mcp__review-cycle__sweep can end what the legs left running there and remove it, including what a stalled or dropped leg never cleaned up.",
+      inputSchema: { type: 'object', properties: {} },
+    });
+    await $.tool.register({
+      name: 'sweep',
+      description:
+        'Ends every process still running in, or naming a path inside, a scratch directory mcp__review-cycle__scratch made this session, then removes the directory. Call it once the cycle ends, after every leg reported, was dropped, or was stopped. Reports per directory how many processes it ended, whether it removed the directory, and any errors; a directory it could not remove stays listed for the next sweep.',
+      inputSchema: { type: 'object', properties: {} },
+    });
+    state.sweepServed = true;
+  } catch {
+    // Without the sweep, scratch refuses, and legs fall back to their own mktemp -d.
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function onScratch(
+  $: $,
+  _e: Input<ScratchHook>,
+  _next: NextOf<ScratchHook>,
+): Promise<Output<ScratchHook>> {
+  // A new cycle starts here, whether or not it gets a directory, so the capped
+  // legs listed from now on are this cycle's.
+  state.capped = [];
+  const fallback =
+    'Legs use their own mktemp -d instead, and nothing sweeps them; say so in the summary.';
+  // A directory nothing can sweep would only pile up.
+  if (!state.sweepServed) {
+    return {
+      result: `review-cycle's sweep tool is not registered, so it made no scratch directory. ${fallback}`,
+    };
+  }
+  try {
+    const tmpdir = await $.env.get('TMPDIR');
+    // An empty TMPDIR is as good as none.
+    const tmp = tmpdir?.replace(/\/+$/, '') ? tmpdir.replace(/\/+$/, '') : '/tmp';
+    const r = await run($, ['mktemp', '-d', `${tmp}/review-cycle.XXXXXX`]);
+    const dir = r.stdout.trim();
+    if (r.exitCode !== 0 || dir === '') {
+      return {
+        result: `review-cycle could not make a scratch directory (${firstLine(r.stderr) || `exit ${r.exitCode}`}). ${fallback}`,
+      };
+    }
+    state.scratch.push(dir);
+    return {
+      result: `${dir}\nGive every reviewer leg this path: each makes its private directory with mktemp -d ${dir}/leg.XXXXXX. Call mcp__review-cycle__sweep when the cycle ends.`,
+    };
+  } catch (error) {
+    return {
+      result: `review-cycle could not make a scratch directory (${messageOf(error)}). ${fallback}`,
+    };
+  }
+}
+
+async function onSweep(
+  $: $,
+  _e: Input<SweepHook>,
+  _next: NextOf<SweepHook>,
+): Promise<Output<SweepHook>> {
+  if (state.scratch.length === 0) return { result: 'No scratch directory to sweep.' };
+  const swept = [];
+  for (const dir of state.scratch) {
+    let r;
+    try {
+      r = await sweep(
+        (argv) => run($, argv),
+        (ms) => $.clock.sleep(ms),
+        dir,
+        0,
+      );
+    } catch (error) {
+      r = { dir, stopped: 0, removed: false, errors: [messageOf(error)] };
+    }
+    // Kept until it is gone, so a failed sweep can be tried again.
+    if (r.removed) state.scratch = state.scratch.filter((d) => d !== dir);
+    swept.push(r);
+  }
+  return { result: JSON.stringify(swept, null, 2) };
 }
 
 // The ledger gates nothing, so its tools are served whether or not the gate is on.
@@ -1233,6 +1391,8 @@ export const register: Register = (on, options) => {
   on('session.start', onSessionStart);
   on('tool.call', { tool: 'mcp__review-cycle__ledger' }, onLedger);
   on('tool.call', { tool: 'mcp__review-cycle__ledger_record' }, onLedgerRecord);
+  on('tool.call', { tool: 'mcp__review-cycle__scratch' }, onScratch);
+  on('tool.call', { tool: 'mcp__review-cycle__sweep' }, onSweep);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.
     on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatusOff);

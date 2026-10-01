@@ -96,6 +96,7 @@ const OFFER_LEAD = new Set([
   'may',
   'i',
   "i'll",
+  'we',
   'do',
   'you',
   'would',
@@ -327,6 +328,11 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
       /^(can|could)$/.test(lead[we + 1] ?? '');
     if (we !== -1 && !agreeing && !/^(can|could|let'?s?)$/.test(lead[we - 1] ?? '')) return false;
   }
+  // "Should we push?" offers; "Do we push to main?" asks how the repo works.
+  if (allowed === OFFER_LEAD) {
+    const we = lead.indexOf('we');
+    if (we !== -1 && !/^(should|shall)$/.test(lead[we - 1] ?? '')) return false;
+  }
   return true;
 }
 
@@ -370,7 +376,10 @@ function grammarGrant(
     const opening = part.find((x) => !lead.has(x));
     if (opening !== undefined && MOOD.test(opening)) return 'mood';
     if (opening !== undefined && DESCRIBES.has(opening) && opening === part[0]) described = true;
-    if (at === -1 && part.some((x) => STATEMENT.has(x))) described = true;
+    // A part shaped as a request is not a description, even when its tail
+    // is not one the grammar reads: "I want you to commit separately and push".
+    const requestShaped = at !== -1 && isLead(part.slice(0, at), lead, agreed);
+    if (!requestShaped && part.some((x) => STATEMENT.has(x))) described = true;
   }
   return described ? 'described' : 'none';
 }

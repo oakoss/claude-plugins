@@ -42,6 +42,7 @@ describe('grants on a request', () => {
     ['Ok, we can ship', BOTH],
     ['Ok, we can push', PUSH],
     ['Ok we can push', PUSH],
+    ['I want you to commit separately and push', PUSH],
     ['fix the handler so it never crashes and commit', COMMIT],
   ];
   for (const [prompt, want] of cases) {
@@ -118,6 +119,10 @@ describe('grants nothing on a mention', () => {
     '**Commit**',
     'Fix the tests, so we can push.',
     'delete the file',
+    'i commit and push',
+    'we commit and push',
+    'i always commit and push',
+    'normally commit and then push',
     'delete it',
     'delete the branch file',
     'Ok, we can push later',
@@ -176,6 +181,11 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Should I push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Merged. Want me to delete the branch?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should I go ahead with deleting the branch?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we commit and push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we commit, then push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Do we push to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push to main, or is it protected?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I delete it?')).toEqual(NONE);
   });
   test('yes after a statement, not a question, grants nothing', () => {
