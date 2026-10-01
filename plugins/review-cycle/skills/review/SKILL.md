@@ -117,7 +117,7 @@ git diff --name-status <lastReviewedTree> <worktreeTree>
 git diff --shortstat <lastReviewedTree> <worktreeTree>
 ```
 
-Decide the tier from THAT (light when the delta is prose-only or ~25 lines or fewer), hand reviewers the delta's files as the changed-file list, and say in the brief that the rest of the diff matches what an earlier reviewer saw. When `lastReviewedTree` is null (no review yet this session), scope to the full diff. When the tool does not exist, the commit gate is not loaded — it is switched off in `/config`, or hooks modules are off in this Claude Code build — so nothing will gate the commit: scope to the full diff and say so prominently in the summary. The delta is why a 20-line follow-up to a converged review gets a small review instead of a full re-run.
+Decide the tier from THAT (light when the delta is prose-only or ~25 lines or fewer), hand reviewers the delta's files as the changed-file list, and say in the brief that the rest of the diff matches what an earlier reviewer saw. When `lastReviewedTree` is null (no review yet this session), scope to the full diff. When the tool does not exist, the commit gate is not loaded — it is switched off in `/config`, or mods did not load in this session — so nothing will gate the commit: scope to the full diff and say so prominently in the summary. The delta is why a 20-line follow-up to a converged review gets a small review instead of a full re-run.
 
 The tier and scope are decided once, here, and named in the final summary — do not re-derive them per phase.
 

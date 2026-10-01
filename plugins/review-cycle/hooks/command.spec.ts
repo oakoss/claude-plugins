@@ -824,11 +824,94 @@ describe('aliases', () => {
   });
 });
 
+// The second word of the first statement, as the gate reads it.
+function secondWord(cmd: string): string | undefined {
+  const parsed = parse(cmd);
+  return 'statements' in parsed ? parsed.statements[0]?.words[1]?.text : undefined;
+}
+
 describe('shell aliases', () => {
   test("decodes zsh's $'…' values", () => {
     expect(parseShellAliases(String.raw`alias -- wip=$'git add -A\ngit push'`).get('wip')).toBe(
       'git add -A\ngit push',
     );
+  });
+  // zsh 5.9.2's own `alias` listing of these bytes, measured.
+  test("decodes zsh's control and meta notation in alias values", () => {
+    const listing = String.raw`t1=$'a\C-Mb'
+t2=$'p\C-?q'
+t3=$'m\M-\C-An'
+t4=$'c\M-\C-[d'`;
+    expect(Object.fromEntries(parseShellAliases(listing))).toEqual({
+      t1: 'a\rb',
+      t2: 'p\u007Fq',
+      t3: 'm\u0081n',
+      t4: 'c\u009Bd',
+    });
+  });
+  // zsh does not escape the byte after `\C-` or `\M-`, so it can be the quote
+  // or a backslash; the alias after must survive.
+  test('reads a zsh escape whose byte is a quote or a backslash', () => {
+    const listing = String.raw`e1=$'a\C-\'
+e2=next
+e4=$'a\M-\C-\'
+f1=$'a\M-'z'
+f2=$'a\M-\z'
+m1=$'n\M-~o'
+t9=$'\M-\t'
+ta=$'\M-\n'`;
+    expect(Object.fromEntries(parseShellAliases(listing))).toEqual({
+      e1: 'a\u001C',
+      e2: 'next',
+      e4: 'a\u009C',
+      f1: 'a§z',
+      f2: 'aÜz',
+      m1: 'nþo',
+      t9: '\u0089',
+      ta: '\u008A',
+    });
+  });
+  // The Bash tool runs zsh, so a command's `$'…'` is read as zsh runs it: these
+  // run as git commit and git push there and must stay gated.
+  test("a command's $'…' is read as zsh runs it, so the command stays gated", () => {
+    expect(secondWord(String.raw`git $'c\ommit' -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git $'\push'`)).toBe('push');
+    expect(secondWord(String.raw`git $'\commit' -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git $'\c'ommit -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git co$'\C-'mmit -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git co$'\M-\C-'mmit -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git co$'\C'mmit -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git co$'\M'mmit -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git $'\143ommit' -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git $'\U00000063ommit' -m x`)).toBe('commit');
+    expect(classify(String.raw`git $'\commit' -m x`).kind).not.toBe('none');
+    expect(classify(String.raw`git co$'\M-'mmit -m x`).kind).not.toBe('none');
+  });
+  // zsh 5.9.2's output for each, measured.
+  test(String.raw`a command's $'\C-' and $'\M-' set control and meta on the next character`, () => {
+    expect(secondWord(String.raw`echo $'a\C-Mb'`)).toBe('a\rb');
+    expect(secondWord(String.raw`echo c$'\C-\x41'x`)).toBe('c\u0001x');
+    expect(secondWord(String.raw`echo c$'\M-\x41'x`)).toBe('c\u00C1x');
+    expect(secondWord(String.raw`echo c$'\C-\M-a'x`)).toBe('c\u0081x');
+    expect(secondWord(String.raw`echo $'\M-\C-?'`)).toBe('\u00FF');
+    expect(secondWord(String.raw`echo $'a\C-\M-?'`)).toBe('a\u009F');
+    expect(secondWord(String.raw`echo $'a\Cz'`)).toBe('a\u001A');
+    expect(secondWord(String.raw`echo $'a\C\C-a'`)).toBe('a\u0001');
+    expect(secondWord(String.raw`echo $'\M-ab'`)).toBe('\u00E1b');
+    expect(secondWord(String.raw`echo $'\C-\U00000063x'`)).toBe('c\u0018');
+    expect(secondWord(String.raw`echo $'\1431'`)).toBe('c1');
+    expect(secondWord("echo $'a\nb'")).toBe('a\nb');
+    expect(secondWord("echo $'a\\\nb'")).toBe('a\nb');
+    expect(secondWord(String.raw`echo $'a\C-\\b'`)).toBe('a\u001Cb');
+    expect(secondWord(String.raw`echo $'a\C-\'x'`)).toBe('a\u0007x');
+    expect(secondWord(String.raw`echo c$'\C-\q'x`)).toBe('c\u0011x');
+    expect(secondWord(String.raw`echo $'\C-\u0063ommit'`)).toBe('c\u000Fmmit');
+  });
+  // zsh cuts an argument at NUL, so this runs git commit; like `$'\0'`, it refuses.
+  test(String.raw`a command's $'\C-@' and a bare $'\x' are NUL`, () => {
+    expect(secondWord(String.raw`git commit$'\C-@' -m x`)).toBe('commit\0');
+    expect(secondWord(String.raw`git commit$'\x' -m x`)).toBe('commit\0');
+    expect(classify(String.raw`git commit$'\C-@' -m x`).kind).toBe('refuse');
   });
   test('reads zsh and bash alias listings', () => {
     const zsh = [

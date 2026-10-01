@@ -197,12 +197,10 @@ jobs:
           done
           exit "$status"
 
-      # Hooks modules are early access. Without this variable `claude plugin
-      # test` prints a notice and exits 0 having run nothing, so the step also
-      # requires each run to report the tests it ran.
+      # A Claude Code without mods (before v2.1.287) prints a notice and exits
+      # 0 having run nothing, so the step requires each run to report the
+      # tests it ran.
       - name: Test hooks modules
-        env:
-          CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1"
         run: |
           status=0
           for plugin in plugins/*/; do

@@ -142,7 +142,7 @@ The ledger is served by the hooks module's `mcp__review-cycle__ledger` and `mcp_
 
 ## Requirements
 
-The commit gate, the comment-slop check and the findings ledger are a hooks module, an early-access Claude Code feature. Where hooks modules are off, none of them loads and nothing is gated — the review skill still runs, and says in its summary that no gate is active. Turn them on with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` set to `1` in the `env` block of `~/.claude/settings.json`; `/review-cycle:init` checks whether the gate loaded.
+The commit gate, the comment-slop check and the findings ledger are a mod, which Claude Code loads by default from v2.1.287. Where mods do not load — an older Claude Code, a session started with `--bare`, `disableAllHooks` in your settings, or an organization policy that stops user-installed mods — nothing is gated: the review skill still runs, and says in its summary that no gate is active. `/review-cycle:init` checks whether the gate loaded, and `/plugin` names the mods a session loaded. `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`, which turned mods on during early access, no longer does anything; remove it from your settings.
 
 While the gate is loaded, Bash inside an `isolation: "worktree"` subagent is refused — an open Claude Code issue (anthropics/claude-code#92533) with any hooks module that watches Bash.
 
@@ -186,7 +186,7 @@ Effort is the tuning axis rather than model name on purpose: `codex review` expo
 
 ### Turning the gate off
 
-The gate is one setting, `review-cycle.enabled`, in `/config`. Only you can change it: the gate refuses a change from anywhere but the menu. Changing it reloads the gate, which forgets the reviews it had seen. Claude Code also reloads a plugin when your user settings file changes, so the gate refuses an agent's Edit or Write to a JSON file that changes review-cycle's entries under `enabledPlugins` or `pluginConfigs`, `disableAllHooks`, or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` in `env`. A Bash command that writes while naming a file under `.claude` named `settings…`, or that runs `claude plugin disable`, `uninstall` or `remove` (or removes a marketplace, which uninstalls its plugins), is refused too, and so is a Monitor command the gate would otherwise have to judge. The Bash check reads the command's text for those ordinary routes only, so a command that merely mentions a switch key, such as a test run with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` and a redirect, passes. Writing a switch into a shell rc file is out of scope. It applies to every project; to turn review-cycle off for a single project, disable the plugin there with `enabledPlugins` in that project's `.claude/settings.json`.
+The gate is one setting, `review-cycle.enabled`, in `/config`. Only you can change it: the gate refuses a change from anywhere but the menu. Changing it reloads the gate, which forgets the reviews it had seen. Claude Code also reloads a plugin when your user settings file changes, so the gate refuses an agent's Edit or Write to a JSON file that changes review-cycle's entries under `enabledPlugins` or `pluginConfigs`, or `disableAllHooks`. A Bash command that writes while naming a file under `.claude` named `settings…`, or that runs `claude plugin disable`, `uninstall` or `remove` (or removes a marketplace, which uninstalls its plugins), is refused too, and so is a Monitor command the gate would otherwise have to judge. The Bash check reads the command's text for those ordinary routes only, so a command that merely mentions a switch key, such as `grep -n enabledPlugins README.md > /tmp/hits`, passes. Writing a switch into a shell rc file is out of scope. It applies to every project; to turn review-cycle off for a single project, disable the plugin there with `enabledPlugins` in that project's `.claude/settings.json`.
 
 ### Add the policies to your global CLAUDE.md
 
@@ -227,7 +227,7 @@ If you installed the git pre-commit hook, remove it from `.git/hooks/pre-commit`
 ## Troubleshooting
 
 **Commits are not gated at all.**
-The gate did not load. Run `/review-cycle:init`: it reports whether the gate is loaded, and the usual cause is hooks modules being off in this Claude Code build (see [Requirements](#requirements)).
+The gate did not load. Run `/review-cycle:init`: it reports whether the gate is loaded. Either the gate is switched off in `/config`, or mods did not load in this session (see [Requirements](#requirements) for the causes).
 
 **A commit is refused right after a review.**
 The refusal lists the paths and why. `edited after the last review` means content changed after the last reviewer saw it — an inline fix, cleanup, or an edit made while a reviewer was running. Run `/review-cycle:review` again; it scopes itself to what changed. `never reviewed` after a session restart is expected: the gate remembers reviews for the session only.

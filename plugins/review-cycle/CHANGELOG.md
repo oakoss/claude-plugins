@@ -4,6 +4,20 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.23.1 (2026-10-01)
+
+### Fixed
+
+`/review-cycle:init` no longer tells you to set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` when the commit gate is not loaded. Claude Code loads mods, the gate among them, by default from v2.1.287 and ignores that variable, so the advice fixed nothing. Init now names the real causes: a Claude Code older than v2.1.287, a session started with `--bare`, `disableAllHooks` in your settings, or an organization policy that stops user-installed mods. If you set the variable during early access, remove it from your settings. The gate also stops refusing edits that change it, since it no longer switches anything.
+
+A semicolon no longer turns a description into a push request. "we commit; then push" and "I'll commit; then push" grant nothing, as "we commit, then push" already did, and a yes to the agent asking "Do we commit, then push?", "Do we commit; then push?" or "Can we commit, then push?" grants nothing either. Only a semicolon after a sentence about committing or pushing carries over: "I fixed it. Then please push it.", "we're done; then push it", "commit; then push" and a yes to "Should we commit, then push?" or "Should I fix it, then push?" still grant the push.
+
+The gate now reads zsh's control and meta notation in alias values. zsh lists a control byte in an alias as `\C-M`, DEL as `\C-?` and a high byte with a `\M-` prefix (measured on zsh 5.9.2, every byte from 1 to 255). The gate used to read the literal text `C-M`. When the escaped byte was a quote or a backslash, as in `$'a\C-\'` or `$'x\M-'y'`, it also misread where the value ended, so the aliases listed after it ran into that value and went unchecked. The gate now reads each value as zsh means it and keeps every alias that follows.
+
+Command parsing is unchanged: bash never writes this notation, and the gate still reads an unknown `$'…'` escape the way zsh runs it, dropping the backslash, so `git $'c\ommit'` stays gated.
+
+The gate now reads a command's `$'…'` word the way zsh, the Bash tool's shell, runs it. Before, `git $'\commit' -m x`, `git co$'\C-'mmit -m x` and `git co$'\C'mmit -m x` all ran `git commit` while the gate saw no git command and let them through. zsh does not treat `\c` as an escape, and in zsh `\C` and `\M` (each with an optional `-`) set control and meta on the next character, adding nothing when no character follows. A bare `\x`, `\u` or `\U` reads as NUL, which the gate refuses, as it already did for `$'\0'`; such a word used to fail to parse. Measured against zsh 5.9.2 over 1321 escape shapes, every reading agrees except where a word contains NUL: zsh cuts the argument there, and the gate refuses the command.
+
 ## 0.23.0 (2026-10-01)
 
 ### Added

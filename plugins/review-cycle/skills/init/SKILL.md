@@ -13,7 +13,7 @@ One-time setup for using `review-cycle`. Run it once; re-running is safe and add
 
 Five named checks, each idempotent:
 
-1. **Gate prerequisites** — verifies `git` is on `$PATH`, and that this Claude Code build loads hooks modules. The commit gate is a hooks module; where modules are off, it never loads and nothing is gated.
+1. **Gate prerequisites** — verifies `git` is on `$PATH`, and that the commit gate loaded in this session. The gate is a mod; where mods do not load, nothing is gated.
 2. **Codex CLI** (optional) — verifies `codex --version` works
 3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
 4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
@@ -36,7 +36,7 @@ Remember whether we're inside a git repo. Project-scope options only apply when 
 
 ### Step 1.5: Gate prerequisites
 
-The commit gate and the comment-slop check both run `git`. They live in a hooks module, an early-access Claude Code feature; a build with modules off never loads it, and nothing is gated.
+The commit gate and the comment-slop check both run `git`. They live in a mod, which Claude Code loads by default from v2.1.287; where mods do not load, nothing is gated.
 
 ```bash
 command -v git >/dev/null && echo "✓ git" || echo "⚠ git missing"
@@ -45,7 +45,7 @@ command -v git >/dev/null && echo "✓ git" || echo "⚠ git missing"
 Then call the `mcp__review-cycle__status` tool. The gate registers it when it loads, so:
 
 - the tool answers → `✓ commit gate loaded`
-- the tool does not exist → `⚠ commit gate not loaded`. Either the gate is switched off (`review-cycle.enabled` in `/config`) or hooks modules are off in this build; for the latter, setting `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` to `1` in the `env` block of `~/.claude/settings.json` turns them on from the next session.
+- the tool does not exist → `⚠ commit gate not loaded`. Either the gate is switched off (`review-cycle.enabled` in `/config`), or mods did not load: Claude Code is older than v2.1.287 (check `claude --version` and update), the session started with `--bare`, `disableAllHooks` is set in settings, or an organization policy stops user-installed mods. `/plugin` names the mods a session loaded. Setting `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` does nothing: Claude Code ignores it from v2.1.287.
 
 For a missing `git`, surface an install hint in the final summary:
 
@@ -152,7 +152,7 @@ When something needs manual action, surface it inline with `⚠` and a clear nex
 
 ```text
 review-cycle init summary:
-  ⚠ Prereqs: commit gate not loaded — set CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 in ~/.claude/settings.json env
+  ⚠ Prereqs: commit gate not loaded — off in /config, or mods did not load (README Requirements)
   - Codex CLI: not installed — review runs Claude-only (npm i -g @openai/codex to add it)
   - multi_agent: n/a without the CLI
   - Codex auth: n/a without the CLI
