@@ -2,10 +2,11 @@ import { describe, expect, test } from 'vitest';
 
 import { grantOf } from './consent';
 
-const NONE = { commit: false, push: false };
-const COMMIT = { commit: true, push: false };
-const PUSH = { commit: false, push: true };
-const BOTH = { commit: true, push: true };
+const NONE = { push: false };
+// A commit needs no request, so asking for one settles nothing beyond the push.
+const COMMIT = NONE;
+const PUSH = { push: true };
+const BOTH = PUSH;
 
 describe('grants on a request', () => {
   const cases: [string, object][] = [
@@ -36,6 +37,12 @@ describe('grants on a request', () => {
     ['No problem, commit it', COMMIT],
     ['this looks good, commit it', COMMIT],
     ['fix the parser, then commit', COMMIT],
+    ['Ok, we can delete the branch', PUSH],
+    ['delete the remote branch', PUSH],
+    ['Ok, we can ship', BOTH],
+    ['Ok, we can push', PUSH],
+    ['Ok we can push', PUSH],
+    ['fix the handler so it never crashes and commit', COMMIT],
   ];
   for (const [prompt, want] of cases) {
     test(prompt, () => {
@@ -53,9 +60,9 @@ describe('grants nothing on a mention', () => {
     'Essential I want the agents to go off be agentic as needed and before committing changes run the reviews needed if needed. But they would skip reviews or marked as reviewed then commit.',
     'Can we merge 73?',
     "don't commit yet",
-    'do not push',
     "no, don't commit",
     'hold off on committing',
+    'do not push',
     'before you commit, run the tests',
     'never push to main',
     'what does the last commit do?',
@@ -110,6 +117,14 @@ describe('grants nothing on a mention', () => {
     'The phases are\n* review\n* commit\n* push',
     '**Commit**',
     'Fix the tests, so we can push.',
+    'delete the file',
+    'delete it',
+    'delete the branch file',
+    'Ok, we can push later',
+    'ok, CI is green, we can push',
+    'ok, we will push',
+    'ok, we push',
+    "it's not committed yet, commit it",
     'CI is green, we can ship.',
     'so the plan is: review and then commit',
     'usually I review and then commit',
@@ -141,6 +156,10 @@ describe('an affirmative grants what the previous answer asked', () => {
   test('go ahead to commit-and-push', () => {
     expect(grantOf('go ahead', 'Shall I commit and push?')).toEqual(BOTH);
   });
+  // pr-kit's fix-ci asks this question verbatim, and its anchor pins the wording.
+  test("yes to fix-ci's question grants the push", () => {
+    expect(grantOf('yes', 'Should I commit and push the fixes?')).toEqual(BOTH);
+  });
   test('yes to an unrelated question', () => {
     expect(grantOf('yes', 'Should I rename the helper?')).toEqual(NONE);
   });
@@ -155,6 +174,9 @@ describe('an affirmative grants what the previous answer asked', () => {
   });
   test('yes to a push question grants the push only', () => {
     expect(grantOf('yes', 'Should I push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Merged. Want me to delete the branch?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I go ahead with deleting the branch?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I delete it?')).toEqual(NONE);
   });
   test('yes after a statement, not a question, grants nothing', () => {
     expect(grantOf('yes', 'Ready to push. Run the tests?')).toEqual(NONE);

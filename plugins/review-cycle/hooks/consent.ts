@@ -1,4 +1,4 @@
-// Decides whether a human prompt asks for a commit or a push. Pure.
+// Decides whether a human prompt asks for a push. Pure.
 //
 // A grant needs the verb in a request the grammar below recognises: only
 // request words before it ("ok, please commit", "can you push?", "I want you
@@ -6,22 +6,26 @@
 // ("commit the changes", "push to main now"). Anything else grants nothing:
 // "the commit gate", "agents would commit", "I'll push later", "commit to this
 // approach", "push the button". Missing a request costs one question; reading
-// one that was not made costs a commit nobody asked for.
+// one that was not made costs a push nobody asked for.
 //
 // A bare affirmative ("yes", "go ahead") grants what the previous answer's
 // closing question offered to do.
 
-export type Grant = Readonly<{ commit: boolean; push: boolean }>;
+// Whether the user's message asked for a push. A commit needs no request.
+export type Grant = Readonly<{ push: boolean }>;
 
-export const NO_GRANT: Grant = Object.freeze({ commit: false, push: false });
+export const NO_GRANT: Grant = Object.freeze({ push: false });
 
-export type Verb = keyof Grant;
+// The parser reads commit requests too: "commit and push" is one request.
+type Verb = 'commit' | 'push';
 type MutableGrant = { commit: boolean; push: boolean };
 
 const REQUESTED: Record<string, Verb[]> = {
   commit: ['commit'],
   push: ['push'],
   ship: ['commit', 'push'],
+  // Deleting a remote branch is a push; only with "branch" last.
+  delete: ['push'],
 };
 
 const OFFERED: Record<string, Verb[]> = {
@@ -29,6 +33,7 @@ const OFFERED: Record<string, Verb[]> = {
   committing: ['commit'],
   pushing: ['push'],
   shipping: ['commit', 'push'],
+  deleting: ['push'],
 };
 
 // Words that may come before the verb in a request.
@@ -234,6 +239,22 @@ const SUBORDINATE = new Set([
   'without',
 ]);
 
+// A clause that only agrees: "ok", "sounds good".
+const AGREE =
+  /^\s*(ok|okay|alright|yes|yeah|yep|sure|great|cool|perfect|lgtm|sounds good|looks good)\s*$/i;
+const AGREE_WORD = new Set([
+  'ok',
+  'okay',
+  'alright',
+  'yes',
+  'yeah',
+  'yep',
+  'sure',
+  'great',
+  'cool',
+  'perfect',
+  'lgtm',
+]);
 // A clause with no verb that holds off: "not yet, commit later".
 const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const RETRACT = /^\s*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don'?t))\b/i;
@@ -293,15 +314,24 @@ function isTail(tail: string[]): boolean {
   return true;
 }
 
-function isLead(lead: string[], allowed: Set<string>): boolean {
+// "we can push" after an agreement ("ok, we can push") answers, rather than
+// describes ("CI is green, we can push").
+function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean {
   if (!lead.every((x) => allowed.has(x) || x === 'to')) return false;
   // The user's own plan unless addressed to the agent: "I want you to push".
   if (allowed === REQUEST_LEAD) {
     if (lead.some((x) => x === 'i' || x === "i'd") && !lead.includes('you')) return false;
     const we = lead.indexOf('we');
-    if (we !== -1 && !/^(can|could|let'?s?)$/.test(lead[we - 1] ?? '')) return false;
+    const agreeing =
+      (agreed || (we > 0 && lead.slice(0, we).every((x) => AGREE_WORD.has(x)))) &&
+      /^(can|could)$/.test(lead[we + 1] ?? '');
+    if (we !== -1 && !agreeing && !/^(can|could|let'?s?)$/.test(lead[we - 1] ?? '')) return false;
   }
   return true;
+}
+
+function isObject(verb: string, tail: string[]): boolean {
+  return !verb.startsWith('delet') || tail.at(-1) === 'branch';
 }
 
 // What a clause leaves for the clauses after it in the sentence: a mood
@@ -316,6 +346,7 @@ function grammarGrant(
   verbs: Record<string, Verb[]>,
   lead: Set<string>,
   into: MutableGrant,
+  agreed = false,
 ): Carry {
   const w = words(clause);
   if (w.some((x) => SUBORDINATE.has(x))) return 'mood';
@@ -327,9 +358,15 @@ function grammarGrant(
   let described = false;
   for (const part of parts) {
     const at = part.findIndex((x) => Object.hasOwn(verbs, x));
+    const verb = part[at] ?? '';
+    const tail = part.slice(at + 1);
     const asks =
-      at !== -1 && !described && isLead(part.slice(0, at), lead) && isTail(part.slice(at + 1));
-    if (asks) for (const v of verbs[part[at] ?? ''] ?? []) into[v] = true;
+      at !== -1 &&
+      !described &&
+      isLead(part.slice(0, at), lead, agreed) &&
+      isTail(tail) &&
+      isObject(verb, tail);
+    if (asks) for (const v of verbs[verb] ?? []) into[v] = true;
     const opening = part.find((x) => !lead.has(x));
     if (opening !== undefined && MOOD.test(opening)) return 'mood';
     if (opening !== undefined && DESCRIBES.has(opening) && opening === part[0]) described = true;
@@ -364,6 +401,10 @@ function isQuestion(sentence: string): boolean {
   return !/^\s*(can|could|would|will) (you|we)\b|^\s*(please|mind)\b/i.test(sentence);
 }
 
+function settled(g: MutableGrant): Grant {
+  return Object.freeze({ push: g.push });
+}
+
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string): Grant {
   const g: MutableGrant = { commit: false, push: false };
@@ -372,7 +413,7 @@ function asked(answer: string): Grant {
     if (!q.trim().endsWith('?') || words(q).some((x) => HANDBACK.has(x))) continue;
     for (const c of clauses(q)) grammarGrant(c.replace(CONTRAST, ''), OFFERED, OFFER_LEAD, g);
   }
-  return Object.freeze(g);
+  return settled(g);
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
@@ -400,13 +441,15 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     const mine: MutableGrant = { commit: false, push: false };
     let carry: Carry = 'none';
     let withheld = false;
+    let agreed = false;
     for (const part of clauses(sentence)) {
       const c = part.replace(CONTRAST, '');
       if (CONDITION.test(c)) return NO_GRANT;
       if (HOLD.test(c)) withheld = true;
       if (withheld) break;
       if (carry === 'described' && continues(c)) continue;
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, mine);
+      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, mine, agreed);
+      agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
       else if (left !== 'none') carry = left;
     }
@@ -415,5 +458,5 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       g.push ||= mine.push;
     }
   }
-  return Object.freeze(g);
+  return settled(g);
 }

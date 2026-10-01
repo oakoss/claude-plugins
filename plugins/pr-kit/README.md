@@ -11,7 +11,7 @@ A pull-request workflow toolkit for Claude Code.
 
 Every skill that would touch the remote or rewrite history is **gate-aware**: nothing commits, pushes, or force-pushes unreviewed. If you also run `review-cycle`, fixes route through `/review-cycle:review` before they are committed.
 
-`fix-ci` is the exception, and deliberately so: getting CI green requires pushing, so invoking it authorizes committing and pushing each round. Every fix still goes through review first, and the loop stops after three rounds, or two on the same check. `make-pr-easy-to-review` rewrites history only after an explicit yes.
+`fix-ci` is the exception, and deliberately so: getting CI green requires pushing, so invoking it authorizes committing and pushing each round. With review-cycle installed, its gate needs your yes before the first push, so fix-ci asks once. Every fix still goes through review first, and the loop stops after three rounds, or two on the same check. `make-pr-easy-to-review` rewrites history only after an explicit yes.
 
 All skills are invoked as bare slash commands and take natural-language arguments — no flags.
 

@@ -45,6 +45,9 @@ const EVADE_ANCHOR = 'slip past a guard';
 const NO_SYMLINK_ANCHOR = 'never symlink anything from the target';
 const NO_INSTALL_ANCHOR = 'no package-manager install';
 const SCRIPT_DIR_ANCHOR = /set -u.*cd <dir> &&`? before any git command/;
+// Claude Code stops to ask about an rm whose path a variable starts, even under
+// set -u; its own fix guards every variable in the path with :?.
+const RM_PATH_ANCHOR = /rm`? guards every variable in its path, as in `?"?\$\{DIR:\?\}\/…/;
 const SCRIPT_GIT_ANCHOR =
   'a script never runs git anywhere but your copy or the target you were given';
 
@@ -111,6 +114,7 @@ test('every measuring agent requires a private mktemp -d it names in its report'
       [NO_SYMLINK_ANCHOR, 'symlink ban lost'],
       [NO_INSTALL_ANCHOR, 'install ban lost'],
       [SCRIPT_DIR_ANCHOR, 'script directory rule lost'],
+      [RM_PATH_ANCHOR, 'rm path rule lost'],
       [SCRIPT_GIT_ANCHOR, 'script git-location rule lost'],
     ]);
   }
@@ -162,6 +166,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
       [NO_SYMLINK_ANCHOR, 'the reviewer prompt lost the symlink ban'],
       [NO_INSTALL_ANCHOR, 'the reviewer prompt lost the install ban'],
       [SCRIPT_DIR_ANCHOR, 'the reviewer prompt lost the script directory rule'],
+      [RM_PATH_ANCHOR, 'the reviewer prompt lost the rm path rule'],
     ]);
   }
 });
@@ -187,6 +192,7 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
     [NO_SYMLINK_ANCHOR, 'Phase 7 sentence lost the symlink ban'],
     [NO_INSTALL_ANCHOR, 'Phase 7 sentence lost the install ban'],
     [SCRIPT_DIR_ANCHOR, 'Phase 7 sentence lost the script directory rule'],
+    [RM_PATH_ANCHOR, 'Phase 7 sentence lost the rm path rule'],
   ]);
 });
 

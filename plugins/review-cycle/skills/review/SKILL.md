@@ -1,13 +1,13 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer alone; the rest get the full conditional fan-out). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies and loops until a pass applies no fixes, because a commit is admitted only for content a reviewer saw. Then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state, and confirms every changed path is covered. Commits only when the user asked for a commit.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer alone; the rest get the full conditional fan-out). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies and loops until a pass applies no fixes, because a commit is admitted only for content a reviewer saw. Then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state, and confirms every changed path is covered. Commits a clean result unless the user held off; pushes only when they asked.
 argument-hint: "[against <ref>] [max <n>] [effort <level>]"
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
 
 # Review cycle
 
-Automated multi-agent review cycle on uncommitted changes. Invoke it with `/review-cycle:review`, or via the Skill tool before a commit: review-cycle's commit gate admits a commit only when the user asked for one and a reviewer saw exactly what it records. The gate keeps what each reviewer saw in the session's memory, so a review from an earlier session does not count.
+Automated multi-agent review cycle on uncommitted changes. Invoke it with `/review-cycle:review`, or via the Skill tool before a commit: review-cycle's commit gate admits a commit only when a reviewer saw exactly what it records, and a push only when the user asked for one. The gate keeps what each reviewer saw in the session's memory, so a review from an earlier session does not count.
 
 ## Embedded policies
 
@@ -271,7 +271,7 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
      run_in_background: true,
-     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a private mktemp -d directory, never a shared scratchpad, and never reshape a command to slip past a guard. Name that directory in your report, delete it when you finish, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with set -u and runs cd <dir> && before any git command. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix. List separately, under Questions, any claim about tool behavior you could neither exercise here nor settle against authoritative documentation."
+     prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a private mktemp -d directory, never a shared scratchpad, and never reshape a command to slip past a guard. Name that directory in your report, delete it when you finish, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with set -u and runs cd <dir> && before any git command, and an rm guards every variable in its path, as in ${DIR:?}/…, never $DIR/…. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix. List separately, under Questions, any claim about tool behavior you could neither exercise here nor settle against authoritative documentation."
    })
    ```
 
@@ -390,7 +390,7 @@ Running them here, once, is the whole point: the opus maintainability pass and t
 
 **Both report-only spawns also carry Phase 3's `settled in earlier cycles` block**, so they do not re-measure what an earlier cycle settled.
 
-**Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Carry the same containment clauses Phase 3's prompt carries: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a private `mktemp -d` directory, never a shared scratchpad, and delete it when you finish. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Never reshape a command to slip past a guard; name that directory in your report, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with `set -u` and runs `cd <dir> &&` before any git command.* Phase 3's snapshot does not cover this phase, so a file a report-only agent leaves changed is only caught by Phase 8's coverage check. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
+**Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Carry the same containment clauses Phase 3's prompt carries: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a private `mktemp -d` directory, never a shared scratchpad, and delete it when you finish. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Never reshape a command to slip past a guard; name that directory in your report, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with `set -u` and runs `cd <dir> &&` before any git command, and an `rm` guards every variable in its path, as in `"${DIR:?}/…"`, never `"$DIR/…"`.* Phase 3's snapshot does not cover this phase, so a file a report-only agent leaves changed is only caught by Phase 8's coverage check. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
 
 **Grade these two legs as well.** Phase 4's labelling covers only the loop's auto-fix reviewers, so apply it here from each report's two receipt lines and carry the label into Phase 9 — including the demotion rule, which applies to a structural or conformance claim about an external tool exactly as it does in the loop.
 
@@ -475,11 +475,13 @@ Final state: clean / N findings remain
 
 ### Phase 10: Finish
 
-The cycle does not commit on its own account. If the user asked for a commit and review led up to it, make that commit now, as its own Bash call — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). The gate admits it only if the user's latest message asked for a commit and every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command. Otherwise, stop after the summary.
+When the final state is clean and every path is covered, commit the reviewed work now, as its own Bash call — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). Skip the commit and stop after the summary when the user's message held off a commit ("don't commit", "not yet"), or when findings remain that need their decision. The gate admits a commit only if every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command.
+
+Push only when the user's latest message asked for one ("push it", "ship it"). After "ship it", also open the pull request.
 
 ## Things to NOT do
 
-- Do NOT commit unless the user asked for one. The gate refuses it anyway; asking is the user's decision to make.
+- Do NOT push unless the user asked for one. Without a request, the gate interrupts them with a dialog.
 - Do NOT let the Codex leg's status go unreported. Absent is fine and gets named; broken mid-run gets named louder.
 - Do NOT pass `name:` when spawning any review subagent, in either the Phase 3 loop fan-out or the Phase 7 post-loop pass. A named background agent parks as `idle` awaiting messages instead of completing and returning its report, so its findings never arrive — and Phase 7 has no watchdog to notice.
 - Do NOT auto-create beads or trekker tickets for deferred findings.

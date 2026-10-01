@@ -116,6 +116,16 @@ describe('fix-ci: the round cap', () => {
   });
 });
 
+// review-cycle's consent spec pins that a yes to this exact question grants the
+// push; a reworded question can stop granting it.
+describe('fix-ci: the push question', () => {
+  test('asks the question review-cycle reads as a push request', () => {
+    expect(skillText('pr-kit', 'fix-ci')).toContain(
+      'end your answer with this question, word for word and unquoted: Should I commit and push the fixes?',
+    );
+  });
+});
+
 describe('get-pr-comments: nothing open is dropped', () => {
   const text = skillText('pr-kit', 'get-pr-comments');
   const fences = shellFences(text, 'get-pr-comments');
