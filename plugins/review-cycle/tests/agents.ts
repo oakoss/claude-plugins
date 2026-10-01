@@ -48,3 +48,16 @@ export function expectAnchors(text: string, label: string, anchors: readonly Anc
     expect.soft(hit, `${label}: ${reason}`).toBe(true);
   }
 }
+
+// The lines from the `Phase n` heading through the `Phase n+1` heading that
+// closes it. A missing close throws rather than running to EOF, so a renamed
+// heading cannot widen the section past the phase it names.
+export function phase(text: string, n: number, label: string): string[] {
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => new RegExp(`^##+ Phase ${n}`).test(l));
+  if (start === -1) throw new Error(`${label}: Phase ${n} section not found`);
+  const close = new RegExp(`^##+ Phase ${n + 1}`);
+  const end = lines.findIndex((l, i) => i >= start && close.test(l));
+  if (end === -1) throw new Error(`${label}: Phase ${n} section unterminated`);
+  return lines.slice(start, end + 1);
+}

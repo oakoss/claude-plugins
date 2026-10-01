@@ -19,7 +19,7 @@ test('every brief carries the ledger, and changed code reopens an entry', () => 
     'an entry whose `changed` is null, since nothing checked it; and a `stale` one',
   );
   expect(text).toContain(
-    "**Both report-only spawns also carry Phase 3's `settled in earlier cycles` block**",
+    "**The maintainability spawn also carries Phase 3's `settled in earlier cycles` block**",
   );
   expect(text).toContain('or answers with an error rather than JSON, write `Ledger: unavailable');
 });
