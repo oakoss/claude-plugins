@@ -41,6 +41,12 @@ describe('grants on a request', () => {
     ['delete the remote branch', PUSH],
     ['Ok, we can ship', BOTH],
     ['Ok, we can push', PUSH],
+    ['commit; then push', PUSH],
+    ['fix it; then push', PUSH],
+    ['I fixed it. Then please push it.', PUSH],
+    ["I won't commit. Then please push it.", PUSH],
+    ["we're done; then push it", PUSH],
+    ['we commit; then push. Then push it.', PUSH],
     ['Ok we can push', PUSH],
     ['I want you to commit separately and push', PUSH],
     ['fix the handler so it never crashes and commit', COMMIT],
@@ -120,6 +126,10 @@ describe('grants nothing on a mention', () => {
     'Fix the tests, so we can push.',
     'delete the file',
     'i commit and push',
+    'we commit; then push',
+    "I'll commit; then push",
+    'we commit; then review; then push',
+    'we commit; then push; then push it',
     'we commit and push',
     'i always commit and push',
     'normally commit and then push',
@@ -183,6 +193,14 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Should I go ahead with deleting the branch?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should we commit and push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should we commit, then push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I fix it, then push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Do we commit, then push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit; then push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should we commit; then push?')).toEqual(PUSH);
+    expect(grantOf('yes', "I'll leave the docs alone; should I push?")).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I commit and push; or wait?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we commit, then push?')).toEqual(NONE);
+    expect(grantOf('yes', 'We commit, then push?')).toEqual(NONE);
     expect(grantOf('yes', 'Should we push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Do we push to main?')).toEqual(NONE);
     expect(grantOf('yes', 'Can we push to main, or is it protected?')).toEqual(NONE);
