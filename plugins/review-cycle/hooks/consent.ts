@@ -417,10 +417,23 @@ function settled(g: MutableGrant): Grant {
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string): Grant {
   const g: MutableGrant = { commit: false, push: false };
-  const tail = unquote(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n'));
+  // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
+  // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
+  const tail = unquote(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n')).replaceAll(
+    /;(?=\s*(and|then)\b)/gi,
+    ',',
+  );
   for (const q of sentences(tail)) {
     if (!q.trim().endsWith('?') || words(q).some((x) => HANDBACK.has(x))) continue;
-    for (const c of clauses(q)) grammarGrant(c.replace(CONTRAST, ''), OFFERED, OFFER_LEAD, g);
+    // "Do we commit, then push?" asks how work goes; its "then push" offers nothing.
+    let carry: Carry = 'none';
+    for (const part of clauses(q)) {
+      const c = part.replace(CONTRAST, '');
+      if (carry !== 'none' && continues(c)) continue;
+      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g);
+      // "Should I fix it, then push?" offers the push; only a commit or push clause carries.
+      if (left !== 'none' && words(c).some((x) => Object.hasOwn(OFFERED, x))) carry = left;
+    }
   }
   return settled(g);
 }
@@ -437,14 +450,25 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     .filter((line) => !/^\s*(\d+[.)]|[-*•])\s|^\s*[*_]+[^*_]+[*_]+\s*$/.test(line))
     .join('\n');
   const g: MutableGrant = { commit: false, push: false };
+  // What the previous sentence left: "we commit; then push" describes across
+  // the semicolon as "we commit, then push" does across the comma.
+  let prev: Carry = 'none';
   for (const sentence of sentences(unquote(typed))) {
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
       g.commit = false;
       g.push = false;
+      prev = 'none';
       continue;
     }
-    if (isQuestion(sentence)) continue;
+    if (isQuestion(sentence)) {
+      prev = 'none';
+      continue;
+    }
+    if (prev !== 'none' && continues(sentence)) {
+      if (!sentence.trim().endsWith(';')) prev = 'none';
+      continue;
+    }
     // One clause that withholds withholds its whole sentence: "push it, but
     // not until CI passes" grants nothing.
     const mine: MutableGrant = { commit: false, push: false };
@@ -466,6 +490,11 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       g.commit ||= mine.commit;
       g.push ||= mine.push;
     }
+    // Only a semicolon ties two sentences together, and only around the verbs:
+    // "I fixed it. Then push it." asks.
+    const tied =
+      sentence.trim().endsWith(';') && words(sentence).some((x) => Object.hasOwn(REQUESTED, x));
+    prev = tied ? (withheld ? 'mood' : carry) : 'none';
   }
   return settled(g);
 }
