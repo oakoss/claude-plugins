@@ -4,6 +4,38 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.23.0 (2026-10-01)
+
+### Added
+
+The commit gate no longer asks whether you want a commit. A commit still needs a reviewer to have seen everything it records, and nothing else: it stays on your machine, and a `git reset` undoes it. The **Commit** / **Don't commit** dialog is gone, and so is the "landed without the user asking" report after a script commits. A pull, merge, rebase or cherry-pick no longer needs a request either, and is not reported.
+
+Pushes still need a request. When your latest message doesn't ask for one, the gate shows the **Push** / **Don't push** dialog as before, and re-checks the review after you answer when the same command also commits. The request parser now also understands "delete the branch" (a `git push --delete` is a push), and "ok, we can push" or "ok we can ship" after an agreement. Like any push request, these allow every push until your next message. "CI is green, we can push" still asks nothing.
+
+`/review-cycle:review` now ends a clean cycle by committing the reviewed work, unless your message held off a commit ("don't commit", "not yet") or findings remain that need your decision. That hold is the skill's to honor; the gate does not read it. It pushes only when you asked. "ship it" covers the whole run: review, commit, push and the pull request.
+
+The status tool's `consent` field is replaced by `pushRequested`, a boolean.
+
+A reviewer that keeps working past 30 minutes no longer holds up the whole cycle. The gate keeps each reviewer's clock, since the cycle only wakes on notifications and a busy reviewer sends none. When one runs over, the gate asks the session to stop it with TaskStop, and the summary lists it under "Reviewers capped (over budget)", apart from stalled reviewers. The status tool reports these as `cappedReviews`. The 30-minute budget comes from 138 measured reviewer runs: a fan-out's slowest leg had a median of 16 minutes, the slowest reviewer type peaked at 25, and runaways ran 60 to 70.
+
+Reviewers no longer leave processes and directories behind. Each cycle makes one scratch directory with the new `mcp__review-cycle__scratch` tool, and every reviewer works in its own directory inside it. At the end, `mcp__review-cycle__sweep` ends any process still running in that directory and removes it. That includes the leftovers of a reviewer that stalled or was dropped and so never cleaned up after itself, like a reader blocked on a pipe nobody writes. It matches the directory and paths inside it, including a quoted mention, but not a neighbour such as `<dir>.log` or `<dir>-old`. A process still running after KILL is reported as an error rather than as ended, and a directory the sweep could not remove stays listed for the next sweep. A process that holds nothing in the directory and does not name it is out of the sweep's reach. `/review-cycle:review` and `/review-cycle:review-pr` both use the new tools, and the summary reports what the sweep ended and removed. In `/review-cycle:review-pr` a capped reviewer counts against coverage like a dropped one, so the verdict cannot read clean.
+
+The review cycle now keeps a findings ledger, so what one cycle settles stays settled in the next. Until now, the list of settled findings lasted only for the cycle that made it. A new session or a follow-up PR started from nothing, and reviewers re-raised findings an earlier cycle had deferred or rebutted by measurement, unless you pasted a "do not re-report" list into the brief yourself. (cpl-e0e.1)
+
+At the end of a cycle, the skill records every finding it deferred, rebutted, or examined and left alone on purpose, and every open question, with the reason and the file as the cycle reviewed it. It carries forward the entries it settled again unchanged, keeping their dates, and removes the ones it fixed; fixed findings are never recorded. At the start of the next cycle it reads the entries for the changed paths into every reviewer's brief, Codex and the report-only reviewers included, as settled. An entry is open again when its file has changed since and the change touches the code it cites, or when it was settled more than 90 days ago, so a deferral nobody revisits does not stay settled for good. A reviewer that thinks a settled entry is wrong must bring new evidence. The summary gains a `Ledger:` line with how many entries were carried over, recorded and resolved.
+
+The ledger is stored in the plugin's own store under your Claude Code configuration directory, not in the repository. It needs no gitignore entry and never appears as a change for the commit gate to refuse, and nothing prompts for permission to write it. All worktrees of a repository share one ledger, which keeps the newest 100 entries. The store keeps ledgers for the 10 repositories recorded to most recently. Stored entries this version cannot read, such as ones a newer version wrote, are dropped by the next record, which says how many. Two new tools serve it, `mcp__review-cycle__ledger` and `mcp__review-cycle__ledger_record`, and they work while the commit gate is switched off. Like the gate, they need hooks modules enabled.
+
+### Fixed
+
+The end-of-turn review reminder is tried again after another plugin refuses it. A refusal arrives as `{ drop }` on a resolved `$.prompt.submit`, not as a rejection, so the gate used to treat the reminder as delivered and stayed silent for the rest of that message.
+
+A prompt that describes your own routine, like "I commit and push", "we commit and push" or "normally commit and then push", no longer counts as a request to push. The parser marked a clause as a description only when it held no verb, so a commit verb let the push that followed through. A clause phrased as a request still counts, as in "I want you to commit separately and push". A yes to the agent asking "Should we commit and push?" or "Should we push?" now grants the push, as a yes to "Should I push?" does.
+
+The README no longer says a Codex leg with missing credentials can block on a login prompt. Measured on codex-cli 0.159.2 with no credentials and no terminal, `codex review` retried and exited 1 after about 15 seconds with `401 Unauthorized`, so the review reports the leg as failed like any other.
+
+Reviewers guard every variable in an `rm` path, as in `"${DIR:?}/…"` rather than `"$DIR/…"`. Claude Code's Bash safety check stops to ask you about an `rm -rf` whose path starts with a variable that could be empty, even under `set -u`, so a reviewer cleaning up its temp directory used to interrupt you with a "Dangerous rm operation" prompt. The rule is in every reviewer's containment instructions and in the spawn prompts of `/review-cycle:review` and `/review-cycle:review-pr`.
+
 ## 0.22.1 (2026-09-25)
 
 ### Fixed
