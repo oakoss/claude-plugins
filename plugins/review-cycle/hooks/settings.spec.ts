@@ -36,7 +36,12 @@ describe('touchesGate', () => {
   });
   test('switching hooks off touches it', () => {
     expect(touchesGate('{}', '{"disableAllHooks":true}')).toBe(true);
-    expect(touchesGate('{}', '{"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"0"}}')).toBe(true);
+    expect(touchesGate(null, '// c\n{"disableAllHooks":true}')).toBe(true);
+    // Claude Code ignores this from v2.1.287, when mods went on by default.
+    expect(touchesGate('{}', '{"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"0"}}')).toBe(false);
+    expect(touchesGate('// c\n{}', '// c\n{"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"0"}}')).toBe(
+      false,
+    );
     expect(touchesGate('{"env":{"A":"1"}}', '{"env":{"A":"2"}}')).toBe(false);
     expect(touchesGate('{}', '{"env":{"A":"1"}}')).toBe(false);
     expect(touchesGate(null, '{"env":{"browser":true}}')).toBe(false);
