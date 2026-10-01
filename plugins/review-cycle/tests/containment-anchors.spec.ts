@@ -30,7 +30,7 @@ import path from 'node:path';
 
 import { afterEach, expect, test } from 'vitest';
 
-import { AGENTS_DIR, expectAnchors, listAgents, REPO_ROOT, skillText } from './agents';
+import { AGENTS_DIR, expectAnchors, listAgents, phase, REPO_ROOT, skillText } from './agents';
 
 const REVIEW_SKILL = path.join(REPO_ROOT, 'plugins/review-cycle/skills/review/SKILL.md');
 const CLEANUP_AGENT = path.join(AGENTS_DIR, 'cleanup.md');
@@ -57,19 +57,6 @@ const AGENT_FLOOR = 7;
 
 function listAllAgents(dir = AGENTS_DIR): string[] {
   return listAgents({ dir, min: AGENT_FLOOR });
-}
-
-// The lines from the `Phase n` heading through the `Phase n+1` heading that
-// closes it. A missing close throws rather than running to EOF, so a renamed
-// heading cannot widen the section past the phase it names.
-function phase(text: string, n: number, label: string): string[] {
-  const lines = text.split('\n');
-  const start = lines.findIndex((l) => new RegExp(`^##+ Phase ${n}`).test(l));
-  if (start === -1) throw new Error(`${label}: Phase ${n} section not found`);
-  const close = new RegExp(`^##+ Phase ${n + 1}`);
-  const end = lines.findIndex((l, i) => i >= start && close.test(l));
-  if (end === -1) throw new Error(`${label}: Phase ${n} section unterminated`);
-  return lines.slice(start, end + 1);
 }
 
 // The one line in `lines` containing `marker`, or undefined after a soft
@@ -179,7 +166,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
 test("the review skill's Phase 7 containment sentence stands on its own", () => {
   const line = markedLine(
     phase(readFileSync(REVIEW_SKILL, 'utf8'), 7, 'review'),
-    'Both report-only spawns carry the containment sentence',
+    'The report-only spawn carries the containment sentence',
     'review: Phase 7 containment paragraph expected exactly once in Phase 7',
   );
   if (line === undefined) return;

@@ -1,6 +1,6 @@
 ---
 name: review
-description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer alone; the rest get the full conditional fan-out). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies and loops until a pass applies no fixes, because a commit is admitted only for content a reviewer saw. Then runs the report-only reviewers (structural maintainability and spec conformance) and cleanup once against the final state, and confirms every changed path is covered. Commits a clean result unless the user held off; pushes only when they asked.
+description: Run the full automated code review cycle on uncommitted changes. First brings the tree to the project's canonical state (its own format/lint/typecheck). Scales the fan-out to the diff tier (light diffs — prose-only, where agent and skill bodies count as code, or ~25 changed lines or fewer — get code-reviewer alone, plus spec conformance in the first round when a spec exists; the rest get the full conditional fan-out). Adds a Codex review leg when the Codex CLI is installed — at reduced reasoning effort on light diffs — and runs Claude-only when it isn't. Applies fixes inline per the embedded policies and loops until a pass applies no fixes, because a commit is admitted only for content a reviewer saw. Checks the change against its spec in the first fan-out and stops before fixing anything when the scope is wrong. Then runs the structural maintainability reviewer and cleanup once against the final state, and confirms every changed path is covered. Commits a clean result unless the user held off; pushes only when they asked.
 argument-hint: "[against <ref>] [max <n>] [effort <level>]"
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep, Agent, SendMessage, AskUserQuestion, Skill
 ---
@@ -105,7 +105,7 @@ If empty, report "nothing to review" and stop.
 
 **Classify the diff into a tier.** List the changed paths in scope (the working tree by default, `<ref>..HEAD` when a base was given) and pick one:
 
-- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Markdown a tool loads as instructions tiers as code, wherever it lives: agent bodies, `SKILL.md`, commands, hook-owned markdown, `reference/` files a skill loads, and instruction files like `AGENTS.md` and `CLAUDE.md` — an agent body is a system prompt, not prose. Under a plugin directory that leaves only `README.md`, `LICENSE*`, `CHANGELOG*`, `NOTICE`, and `tests/` as prose. Reduced: fan-out is `code-reviewer` plus Codex when available, default iteration ceiling 3 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
+- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Markdown a tool loads as instructions tiers as code, wherever it lives: agent bodies, `SKILL.md`, commands, hook-owned markdown, `reference/` files a skill loads, and instruction files like `AGENTS.md` and `CLAUDE.md` — an agent body is a system prompt, not prose. Under a plugin directory that leaves only `README.md`, `LICENSE*`, `CHANGELOG*`, `NOTICE`, and `tests/` as prose. Reduced: fan-out is `code-reviewer` plus Codex when available (and spec conformance in iteration 1), default iteration ceiling 3 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
 - **full** — anything else. Full conditional fan-out, default ceiling 5, Codex at the user's configured effort.
 
 The tier decides fan-out, iteration ceiling, and whether Codex's effort is capped. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
@@ -171,7 +171,7 @@ Call the `mcp__review-cycle__status` tool and run:
 git config --local --list
 ```
 
-Record the status tool's `snapshot` value and the config listing verbatim into the Phase 9 summary draft as you take them — the loop ends turns between here and Phase 4, and a baseline you have to remember is one you will compare against badly. Write any scratch file outside the repository; one inside it is a change a reviewer never saw.
+Record the status tool's `snapshot` value, its `worktreeTree` (this iteration's `<spawnTree>`, which Phase 6 diffs against), and the config listing verbatim into the Phase 9 summary draft as you take them — the loop ends turns between here and Phase 4, and a baseline you have to remember is one you will compare against badly. Write any scratch file outside the repository; one inside it is a change a reviewer never saw.
 
 Re-take both in Phase 4 before aggregating and compare. `snapshot` is a digest of HEAD and every reviewable change against it, blob ids included, so it moves with content, staging that reaches the tree, and commits; a `git status` comparison misses an empty commit. The config listing covers a repository-local identity, which the snapshot never reads and which mis-authors every later commit. What escapes both: the excluded paths (`.beads/**`, `.trekker/**`, editor directories, the project's `ignore` patterns), untracked gitignored files, and anything under `.git/` other than HEAD — a worktree registration, a written hook, the stash. That residual is why reviewers work outside the repository rather than in a subdirectory of it.
 
@@ -240,14 +240,16 @@ In a single conversation turn, invoke ALL of the following:
    - Returns immediately with a bash shell ID; output streams to the task output file
    - Save the shell ID; you'll read its output later when notified of completion
 
-2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true` in the same single message as the codex invocation. Dispatch by the tier decided in Phase 1 — on the **light** tier, spawn `review-cycle:code-reviewer` and nothing else. On the **full** tier, conditional dispatch:
+2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true` in the same single message as the codex invocation. Dispatch by the tier decided in Phase 1 — on the **light** tier, spawn `review-cycle:code-reviewer`, plus spec conformance in iteration 1 (below), and nothing else. On the **full** tier, conditional dispatch:
 
    - `review-cycle:code-reviewer` — always
    - `review-cycle:pr-test-analyzer` — if the diff changes source code at all, whether or not it touches `*.test.*`, `*.spec.*`, `tests/`, `__tests__/`, or similar test paths. A source change that ships **no** corresponding test is precisely the case to flag, so do not gate this on test files being touched.
    - `review-cycle:silent-failure-hunter` — if diff touches error-handling code (try/catch, `Result<`, `.catch(`, error returns)
    - `review-cycle:type-design-analyzer` — if diff adds or modifies type declarations (interfaces, structs, classes, type aliases), OR introduces type-boundary smells anywhere (`any`, an un-narrowed `unknown`, `as` casts, non-null `!`, or newly optional fields/params)
 
-   The **report-only** reviewers — `review-cycle:spec-conformance-analyzer` and `review-cycle:maintainability-auditor` — are deliberately **not** in this loop fan-out. They run once after the loop converges (Phase 7), against the final post-fix state. That keeps the expensive opus maintainability pass and the spec-discovery step from re-running on every iteration, and means their findings reflect exactly the code you'll commit rather than an intermediate state.
+   - `review-cycle:spec-conformance-analyzer` — **iteration 1 only, on either tier**, when a spec source is discoverable: the diff's commits reference an issue/task ID, a spec or PRD file matches the branch/feature, or the user passed a spec path. Spawn it with the prompt below; its question is whether this is the thing that was asked for. Name a source in its prompt only when the user named one or the reviewed commits reference it: the agent treats a source it is handed as current, so let it find and label any other source itself. "Are we building the right thing" gates "is it built well": a spec finding after the loop arrives after rounds spent polishing code that may not belong. It runs in parallel, so it costs little: across 138 legs measured on 2026-09-19 (cpl-bcy) its median was 7.5 minutes against code-reviewer's 12.8. With no spec source, skip it and note "no spec source found" in the summary.
+
+   `review-cycle:maintainability-auditor` is **not** in this loop: it runs once after the loop (Phase 7), so the expensive opus pass judges the code you'll commit.
 
    **Give each leg a falsifiable question — the Codex leg included.** Compose all of them before step 1 assembles the Codex invocation, and append that leg's question to its `<brief>`; `developer_instructions` is additive, so it carries the question the same way it carries the intent. The question rides the same single-line, no-double-quotes constraint as the brief itself — a question containing `"` breaks the `-c` argument's quoting.
 
@@ -281,13 +283,13 @@ In a single conversation turn, invoke ALL of the following:
 
    **Do not pass `name:` to these spawns** (see "Things to NOT do"). Address any nudge to the `agent_id` in the spawn result instead — that keeps `SendMessage` available without changing completion semantics.
 
-The post-loop pass (Phase 7) runs the report-only reviewers and cleanup; none of those are part of this fan-out.
+The post-loop pass (Phase 7) runs the maintainability auditor and cleanup; neither is part of this fan-out.
 
 **Collecting results, with a stall watchdog.** Completion notifications arrive automatically — do not poll, and end the turn rather than sleep while reviewers run. Background reviewers sometimes stall: they go idle without ever delivering a report. The watchdog is wake-driven — you cannot wait on a timer, so act on whatever wakes you (a completion, an idle notification, a user message):
 
 - On any wake where a reviewer has gone idle without delivering, or has stayed silent while the other reviewers all completed, send it ONE nudge via `SendMessage`: deliver findings now, even if incomplete, opening with the two receipt lines. Address the nudge to the `agent_id` from that reviewer's spawn result.
 - If a nudged reviewer still hasn't reported by the next wake **that carries information about it**, proceed to Phase 4 without it and list it under "reviewers dropped (stalled)" in the final summary. Evidence means an idle or completion notification naming that reviewer, or — only when other Claude-side reviewers exist — all of them having since reported. A wake triggered by unrelated agents is not evidence; dropping on it discards a reviewer that may be mid-reply.
-- **When it is the only Claude-side reviewer** (the light tier spawns `code-reviewer` alone), the set-relative test is vacuously true and must not be used: only that reviewer's own idle notification, or the user's next message, counts as evidence. Dropping it takes the entire Claude side of the review with it, so it gets the strictest reading.
+- **When it is the only Claude-side reviewer** (the light tier after iteration 1, or with no spec source), the set-relative test is vacuously true and must not be used: only that reviewer's own idle notification, or the user's next message, counts as evidence. Dropping it takes the entire Claude side of the review with it, so it gets the strictest reading.
 - Never nudge the same reviewer twice, and never hold the whole cycle for a single straggler that has already been nudged.
 - A leg that keeps working is never idle, so the gate keeps the clock: when a leg passes its 30-minute budget, a prompt from `review-cycle` names its agent id. Stop that leg with the TaskStop tool, proceed without it, and list it under "Reviewers capped" — a capped leg is not a stalled one.
 - Residual: if the last outstanding reviewer stalls without even an idle notification, no wake arrives until the user's next message — that message is the wake; apply the rules then. Do not burn turns polling to avoid this case.
@@ -341,7 +343,9 @@ A finding the leg labeled `inferred` keeps that label and stays a finding. The l
 
 Attribute each finding to its source. Group by file when presenting. Do not aggressively dedupe — if two reviewers flag the same line, merge them into one bullet with both sources listed.
 
-This phase covers only the loop's auto-fix reviewers. The report-only reviewers (spec conformance, maintainability) run post-loop and are aggregated in Phase 7.
+**Spec conformance decides whether the loop runs at all.** Grade it like the other legs. A finding that quotes an explicit spec line the code contradicts or leaves out is a defect, and goes through Phase 5 with the rest. Scope creep against a current spec source needs the user's decision: stop here, apply no review fix (Phase 2's formatting stays), run Phase 9 with the spec section filled, and end without committing. Fixing quality findings first would polish code the user may remove. Use the source label the agent reports: findings against an unverified source are caveated, never a stop. On a stop, record only the scope finding in the ledger, as a `question`, and list iteration 1's other findings in the summary as pending, not deferred.
+
+The maintainability auditor runs post-loop and is aggregated in Phase 7.
 
 ### Phase 5: Apply fixes per policy
 
@@ -356,7 +360,7 @@ When fixing, follow the comment policy — do not add comments that restate the 
 
 Track fixed items and deferred items separately for the final summary. Do not auto-create beads or trekker tickets for deferred findings — just list them in the summary; the user decides.
 
-Only the loop's auto-fix reviewers feed this phase. The report-only reviewers (spec conformance, maintainability) run after the loop, and Phase 7 decides which of their findings are fixed there and which are surfaced.
+The loop's reviewers feed this phase, spec conformance's defects included. The maintainability auditor runs after the loop, and Phase 7 decides which of its findings are fixed there and which are surfaced.
 
 ### Phase 6: Verify fixes (self-check), then loop check
 
@@ -371,38 +375,33 @@ A full reviewer re-fan-out is only worth its wall-clock when this iteration's fi
 
 **From iteration 2, only a finding that matters reopens the loop.** Fix a finding that shows one of this cycle's own fixes is wrong, at any severity: it breaks something, misses the case it was written for, or states something false. Also fix a finding at important or above, on whichever scale its leg uses: a Codex `critical` or `high`, a Critical or Important section, a CRITICAL or HIGH, or a test-gap rating of 7 or more. A numeric rating decides over the section it is listed under, and a finding with no rating counts as important. Every other finding is not fixed this cycle: a Codex `medium` or `low`, a Suggestion, or a test-gap rating under 7. Record it under the deferred findings with that reason, and leave it out of the count of applied fixes. A leg asked which guard survives being broken always finds one more. If each such gap is pinned inside the cycle, it buys another iteration, and the loop does not converge.
 
+**Track where the fixes land.** Before deciding, record `git diff --name-only <spawnTree> <worktreeTree>` in the summary draft: `<spawnTree>` is the `worktreeTree` Phase 3's status call returned before this iteration's fan-out, and `<worktreeTree>` is the status tool's now. That is this iteration's fix set. From the second iteration that applied fixes, a file in every fixing iteration's set means the fixes are not converging there. Name it with the latest hunks (`git diff -U0 <spawnTree> <worktreeTree> -- <file> | grep '^@@'`) and say that repeated patching at one site argues for the structural fix, cutting or deferring the piece that keeps drawing findings, rather than another round. A flagged file stays on the summary's `Churn:` line even when the loop later converges. Churn covers loop iterations only, not Phase 8's pass.
+
 Then decide. The loop converges on an iteration that applies **no** fixes: only then did a reviewer see the tree as it now stands. Every fix, however small, is content no reviewer has seen, and the commit gate refuses it until one does.
 
 - NO inline fixes applied (everything clean or correctly deferred) → exit loop, converged.
 - Fixes applied AND iteration count < ceiling → GOTO Phase 3, scoped by what the fixes were:
-  - at least one **substantive** fix → re-run Codex (when its leg is eligible) plus the subagents whose domain the substantive fixes touched. A Codex leg that failed gets exactly one retry across the whole cycle; after a second failure stop launching it, since repeated attempts against a rate limit or a revoked session buy nothing. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)` rather than a bare `participated` — the iteration Codex missed is usually the one that had the findings.
+  - at least one **substantive** fix → re-run Codex (when its leg is eligible) plus the subagents whose domain the substantive fixes touched; a spec defect fix's domain is spec conformance, scoped to the requirement it addressed. A Codex leg that failed gets exactly one retry across the whole cycle; after a second failure stop launching it, since repeated attempts against a rate limit or a revoked session buy nothing. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)` rather than a bare `participated` — the iteration Codex missed is usually the one that had the findings.
   - only **mechanical** and **verified message** fixes → a confirmation pass: `review-cycle:code-reviewer` alone, scoped to the fixes' delta, asked whether the fixes are correct and the change is ready to commit, reporting only findings at its threshold. The self-check and reproductions above already did the verifying; this pass is what lets the fixed content count as seen. When a fix carries a claim local verification could not reach (cross-platform shell behavior, remote-service semantics), add the Codex leg to this pass at `low` — or at the explicit effort argument when one was given; otherwise apply Phase 3's root-table check, passing no override when the configured effort is already `low`, `minimal`, or `none`; unlike Phase 3, this reduction is not tier-gated. Its findings are graded by Phase 4's labels before any fix is applied, since a `static-analysis-only` Codex pass contributes questions rather than fixes, and the claim is named in the summary if no leg could settle it.
 - Fixes applied AND iteration count == ceiling → exit loop **unconverged**. The summary lists the paths the status tool reports as uncovered, and says the commit gate will refuse them until a reviewer sees them.
 
-### Phase 7: Post-loop pass (report-only reviewers + cleanup)
+### Phase 7: Post-loop pass (maintainability + cleanup)
 
-The loop has ended. Run the report-only reviewers **once** here — against the final post-fix state — together with cleanup. Spawn all applicable agents in a single turn when no changed path is runtime markdown (Phase 1's split): the reviewers only read, and on an ordinary code diff cleanup edits comments and prose, which doesn't change a structural or spec verdict. When the diff's prose IS runtime — agent bodies, skill bodies — a cleanup rewording changes exactly what the spec and maintainability legs are evaluating mid-read, so cleanup (inline or spawned) runs only after both reports land:
+The loop has ended. Run the maintainability auditor **once** here, against the final post-fix state, together with cleanup. Spawn both in a single turn when no changed path is runtime markdown (Phase 1's split): the auditor only reads, and on an ordinary code diff cleanup edits comments and prose, which doesn't change a structural verdict. When the diff's prose IS runtime — agent bodies, skill bodies — a cleanup rewording changes what the auditor is evaluating mid-read, so cleanup (inline or spawned) runs only after its report lands:
 
 1. **`review-cycle:maintainability-auditor`** — if the diff includes non-trivial source-code changes (new or substantially reworked functions, modules, types, or logic). Skip it when the diff is only docs, config, version bumps, or a handful of trivial lines — its ambitious suggestions are noise on small changes.
 
-2. **`review-cycle:spec-conformance-analyzer`** — if a spec source is discoverable: the diff's commits reference an issue/task ID, a spec or PRD file matches the branch/feature, or the user passed a spec path. If none exist, skip it and note "no spec source found" in the summary. The agent's current/unverified source rules still apply; an unverified source is caveated, not acted on.
+2. **Cleanup** — comment policy + de-slopify, tier-dependent (below).
 
-3. **Cleanup** — comment policy + de-slopify, tier-dependent (below).
+**The maintainability spawn also carries Phase 3's `settled in earlier cycles` block**, so it does not re-measure what an earlier cycle settled.
 
-Running them here, once, is the whole point: the opus maintainability pass and the spec-discovery step execute a single time against the code you'll actually commit, instead of re-running on every loop iteration.
+**The report-only spawn carries the containment sentence** — the maintainability auditor, not cleanup, which is spawned precisely to edit the target. Carry the same containment clauses Phase 3's prompt carries: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a private directory made with `mktemp -d <SCRATCH>/leg.XXXXXX`, never a shared scratchpad, and delete it when you finish. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Never reshape a command to slip past a guard; name that directory in your report, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with `set -u` and runs `cd <dir> &&` before any git command, and an `rm` guards every variable in its path, as in `"${DIR:?}/…"`, never `"$DIR/…"`.* Phase 3's snapshot does not cover this phase, so a file a report-only agent leaves changed is only caught by Phase 8's coverage check. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
 
-**Both report-only spawns also carry Phase 3's `settled in earlier cycles` block**, so they do not re-measure what an earlier cycle settled.
+**Grade this leg as well.** Apply Phase 4's labelling from its two receipt lines and carry the label into Phase 9, including the demotion rule for a structural claim about an external tool.
 
-**Both report-only spawns carry the containment sentence** — the maintainability auditor and the spec-conformance analyzer, not cleanup, which is spawned precisely to edit the target. Carry the same containment clauses Phase 3's prompt carries: *do not edit, stage, or commit anything in `<PROJECT_ROOT>` — work only on a copy in a private directory made with `mktemp -d <SCRATCH>/leg.XXXXXX`, never a shared scratchpad, and delete it when you finish. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Never reshape a command to slip past a guard; name that directory in your report, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with `set -u` and runs `cd <dir> &&` before any git command, and an `rm` guards every variable in its path, as in `"${DIR:?}/…"`, never `"$DIR/…"`.* Phase 3's snapshot does not cover this phase, so a file a report-only agent leaves changed is only caught by Phase 8's coverage check. The maintainability auditor needs it most: demonstrating that a restructuring preserves behavior means applying the restructuring somewhere.
+**The auditor does not re-open the loop.** Its speculative structural restructurings (delete a layer, split a file, reframe a state model) are high-blast-radius and low-precision, so never auto-apply them: surface them in the summary's "Structural suggestions" section, to act on by prompting afterward.
 
-**Grade these two legs as well.** Phase 4's labelling covers only the loop's auto-fix reviewers, so apply it here from each report's two receipt lines and carry the label into Phase 9 — including the demotion rule, which applies to a structural or conformance claim about an external tool exactly as it does in the loop.
-
-**Neither reviewer re-opens the loop.** Their proposals and scope questions are not auto-applied:
-
-- **maintainability-auditor** — speculative structural restructurings (delete a layer, split a file, reframe a state model): high-blast-radius, low-precision, never auto-apply. Surface them in the summary's "Structural suggestions" section; act on the ones you want by prompting afterward.
-- **spec-conformance-analyzer** — missing/partial requirements, scope creep, and implemented-but-wrong: surfaced for you to decide, quoting the spec line. "Did we build the right thing" is your call, so report rather than fix — except where the finding is a defect, per the paragraph below.
-
-**Report-only is about the kind of finding, not about which leg found it.** What these two legs own is judgment you do not have: whether a restructuring is worth its blast radius, whether the scope was right, what the change should have been. A finding that quotes a spec line and shows the implementation plainly contradicting it is not that — it is a defect, and so is a measured fault in code this cycle wrote, whichever leg reports it. Those go through the fix-vs-defer policy like any other finding. Reserve the surface-only treatment for what it exists for: proposals and scope questions, where fixing would substitute your judgment for the user's. A fix applied here gets Phase 6's self-check and fact verification before Phase 8, including the both-directions check on any guard it adds — the loop has closed, and Phase 8's confirmation pass reviews only what changed.
+**Report-only is about the kind of finding, not about which leg found it.** What the auditor owns is judgment you do not have: whether a restructuring is worth its blast radius. A measured fault in code this cycle wrote is not that — it is a defect, whichever leg reports it. Those go through the fix-vs-defer policy like any other finding. Reserve the surface-only treatment for what it exists for: proposals and scope questions, where fixing would substitute your judgment for the user's. A fix applied here gets Phase 6's self-check and fact verification before Phase 8, including the both-directions check on any guard it adds — the loop has closed, and Phase 8's confirmation pass reviews only what changed.
 
 **Cleanup.** A separate agent spawn only earns its place on a diff big enough that loading the de-slopify methodology into your own context would be the greater cost:
 
@@ -440,7 +439,7 @@ Review cycle complete.
 
 Tier: light | full
 Scope: delta (N files, +A -D vs the last reviewed tree) | full (<no review yet this session | status tool unavailable>)
-Iterations: N (converged | ceiling of <max> reached)
+Iterations: N (converged | ceiling of <max> reached | stopped at iteration 1 for a spec decision)
 Coverage: all changed paths reviewed | uncovered: <path (edited-after-review | never-reviewed)>, ...
 Falsifiable questions: N asked / N answered by measurement / N fell back to reading
 Factual corrections (cleanup): N — <the claim that was wrong, and what the run showed> | none
@@ -456,6 +455,7 @@ Leg execution: all executed | no leg reported | <leg> = partial (<what>) / stati
 Canonicalization: ran (<commands>) | partial (<tool> unavailable) | no project checks found
 Reviewers dropped (stalled): none | <names, each nudged once before dropping>
 Reviewers capped (over budget): none | <each `cappedReviews` entry from the status tool, and whether TaskStop stopped it>
+Churn: none | <file[:hunks] in every fixing iteration's set (N of N fixing iterations)>
 Scratch swept: <N processes ended, directory removed> | <errors> | not swept (<reason>)
 Findings fixed inline: X
   - file:line — issue (source)
@@ -466,10 +466,11 @@ Findings deferred: Y
     reason: <criterion from fix-vs-defer policy>
   - ...
 
-Spec conformance (defects appear above under findings; the rest is report-only): <spec source / no spec source found>
-  - implemented but wrong (contradicts a quoted spec line — fixed or deferred above): ...
-  - missing/partial requirements: ...
-  - scope creep (confirm intended): ...
+Spec conformance (iteration 1): <spec source / no spec source found>
+  - contradicts or leaves out an explicit spec line (defect — fixed or deferred above): ...
+  - scope creep against a current source (stopped the cycle for your decision): ...
+  - findings against an unverified source (caveated, not acted on): ...
+  - pending after a spec stop (iteration 1's other findings, not judged): ...
 
 Structural suggestions (report-only — prompt to address the ones you want):
   - file:line — suggestion (confidence: high/medium/speculative)
