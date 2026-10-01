@@ -824,11 +824,64 @@ describe('aliases', () => {
   });
 });
 
+// The second word of the first statement, as the gate reads it.
+function secondWord(cmd: string): string | undefined {
+  const parsed = parse(cmd);
+  return 'statements' in parsed ? parsed.statements[0]?.words[1]?.text : undefined;
+}
+
 describe('shell aliases', () => {
   test("decodes zsh's $'…' values", () => {
     expect(parseShellAliases(String.raw`alias -- wip=$'git add -A\ngit push'`).get('wip')).toBe(
       'git add -A\ngit push',
     );
+  });
+  // zsh 5.9.2's own `alias` listing of these bytes, measured.
+  test("decodes zsh's control and meta notation in alias values", () => {
+    const listing = String.raw`t1=$'a\C-Mb'
+t2=$'p\C-?q'
+t3=$'m\M-\C-An'
+t4=$'c\M-\C-[d'`;
+    expect(Object.fromEntries(parseShellAliases(listing))).toEqual({
+      t1: 'a\rb',
+      t2: 'p\u007Fq',
+      t3: 'm\u0081n',
+      t4: 'c\u009Bd',
+    });
+  });
+  // zsh does not escape the byte after `\C-` or `\M-`, so it can be the quote
+  // or a backslash; the alias after must survive.
+  test('reads a zsh escape whose byte is a quote or a backslash', () => {
+    const listing = String.raw`e1=$'a\C-\'
+e2=next
+e4=$'a\M-\C-\'
+f1=$'a\M-'z'
+f2=$'a\M-\z'
+m1=$'n\M-~o'
+t9=$'\M-\t'
+ta=$'\M-\n'`;
+    expect(Object.fromEntries(parseShellAliases(listing))).toEqual({
+      e1: 'a\u001C',
+      e2: 'next',
+      e4: 'a\u009C',
+      f1: 'a§z',
+      f2: 'aÜz',
+      m1: 'nþo',
+      t9: '\u0089',
+      ta: '\u008A',
+    });
+  });
+  // The Bash tool may run zsh, which drops an unknown escape's backslash, so
+  // these run as git commit and git push there and must stay gated.
+  test("an unknown $'…' escape is read as zsh runs it, so the command stays gated", () => {
+    expect(secondWord(String.raw`git $'c\ommit' -m x`)).toBe('commit');
+    expect(secondWord(String.raw`git $'\push'`)).toBe('push');
+  });
+  test(String.raw`a command's $'\C-M' is not read as zsh notation`, () => {
+    const parsed = parse(String.raw`echo $'a\C-Mb'`);
+    const words = 'statements' in parsed ? (parsed.statements[0]?.words ?? []) : [];
+    expect(words[1]?.text).toBeDefined();
+    expect(words[1]?.text).not.toContain('\r');
   });
   test('reads zsh and bash alias listings', () => {
     const zsh = [
