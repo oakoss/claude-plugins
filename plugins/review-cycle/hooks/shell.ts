@@ -473,35 +473,65 @@ const ANSI_C: Record<string, string> = {
   v: '\v',
 };
 
-const ANSI_ESCAPE = /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|.)/g;
 // zsh lists a control byte in an alias value as `\C-M`, DEL as `\C-?`, and a
 // byte with the high bit as `\M-` before either form; bash never writes these.
-const ZSH_ESCAPE =
-  /\\(M-\\C-.|M-\\[tn]|M-.|C-.|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|c.|.)/g;
+// The listing does not escape the byte after `\C-` or `\M-`.
+const LISTING_ESCAPE =
+  /\\(M-\\C-.|M-\\[tn]|M-.|C-.|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|.)/g;
+const COMMAND_ESCAPE =
+  /\\(C-?|M-?|x[0-9a-fA-F]{0,2}|u[0-9a-fA-F]{0,4}|U[0-9a-fA-F]{0,8}|[0-7]{1,3}|[\s\S])|[\s\S]/gu;
 
-function zshControl(c: string): number {
-  return c === '?' ? 127 : (c.codePointAt(0) ?? 0) & 31;
+function zshControl(code: number): number {
+  return code === 63 ? 127 : code & 0x9f;
 }
 
-// The value bash gives a `$'…'` word: `$'co\x6dmit'` is `commit`. `zsh` also
-// reads the notation zsh's alias listing uses.
-function decodeAnsiC(body: string, zsh = false): string {
-  return body.replaceAll(zsh ? ZSH_ESCAPE : ANSI_ESCAPE, (_, esc: string) => {
-    if (esc.startsWith(String.raw`M-\C-`))
-      return String.fromCodePoint(0x80 | zshControl(esc[5] ?? ''));
+// One escape after its backslash. zsh drops the backslash of an escape it does
+// not know, `\c` included: `$'c\ommit'` and `$'\commit'` run as `commit`.
+function escapeValue(esc: string): string {
+  const kind = esc[0] ?? '';
+  if (kind === 'x' || kind === 'u' || kind === 'U') {
+    return String.fromCodePoint(Number.parseInt(esc.slice(1), 16) || 0);
+  }
+  if (/[0-7]/.test(kind)) return String.fromCodePoint(Number.parseInt(esc, 8));
+  return ANSI_C[kind] ?? kind;
+}
+
+// The value zsh gives a command's `$'…'` word, which the Bash tool runs:
+// `$'co\x6dmit'` is `commit`. `\C` and `\M`, a `-` after either optional, set
+// control and meta on the next character, escaped or not, except a `\u` or
+// `\U` one; with no next character they add nothing, so `co$'\C'mmit` is
+// `commit`. As zsh does, meta set after control applies first.
+function decodeAnsiC(body: string): string {
+  let out = '';
+  let control = false;
+  let meta: 'before' | 'after' | undefined;
+  for (const [whole, esc] of body.matchAll(COMMAND_ESCAPE)) {
+    if (esc?.[0] === 'C' && esc.length <= 2) control = true;
+    else if (esc?.[0] === 'M' && esc.length <= 2) meta = control ? 'before' : 'after';
+    else if (esc?.[0] === 'u' || esc?.[0] === 'U') out += escapeValue(esc);
+    else {
+      let code = (esc === undefined ? whole : escapeValue(esc)).codePointAt(0) ?? 0;
+      if (meta === 'before') code |= 0x80;
+      if (control) code = zshControl(code);
+      if (meta === 'after') code |= 0x80;
+      control = false;
+      meta = undefined;
+      out += String.fromCodePoint(code);
+    }
+  }
+  return out;
+}
+
+// An alias value as zsh's `alias` listing writes it.
+function decodeListing(body: string): string {
+  return body.replaceAll(LISTING_ESCAPE, (_, esc: string) => {
+    const control = (at: number): number => zshControl(esc.codePointAt(at) ?? 0);
+    if (esc.startsWith(String.raw`M-\C-`)) return String.fromCodePoint(0x80 | control(5));
     // zsh lists 0x89 and 0x8a as `\M-\t` and `\M-\n`, reading them back so.
     if (/^M-\\[tn]$/.test(esc)) return String.fromCodePoint(0x80 | (esc[3] === 't' ? 9 : 10));
     if (esc.startsWith('M-')) return String.fromCodePoint(0x80 | (esc.codePointAt(2) ?? 0));
-    if (esc.startsWith('C-')) return String.fromCodePoint(zshControl(esc[2] ?? ''));
-    const kind = esc[0] ?? '';
-    if (kind === 'x' || kind === 'u' || kind === 'U') {
-      return String.fromCodePoint(Number.parseInt(esc.slice(1), 16));
-    }
-    if (/[0-7]/.test(kind)) return String.fromCodePoint(Number.parseInt(esc, 8));
-    if (kind === 'c') return String.fromCodePoint((esc.codePointAt(1) ?? 0) & 31);
-    // The Bash tool may run zsh, which drops the backslash of an escape it
-    // does not know: `$'c\ommit'` runs as `commit`. bash would keep it.
-    return ANSI_C[kind] ?? kind;
+    if (esc.startsWith('C-')) return String.fromCodePoint(control(2));
+    return escapeValue(esc);
   });
 }
 
@@ -640,7 +670,7 @@ function unquoteWord(s: string): string {
   while (i < s.length) {
     if (s.startsWith("$'", i)) {
       const end = ansiEnd(s, i + 2);
-      out += decodeAnsiC(s.slice(i + 2, end), true);
+      out += decodeListing(s.slice(i + 2, end));
       i = end + 1;
     } else if (s[i] === "'") {
       const end = s.indexOf("'", i + 1);
