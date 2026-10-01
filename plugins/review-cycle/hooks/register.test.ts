@@ -73,6 +73,10 @@ type World = {
   registered?: string[];
   // Makes registering this tool fail.
   registerFails?: string;
+  // Each armed clock.after: its wait in ms, and what fires it.
+  timers?: { ms: number; fire: () => void }[];
+  // Environment variables beyond SHELL and HOME.
+  env?: Record<string, string>;
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -250,7 +254,9 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   );
   on('session.cwd', () => ({ value: '/repo' }));
   on('env.get', ($: unknown, e: { name?: string }) => ({
-    value: ({ SHELL: '/bin/zsh', HOME: '/Users/tester' } as Record<string, string>)[e.name ?? ''],
+    value: ({ SHELL: '/bin/zsh', HOME: '/Users/tester', ...w.env } as Record<string, string>)[
+      e.name ?? ''
+    ],
   }));
   on('fs.list', () => ({
     value:
@@ -332,6 +338,13 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     },
   );
   on('agent.list', () => ({ value: w.agents ?? [] }));
+  on(
+    'clock.after',
+    ($: unknown, e: { ms: number }) =>
+      new Promise((resolve) => {
+        (w.timers ??= []).push({ ms: e.ms, fire: () => resolve({ value: undefined }) });
+      }),
+  );
   on('prompt.submit', async ($: unknown, e: { text: string }) => {
     if (w.submitFails && e.text.startsWith('review-cycle:')) {
       await w.submitGate;
@@ -2545,6 +2558,160 @@ async function reviewerChanges($: any): Promise<string[]> {
   const r = await $.tool.call({ tool: 'mcp__review-cycle__status' });
   return JSON.parse((r as { result: string }).result).reviewerChanges;
 }
+
+async function settle() {
+  for (let i = 0; i < 500; i++) await Promise.resolve();
+}
+async function finishLeg($: any, agentId: string, isAborted: boolean) {
+  await $.turn.complete({
+    answer: RECEIPT,
+    durationMs: 1,
+    isAborted,
+    turnId: `turn-${agentId}`,
+    agentId,
+    reason: isAborted ? 'aborted' : 'answer',
+  });
+}
+function statusOf(r: unknown) {
+  return JSON.parse((r as { result: string }).result);
+}
+
+describe('the scratch directory', () => {
+  test('scratch makes one under TMPDIR, and sweep removes it once', async ($, on) => {
+    const w = fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : a.startsWith('test -e')
+            ? { exitCode: 1 }
+            : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    const made = (await $.tool.call({ tool: 'mcp__review-cycle__scratch' })) as { result: string };
+    expect(made.result).toContain('mktemp -d /tmp/review-cycle.abc123/leg.XXXXXX');
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      { dir: '/tmp/review-cycle.abc123', stopped: 0, removed: true, errors: [] },
+    ]);
+    expect(w.calls.some((c) => c.argv.join(' ') === 'rm -rf -- /tmp/review-cycle.abc123')).toBe(
+      true,
+    );
+    const again = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(again.result).toBe('No scratch directory to sweep.');
+  });
+  test('a TMPDIR with a trailing slash makes a path without a doubled one', async ($, on) => {
+    const w = fakeWorld(on, { env: { TMPDIR: '/var/x/' } });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    expect(w.calls.some((c) => c.argv.join(' ') === 'mktemp -d /var/x/review-cycle.XXXXXX')).toBe(
+      true,
+    );
+  });
+  test('a sweep that fails keeps the directory, and the next sweep tries it again', async ($, on) => {
+    let failing = true;
+    fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : a.startsWith('test -e')
+            ? { exitCode: 1 }
+            : null,
+      reject: (a) => failing && a.startsWith('lsof'),
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const first = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(first.result)).toEqual([
+      { dir: '/tmp/review-cycle.abc123', stopped: 0, removed: false, errors: [expect.any(String)] },
+    ]);
+    failing = false;
+    const second = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(second.result)[0]).toMatchObject({ removed: true, errors: [] });
+  });
+  test('without the sweep tool, scratch makes nothing', async ($, on) => {
+    const w = fakeWorld(on, { registerFails: 'sweep' });
+    await ($ as any).session.start({ source: 'startup' });
+    const made = (await $.tool.call({ tool: 'mcp__review-cycle__scratch' })) as { result: string };
+    expect(made.result).toContain('sweep tool is not registered');
+    expect(w.calls.some((c) => c.argv[0] === 'mktemp')).toBe(false);
+  });
+  test('a scratch directory that cannot be made says so, and nothing is swept', async ($, on) => {
+    fakeWorld(on, { fail: (a) => a.startsWith('mktemp -d') });
+    await ($ as any).session.start({ source: 'startup' });
+    const made = (await $.tool.call({ tool: 'mcp__review-cycle__scratch' })) as { result: string };
+    expect(made.result).toContain('could not make a scratch directory (fatal: injected)');
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(swept.result).toBe('No scratch directory to sweep.');
+  });
+});
+
+describe('the leg time budget', () => {
+  test('a leg past its budget asks the session to stop it, and is capped, not dropped', async ($, on) => {
+    const w = fakeWorld(on);
+    const id = await legUnderWay($);
+    expect(w.timers?.map((t) => t.ms)).toEqual([30 * 60_000]);
+    w.timers?.[0]?.fire();
+    await settle();
+    const asked = (w.prompts ?? []).filter((p) => p.includes('past its 30-minute budget'));
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain(`(agent ${id})`);
+    expect(asked[0]).toContain('TaskStop');
+    await finishLeg($, id, true);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([
+      `review-cycle:code-reviewer (agent ${id}): still running after 30 minutes`,
+    ]);
+    expect(status.droppedReviews).toEqual([]);
+  });
+  test('a review-pr leg, which counts toward nothing, still gets a budget', async ($, on) => {
+    const w = fakeWorld(on);
+    await $.tool.call({ tool: 'Skill', skill: 'review-cycle:review-pr' });
+    await legUnderWay($);
+    expect(w.timers?.map((t) => t.ms)).toEqual([30 * 60_000]);
+  });
+  test('a leg that finished in time is not capped when its timer fires', async ($, on) => {
+    const w = fakeWorld(on);
+    const id = await legUnderWay($);
+    await finishLeg($, id, false);
+    w.timers?.[0]?.fire();
+    await settle();
+    expect((w.prompts ?? []).filter((p) => p.includes('budget'))).toEqual([]);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([]);
+  });
+  test('a refused request to stop the leg is recorded', async ($, on) => {
+    const w = fakeWorld(on, { submitFails: true });
+    const id = await legUnderWay($);
+    w.timers?.[0]?.fire();
+    await settle();
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toContain(
+      `review-cycle:code-reviewer (agent ${id}): the request to stop it was refused (refused)`,
+    );
+  });
+  test("a new cycle's scratch call clears the last cycle's capped legs even when it fails", async ($, on) => {
+    const w = fakeWorld(on, { fail: (a) => a.startsWith('mktemp -d') });
+    await ($ as any).session.start({ source: 'startup' });
+    await legUnderWay($);
+    w.timers?.[0]?.fire();
+    await settle();
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([]);
+  });
+  test("a new cycle's scratch directory clears the last cycle's capped legs", async ($, on) => {
+    const w = fakeWorld(on, {
+      git: (a) => (a.startsWith('mktemp -d') ? { stdout: '/tmp/review-cycle.abc123\n' } : null),
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await legUnderWay($);
+    w.timers?.[0]?.fire();
+    await settle();
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([]);
+  });
+});
 
 describe('reviewer containment', () => {
   test('a reviewer edits outside the repository, not inside it', async ($, on) => {

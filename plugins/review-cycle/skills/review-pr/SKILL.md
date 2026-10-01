@@ -92,6 +92,8 @@ Record `<WT>` in the report draft immediately. **If the skill aborts at any poin
 
 ## Phase 3: Brief and fan-out (parallel)
 
+**Call `mcp__review-cycle__scratch` once** and use the path it returns as `<SCRATCH>` in every reviewer prompt; Phase 7 sweeps it. If the tool is missing or fails, use a bare `mktemp -d` and say so in the report.
+
 **Compose the intent brief** — 2–4 sentences on what the PR is trying to accomplish and why, from its title, body, and commit subjects, plus the changed-file list. State intent, not hoped-for verdicts. Every reviewer gets it.
 
 Carry the evidence rule into the brief, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. Carry the never-evade rule into the brief the same way: never reshape a command to slip past a guard — an opt-out is visible and reviewable, an evasion is neither. It matters more here than in the working-tree cycle — the PR head sits in a disposable worktree whose dependencies may not be installed, so a reviewer that cannot build has every reason to reason from manifests and no fix loop downstream to catch it.
@@ -140,11 +142,11 @@ In a single conversation turn, invoke ALL of the following:
      subagent_type: "review-cycle:code-reviewer",
      description: "PR review",
      run_in_background: true,
-     prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file in <WT> or in the main checkout — verification that has to run or perturb code goes in a private mktemp -d directory outside both, never a shared scratchpad, under the containment rule in your own prompt — and never reshape a command to slip past a guard. Name that directory in your report, delete it when you finish, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with set -u and runs cd <dir> && before any git command, and an rm guards every variable in its path, as in ${DIR:?}/…, never $DIR/…. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Output findings as file:line — severity — issue — suggested fix."
+     prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file in <WT> or in the main checkout — verification that has to run or perturb code goes in a private directory you make with mktemp -d <SCRATCH>/leg.XXXXXX, outside both, never a shared scratchpad, under the containment rule in your own prompt — and never reshape a command to slip past a guard. Name that directory in your report, delete it when you finish, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with set -u and runs cd <dir> && before any git command, and an rm guards every variable in its path, as in ${DIR:?}/…, never $DIR/…. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Output findings as file:line — severity — issue — suggested fix."
    })
    ```
 
-**Collecting results — wake-driven, single pass.** Completion notifications arrive automatically; do not poll, and end the turn while reviewers run. On any wake where a reviewer has gone idle without delivering — or stayed silent while every other reviewer completed — send it ONE `SendMessage` nudge (to the `agent_id` from its spawn result): deliver findings now, even if incomplete, opening with the two receipt lines. If it still hasn't reported by the next wake that carries information about it (its own idle or completion notification, or — only when other Claude-side reviewers exist — all of them having since reported), proceed without it and list it under dropped reviewers. When it is the only Claude-side reviewer (light tier), only its own notification or the user's next message counts as evidence. Never nudge twice; never hold the pass for a nudged straggler.
+**Collecting results — wake-driven, single pass.** Completion notifications arrive automatically; do not poll, and end the turn while reviewers run. On any wake where a reviewer has gone idle without delivering — or stayed silent while every other reviewer completed — send it ONE `SendMessage` nudge (to the `agent_id` from its spawn result): deliver findings now, even if incomplete, opening with the two receipt lines. If it still hasn't reported by the next wake that carries information about it (its own idle or completion notification, or — only when other Claude-side reviewers exist — all of them having since reported), proceed without it and list it under dropped reviewers. When it is the only Claude-side reviewer (light tier), only its own notification or the user's next message counts as evidence. Never nudge twice; never hold the pass for a nudged straggler. When a prompt from `review-cycle` names a leg past its 30-minute budget, stop it with the TaskStop tool and list it as capped.
 
 A Codex leg that dies after launch is a **failure**, not a skip. The completion notification's exit code says *whether* it failed; the output file says *why*, and exit 1 alone names no cause. Open that file before filling `failed (<error>)` and quote what it says.
 
@@ -152,7 +154,7 @@ A Codex leg that dies after launch is a **failure**, not a skip. The completion 
 
 Collect findings from every reviewer. Attribute each to its source, group by file, and do not aggressively dedupe — two reviewers flagging the same line merge into one bullet with both sources listed. Apply the review cycle's severity framing (critical/high/medium/low) when a source doesn't provide its own.
 
-**The coverage floor is the point of this phase.** Every dispatched reviewer appears in the report with an outcome: `reported`, `skipped (<reason>)`, `failed (<error>)`, or `dropped (stalled, nudged once)`. "No findings" and "nobody looked" must never read the same: if any dispatched leg is `failed` or `dropped`, the verdict says `partial coverage` and never `clean`, regardless of how few findings arrived.
+**The coverage floor is the point of this phase.** Every dispatched reviewer appears in the report with an outcome: `reported`, `skipped (<reason>)`, `failed (<error>)`, `dropped (stalled, nudged once)`, or `capped (over budget, stopped)`. "No findings" and "nobody looked" must never read the same: if any dispatched leg is `failed`, `dropped` or `capped`, the verdict says `partial coverage` and never `clean`, regardless of how few findings arrived.
 
 **Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. This is deliberately broader than the working-tree cycle, and the difference is the class of claim rather than the leg: there, demotion covers claims about external tool behavior; here it covers any finding whose only support is a declaration, because the finding leaves as a public comment with no fix loop and no author turn behind it. Neither is gated on the leg's grade. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file.
 
@@ -185,8 +187,8 @@ Tier: light | full
 Coverage:
   codex — participated (effort: low | inherited | <level> (explicit)) | skipped (<reason>[; effort <level> requested, unused]) | failed (<error>)
     auth: stored session (not exercised) | no stored session | unknown (probe unsupported)
-  code-reviewer — reported | dropped (stalled, nudged once)
-  <each other dispatched reviewer — reported | skipped (<reason>) | failed | dropped>
+  code-reviewer — reported | dropped (stalled, nudged once) | capped (over budget, stopped)
+  <each other dispatched reviewer — reported | skipped (<reason>) | failed | dropped | capped (over budget, stopped)>
 Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
 
 Findings: <count>
@@ -222,7 +224,7 @@ Post only when the argument parse found post intent, or the user asks after seei
 
 ## Phase 7: Clean up (always)
 
-Runs on every exit path — posted, report-only, or aborted anywhere after Phase 2:
+Runs on every exit path — posted, report-only, or aborted anywhere after Phase 2. First call `mcp__review-cycle__sweep`, which ends what the legs left running in `<SCRATCH>` and removes it, even for a leg that stalled; then:
 
 ```bash
 git -C <ROOT> worktree remove --force <WT>

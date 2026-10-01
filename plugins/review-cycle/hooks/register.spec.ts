@@ -81,10 +81,12 @@ describe('with the gate switched off', () => {
 });
 
 describe('the findings ledger with the gate off', () => {
-  test('its tools are served and registered, and nothing of the gate starts', async () => {
+  test('its tools and the scratch tools are served and registered, and nothing of the gate starts', async () => {
     const hooks = load(false);
     expect(hooks.has('tool.call:mcp__review-cycle__ledger')).toBe(true);
     expect(hooks.has('tool.call:mcp__review-cycle__ledger_record')).toBe(true);
+    expect(hooks.has('tool.call:mcp__review-cycle__scratch')).toBe(true);
+    expect(hooks.has('tool.call:mcp__review-cycle__sweep')).toBe(true);
     const registered: string[] = [];
     const runs: unknown[] = [];
     const $$ = {
@@ -94,7 +96,7 @@ describe('the findings ledger with the gate off', () => {
     const [start] = hooks.get('session.start:') ?? [];
     const out = await start?.($$, { source: 'startup' }, (e: unknown) => Promise.resolve({ e }));
     expect(out).toEqual({ e: { source: 'startup' } });
-    expect(registered).toEqual(['ledger', 'ledger_record']);
+    expect(registered).toEqual(['ledger', 'ledger_record', 'scratch', 'sweep']);
     expect(runs).toEqual([]);
   });
 });
