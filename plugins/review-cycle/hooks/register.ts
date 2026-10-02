@@ -107,8 +107,6 @@ const LEG_BUDGET_MS = 30 * 60_000;
 // prompt queued into the running turn updates it.
 type Message = {
   grant: Grant;
-  // Whether the user turned down a push when the gate asked, so it does not ask again.
-  declined: boolean;
   // The working tree when it arrived; null when unreadable.
   tree: string | null;
   // Whether the agent was told to review since it arrived.
@@ -125,8 +123,6 @@ type GateState = {
   message: Message;
   // How many messages the user has typed, queued ones included.
   messages: number;
-  // Whether the gate's question to the user is on screen.
-  asking: boolean;
   lastAnswer: string;
   // The user's shell aliases, which the Bash tool expands.
   shellAliases: Map<string, string>;
@@ -157,9 +153,8 @@ const state: GateState = {
   reviews: [],
   legs: new Map(),
   // No message yet, so nothing to nudge about.
-  message: { grant: NO_GRANT, declined: false, tree: null, nudged: true, prWindow: false },
+  message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
   messages: 0,
-  asking: false,
   lastAnswer: '',
   shellAliases: new Map(),
   aliasError: null,
@@ -335,7 +330,6 @@ async function onPromptSubmit(
     if (e.turnId !== undefined) {
       // Updated in place: a pending nudge's rollback holds this record.
       state.message.grant = grant;
-      state.message.declined = false;
       state.message.nudged = false;
     } else {
       let tree: string | null = null;
@@ -345,7 +339,7 @@ async function onPromptSubmit(
       } catch {
         // No starting tree means no nudge this message; the commit gate still holds.
       }
-      state.message = { grant, declined: false, tree, nudged: false, prWindow: false };
+      state.message = { grant, tree, nudged: false, prWindow: false };
     }
   }
   return next(e);
@@ -801,7 +795,7 @@ async function judgeBash(
 ): Promise<Output<BashHook>> {
   // A newer message overtakes anything decided from this one.
   const message = state.messages;
-  let granted = state.message.grant;
+  const granted = state.message.grant;
   if (bashTouchesGate(e.command)) return deny(SWITCHED_BY_USER);
   await loadShellAliases($);
   const cls = classify(e.command, state.shellAliases);
@@ -859,14 +853,7 @@ async function judgeBash(
   const unreviewed = await reviewed($, root.top, cls);
   if (unreviewed !== null) return deny(unreviewed);
 
-  if (cls.push && !granted.push) {
-    const refusal = await ask($, e.command, message, next.signal);
-    if (refusal !== null) return deny(refusal);
-    granted = Object.freeze({ ...granted, push: true });
-    // The dialog waits on a person, and the tree can change meanwhile.
-    const after = await reviewed($, root.top, cls);
-    if (after !== null) return deny(after);
-  }
+  if (cls.push && !granted.push) return deny(pushRefusal(e.command, cls.commit !== null));
   const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
   return watch($, root, e, next, checked, granted, message);
 }
@@ -897,69 +884,16 @@ async function reviewed(
   return null;
 }
 
-// Longer than this, a command is not shown in the dialog, so it is not asked about.
-const MAX_SHOWN = 500;
+// Longer than this, the refusal quotes only the start of the command.
+const MAX_SHOWN = 300;
 
-// Fixed labels keep the agent's wording from deciding what a pick means. A second
-// question is refused, not queued: waiting would count against its hook's time limit.
-async function ask(
-  $: $,
-  command: string,
-  message: number,
-  signal: AbortSignal,
-): Promise<string | null> {
-  if (state.message.declined) {
-    return 'the user turned down the push when the gate asked. Do not try it again unless their next message asks for it.';
-  }
-  if (state.messages !== message) {
-    return 'the user sent a new message while the gate was checking this push, so it did not ask them. Act on their message.';
-  }
-  if (state.asking) {
-    return 'the gate is already asking the user about another command, so it did not ask about this push. Wait for that answer, then run it again.';
-  }
-  if (signal.aborted) {
-    return 'the call was interrupted before the gate asked about the push, so it did not ask them.';
-  }
+// The gate does not ask: the agent asks in its reply, so the user can answer
+// with anything at all. Their next message grants through the consent grammar.
+function pushRefusal(command: string, commits: boolean): string {
   const shown = shownCommand(command, state.shellAliases);
-  if (shown.length > MAX_SHOWN) {
-    return `this command is too long for the gate to show the user (${shown.length} characters; ${MAX_SHOWN} at most), so it did not ask them. Run the push as a shorter command or ask the user to run it.`;
-  }
-  const yes = 'Push';
-  const no = "Don't push";
-  let answer: string;
-  state.asking = true;
-  try {
-    const asked = $.ui.ask(`The agent wants to push: ${shown}. Allow it?`, {
-      options: [yes, no],
-      header: 'review-cycle',
-    });
-    // The dialog outlives an abandoned call, and must not hold the next one off.
-    const abandoned = new Promise<never>((_, reject) => {
-      const stop = () => reject(new Error('the call was interrupted'));
-      if (signal.aborted) stop();
-      signal.addEventListener('abort', stop, { once: true });
-    });
-    void asked.catch(() => null);
-    void abandoned.catch(() => null);
-    answer = await Promise.race([asked, abandoned]);
-  } catch (error) {
-    const why = error instanceof Error ? error.message : String(error);
-    return `the user's latest message doesn't ask for a push, and the gate got no answer when it asked them (${why}). Ask them first.`;
-  } finally {
-    state.asking = false;
-  }
-  // An answer to a question the user's newer message has overtaken settles nothing.
-  if (state.messages !== message) {
-    return 'the user sent a new message while the gate was asking about the push, so nothing ran. Act on their message.';
-  }
-  if (answer === yes) return null;
-  if (answer === no) {
-    state.message.declined = true;
-    return 'the user turned down the push when the gate asked. Do not try it again unless their next message asks for it.';
-  }
-  // Text typed under "Type something." is not a pick, so it grants nothing;
-  // the agent reads it, and a retry asks again.
-  return `the user answered the gate's question about the push with: ${JSON.stringify(answer)}. Nothing ran; act on what they said.`;
+  const quoted = shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
+  const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
+  return `the user's latest message doesn't ask for a push, so nothing ran.${alone} To push, stop and ask them in your reply, naming what it pushes and where with names in backticks (for example "Push \`fix/x\` to \`origin\`?"), and end your turn; their answer decides. The command: ${quoted}`;
 }
 
 type Checked = 'commit' | 'history' | 'push' | 'unchecked';

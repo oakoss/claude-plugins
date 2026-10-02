@@ -1068,7 +1068,7 @@ describe('the alias read mirrors the snapshot', () => {
   });
 });
 
-describe("the command as the gate's question shows it", () => {
+describe("the command as the gate's push refusal quotes it", () => {
   const cases: [string, string][] = [
     ['git push', 'git push'],
     ['  git   push\t--tags  ', 'git push --tags'],

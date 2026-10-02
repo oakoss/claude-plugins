@@ -490,7 +490,7 @@ Push only when the user's latest message asked for one ("push it", "ship it"). A
 
 ## Things to NOT do
 
-- Do NOT push unless the user asked for one. Without a request, the gate interrupts them with a dialog.
+- Do NOT push unless the user asked for one. Without a request, the gate refuses the push; ask them in your reply, naming what it pushes and where, and end your turn.
 - Do NOT let the Codex leg's status go unreported. Absent is fine and gets named; broken mid-run gets named louder.
 - Do NOT pass `name:` when spawning any review subagent, in either the Phase 3 loop fan-out or the Phase 7 post-loop pass. A named background agent parks as `idle` awaiting messages instead of completing and returning its report, so its findings never arrive — and Phase 7 has no watchdog to notice.
 - Do NOT auto-create beads or trekker tickets for deferred findings.

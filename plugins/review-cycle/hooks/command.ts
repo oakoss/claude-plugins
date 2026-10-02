@@ -990,7 +990,7 @@ function tame(text: string): string {
     .replaceAll(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '\u{FFFD}');
 }
 
-// The command as the gate's question shows it: every line, runs of spaces
+// The command as the gate's push refusal quotes it: every line, runs of spaces
 // collapsed, and characters that could hide or reorder text replaced. A
 // command that uses shell aliases also shows their expansion, which is what runs.
 export function shownCommand(command: string, aliases: ShellAliases = new Map()): string {

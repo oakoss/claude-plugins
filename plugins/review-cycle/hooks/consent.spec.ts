@@ -187,6 +187,45 @@ describe('an affirmative grants what the previous answer asked', () => {
   test('yes to a question after a statement that mentions push', () => {
     expect(grantOf('yes', 'I will not push. Want me to run the tests?')).toEqual(NONE);
   });
+  // The gate's refusal asks the agent to name what it pushes and where.
+  test('yes to a push question that names the branch grants the push', () => {
+    expect(grantOf('yes', 'Fixed.\nPush fix/x to origin?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Push `fix/x` to origin?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I push feat/ask-in-prose to origin?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Push fix/x and open the PR?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Push feat/a/b to origin/feat/a/b?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Push `ask-in-prose` to `origin`?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Committed on fix/x. Push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Done in src/a.ts. Want me to push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I rename src/a.ts?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push fix/x to main?')).toEqual(NONE);
+  });
+  test('a slash joining hand-back words still hands the push back', () => {
+    expect(grantOf('yes', 'Should I push, or would you rather/prefer to do it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Want me to push, or skip/defer it?')).toEqual(NONE);
+  });
+  test('quoting a hand-back word still hands the push back', () => {
+    expect(grantOf('yes', 'Should I push, or would you `rather/prefer` do it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I push, or would you `rather` do it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Want me to push, or run it in your `terminal`?')).toEqual(NONE);
+    expect(grantOf('yes', "Should I push, or can't we `skip` it as 'deferred'?")).toEqual(NONE);
+    expect(grantOf('yes', "I'd rather not force-push. Should I push, or you'd do it?")).toEqual(
+      NONE,
+    );
+    expect(grantOf('yes', "That's rather slow. Should I push, or you'd prefer to?")).toEqual(NONE);
+    expect(grantOf('yes', "I've committed it. Should I push?")).toEqual(PUSH);
+    expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
+  });
+  test('a quoted destination in a user message is not a push target', () => {
+    expect(grantOf('push this to `next sprint`', '')).toEqual(NONE);
+    expect(grantOf('push it to "later"', '')).toEqual(NONE);
+  });
+  test('yes to deleting a path is not a push', () => {
+    expect(grantOf('yes', 'Should I delete src/old.ts?')).toEqual(NONE);
+    expect(grantOf('yes', 'Delete scratch/tmp?')).toEqual(NONE);
+    expect(grantOf('yes', 'Want me to delete the fix/x branch?')).toEqual(PUSH);
+  });
   test('yes to a push question grants the push only', () => {
     expect(grantOf('yes', 'Should I push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Merged. Want me to delete the branch?')).toEqual(PUSH);
