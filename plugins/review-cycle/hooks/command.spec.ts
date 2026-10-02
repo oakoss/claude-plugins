@@ -304,6 +304,16 @@ describe('gates the accepted shapes', () => {
       expect.objectContaining({ kind: 'gated', history: 'pull' }),
     );
   });
+  test('a runner named as a bare word in a commit or push is data', () => {
+    for (const c of [
+      'git commit -m tsx',
+      'git commit -m ts-node',
+      'git push origin lua',
+      'git add tsx lua && git commit -m x',
+    ]) {
+      expect(classify(c).kind, c).toBe('gated');
+    }
+  });
   test('an alias of several commands is judged like the commands it stands for', () => {
     const aliases = new Map([
       ['GpA', 'git push --all && git push --tags --no-verify'],
@@ -660,6 +670,9 @@ describe('refuses every other shape that commits or pushes', () => {
     'python3 -c \'import os; os.system("git commit -m x")\'',
     'python3 -c \'import os; os.system("git-merge topic")\'',
     'python3 -c \'import os; os.system("git merge topic")\'',
+    `tsx -e "require('child_process').execSync('git commit -m x')"`,
+    `npx ts-node -e "require('child_process').execSync('git push')"`,
+    `lua -e "os.execute('git commit -m x')"`,
     'git merge-into main',
     String.raw`find . -name x -exec git commit -m x \;`,
     "git submodule foreach 'git commit -am x'",

@@ -25,9 +25,6 @@ const WRITERS = new Set([
   'sponge',
   'patch',
   'xargs',
-  'tsx',
-  'ts-node',
-  'lua',
 ]);
 const PYTHON = /^python[0-9.]*$/;
 // Wrappers that run the command after them, besides the reserved words.
