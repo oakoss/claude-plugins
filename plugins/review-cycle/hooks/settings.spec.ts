@@ -4,6 +4,10 @@ import { applyEdit, bashTouchesGate, touchesGate } from './settings';
 
 const on = JSON.stringify({ enabledPlugins: { 'review-cycle@oakoss': true, 'x@y': true } });
 
+// The rung on a line of its own, behind a comment, as a hand-edited file holds it.
+const jsonc = (rung: string) =>
+  `// mine\n{\n  "pluginConfigs": {\n    "review-cycle": {\n      "options": {\n        /* loose */ "stopBefore": "${rung}",\n      },\n    },\n  },\n  "url": "http://x//y,}",\n}\n`;
+
 describe('touchesGate', () => {
   test('disabling, removing or reconfiguring the plugin touches it', () => {
     expect(
@@ -26,7 +30,18 @@ describe('touchesGate', () => {
     expect(touchesGate(null, '{}')).toBe(false);
     expect(touchesGate(null, '[1]')).toBe(false);
   });
-  test('text JSON.parse rejects is compared by its switch lines', () => {
+  test('repairing or breaking a file that names a switch touches it', () => {
+    const loose = jsonc('never stop');
+    expect(touchesGate(`${loose}}`, loose)).toBe(true);
+    expect(touchesGate(loose, `${loose}}`)).toBe(true);
+    expect(touchesGate('{"theme":1', '{"theme":1}')).toBe(false);
+  });
+  test('a file with comments and trailing commas is read as JSON', () => {
+    expect(touchesGate(jsonc('push'), jsonc('never stop'))).toBe(true);
+    expect(touchesGate(jsonc('push'), jsonc('push').replace('// mine', '// theirs'))).toBe(false);
+    expect(touchesGate(jsonc('push'), jsonc('push').replace('x//y,}', 'x//z,}'))).toBe(false);
+  });
+  test('a byte-order mark, comments or a trailing comma do not hide the switch', () => {
     const off = '{"enabledPlugins":{"review-cycle@oakoss":false}}';
     expect(touchesGate(null, `\uFEFF${off}`)).toBe(true);
     expect(touchesGate(null, `// x\n${off}`)).toBe(true);

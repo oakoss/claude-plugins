@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { aliasCommits, classify, possibleAliases, shownCommand } from './command';
+import { aliasCommits, classify, opensPr, possibleAliases, shownCommand } from './command';
 import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
 
 const HEREDOC_MESSAGE = `git commit -m "$(cat <<'EOF'
@@ -11,6 +11,8 @@ EOF
 )"`;
 
 const PLAIN = { all: false, amend: false, dryRun: false, config: [] };
+// Any push; its spec is pinned in the push-arguments tests.
+const PUSHES = expect.objectContaining({ force: expect.any(String) });
 
 function expanded(cmd: string, table: [string, string][]): string {
   const parsed = parse(cmd, new Map(table));
@@ -104,7 +106,7 @@ describe('gates the accepted shapes', () => {
       adds: [],
       commit: PLAIN,
       history: null,
-      push: false,
+      push: null,
     });
   });
   test('add chained before commit', () => {
@@ -114,7 +116,7 @@ describe('gates the accepted shapes', () => {
       adds: [['add', '-A']],
       commit: PLAIN,
       history: null,
-      push: false,
+      push: null,
     });
   });
   test('several adds, config options kept for replay', () => {
@@ -137,7 +139,7 @@ describe('gates the accepted shapes', () => {
   });
   test('-F - with a heredoc on stdin', () => {
     expect(classify("git commit -F - <<'EOF'\nmsg; git push\nEOF")).toEqual(
-      expect.objectContaining({ kind: 'gated', push: false }),
+      expect.objectContaining({ kind: 'gated', push: null }),
     );
   });
   test('-am and --all stage tracked changes', () => {
@@ -157,7 +159,7 @@ describe('gates the accepted shapes', () => {
   });
   test('a trailing pipe into tail or wc is judged like the command before it', () => {
     expect(classify('git push 2>&1 | tail -3')).toEqual(
-      expect.objectContaining({ kind: 'gated', push: true }),
+      expect.objectContaining({ kind: 'gated', push: PUSHES }),
     );
     expect(classify('git commit -m x | tail -n 5')).toEqual(
       expect.objectContaining({ kind: 'gated', commit: PLAIN }),
@@ -185,7 +187,7 @@ describe('gates the accepted shapes', () => {
   });
   test('commit then push', () => {
     expect(classify('git commit -m x && git push')).toEqual(
-      expect.objectContaining({ kind: 'gated', push: true }),
+      expect.objectContaining({ kind: 'gated', push: PUSHES }),
     );
   });
   test('push alone', () => {
@@ -195,7 +197,7 @@ describe('gates the accepted shapes', () => {
       adds: [],
       commit: null,
       history: null,
-      push: true,
+      push: PUSHES,
     });
   });
   test('commands that commit from history', () => {
@@ -242,7 +244,9 @@ describe('gates the accepted shapes', () => {
     expect(classify('gcam "feat: x"', aliases)).toEqual(
       expect.objectContaining({ kind: 'gated', commit: { ...PLAIN, all: true } }),
     );
-    expect(classify('gp', aliases)).toEqual(expect.objectContaining({ kind: 'gated', push: true }));
+    expect(classify('gp', aliases)).toEqual(
+      expect.objectContaining({ kind: 'gated', push: PUSHES }),
+    );
     expect(classify('g commit -m x', aliases)).toEqual(
       expect.objectContaining({ kind: 'gated', commit: PLAIN }),
     );
@@ -280,7 +284,7 @@ describe('gates the accepted shapes', () => {
   });
   test('a fast-forward pull is neutral before a push; a pull or merge that may merge is not', () => {
     expect(classify('git pull --ff-only && git push')).toEqual(
-      expect.objectContaining({ kind: 'gated', history: null, push: true }),
+      expect.objectContaining({ kind: 'gated', history: null, push: PUSHES }),
     );
     for (const c of [
       'git pull --ff-only --no-ff',
@@ -295,7 +299,7 @@ describe('gates the accepted shapes', () => {
   });
   test('everyday steps before the commit or push are allowed', () => {
     expect(classify('git checkout -b feat/x && git push -u origin feat/x')).toEqual(
-      expect.objectContaining({ kind: 'gated', commit: null, history: null, push: true }),
+      expect.objectContaining({ kind: 'gated', commit: null, history: null, push: PUSHES }),
     );
     expect(classify('git fetch origin && git rebase origin/main')).toEqual(
       expect.objectContaining({ kind: 'gated', history: 'rebase' }),
@@ -326,10 +330,15 @@ describe('gates the accepted shapes', () => {
     ]);
     for (const name of ['GpA', 'gpp', 'sq']) expect(classify(name, aliases).kind).toBe('refuse');
     expect(classify('Gpc', aliases)).toEqual(
-      expect.objectContaining({ kind: 'gated', push: true }),
+      expect.objectContaining({ kind: 'gated', push: PUSHES }),
     );
     expect(classify('gacp', aliases)).toEqual(
-      expect.objectContaining({ kind: 'gated', adds: [['add', '-A']], commit: PLAIN, push: true }),
+      expect.objectContaining({
+        kind: 'gated',
+        adds: [['add', '-A']],
+        commit: PLAIN,
+        push: PUSHES,
+      }),
     );
     expect(classify('ll', aliases)).toEqual({ kind: 'none' });
     expect(classify('echo gp', aliases)).toEqual({ kind: 'none' });
@@ -473,11 +482,11 @@ describe('gates the accepted shapes', () => {
       expect(r.kind === 'refuse' && r.reason).toContain('`git` is a shell alias here (for `hub`)');
     }
     expect(classify('git status', hub)).toEqual({ kind: 'none' });
-    expect(classify(String.raw`\git push`, hub)).toEqual(expect.objectContaining({ push: true }));
+    expect(classify(String.raw`\git push`, hub)).toEqual(expect.objectContaining({ push: PUSHES }));
   });
   test('an alias for git itself is judged on its expansion, a hidden push included', () => {
     const sneaky = new Map([['git', 'git push origin main && git']]);
-    expect(classify('git status', sneaky)).toEqual(expect.objectContaining({ push: true }));
+    expect(classify('git status', sneaky)).toEqual(expect.objectContaining({ push: PUSHES }));
     // Expanded it is a commit after a push, which no reading admits.
     expect(classify('git commit -m x', sneaky).kind).toBe('refuse');
     // eval reparses its text, where the alias expands.
@@ -568,7 +577,7 @@ describe('gates the accepted shapes', () => {
     );
   });
   test("zsh's =git resolves to git", () => {
-    expect(classify('=git push')).toEqual(expect.objectContaining({ kind: 'gated', push: true }));
+    expect(classify('=git push')).toEqual(expect.objectContaining({ kind: 'gated', push: PUSHES }));
   });
   test('git options that take a value do not hide the subcommand', () => {
     expect(classify('git --attr-source HEAD commit -m x')).toEqual(
@@ -733,6 +742,9 @@ describe('refuses every other shape that commits or pushes', () => {
     'timeout 30 git pull --ff-only',
     "git pull --ff-only <<'EOF'\ngit push origin main\nEOF",
     'git config core.hooksPath /dev/null && git commit -m x',
+    // A mode after the name and value still writes.
+    'git config core.hooksPath /dev/null --get && git commit -m x',
+    'git config remote.origin.pushurl ../b.git -l && git push',
     'X=$(echo x >> a.ts) && git commit -am m',
     'X=`touch a.ts` && git commit -m m',
     'X=1 > a.ts && git commit -am m',
@@ -1192,5 +1204,170 @@ describe('glob and brace patterns', () => {
   });
   test("zsh's extended-glob characters in an argument are left alone", () => {
     expect(classify('git log HEAD^ && git show HEAD~1 && git push').kind).toBe('gated');
+  });
+});
+
+function pushOf(command: string) {
+  const c = classify(command);
+  return c.kind === 'gated' ? c.push : c;
+}
+
+describe('push arguments', () => {
+  test.each([
+    ['git push', 'none'],
+    ['git push -u origin fix/x', 'none'],
+    ['git push --force-with-lease', 'lease'],
+    ['git push --force-with-lease=main:abc123 origin main', 'lease'],
+    ['git push --force-with-lease --force-if-includes origin fix/x', 'lease'],
+    ['git push --force origin fix/x', 'bare'],
+    ['git push -f', 'bare'],
+    ['git push -uf origin fix/x', 'bare'],
+    ['git push origin +fix/x', 'bare'],
+    ['git push --force-with-lease --force', 'bare'],
+    ['git push --force --force-with-lease', 'bare'],
+    ['git push --mirror origin', 'bare'],
+    ['git push --force-with-lease=main:$expect origin main', 'lease'],
+    ['git push origin "+$B"', 'bare'],
+    ['git push -- origin +main', 'bare'],
+    ['git push -oci.skip origin main', 'none'],
+    ['git push --no-follow-tags origin main', 'none'],
+  ])('%s → %s', (command, force) => {
+    expect(pushOf(command)).toEqual(expect.objectContaining({ force }));
+  });
+  test('reads tags, deletes, every branch, the remote and the refspecs', () => {
+    expect(pushOf('git push --tags')).toEqual(expect.objectContaining({ tags: true }));
+    expect(pushOf('git push --follow-tags')).toEqual(expect.objectContaining({ tags: true }));
+    expect(pushOf('git push origin refs/tags/v1')).toEqual(expect.objectContaining({ tags: true }));
+    expect(pushOf('git push origin --delete old')).toEqual(
+      expect.objectContaining({ deletes: true }),
+    );
+    expect(pushOf('git push origin :old')).toEqual(expect.objectContaining({ deletes: true }));
+    expect(pushOf('git push --all')).toEqual(expect.objectContaining({ every: true }));
+    expect(pushOf('git push --mirror')).toEqual(
+      expect.objectContaining({ every: true, deletes: true }),
+    );
+    expect(pushOf('git push --prune origin')).toEqual(expect.objectContaining({ deletes: true }));
+    expect(pushOf('git push origin tag v1')).toEqual(expect.objectContaining({ tags: true }));
+    // No remote, and one built at run time, are told apart.
+    expect(pushOf('git push')).toEqual(expect.objectContaining({ remote: 'default' }));
+    expect(pushOf('git push "$R" main')).toEqual(
+      expect.objectContaining({ remote: 'dynamic', refspecs: ['main'] }),
+    );
+    // A repository argument wins over --repo, as in git.
+    expect(pushOf('git push --repo=upstream')).toEqual(
+      expect.objectContaining({ remote: { name: 'upstream' }, refspecs: [] }),
+    );
+    expect(pushOf('git push --repo upstream')).toEqual(
+      expect.objectContaining({ remote: { name: 'upstream' }, refspecs: [] }),
+    );
+    expect(pushOf('git push --repo=upstream origin main')).toEqual(
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
+    );
+    expect(pushOf('git push --tags --no-follow-tags origin main')).toEqual(
+      expect.objectContaining({ tags: true }),
+    );
+    expect(pushOf('git push --no-tags origin main')).toEqual(
+      expect.objectContaining({ tags: false }),
+    );
+    expect(pushOf('git push --push-option ci.skip origin main')).toEqual(
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
+    );
+    expect(pushOf('git push -oci.skip origin main')).toEqual(
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
+    );
+    expect(pushOf('git push -o ci.skip origin HEAD:main')).toEqual(
+      expect.objectContaining({
+        remote: { name: 'origin' },
+        refspecs: ['HEAD:main'],
+        force: 'none',
+      }),
+    );
+    expect(pushOf('git push origin "$BRANCH"')).toEqual(
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: null }),
+    );
+  });
+  test('an option the gate does not know is refused, an abbreviation included', () => {
+    expect(readable('git push --forc')).toContain(
+      'git push --forc, an option the gate does not know',
+    );
+    expect(readable('git push -x')).toContain('git push -x, an option the gate does not know');
+  });
+  // A dry run appends flags, which a valueless option would take as its value.
+  test.each([
+    ['git push origin main -o', '-o'],
+    ['git push origin main --repo', '--repo'],
+    ['git push origin --push-option', '--push-option'],
+  ])('%s is refused for its valueless %s', (command, option) => {
+    expect(readable(command)).toContain(`git push ${option} without a value`);
+  });
+  test('options end at the `--` that ends them, not one given as a value', () => {
+    expect(pushOf('git push origin -- main')).toEqual(
+      expect.objectContaining({ argv: { config: [], args: ['origin', '--', 'main'], end: 1 } }),
+    );
+    expect(pushOf('git push -o -- origin main')).toEqual(
+      expect.objectContaining({
+        argv: { config: [], args: ['-o', '--', 'origin', 'main'], end: 4 },
+      }),
+    );
+  });
+  test.each([
+    ['git checkout main && git push', 'checkout'],
+    ['git switch main && git merge fix/x && git push origin HEAD', 'switch'],
+    ['git branch -f fix/x main && git push origin fix/x', 'branch'],
+    ['git tag v1 && git push', 'tag'],
+    ['git remote set-url origin ../other.git && git push', 'remote'],
+    ['git fetch --set-upstream origin main && git push', 'fetch'],
+    ['git stash branch main && git push', 'stash'],
+    ['git rebase origin/main main && git push', 'rebase'],
+    ['git checkout main && git switch dev && git push', 'checkout'],
+    ['git status && git log -1 && git push', null],
+    ['git commit -m x && git push', null],
+    ['git push', null],
+  ])('%s: the step before that can retarget it is %s', (command, after) => {
+    expect(pushOf(command)).toEqual(expect.objectContaining({ after }));
+  });
+});
+
+describe('opening a pull request', () => {
+  test.each([
+    'gh pr create --fill',
+    'gh -R oakoss/x pr create --title t --body b',
+    'gh --repo=oakoss/x pr new',
+    'cd sub && GH_TOKEN=x gh pr create --draft',
+    'echo "$(gh pr create --fill)"',
+    '/opt/homebrew/bin/gh pr create',
+    'gh --repo oakoss/x pr create',
+    'gh --hostname ghe.example pr create',
+    'gh pr -R oakoss/x create',
+    'env GH_TOKEN=x gh pr create',
+    'env -u GH_TOKEN gh pr create',
+    'sudo -u bot gh pr create',
+    'timeout 60 gh pr create --fill',
+    'nice -n 5 gh pr create',
+    'xargs gh pr create',
+    'flock /tmp/l gh pr create',
+    'gh pr create --title "unterminated',
+  ])('%s', (command) => {
+    expect(opensPr(command)).toBe(true);
+  });
+  test.each([
+    'gh pr view 12',
+    'gh pr list',
+    'echo "gh pr create"',
+    'grep -r "gh pr create" docs',
+    'gh issue create --title pr',
+    'echo gh pr create',
+    'grep gh pr create docs',
+    'bash -c "gh pr view 1; echo create"',
+    // Quoted text is not read: a well-meaning agent writes the command plainly.
+    'bash -c "gh pr create --fill"',
+    "eval 'gh pr create'",
+    'git log --grep "gh pr create"',
+    'gh pr comment 5 --body "will gh pr create a follow-up"',
+  ])('%s opens none', (command) => {
+    expect(opensPr(command)).toBe(false);
+  });
+  test('an alias that expands to it opens one', () => {
+    expect(opensPr('mkpr', new Map([['mkpr', 'gh pr create --fill']]))).toBe(true);
   });
 });

@@ -77,6 +77,14 @@ type World = {
   timers?: { ms: number; fire: () => void }[];
   // Environment variables beyond SHELL and HOME.
   env?: Record<string, string>;
+  // What $.settings.read answers, by source; 'throw' makes that read reject.
+  settings?: Partial<Record<'project' | 'local', object | 'throw'>>;
+  // Runs on every settings read, before it answers.
+  settingsRead?: () => void;
+  // The Bash tool reports the command as failed.
+  bashFails?: boolean;
+  // Every line the plugin logged.
+  logs?: string[];
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -334,7 +342,8 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
       if (w.head !== head && (w.headLog?.length ?? 0) === logged && !w.headLogOff) {
         w.headLog = [`${w.head} commit: made`, ...(w.headLog ?? [])];
       }
-      return { result: { stdout: `ran ${e.command ?? ''}`, stderr: '', interrupted: false } };
+      const result = { stdout: `ran ${e.command ?? ''}`, stderr: '', interrupted: false };
+      return w.bashFails ? { result, isError: true } : { result };
     },
   );
   on('agent.list', () => ({ value: w.agents ?? [] }));
@@ -360,6 +369,16 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   on('session.start', () => ({ cwd: '/repo' }));
   on('turn.complete', ($: unknown, e: { answer: string }) => ({ text: e.answer }));
   on('config.set', ($: unknown, e: { value: unknown }) => ({ value: e.value }));
+  on('settings.read', ($: unknown, e: { source?: 'project' | 'local' }) => {
+    w.settingsRead?.();
+    const answer = e.source && w.settings?.[e.source];
+    if (answer === 'throw') return { deny: 'settings unreadable' };
+    return { value: answer ?? {} };
+  });
+  on('ui.log', ($: unknown, e: { text: string }) => {
+    (w.logs ??= []).push(e.text);
+    return { value: undefined };
+  });
   return w;
 }
 
@@ -2208,7 +2227,7 @@ describe('a push the user did not ask for', () => {
       reason: 'answer',
     });
     await say($, 'not yet, rename the helper first');
-    expect(denied(await bash($, 'git push origin fix/x'), "doesn't ask for a push")).toBe(true);
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off pushing')).toBe(true);
   });
   test('a reviewed commit with it is refused whole, naming the commit on its own', async ($, on) => {
     fakeWorld(on);
@@ -2265,6 +2284,41 @@ describe('a push the user did not ask for', () => {
     fakeWorld(on, { shellAliases: "alias -- git='hub'\n" });
     await say($, 'fix the parser');
     expect(denied(await bash($, 'git push'), '`git` is a shell alias here (for `hub`)')).toBe(true);
+  });
+});
+
+describe('a force push', () => {
+  test('a push request does not cover it; one that names a force does', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'push it');
+    const r = await bash($, 'git push --force-with-lease origin fix/x');
+    expect(denied(r, "doesn't ask for a force push")).toBe(true);
+    expect(denied(r, '"Force-push `fix/x` to `origin` with a lease?"')).toBe(true);
+    await say($, 'force push it');
+    expect(ran(await bash($, 'git push --force-with-lease origin fix/x'))).toBe(true);
+  });
+  test('a bare --force points to the lease unless named', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'force push it');
+    const r = await bash($, 'git push --force origin fix/x');
+    expect(denied(r, 'Use `--force-with-lease --force-if-includes` instead;')).toBe(true);
+    expect(denied(r, 'without a lease?"')).toBe(true);
+    expect(denied(await bash($, 'git push origin +fix/x'), 'a bare --force')).toBe(true);
+    await say($, 'force push it without a lease');
+    expect(ran(await bash($, 'git push --force origin fix/x'))).toBe(true);
+  });
+  test('with no request at all, the bare refusal says the lease needs one too', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push -f'), 'which also needs their request')).toBe(true);
+  });
+  test('a commit with a force push is told to run on its own', async ($, on) => {
+    fakeWorld(on);
+    await review($);
+    await say($, 'push it');
+    const r = await bash($, 'git commit -am x && git push --force-with-lease');
+    expect(denied(r, 'To commit without pushing, run the commit on its own.')).toBe(true);
+    expect(denied(r, "doesn't ask for a force push")).toBe(true);
   });
 });
 
@@ -2409,6 +2463,429 @@ async function finishLeg($: any, agentId: string, isAborted: boolean) {
 function statusOf(r: unknown) {
   return JSON.parse((r as { result: string }).result);
 }
+
+function stops(stopBefore: string) {
+  return { pluginConfigs: { 'review-cycle': { options: { stopBefore } } } };
+}
+
+const REMOTE = '/remote.git';
+const DRY_FLAGS = '--dry-run --porcelain --no-verify --no-quiet --recurse-submodules=no';
+const NEW_BRANCH = '*\tHEAD:refs/heads/fix/x\t[new branch]';
+
+// The remote as the gate's always-ask check sees it: what git's dry run
+// prints for each push, keyed by the words after `push` ('fail' for a dry run
+// that fails), and the remote's default branch (null when unreadable).
+function remoteSide(
+  dryRuns: Record<string, readonly string[] | 'fail'> = {},
+  head: string | null = 'main',
+): (a: string) => Partial<Run> | null {
+  return (a) => {
+    if (/^git (?:-c \S+ )*push --dry-run /.test(a) && a.includes(DRY_FLAGS)) {
+      const args = a
+        .replace(/^git (?:-c \S+ )*push --dry-run ?/, '')
+        .replace(DRY_FLAGS, '')
+        .replaceAll(/\s+/g, ' ')
+        .trim();
+      const lines = dryRuns[args] ?? [NEW_BRANCH];
+      if (lines === 'fail') {
+        return { exitCode: 128, stderr: 'fatal: Could not read from remote repository.\n' };
+      }
+      return { stdout: [`To ${REMOTE}`, ...lines, 'Done'].join('\n') };
+    }
+    if (a.startsWith('git ls-remote --symref')) {
+      return head === null
+        ? { exitCode: 128, stderr: 'fatal: unable to access\n' }
+        : { stdout: `ref: refs/heads/${head}\tHEAD\nabc\tHEAD\n` };
+    }
+    return null;
+  };
+}
+
+// A world on fix/x whose next Bash call moves origin/fix/x, as a push does.
+function pushing(setup: Partial<World>): Partial<World> {
+  return {
+    refs: { 'refs/remotes/origin/fix/x': 'c'.repeat(40) },
+    git: remoteSide(),
+    shell(this: World) {
+      this.refs = { 'refs/remotes/origin/fix/x': 'd'.repeat(40) };
+      this.reflogs = { 'refs/remotes/origin/fix/x': [`${'d'.repeat(40)} update by push`] };
+    },
+    ...setup,
+  };
+}
+
+const RAN_PUSH =
+  'review-cycle: ran a push without asking, since the stop-before setting is open PR (.claude/settings.local.json).';
+
+describe('the stop-before setting', () => {
+  test('a push below the rung runs without asking, logged and told to the agent', async ($, on) => {
+    const w = fakeWorld(on, pushing({ settings: { local: stops('open PR') } }));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push');
+    expect(ran(r)).toBe(true);
+    expect(contextOf(r)).toEqual([RAN_PUSH]);
+    expect(w.logs).toEqual([RAN_PUSH]);
+  });
+  test('a push a script makes below the rung is logged, not reported as unasked', async ($, on) => {
+    const w = fakeWorld(on, pushing({ settings: { local: stops('open PR') } }));
+    await say($, 'fix the parser');
+    const context = contextOf(await bash($, './release.sh'));
+    expect(has(context, RAN_PUSH)).toBe(true);
+    expect(has(context, 'without the user asking')).toBe(false);
+    expect(w.logs).toHaveLength(1);
+  });
+  // Each dry-run output is what git 2.56 printed for that push.
+  const asking: [string, readonly string[] | 'fail' | null, string][] = [
+    [
+      'git push origin main',
+      [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+      'it pushes to `main`, the default branch',
+    ],
+    [
+      'git push origin @',
+      [' \tHEAD:refs/heads/main\tb65222b..9f4a349'],
+      'it pushes to `main`, the default branch',
+    ],
+    ['git push origin v1', ['*\trefs/tags/v1:refs/tags/v1\t[new tag]'], 'it pushes the tag `v1`'],
+    // push.followTags carries a new annotated tag along with the branch.
+    ['git push', [NEW_BRANCH, '*\trefs/tags/v1:refs/tags/v1\t[new tag]'], 'it pushes the tag `v1`'],
+    [
+      'git push',
+      'fail',
+      'a dry run of it, which shows what it would push, failed (fatal: Could not read from remote repository.)',
+    ],
+    ['git push --tags', null, 'it pushes tags'],
+    ['git push origin --delete old', null, 'it deletes a remote branch'],
+    ['git push --all', null, 'it pushes every branch'],
+    ['git push origin "$BRANCH"', null, 'its remote or branch is built at run time'],
+  ];
+  for (const [command, lines, reason] of asking) {
+    test(`${command} asks whatever the setting: ${reason}`, async ($, on) => {
+      const args = command.replace(/^git push ?/, '');
+      const git = remoteSide(lines === null ? {} : { [args]: lines });
+      fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
+      await say($, 'fix the parser');
+      const r = await bash($, command);
+      expect(denied(r, `This push asks whatever the setting: ${reason}.`)).toBe(true);
+      await say($, 'push it');
+      expect(ran(await bash($, command))).toBe(true);
+    });
+  }
+  test("a pull request's push runs unnoted, but still asks before main", async ($, on) => {
+    const w = fakeWorld(
+      on,
+      pushing({
+        git: remoteSide({ 'origin main': [' \trefs/heads/main:refs/heads/main\t1..2'] }),
+      }),
+    );
+    await say($, 'open a PR');
+    const r = await bash($, 'git push -u origin HEAD');
+    expect(ran(r)).toBe(true);
+    expect(w.logs ?? []).toEqual([]);
+    expect(has(contextOf(r), 'without')).toBe(false);
+    expect(denied(await bash($, 'git push origin main'), 'the default branch')).toBe(true);
+  });
+  test('a held pull request request lets no push through', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await say($, 'open a PR. do not push.');
+    expect(denied(await bash($, 'git push -u origin HEAD'), 'held off pushing')).toBe(true);
+  });
+  test("a script's push under a pull request request is still reported", async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await say($, 'open a PR');
+    const context = contextOf(await bash($, './release.sh'));
+    expect(has(context, 'without the user asking for a push')).toBe(true);
+  });
+  test("the dry run carries the push's own -c options", async ($, on) => {
+    const upstream = ' \trefs/heads/fix/x:refs/heads/main\t1..2';
+    const w = fakeWorld(
+      on,
+      pushing({
+        settings: { local: stops('never stop') },
+        git: (a) =>
+          a.startsWith('git -c push.default=upstream push') && a.includes('--dry-run')
+            ? { stdout: [`To ${REMOTE}`, upstream, 'Done'].join('\n') }
+            : remoteSide()(a),
+      }),
+    );
+    await say($, 'fix the parser');
+    const r = await bash($, 'git -c push.default=upstream push');
+    expect(denied(r, 'the default branch')).toBe(true);
+    const probe = w.calls.find((c) => c.argv.includes('--dry-run'));
+    expect(probe?.init?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+  // Measured on git 2.56: a later --no-verify and --no-quiet win, and an
+  // option before the push's own `--` would take a flag as its value.
+  const flags = DRY_FLAGS.split(' ');
+  const probes: [string, string[]][] = [
+    ['git push -q --verify origin main', ['-q', '--verify', 'origin', 'main', ...flags]],
+    ['git push origin -- main', ['origin', ...flags, '--', 'main']],
+    ['git push -o -- origin main', ['-o', '--', 'origin', 'main', ...flags]],
+  ];
+  for (const [command, words] of probes) {
+    test(`the dry run of ${command} leads with --dry-run and ends its options with the flags`, async ($, on) => {
+      const w = fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+      await say($, 'fix the parser');
+      await bash($, command);
+      const probe = w.calls.find((c) => c.argv.includes('--porcelain'));
+      expect(probe?.argv).toEqual(['git', 'push', '--dry-run', ...words]);
+    });
+  }
+  test('a push option with no value is refused before any dry run', async ($, on) => {
+    const w = fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push origin main -o'), 'without a value')).toBe(true);
+    expect(w.calls.some((c) => c.argv.includes('--porcelain'))).toBe(false);
+  });
+  test('a push after a step that can retarget it asks, without a dry run', async ($, on) => {
+    const w = fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git checkout main && git push');
+    expect(denied(r, '`git checkout` runs before it in the same command')).toBe(true);
+    expect(w.calls.some((c) => c.argv.includes('--porcelain'))).toBe(false);
+  });
+  test('a quiet push and a commit with its push are still judged', async ($, on) => {
+    const main = ['=\trefs/heads/main:refs/heads/main\t[up to date]'];
+    fakeWorld(
+      on,
+      pushing({
+        settings: { local: stops('never stop') },
+        git: remoteSide({ '-q origin main': main, 'origin main': main }),
+      }),
+    );
+    await review($);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push -q origin main'), 'the default branch')).toBe(true);
+    expect(
+      denied(await bash($, 'git commit -am x && git push origin main'), 'the default branch'),
+    ).toBe(true);
+  });
+  test('an unreadable setting leaves its rung out of the commit refusal', async ($, on) => {
+    fakeWorld(on, { settings: { local: 'throw' } });
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'git commit -am x');
+    expect(denied(r, 'could not read .claude/settings.local.json')).toBe(true);
+    expect(denied(r, 'the stop-before setting is')).toBe(false);
+  });
+  test('a commit dry run needs no request at a commit rung', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git commit --dry-run -am x'))).toBe(true);
+  });
+  test("a remote whose default branch can't be read asks", async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}, null) }));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push');
+    expect(
+      denied(r, `the default branch of ${REMOTE} could not be read (fatal: unable to access)`),
+    ).toBe(true);
+  });
+  test('at the default setting, a refused push skips the always-ask reason', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push origin main');
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(r, 'asks whatever the setting')).toBe(false);
+  });
+  test('an unreadable settings file stops before a commit too', async ($, on) => {
+    fakeWorld(on, { settings: { local: 'throw' } });
+    await review($);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git commit -am x'), "doesn't ask for a commit")).toBe(true);
+  });
+  test('a force push asks whatever the setting', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push --force-with-lease'), 'force push')).toBe(true);
+  });
+  test('a pull request a newer message overtakes does not run, and logs nothing', async ($, on) => {
+    let typed = false;
+    const w = fakeWorld(on, {
+      settings: { local: stops('never stop') },
+      git: (a) => {
+        if (!typed && a.startsWith('git for-each-ref')) {
+          typed = true;
+          void say($, "don't open a PR");
+        }
+        return null;
+      },
+    });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr create --fill'), 'sent a new message')).toBe(true);
+    expect(w.logs ?? []).toEqual([]);
+  });
+  test('a pull request at the rung is refused, naming the branch to ask about', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('open PR') } });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr create --fill');
+    expect(denied(r, "doesn't ask for a pull request")).toBe(true);
+    expect(denied(r, '"Open a PR from `fix/x` into `main`?"')).toBe(true);
+  });
+  test('by default a pull request asks, and a request for one lets it run', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr create --fill'), 'pull request')).toBe(true);
+    await say($, 'open a PR');
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+    expect(w.logs ?? []).toEqual([]);
+  });
+  test('never stop lets a pull request run, logged', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+    expect(w.logs?.[0]).toContain('ran a pull request without asking');
+  });
+  test('outside a repository a newer message still stops a pull request', async ($, on) => {
+    let typed = false;
+    const w = fakeWorld(on, {
+      settings: { local: stops('never stop') },
+      git: (a) =>
+        a.includes('--show-toplevel')
+          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          : null,
+      settingsRead: () => {
+        if (typed) return;
+        typed = true;
+        void say($, 'actually, rename the helper first');
+      },
+    });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh -R o/r pr create --fill');
+    expect(denied(r, 'sent a new message')).toBe(true);
+    expect(w.logs ?? []).toEqual([]);
+  });
+  // The note says the step ran, not that it succeeded, so it stands either way.
+  test('a pull request that failed is still noted as run', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('never stop') }, bashFails: true });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr create --fill');
+    expect(has(contextOf(r), 'ran a pull request without asking')).toBe(true);
+    expect(w.logs).toHaveLength(1);
+  });
+  test('a permitted push that moved no ref is still noted as run', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('open PR') }, git: remoteSide() });
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    expect(w.logs).toEqual([RAN_PUSH]);
+  });
+  test('a failure while judging a pull request refuses it', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('never stop') },
+      reject: (a) => a.includes('--show-toplevel'),
+    });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr create --fill'), 'the gate failed')).toBe(true);
+  });
+  test('Monitor refuses a pull request', async ($, on) => {
+    fakeWorld(on);
+    const r = await $.tool.call({ tool: 'Monitor', command: 'gh pr create --fill' } as never);
+    expect(denied(r, 'opens a pull request')).toBe(true);
+  });
+  test('the project file cannot stop later than the user', async ($, on) => {
+    fakeWorld(on, { settings: { project: stops('never stop') } });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push'), "doesn't ask for a push")).toBe(true);
+  });
+  test('settings that cannot be read stop before every step', async ($, on) => {
+    fakeWorld(on, { settings: { project: 'throw', local: stops('never stop') } });
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push');
+    expect(denied(r, 'could not read .claude/settings.json: ')).toBe(true);
+    expect(denied(r, 'settings unreadable, so the gate stops before every step')).toBe(true);
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+  });
+  test('an unreadable local file is named as the one that failed', async ($, on) => {
+    fakeWorld(on, { settings: { local: 'throw' } });
+    await say($, 'fix the parser');
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore.unreadable).toContain('.claude/settings.local.json: ');
+    expect(status.stopBefore.from).toBe('unreadable settings');
+    expect(
+      denied(await bash($, 'gh pr create'), 'could not read .claude/settings.local.json'),
+    ).toBe(true);
+  });
+  test('a held message still runs what it asks for', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, "push it; don't open a PR yet");
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off pushing')).toBe(true);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
+  });
+  test('a commit rung asks before a reviewed commit, and a yes commits', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'git commit -am x');
+    expect(denied(r, "doesn't ask for a commit")).toBe(true);
+    expect(denied(r, '"Commit the changes to `fix/x`?"')).toBe(true);
+    await ($ as any).turn.complete({
+      answer: 'Reviewed and clean. Commit the changes to `fix/x`?',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'main-1',
+      reason: 'answer',
+    });
+    await say($, 'yes');
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+  });
+  test('a hold does not stop a commit', async ($, on) => {
+    fakeWorld(on);
+    await review($);
+    await say($, "don't push yet");
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+  });
+  test('a hold makes every step ask until a message asks for one', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, "don't push yet");
+    expect(denied(await bash($, 'git push'), 'held off pushing')).toBe(true);
+    await say($, 'rename the helper');
+    expect(denied(await bash($, 'gh pr create'), 'held off pushing')).toBe(true);
+    await say($, 'push it');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    await say($, 'rename it back');
+    expect(ran(await bash($, 'gh pr create'))).toBe(true);
+  });
+  test('a subagent is refused at every rung', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'ship it');
+    const r = await bash($, 'gh pr create --fill', { agentId: 'sub-1' });
+    expect(denied(r, 'subagents do not commit, push or open pull requests')).toBe(true);
+  });
+  test('the status tool reports what may run and why', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('open PR') } });
+    await say($, 'fix the parser');
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore).toEqual({
+      stopBefore: 'open PR',
+      source: 'local',
+      from: '.claude/settings.local.json',
+      held: false,
+    });
+    expect([status.mayCommit, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
+  });
+  test('the status tool says a commit may not run at a commit rung', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await say($, 'fix the parser');
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect([status.mayCommit, status.mayPush]).toEqual([false, false]);
+  });
+  test('only the user changes it', async ($, on) => {
+    fakeWorld(on);
+    const change = {
+      key: 'review-cycle.stopBefore',
+      value: 'never stop',
+      previous: 'push',
+      provider: { plugin: 'review-cycle', tier: 'user' as const },
+    };
+    const byPlugin = await $.config.set({ ...change, origin: { kind: 'plugin', name: 'other' } });
+    expect(byPlugin).toEqual({ deny: expect.stringContaining('only by the user') });
+    expect(await $.config.set({ ...change, origin: { kind: 'composer' } })).toEqual({
+      value: 'never stop',
+    });
+  });
+});
 
 describe('the scratch directory', () => {
   test('scratch makes one under TMPDIR, and sweep removes it once', async ($, on) => {

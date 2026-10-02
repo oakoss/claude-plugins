@@ -1,12 +1,18 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf } from './consent';
+import { grantOf, holdsOf } from './consent';
 
-const NONE = { push: false };
-// A commit needs no request, so asking for one settles nothing beyond the push.
-const COMMIT = NONE;
-const PUSH = { push: true };
-const BOTH = PUSH;
+const NONE = { commit: false, push: 'none', pr: false };
+const COMMIT = { ...NONE, commit: true };
+const PUSH = { ...NONE, push: 'push' };
+const BOTH = { ...COMMIT, push: 'push' };
+const LEASE = { ...NONE, push: 'lease' };
+const BARE = { ...NONE, push: 'bare' };
+// A pull request grants no push of its own: the gate judges the push it needs.
+const PR = { ...NONE, pr: true };
+const PUSH_PR = { ...PUSH, pr: true };
+const COMMIT_PR = { ...COMMIT, pr: true };
+const SHIP = { ...BOTH, pr: true };
 
 describe('grants on a request', () => {
   const cases: [string, object][] = [
@@ -18,8 +24,8 @@ describe('grants on a request', () => {
     ['go ahead and commit', COMMIT],
     ['looks good, commit', COMMIT],
     ['push it', PUSH],
-    ['ship it', BOTH],
-    ['Ok, lets ship', BOTH],
+    ['ship it', SHIP],
+    ['Ok, lets ship', SHIP],
     ['commit and push', BOTH],
     ["Commit it. Don't push.", COMMIT],
     ['I want you to commit this', COMMIT],
@@ -30,7 +36,20 @@ describe('grants on a request', () => {
     ["fix the test that doesn't pass and commit it", COMMIT],
     ['fix the handler so it never crashes and commit', COMMIT],
     ['remove the no-op check and commit', COMMIT],
-    ['commit the code and open a PR', COMMIT],
+    ['commit the code and open a PR', COMMIT_PR],
+    ['open a PR, but not until CI passes', NONE],
+    ['push the tag', PUSH],
+    ['push the v1 tag', NONE],
+    ['push it from main', NONE],
+    ['open a pull request', PR],
+    ['create a new draft PR', PR],
+    ['push it and create a draft PR against main', PUSH_PR],
+    ['Please open the PR into main', PR],
+    ['Please open the PR into `later`', NONE],
+    ['open the file', NONE],
+    ['open a PR for the docs', NONE],
+    ['create a test for the PR', NONE],
+    ["it's not committed yet, commit it", COMMIT],
     ["commit it with the message 'fix: parser'", COMMIT],
     ['push the commits to origin', PUSH],
     ['yes, commit everything and push it up', BOTH],
@@ -39,9 +58,9 @@ describe('grants on a request', () => {
     ['fix the parser, then commit', COMMIT],
     ['Ok, we can delete the branch', PUSH],
     ['delete the remote branch', PUSH],
-    ['Ok, we can ship', BOTH],
+    ['Ok, we can ship', SHIP],
     ['Ok, we can push', PUSH],
-    ['commit; then push', PUSH],
+    ['commit; then push', BOTH],
     ['fix it; then push', PUSH],
     ['I fixed it. Then please push it.', PUSH],
     ["I won't commit. Then please push it.", PUSH],
@@ -112,7 +131,6 @@ describe('grants nothing on a mention', () => {
     'commit to this approach',
     "let's commit to this",
     'commit it later',
-    'push --force',
     'commit the parser changes separately',
     'we push it',
     "I'll review it first, then push",
@@ -139,7 +157,6 @@ describe('grants nothing on a mention', () => {
     'ok, CI is green, we can push',
     'ok, we will push',
     'ok, we push',
-    "it's not committed yet, commit it",
     'CI is green, we can ship.',
     'so the plan is: review and then commit',
     'usually I review and then commit',
@@ -192,7 +209,8 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Fixed.\nPush fix/x to origin?')).toEqual(PUSH);
     expect(grantOf('yes', 'Push `fix/x` to origin?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should I push feat/ask-in-prose to origin?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Push fix/x and open the PR?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Push fix/x and open the PR?')).toEqual(PUSH_PR);
+    expect(grantOf('yes', 'Open a PR from `fix/x` into `main`?')).toEqual(PR);
     expect(grantOf('yes', 'Push feat/a/b to origin/feat/a/b?')).toEqual(PUSH);
     expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
     expect(grantOf('yes', 'Push `ask-in-prose` to `origin`?')).toEqual(PUSH);
@@ -230,12 +248,12 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Should I push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Merged. Want me to delete the branch?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should I go ahead with deleting the branch?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Should we commit and push?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Should we commit, then push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we commit and push?')).toEqual(BOTH);
+    expect(grantOf('yes', 'Should we commit, then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should I fix it, then push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Do we commit, then push?')).toEqual(NONE);
     expect(grantOf('yes', 'Do we commit; then push?')).toEqual(NONE);
-    expect(grantOf('yes', 'Should we commit; then push?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we commit; then push?')).toEqual(BOTH);
     expect(grantOf('yes', "I'll leave the docs alone; should I push?")).toEqual(PUSH);
     expect(grantOf('yes', 'Should I commit and push; or wait?')).toEqual(NONE);
     expect(grantOf('yes', 'Can we commit, then push?')).toEqual(NONE);
@@ -263,12 +281,100 @@ describe('an affirmative grants what the previous answer asked', () => {
   });
   test('yes to a bare offer', () => {
     expect(grantOf('yes', 'Commit it?')).toEqual(COMMIT);
-    expect(grantOf('yes', 'Want me to commit these changes and open the PR?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'Want me to commit these changes and open the PR?')).toEqual(COMMIT_PR);
+    expect(grantOf('yes', 'Shall I go ahead with shipping it?')).toEqual(SHIP);
+    expect(grantOf('yes', 'Commit the changes to `fix/x`?')).toEqual(COMMIT);
   });
   test('yes to an offer that commits to something else grants nothing', () => {
     expect(grantOf('yes', 'Should I commit to the new layout?')).toEqual(NONE);
   });
   test('no previous answer', () => {
     expect(grantOf('sure')).toEqual(NONE);
+  });
+});
+
+describe('a force push has to be named', () => {
+  test.each([
+    ['force push it', LEASE],
+    ['ok, force-push it to origin', LEASE],
+    ['force push it with a lease', LEASE],
+    ['force push it without a lease', BARE],
+    ['bare force push it', BARE],
+    ['force push it with `--force`', BARE],
+    ['force push it with `--force-with-lease`', LEASE],
+    ['push it', PUSH],
+    ['push it with --force', BARE],
+    ['push --force', BARE],
+    ['push it with `--force`', BARE],
+    ["don't force push", NONE],
+    ['force push it. never mind', NONE],
+    ['force push it, but not until CI passes', NONE],
+    ['open a PR. bare force push it. no wait, never mind. force push it', LEASE],
+    // A bare force mentioned outside the clause that asks grants none.
+    ['force push it. never do a bare force though', LEASE],
+    ['force push it. The hook refused `--force` earlier', LEASE],
+    ['Force push it with a lease. Do not use `--force`.', LEASE],
+    ['force push it. Do not use --force.', LEASE],
+    ['force push it, without a lease', BARE],
+    ['commit it with --force', COMMIT],
+    ['commit it without a lease', COMMIT],
+    ['commit and push it with a message `--force`', BOTH],
+    ['push it. force push it with --force, but not until CI passes', PUSH],
+  ])('%s', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
+  });
+  test('yes to an offer to force push grants what it named', () => {
+    expect(grantOf('yes', 'Force-push `fix/x` to `origin` with a lease?')).toEqual(LEASE);
+    expect(grantOf('yes', 'Force-push `fix/x` without a lease?')).toEqual(BARE);
+    expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Shall I go ahead with force pushing `fix/x`?')).toEqual(LEASE);
+    expect(grantOf('yes', 'Force-push `fix/x`, without a lease?')).toEqual(BARE);
+    expect(grantOf('yes', 'Push it with a message: `--force`?')).toEqual(PUSH);
+  });
+  test("the agent's own mention of a bare force does not grant one", () => {
+    const offers = [
+      'The bare `--force` was refused by the gate. Force-push `fix/x` to `origin` with a lease?',
+      "I won't use `--force`. Force-push `fix/x` to `origin` with a lease?",
+      'A plain push would be rejected without a lease check.\nForce-push `fix/x` to `origin` with a lease?',
+      'Force-push `fix/x` with a lease? A bare force would overwrite their work.',
+      'Force-push `fix/x` to `origin` with a lease, not a bare `--force`?',
+    ];
+    for (const offer of offers) expect(grantOf('yes', offer), offer).toEqual(LEASE);
+  });
+});
+
+describe('holds', () => {
+  test.each([
+    "don't push yet",
+    "don't commit or push yet",
+    'Can you commit it without pushing?',
+    "let's not push yet",
+    'did the push fail?',
+    'no need to open a PR',
+    'push it, but no need to open a PR',
+    'Anything else before we ship?',
+    'This script pushes automatically.',
+    'Has this shipped yet?',
+    'open a PR. do not push.',
+  ])('%s holds', (prompt) => {
+    expect(holdsOf(prompt)).toBe(true);
+  });
+  test.each([
+    'push it',
+    'ship it',
+    'open a PR',
+    'commit it',
+    "don't commit yet",
+    'rename the helper',
+    'Lets merge PR 113',
+    'run review-pr on it',
+    "the message says 'don't push'",
+  ])('%s holds nothing', (prompt) => {
+    expect(holdsOf(prompt)).toBe(false);
+  });
+  test('not yet holds an offered push or PR', () => {
+    expect(holdsOf('not yet, rename the helper first', 'Push `fix/x` to `origin`?')).toBe(true);
+    expect(holdsOf('not yet', 'Open a PR from `fix/x` into `main`?')).toBe(true);
+    expect(holdsOf('not yet', 'Should I rename the helper?')).toBe(false);
   });
 });
