@@ -84,7 +84,7 @@ export function applyEdit(
 // `.claude` itself: a plugin's `.claude-plugin/` holds no settings.
 const CLAUDE_DIR = /\.claude(?![-\w])|CLAUDE_CONFIG_DIR/i;
 const WRITES =
-  /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|rsync|python3?|node|bun|deno|osascript)\b|\b(sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z0-9]*i|--in-place)/;
+  /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|rsync|python3?|node|bun|deno|tsx|ts-node|lua|osascript)\b|\b(sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z0-9]*i|--in-place)/;
 // Removing a marketplace uninstalls the plugins installed from it.
 const PLUGIN_CLI =
   /\bclaude\b[^|;&]*\bplugins?\s+(market(place)?\s+)?(disable|uninstall|remove|rm)\b/;
@@ -105,7 +105,7 @@ const WRITERS = new Set([
 // Commands that edit a file in place when given `-i` or `--in-place`.
 const IN_PLACE = new Set(['sed', 'perl', 'ruby']);
 // Interpreters, whose writes are in code this reader does not follow.
-const INTERPRETERS = /^(python[0-9.]*|node|bun|deno|osascript)$/;
+const INTERPRETERS = /^(python[0-9.]*|node|bun|deno|tsx|ts-node|lua|osascript)$/;
 // Shells, and commands that hand an argument to one, run a command line this
 // reader does not parse.
 const SHELLS = new Set([
