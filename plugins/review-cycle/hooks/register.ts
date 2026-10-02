@@ -20,6 +20,7 @@ import {
 } from './command';
 import { grantOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
+import { editNote, editsSkipped, mayWrite } from './edits';
 import {
   coverageOf,
   firstLine,
@@ -760,6 +761,52 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
 }
 
+// A note, never a refusal: the command has already run. The working tree is
+// compared around it, so the note names only what changed. Reviewer legs are
+// compared by the gate already, and a background command is still running
+// when the call returns. Never throws, so the gate's own notes always arrive.
+async function onBashEdits(
+  $: $,
+  e: Input<BashHook>,
+  next: NextOf<BashHook>,
+): Promise<Output<BashHook>> {
+  const skip =
+    runningLeg(e.agentId) !== null ||
+    e.run_in_background === true ||
+    !mayWrite(e.command, state.shellAliases);
+  if (skip) return next(e);
+  const git = gitOf($);
+  let top: string;
+  let before: string;
+  try {
+    const root = await ensureRoot($);
+    if (root === null) return await next(e);
+    top = root.top;
+    before = await worktreeTree(git, top);
+  } catch (error) {
+    return withContext(await next(e), editsSkipped(reasonOf(error)));
+  }
+  const r = await next(e);
+  try {
+    const after = await worktreeTree(git, top);
+    if (after === before) return r;
+    const changed = await reviewablePaths(git, top, before, after);
+    if (changed === null) return withContext(r, editsSkipped('git could not compare the trees'));
+    return changed.length === 0 ? r : withContext(r, editNote(changed));
+  } catch (error) {
+    return withContext(r, editsSkipped(reasonOf(error)));
+  }
+}
+
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function withContext(r: Output<BashHook>, note: string): Output<BashHook> {
+  if (r.deny !== undefined) return r;
+  return { ...r, context: [...(r.context ?? []), note] };
+}
+
 async function judgeBash(
   $: $,
   e: Input<BashHook>,
@@ -1403,6 +1450,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', onTurnComplete);
   on('tool.call', { tool: 'Skill' }, onSkill);
   on('tool.call', { tool: 'Bash' }, onBash).catch(onBashError);
+  on('tool.call', { tool: 'Bash' }, onBashEdits);
   on('tool.call', { tool: 'Edit' }, onEditContained);
   on('tool.call', { tool: 'Write' }, onWriteContained);
   on('tool.call', { tool: 'Edit' }, onEdit).catch(onEditError);
