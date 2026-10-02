@@ -17,6 +17,7 @@ import {
   possibleAliases,
   shownCommand,
   type Classification,
+  type PushSpec,
 } from './command';
 import { grantOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
@@ -853,7 +854,8 @@ async function judgeBash(
   const unreviewed = await reviewed($, root.top, cls);
   if (unreviewed !== null) return deny(unreviewed);
 
-  if (cls.push && !granted.push) return deny(pushRefusal(e.command, cls.commit !== null));
+  const refused = cls.push && pushRefusal(e.command, cls.commit !== null, cls.push, granted);
+  if (refused) return deny(refused);
   const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
   return watch($, root, e, next, checked, granted, message);
 }
@@ -887,13 +889,33 @@ async function reviewed(
 // Longer than this, the refusal quotes only the start of the command.
 const MAX_SHOWN = 300;
 
+const LEASE = '`--force-with-lease --force-if-includes`';
+
 // The gate does not ask: the agent asks in its reply, so the user can answer
 // with anything at all. Their next message grants through the consent grammar.
-function pushRefusal(command: string, commits: boolean): string {
+// A force push has to be asked for by name, and a bare --force named apart
+// from a lease; null when the grant covers the push.
+function pushRefusal(
+  command: string,
+  commits: boolean,
+  spec: PushSpec,
+  granted: Grant,
+): string | null {
   const shown = shownCommand(command, state.shellAliases);
   const quoted = shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
   const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
-  return `the user's latest message doesn't ask for a push, so nothing ran.${alone} To push, stop and ask them in your reply, naming what it pushes and where with names in backticks (for example "Push \`fix/x\` to \`origin\`?"), and end your turn; their answer decides. The command: ${quoted}`;
+  const ask = (example: string) =>
+    `stop and ask them in your reply, naming what it pushes and where with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${quoted}`;
+  if (spec.force === 'bare' && !granted.bareForce) {
+    return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for one, so nothing ran.${alone} Use ${LEASE} instead${granted.force ? '' : ', which also needs their request'}; if they want a bare --force, ${ask('"Force-push `fix/x` to `origin` without a lease?"')}`;
+  }
+  if (spec.force === 'lease' && !granted.force) {
+    return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('"Force-push `fix/x` to `origin` with a lease?"')}`;
+  }
+  if (!granted.push) {
+    return `the user's latest message doesn't ask for a push, so nothing ran.${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+  }
+  return null;
 }
 
 type Checked = 'commit' | 'history' | 'push' | 'unchecked';

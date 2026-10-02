@@ -534,6 +534,21 @@ export type CommitSpec = {
   config: string[];
 };
 
+export type PushSpec = {
+  // `lease` is --force-with-lease or --force-if-includes; `bare` is --force,
+  // -f, --mirror or a `+refspec`, which overwrite whatever the remote holds.
+  force: 'none' | 'lease' | 'bare';
+  // --tags, --follow-tags, a refs/tags/ refspec or `tag <name>`.
+  tags: boolean;
+  // --delete, -d, --prune, --mirror or a `:ref` refspec.
+  deletes: boolean;
+  // --all, --branches or --mirror.
+  every: boolean;
+  remote: string | null;
+  // The refspecs after the remote; null when one is built at run time.
+  refspecs: string[] | null;
+};
+
 type Gated = {
   kind: 'gated';
   // Directory the git statements run in, relative to the shell's cwd.
@@ -541,10 +556,125 @@ type Gated = {
   // Each `git add` to replay: the words after `git`, config options first.
   adds: string[][];
 } & (
-  | { commit: CommitSpec; history: null; push: boolean }
-  | { commit: null; history: string; push: boolean }
-  | { commit: null; history: null; push: true }
+  | { commit: CommitSpec; history: null; push: PushSpec | null }
+  | { commit: null; history: string; push: PushSpec | null }
+  | { commit: null; history: null; push: PushSpec }
 );
+
+// As for commit, git accepts any unambiguous prefix of a long option, so only
+// these exact names are read and any other is refused.
+const PUSH_FLAGS_LONG = new Set([
+  'set-upstream',
+  'verbose',
+  'quiet',
+  'progress',
+  'no-progress',
+  'verify',
+  'no-verify',
+  'dry-run',
+  'porcelain',
+  'atomic',
+  'no-atomic',
+  // Accepted but not read: a tag flag anywhere counts as a tag push, which
+  // errs toward asking (git keeps --tags and --follow-tags apart).
+  'no-tags',
+  'no-follow-tags',
+  'thin',
+  'no-thin',
+  'ipv4',
+  'ipv6',
+  'no-force-with-lease',
+  'no-force-if-includes',
+  'no-recurse-submodules',
+  'no-signed',
+]);
+const PUSH_VALUE_LONG = new Set(['repo', 'push-option', 'receive-pack', 'exec']);
+// Options whose value may only be attached: `--signed=if-asked`.
+const PUSH_ATTACHED_LONG = new Set(['signed', 'recurse-submodules']);
+const PUSH_FLAGS_SHORT = new Set(['u', 'v', 'q', 'n', '4', '6']);
+
+export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
+  const spec: PushSpec = {
+    force: 'none',
+    tags: false,
+    deletes: false,
+    every: false,
+    remote: null,
+    refspecs: [],
+  };
+  const bare = () => (spec.force = 'bare');
+  const lease = () => (spec.force = spec.force === 'bare' ? 'bare' : 'lease');
+  const positional: Word[] = [];
+  let repo: Word | null = null;
+  let options = true;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) break;
+    // An option is read by its name even when its value is built at run
+    // time: `--force-with-lease=main:$expect`.
+    const t = arg.text;
+    if (!options || !t.startsWith('-') || t === '-') {
+      positional.push(arg);
+      continue;
+    }
+    if (t === '--') {
+      options = false;
+      continue;
+    }
+    if (t.startsWith('--')) {
+      const name = t.slice(2).split('=')[0] ?? '';
+      if (name === 'force') bare();
+      else if (name === 'force-with-lease' || name === 'force-if-includes') lease();
+      else if (name === 'tags' || name === 'follow-tags') spec.tags = true;
+      else if (name === 'delete' || name === 'prune') spec.deletes = true;
+      else if (name === 'all' || name === 'branches') spec.every = true;
+      else if (name === 'mirror') {
+        // git help push: refs are "force updated" and missing ones "removed".
+        bare();
+        spec.deletes = true;
+        spec.every = true;
+      } else if (PUSH_VALUE_LONG.has(name)) {
+        const attached = t.includes('=');
+        if (name === 'repo') {
+          repo = attached ? { ...arg, text: t.slice(t.indexOf('=') + 1) } : (args[i + 1] ?? null);
+        }
+        if (!attached) i++;
+      } else if (!PUSH_FLAGS_LONG.has(name) && !PUSH_ATTACHED_LONG.has(name)) {
+        return {
+          refuse: `git push --${name}, an option the gate does not know. Spell it out in full`,
+        };
+      }
+      continue;
+    }
+    for (let j = 1; j < t.length; j++) {
+      const letter = t.charAt(j);
+      if (letter === 'f') bare();
+      else if (letter === 'd') spec.deletes = true;
+      else if (letter === 'o') {
+        // `-o value` or `-ovalue`: the rest of the word, or the next, is the value.
+        if (j === t.length - 1) i++;
+        break;
+      } else if (!PUSH_FLAGS_SHORT.has(letter)) {
+        return {
+          refuse: `git push -${letter}, an option the gate does not know. Spell it out in full`,
+        };
+      }
+    }
+  }
+  // `--repo` stands in for the remote argument, which wins when both are given.
+  const [remote = repo ?? undefined, ...refspecs] = positional;
+  if (remote !== undefined) spec.remote = remote.dynamic ? null : remote.text;
+  spec.refspecs = refspecs.some((w) => w.dynamic) ? null : refspecs.map((w) => w.text);
+  // Read from the text as written, so `"+$B"` still shows its `+`.
+  for (const [k, { text: r }] of refspecs.entries()) {
+    if (r.startsWith('+')) bare();
+    if (r.startsWith(':')) spec.deletes = true;
+    if (/(^|:)refs\/tags\//.test(r.replace(/^\+/, ''))) spec.tags = true;
+    // `git push origin tag v1` pushes refs/tags/v1.
+    if (r === 'tag' && k < refspecs.length - 1) spec.tags = true;
+  }
+  return spec;
+}
 
 export type Classification = { kind: 'none' } | { kind: 'refuse'; reason: string } | Gated;
 
@@ -875,7 +1005,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
   const adds: string[][] = [];
   let commit: CommitSpec | null = null;
   let history: string | null = null;
-  let push = false;
+  let push: PushSpec | null = null;
   let movedIndex: string | null = null;
   for (const [i, { st, k }] of pairs.entries()) {
     if (st.op !== '' && st.op !== '&&' && st.op !== ';' && st.op !== '\n') {
@@ -937,7 +1067,9 @@ function judge(command: string, aliases: ShellAliases): Classification {
       adds.push(argv);
     } else if (g.sub === 'push') {
       if (push) return { kind: 'refuse', reason: `more than one push. ${SHAPE}` };
-      push = true;
+      const spec = pushSpec(g.args);
+      if ('refuse' in spec) return { kind: 'refuse', reason: spec.refuse };
+      push = spec;
     } else {
       if (commit || history || push)
         return {
@@ -978,7 +1110,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
   const at = dir ?? base;
   if (commit) return { kind: 'gated', dir: at, adds, commit, history: null, push };
   if (history !== null) return { kind: 'gated', dir: at, adds, commit: null, history, push };
-  if (push) return { kind: 'gated', dir: at, adds, commit: null, history: null, push: true };
+  if (push) return { kind: 'gated', dir: at, adds, commit: null, history: null, push };
   throw new Error('a command that commits was classified with nothing to gate');
 }
 

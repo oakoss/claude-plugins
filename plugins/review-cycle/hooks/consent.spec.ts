@@ -2,11 +2,13 @@ import { describe, expect, test } from 'vitest';
 
 import { grantOf } from './consent';
 
-const NONE = { push: false };
+const NONE = { push: false, force: false, bareForce: false };
 // A commit needs no request, so asking for one settles nothing beyond the push.
 const COMMIT = NONE;
-const PUSH = { push: true };
+const PUSH = { push: true, force: false, bareForce: false };
 const BOTH = PUSH;
+const LEASE = { push: true, force: true, bareForce: false };
+const BARE = { push: true, force: true, bareForce: true };
 
 describe('grants on a request', () => {
   const cases: [string, object][] = [
@@ -112,7 +114,6 @@ describe('grants nothing on a mention', () => {
     'commit to this approach',
     "let's commit to this",
     'commit it later',
-    'push --force',
     'commit the parser changes separately',
     'we push it',
     "I'll review it first, then push",
@@ -270,5 +271,55 @@ describe('an affirmative grants what the previous answer asked', () => {
   });
   test('no previous answer', () => {
     expect(grantOf('sure')).toEqual(NONE);
+  });
+});
+
+describe('a force push has to be named', () => {
+  test.each([
+    ['force push it', LEASE],
+    ['ok, force-push it to origin', LEASE],
+    ['force push it with a lease', LEASE],
+    ['force push it without a lease', BARE],
+    ['bare force push it', BARE],
+    ['force push it with `--force`', BARE],
+    ['force push it with `--force-with-lease`', LEASE],
+    ['push it', PUSH],
+    ['push it with --force', BARE],
+    ['push --force', BARE],
+    ['push it with `--force`', BARE],
+    ["don't force push", NONE],
+    ['force push it. never mind', NONE],
+    ['force push it, but not until CI passes', NONE],
+    ['open a PR. bare force push it. no wait, never mind. force push it', LEASE],
+    // A bare force mentioned outside the clause that asks grants none.
+    ['force push it. never do a bare force though', LEASE],
+    ['force push it. The hook refused `--force` earlier', LEASE],
+    ['Force push it with a lease. Do not use `--force`.', LEASE],
+    ['force push it. Do not use --force.', LEASE],
+    ['force push it, without a lease', BARE],
+    ['commit it with --force', NONE],
+    ['commit it without a lease', NONE],
+    ['commit and push it with a message `--force`', PUSH],
+    ['push it. force push it with --force, but not until CI passes', PUSH],
+  ])('%s', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
+  });
+  test('yes to an offer to force push grants what it named', () => {
+    expect(grantOf('yes', 'Force-push `fix/x` to `origin` with a lease?')).toEqual(LEASE);
+    expect(grantOf('yes', 'Force-push `fix/x` without a lease?')).toEqual(BARE);
+    expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Shall I go ahead with force pushing `fix/x`?')).toEqual(LEASE);
+    expect(grantOf('yes', 'Force-push `fix/x`, without a lease?')).toEqual(BARE);
+    expect(grantOf('yes', 'Push it with a message: `--force`?')).toEqual(PUSH);
+  });
+  test("the agent's own mention of a bare force does not grant one", () => {
+    const offers = [
+      'The bare `--force` was refused by the gate. Force-push `fix/x` to `origin` with a lease?',
+      "I won't use `--force`. Force-push `fix/x` to `origin` with a lease?",
+      'A plain push would be rejected without a lease check.\nForce-push `fix/x` to `origin` with a lease?',
+      'Force-push `fix/x` with a lease? A bare force would overwrite their work.',
+      'Force-push `fix/x` to `origin` with a lease, not a bare `--force`?',
+    ];
+    for (const offer of offers) expect(grantOf('yes', offer), offer).toEqual(LEASE);
   });
 });

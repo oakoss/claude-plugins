@@ -11,14 +11,15 @@
 // A bare affirmative ("yes", "go ahead") grants what the previous answer's
 // closing question offered to do.
 
-// Whether the user's message asked for a push. A commit needs no request.
-export type Grant = Readonly<{ push: boolean }>;
+// What the user's message asked for. A commit needs no request; a force push
+// has to be named, and a bare --force (`bareForce`) named apart from a lease.
+export type Grant = Readonly<{ push: boolean; force: boolean; bareForce: boolean }>;
 
-export const NO_GRANT: Grant = Object.freeze({ push: false });
+export const NO_GRANT: Grant = Object.freeze({ push: false, force: false, bareForce: false });
 
 // The parser reads commit requests too: "commit and push" is one request.
-type Verb = 'commit' | 'push';
-type MutableGrant = { commit: boolean; push: boolean };
+type Verb = 'commit' | 'push' | 'force';
+type MutableGrant = { commit: boolean; push: boolean; force: boolean; bare: boolean };
 
 const REQUESTED: Record<string, Verb[]> = {
   commit: ['commit'],
@@ -26,6 +27,8 @@ const REQUESTED: Record<string, Verb[]> = {
   ship: ['commit', 'push'],
   // Deleting a remote branch is a push; only with "branch" last.
   delete: ['push'],
+  // "force push" and "force-push", read as one word by `forcePhrase`.
+  forcepush: ['push', 'force'],
 };
 
 const OFFERED: Record<string, Verb[]> = {
@@ -34,7 +37,24 @@ const OFFERED: Record<string, Verb[]> = {
   pushing: ['push'],
   shipping: ['commit', 'push'],
   deleting: ['push'],
+  forcepushing: ['push', 'force'],
 };
+
+// A bare --force named apart from a lease ("`--force`", "bare force push",
+// "without a lease") becomes the word `nolease`, which counts only in the
+// tail of a push the grammar grants. Run before quotes are read, since
+// `--force` is usually backticked; "without" would make the clause conditional.
+function forcePhrase(text: string): string {
+  return text
+    .replaceAll(/`--force`|(?<![\w-])--force(?![\w-])/g, 'nolease')
+    .replaceAll(/\bbare force[\s-]?push(ing)?\b/gi, (_m: string, ing?: string) =>
+      ing ? 'forcepushing nolease' : 'forcepush nolease',
+    )
+    .replaceAll(/\s*[,-]?\s*\bwithout (?:a |the )?lease\b/gi, ' nolease')
+    .replaceAll(/\bforce[\s-]?push(ing)?\b/gi, (_m: string, ing?: string) =>
+      ing ? 'forcepushing' : 'forcepush',
+    );
+}
 
 // Words that may come before the verb in a request.
 const REQUEST_LEAD = new Set([
@@ -162,6 +182,8 @@ const TAIL = new Set([
   'message',
   'msg',
   'quoted',
+  'lease',
+  'nolease',
 ]);
 
 // After "to", only a destination: "push to main", not "commit to this approach".
@@ -372,7 +394,18 @@ function grammarGrant(
       isLead(part.slice(0, at), lead, agreed) &&
       isTail(tail) &&
       isObject(verb, tail);
-    if (asks) for (const v of verbs[verb] ?? []) into[v] = true;
+    if (asks) {
+      const granted = verbs[verb] ?? [];
+      for (const v of granted) into[v] = true;
+      // "push it with `--force`", "force push it without a lease"; not a
+      // `--force` given as the commit message.
+      const bare = tail.indexOf('nolease');
+      const message = tail.findIndex((x) => x === 'message' || x === 'msg');
+      if (bare !== -1 && (message === -1 || message > bare) && granted.includes('push')) {
+        into.force = true;
+        into.bare = true;
+      }
+    }
     const opening = part.find((x) => !lead.has(x));
     if (opening !== undefined && MOOD.test(opening)) return 'mood';
     if (opening !== undefined && DESCRIBES.has(opening) && opening === part[0]) described = true;
@@ -411,12 +444,12 @@ function isQuestion(sentence: string): boolean {
 }
 
 function settled(g: MutableGrant): Grant {
-  return Object.freeze({ push: g.push });
+  return Object.freeze({ push: g.push || g.force, force: g.force, bareForce: g.force && g.bare });
 }
 
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string): Grant {
-  const g: MutableGrant = { commit: false, push: false };
+  const g: MutableGrant = { commit: false, push: false, force: false, bare: false };
   // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
@@ -424,12 +457,7 @@ function asked(answer: string): Grant {
   // Only here, in the agent's offer: a user's "push it to `later`" defers. A
   // ref ends on a word character, so a sentence's closing period stays, and
   // one joining hand-back words ("rather/prefer") stays words.
-  const named = answer
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .slice(-3)
-    .join('\n')
+  const named = forcePhrase(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n'))
     // A backticked hand-back stays a word: "or would you `rather` do it?".
     .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>
       words(name).some((x) => HANDBACK.has(x)) ? name.replaceAll('/', ' ') : 'it',
@@ -465,15 +493,17 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     // A list item or an emphasised label names a step; it does not ask for it.
     .filter((line) => !/^\s*(\d+[.)]|[-*•])\s|^\s*[*_]+[^*_]+[*_]+\s*$/.test(line))
     .join('\n');
-  const g: MutableGrant = { commit: false, push: false };
+  const g: MutableGrant = { commit: false, push: false, force: false, bare: false };
   // What the previous sentence left: "we commit; then push" describes across
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
-  for (const sentence of sentences(unquote(typed))) {
+  for (const sentence of sentences(unquote(forcePhrase(typed)))) {
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
       g.commit = false;
       g.push = false;
+      g.force = false;
+      g.bare = false;
       prev = 'none';
       continue;
     }
@@ -487,7 +517,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     }
     // One clause that withholds withholds its whole sentence: "push it, but
     // not until CI passes" grants nothing.
-    const mine: MutableGrant = { commit: false, push: false };
+    const mine: MutableGrant = { commit: false, push: false, force: false, bare: false };
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
@@ -505,6 +535,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     if (!withheld) {
       g.commit ||= mine.commit;
       g.push ||= mine.push;
+      g.force ||= mine.force;
+      g.bare ||= mine.bare;
     }
     // Only a semicolon ties two sentences together, and only around the verbs:
     // "I fixed it. Then push it." asks.

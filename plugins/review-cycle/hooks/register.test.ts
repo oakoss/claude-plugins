@@ -2268,6 +2268,41 @@ describe('a push the user did not ask for', () => {
   });
 });
 
+describe('a force push', () => {
+  test('a push request does not cover it; one that names a force does', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'push it');
+    const r = await bash($, 'git push --force-with-lease origin fix/x');
+    expect(denied(r, "doesn't ask for a force push")).toBe(true);
+    expect(denied(r, '"Force-push `fix/x` to `origin` with a lease?"')).toBe(true);
+    await say($, 'force push it');
+    expect(ran(await bash($, 'git push --force-with-lease origin fix/x'))).toBe(true);
+  });
+  test('a bare --force points to the lease unless named', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'force push it');
+    const r = await bash($, 'git push --force origin fix/x');
+    expect(denied(r, 'Use `--force-with-lease --force-if-includes` instead;')).toBe(true);
+    expect(denied(r, 'without a lease?"')).toBe(true);
+    expect(denied(await bash($, 'git push origin +fix/x'), 'a bare --force')).toBe(true);
+    await say($, 'force push it without a lease');
+    expect(ran(await bash($, 'git push --force origin fix/x'))).toBe(true);
+  });
+  test('with no request at all, the bare refusal says the lease needs one too', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push -f'), 'which also needs their request')).toBe(true);
+  });
+  test('a commit with a force push is told to run on its own', async ($, on) => {
+    fakeWorld(on);
+    await review($);
+    await say($, 'push it');
+    const r = await bash($, 'git commit -am x && git push --force-with-lease');
+    expect(denied(r, 'To commit without pushing, run the commit on its own.')).toBe(true);
+    expect(denied(r, "doesn't ask for a force push")).toBe(true);
+  });
+});
+
 describe('a push the user asked for', () => {
   test('is not reported as one the user did not ask for', async ($, on) => {
     const head = 'c'.repeat(40);
