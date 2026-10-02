@@ -74,7 +74,7 @@ If you can describe the fix in one sentence, just do the fix.
 `$ARGUMENTS` is free-form natural language — there are no flags. Read intent from it:
 
 - **A base ref to scope against** — phrases like `against main`, `since v1.2`, or a bare ref / branch / tag / SHA → review `git diff <ref>..HEAD` instead of the default `git diff HEAD`.
-- **An iteration ceiling** — `max 6`, `6 iterations`, or a bare integer → use it as the most iterations the loop may run before stopping unconverged, overriding the tier default (5 for the full tier, 3 for light; see Phase 1).
+- **An iteration ceiling** — `max 6`, `6 iterations`, or a bare integer → use it as the most iterations the loop may run before holding its last findings for the user (Phase 5), overriding the tier default (3 for the full tier, 2 for light; see Phase 1).
 - **A Codex effort** — `effort medium`, `codex effort high` → the Codex leg runs at exactly that effort on either tier, raising included (see Phase 3). Valid values are the seven literals `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Anything else → name the invalid value, list the valid set, and stop before the cycle starts — a silent fallback would run a long review at the wrong depth.
 - **Empty** → defaults: the uncommitted working tree, tier-default iteration ceiling, tier-decided Codex effort.
 
@@ -105,8 +105,8 @@ If empty, report "nothing to review" and stop.
 
 **Classify the diff into a tier.** List the changed paths in scope (the working tree by default, `<ref>..HEAD` when a base was given) and pick one:
 
-- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Markdown a tool loads as instructions tiers as code, wherever it lives: agent bodies, `SKILL.md`, commands, hook-owned markdown, `reference/` files a skill loads, and instruction files like `AGENTS.md` and `CLAUDE.md` — an agent body is a system prompt, not prose. Under a plugin directory that leaves only `README.md`, `LICENSE*`, `CHANGELOG*`, `NOTICE`, and `tests/` as prose. Reduced: fan-out is `code-reviewer` plus Codex when available (and spec conformance in iteration 1), default iteration ceiling 3 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
-- **full** — anything else. Full conditional fan-out, default ceiling 5, Codex at the user's configured effort.
+- **light** — every changed path is prose or inert metadata (`*.md`, `*.txt`, `*.rst`, `docs/`, `LICENSE*`, `NOTICE`, `CHANGELOG*`), OR the entire diff is ~25 changed lines or fewer regardless of file type — a two-line `.gitignore` fix does not need the full apparatus. Markdown a tool loads as instructions tiers as code, wherever it lives: agent bodies, `SKILL.md`, commands, hook-owned markdown, `reference/` files a skill loads, and instruction files like `AGENTS.md` and `CLAUDE.md` — an agent body is a system prompt, not prose. Under a plugin directory that leaves only `README.md`, `LICENSE*`, `CHANGELOG*`, `NOTICE`, and `tests/` as prose. Reduced: fan-out is `code-reviewer` plus Codex when available (and spec conformance in iteration 1), default iteration ceiling 2 (an explicit user `max` still wins), and the Codex leg may run at reduced reasoning effort (Phase 3 checks the configured value first).
+- **full** — anything else. Full conditional fan-out, default ceiling 3, Codex at the user's configured effort.
 
 The tier decides fan-out, iteration ceiling, and whether Codex's effort is capped. Cleanup mode (Phase 7) is a separate, purely size-based decision — a docs-only diff can be huge, and huge prose is exactly where the cleanup agent pays for itself.
 
@@ -355,6 +355,7 @@ For each finding, apply the fix-vs-defer policy:
 - Defer only if a criterion above is met
 - Critical and high severity findings should almost always be fixed inline; deferring a critical finding requires a strong, defensible justification
 - From iteration 2, also apply Phase 6's bar: a finding below it is deferred, not fixed
+- On the iteration that reaches the ceiling, apply no fix: no reviewer would see it, so the gate would refuse the commit. Hold each finding you would have fixed, with its severity and leg, for Phase 10
 
 When fixing, follow the comment policy — do not add comments that restate the code or describe the fix itself.
 
@@ -379,11 +380,11 @@ A full reviewer re-fan-out is only worth its wall-clock when this iteration's fi
 
 Then decide. The loop converges on an iteration that applies **no** fixes: only then did a reviewer see the tree as it now stands. Every fix, however small, is content no reviewer has seen, and the commit gate refuses it until one does.
 
-- NO inline fixes applied (everything clean or correctly deferred) → exit loop, converged.
+- NO inline fixes applied and none held at the ceiling (everything clean or correctly deferred) → exit loop, converged.
 - Fixes applied AND iteration count < ceiling → GOTO Phase 3, scoped by what the fixes were:
   - at least one **substantive** fix → re-run Codex (when its leg is eligible) plus the subagents whose domain the substantive fixes touched, `code-reviewer` always among them when importers were named; a spec defect fix's domain is spec conformance, scoped to the requirement it addressed. A Codex leg that failed gets exactly one retry across the whole cycle; after a second failure stop launching it, since repeated attempts against a rate limit or a revoked session buy nothing. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)` rather than a bare `participated` — the iteration Codex missed is usually the one that had the findings.
   - only **mechanical** and **verified message** fixes → a confirmation pass: `review-cycle:code-reviewer` alone, scoped to the fixes' delta, asked whether the fixes are correct and the change is ready to commit, reporting only findings at its threshold. The self-check and reproductions above already did the verifying; this pass is what lets the fixed content count as seen. When a fix carries a claim local verification could not reach (cross-platform shell behavior, remote-service semantics), add the Codex leg to this pass at `low` — or at the explicit effort argument when one was given; otherwise apply Phase 3's root-table check, passing no override when the configured effort is already `low`, `minimal`, or `none`; unlike Phase 3, this reduction is not tier-gated. Its findings are graded by Phase 4's labels before any fix is applied, since a `static-analysis-only` Codex pass contributes questions rather than fixes, and the claim is named in the summary if no leg could settle it.
-- Fixes applied AND iteration count == ceiling → exit loop **unconverged**. The summary lists the paths the status tool reports as uncovered, and says the commit gate will refuse them until a reviewer sees them.
+- Findings held at the ceiling (Phase 5) → exit loop **held**. Every path is still covered by the iteration that found them, and Phase 10 asks what to do with them.
 
 ### Phase 7: Post-loop pass (maintainability + cleanup)
 
@@ -439,7 +440,7 @@ Review cycle complete.
 
 Tier: light | full
 Scope: delta (N files, +A -D vs the last reviewed tree) | full (<no review yet this session | status tool unavailable>)
-Iterations: N (converged | ceiling of <max> reached | stopped at iteration 1 for a spec decision)
+Iterations: N (converged | ceiling of <max> reached, N findings held | stopped at iteration 1 for a spec decision)
 Coverage: all changed paths reviewed | uncovered: <path (edited-after-review | never-reviewed)>, ...
 Falsifiable questions: N asked / N answered by measurement / N fell back to reading
 Factual corrections (cleanup): N — <the claim that was wrong, and what the run showed> | none
@@ -463,7 +464,7 @@ Findings fixed inline: X
 
 Findings deferred: Y
   - file:line — issue (source)
-    reason: <criterion from fix-vs-defer policy>
+    reason: <criterion from fix-vs-defer policy | held at the ceiling>
   - ...
 
 Spec conformance (iteration 1): <spec source / no spec source found>
@@ -481,7 +482,7 @@ Final state: clean / N findings remain
 
 ### Phase 10: Finish
 
-When the final state is clean and every path is covered, commit the reviewed work now, as its own Bash call — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). Skip the commit and stop after the summary when the user's message held off a commit ("don't commit", "not yet"), or when findings remain that need their decision. The gate admits a commit only if every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command.
+When the final state is clean, nothing is still held at the ceiling, and every path is covered, commit the reviewed work now, as its own Bash call — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). Skip the commit and stop after the summary when the user's message held off a commit ("don't commit", "not yet"), or when findings other than held ones remain that need their decision. When findings are held at the ceiling, skip the commit and end the summary by listing them and asking in plain prose, not a dialog, whether to apply them or commit with them deferred; the user may answer with something else entirely. Applied, they get the re-review Phase 6 gives their class, outside Phase 5's ceiling rule, and that pass's own findings follow Phase 8's rule: one more pass, then stop and list. A clean re-review with every path covered commits as above. Deferred, they leave nothing held: commit as above. The gate admits a commit only if every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command.
 
 Push only when the user's latest message asked for one ("push it", "ship it"). After "ship it", also open the pull request.
 
