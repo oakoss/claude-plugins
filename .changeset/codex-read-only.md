@@ -1,0 +1,5 @@
+---
+review-cycle: minor
+---
+
+The Codex review leg now runs with the repository read-only. In a trusted project Codex's sandbox is `workspace-write`, which could write the repository, and a leg once left probe files there that the commit gate then counted as unreviewed changes. The review passes a permission profile that reads everything and writes only the cycle's scratch directory, and the Codex brief explains it: write only under the scratch path, and report a refused write in the repository under `attempted-but-failed` rather than asking for wider permissions. Codex can still run checks that write nothing, such as typecheck, lint and `git diff`; a test runner that writes inside the repository, such as vitest's `node_modules/.vite-temp`, is refused, so its question stays one that reading can settle. For this run the profile replaces any `writable_roots` set in `~/.codex/config.toml`, so a `pnpm` script that needs to re-resolve dependencies or lock the store is refused too. Measured on codex-cli 0.159.3.
