@@ -1192,6 +1192,20 @@ describe('a Bash command that changes files', () => {
     const r = await bash($, "sed -i '' 's/one/two/' a.ts");
     expect(has(contextOf(r), 'git could not compare the trees')).toBe(true);
   });
+  test('outside a repository it runs unmeasured, and the gate keeps its notes', async ($, on) => {
+    const w = fakeWorld(on, {
+      shell: edits,
+      git: (a) =>
+        a.includes('--show-toplevel')
+          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          : null,
+    });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(captures(w)).toBe(0);
+    expect(has(contextOf(r), 'could not check which files')).toBe(false);
+    expect(has(contextOf(r), "could not read the user's shell aliases")).toBe(true);
+  });
   test("a runner that throws keeps the gate's own notes", async ($, on) => {
     fakeWorld(on, { shell: edits, reject: (a) => a === 'git add -A' });
     const r = await bash($, "sed -i '' 's/one/two/' a.ts");

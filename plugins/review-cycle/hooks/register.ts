@@ -20,7 +20,7 @@ import {
 } from './command';
 import { grantOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
-import { editNote, editsSkipped, mayWrite } from './edits';
+import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   coverageOf,
   firstLine,
@@ -29,6 +29,7 @@ import {
   prospectTree,
   headLog,
   headLogCount,
+  messageOf,
   pushedRefs,
   remoteRefs,
   repoAt,
@@ -761,8 +762,7 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
 }
 
-// A note, never a refusal: the command has already run. The working tree is
-// compared around it, so the note names only what changed. Reviewer legs are
+// A note, never a refusal: the command has already run. Reviewer legs are
 // compared by the gate already, and a background command is still running
 // when the call returns. Never throws, so the gate's own notes always arrive.
 async function onBashEdits(
@@ -775,36 +775,23 @@ async function onBashEdits(
     e.run_in_background === true ||
     !mayWrite(e.command, state.shellAliases);
   if (skip) return next(e);
+  let root: Repo | null;
+  // onBash, registered first, has already looked the root up; this guards a
+  // registration order where it has not.
+  try {
+    root = await ensureRoot($);
+  } catch (error) {
+    return withNote(next(e), editsSkipped(messageOf(error)));
+  }
+  if (root === null) return next(e);
+  const { top } = root;
   const git = gitOf($);
-  let top: string;
-  let before: string;
-  try {
-    const root = await ensureRoot($);
-    if (root === null) return await next(e);
-    top = root.top;
-    before = await worktreeTree(git, top);
-  } catch (error) {
-    return withContext(await next(e), editsSkipped(reasonOf(error)));
-  }
-  const r = await next(e);
-  try {
-    const after = await worktreeTree(git, top);
-    if (after === before) return r;
-    const changed = await reviewablePaths(git, top, before, after);
-    if (changed === null) return withContext(r, editsSkipped('git could not compare the trees'));
-    return changed.length === 0 ? r : withContext(r, editNote(changed));
-  } catch (error) {
-    return withContext(r, editsSkipped(reasonOf(error)));
-  }
-}
-
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function withContext(r: Output<BashHook>, note: string): Output<BashHook> {
-  if (r.deny !== undefined) return r;
-  return { ...r, context: [...(r.context ?? []), note] };
+  const { result, note } = await measureEdits(
+    () => worktreeTree(git, top),
+    (before, after) => reviewablePaths(git, top, before, after),
+    () => next(e),
+  );
+  return note === null ? result : withNote(result, note);
 }
 
 async function judgeBash(
@@ -1170,10 +1157,6 @@ async function registerScratch($: $): Promise<void> {
   }
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function onScratch(
   $: $,
   _e: Input<ScratchHook>,
@@ -1396,7 +1379,7 @@ function onConfigSet($: $, e: Input<ConfigHook>, next: NextOf<ConfigHook>): Retu
 }
 
 async function withNote(
-  result: Promise<Output<BashHook>>,
+  result: Output<BashHook> | Promise<Output<BashHook>>,
   note: string,
 ): Promise<Output<BashHook>> {
   const r = await result;
