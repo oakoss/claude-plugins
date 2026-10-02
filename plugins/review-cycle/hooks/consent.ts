@@ -12,23 +12,25 @@
 // closing question offered to do.
 
 // How far the user's message lets a push go; each level covers those before
-// it. A commit needs no request.
+// it.
 export const PUSH_LEVELS = ['none', 'push', 'lease', 'bare'] as const;
 export type PushLevel = (typeof PUSH_LEVELS)[number];
 export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level);
 
-export type Grant = Readonly<{ push: PushLevel }>;
+// What the user's message asked for. `push` is only what they asked to push:
+// the push a pull request needs is judged by the gate, which still asks
+// before a tag or default-branch push it would carry.
+export type Grant = Readonly<{ commit: boolean; push: PushLevel; pr: boolean }>;
 
-export const NO_GRANT: Grant = Object.freeze({ push: 'none' });
+export const NO_GRANT: Grant = Object.freeze({ commit: false, push: 'none', pr: false });
 
 // Compared by rank, so a level added between two others keeps its meaning.
 export function covers(grant: Grant, level: PushLevel): boolean {
   return pushRank(grant.push) >= pushRank(level);
 }
 
-// The parser reads commit requests too: "commit and push" is one request.
-type Verb = 'commit' | 'push' | 'force';
-type MutableGrant = { commit: boolean; push: PushLevel };
+type Verb = 'commit' | 'push' | 'force' | 'pr';
+type MutableGrant = { commit: boolean; push: PushLevel; pr: boolean };
 
 function raise(g: MutableGrant, level: PushLevel): void {
   if (pushRank(level) > pushRank(g.push)) g.push = level;
@@ -37,21 +39,32 @@ function raise(g: MutableGrant, level: PushLevel): void {
 const REQUESTED: Record<string, Verb[]> = {
   commit: ['commit'],
   push: ['push'],
-  ship: ['commit', 'push'],
+  ship: ['commit', 'push', 'pr'],
   // Deleting a remote branch is a push; only with "branch" last.
   delete: ['push'],
   // "force push" and "force-push", read as one word by `forcePhrase`.
   forcepush: ['push', 'force'],
+  // "open a PR", read as one word by `prPhrase`.
+  openpr: ['pr'],
 };
 
 const OFFERED: Record<string, Verb[]> = {
   ...REQUESTED,
   committing: ['commit'],
   pushing: ['push'],
-  shipping: ['commit', 'push'],
+  shipping: ['commit', 'push', 'pr'],
   deleting: ['push'],
   forcepushing: ['push', 'force'],
+  openingpr: ['pr'],
 };
+
+// "open a PR", "create the pull request", "opening a new draft PR".
+function prPhrase(text: string): string {
+  return text.replaceAll(
+    /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
+    (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
+  );
+}
 
 // A bare --force named apart from a lease ("`--force`", "bare force push",
 // "without a lease") becomes the word `nolease`, which counts only in the
@@ -171,8 +184,13 @@ const TAIL = new Set([
   'diff',
   'stuff',
   'branch',
+  'tag',
+  'tags',
   'up',
   'to',
+  'into',
+  'against',
+  'from',
   'main',
   'master',
   'origin',
@@ -199,7 +217,8 @@ const TAIL = new Set([
   'nolease',
 ]);
 
-// After "to", only a destination: "push to main", not "commit to this approach".
+// After these, only a destination: "push to main", not "commit to this approach".
+const TOWARD = new Set(['to', 'into', 'against', 'from']);
 const DESTINATION = new Set([
   'main',
   'master',
@@ -341,10 +360,13 @@ function words(text: string): string[] {
 
 // "commit it", "push to main now": nothing but tail words, with "to" naming a
 // destination and a message only in "with a message".
-function isTail(tail: string[]): boolean {
+// "from" names a pull request's head ("open a PR from fix/x"); after a push it
+// names a source, not where the push goes.
+function isTail(tail: string[], verb: string): boolean {
   for (const [i, word] of tail.entries()) {
     if (!TAIL.has(word)) return false;
-    if (word === 'to' && !DESTINATION.has(tail[i + 1] ?? '')) return false;
+    if (word === 'from' && !verb.endsWith('pr')) return false;
+    if (TOWARD.has(word) && !DESTINATION.has(tail[i + 1] ?? '')) return false;
     if ((word === 'message' || word === 'msg') && !tail.slice(0, i).includes('with')) return false;
   }
   return true;
@@ -405,13 +427,14 @@ function grammarGrant(
       at !== -1 &&
       !described &&
       isLead(part.slice(0, at), lead, agreed) &&
-      isTail(tail) &&
+      isTail(tail, verb) &&
       isObject(verb, tail);
     if (asks) {
       const granted = verbs[verb] ?? [];
       if (granted.includes('commit')) into.commit = true;
       if (granted.includes('push')) raise(into, 'push');
       if (granted.includes('force')) raise(into, 'lease');
+      if (granted.includes('pr')) into.pr = true;
       // "push it with `--force`", "force push it without a lease"; not a
       // `--force` given as the commit message.
       const bare = tail.indexOf('nolease');
@@ -458,12 +481,12 @@ function isQuestion(sentence: string): boolean {
 }
 
 function settled(g: MutableGrant): Grant {
-  return Object.freeze({ push: g.push });
+  return Object.freeze({ commit: g.commit, push: g.push, pr: g.pr });
 }
 
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string): Grant {
-  const g: MutableGrant = { commit: false, push: 'none' };
+  const g: MutableGrant = { commit: false, push: 'none', pr: false };
   // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
@@ -476,7 +499,7 @@ function asked(answer: string): Grant {
     .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>
       words(name).some((x) => HANDBACK.has(x)) ? name.replaceAll('/', ' ') : 'it',
     );
-  const tail = unquote(named)
+  const tail = prPhrase(unquote(named))
     .replaceAll(/[\w.-]+\/[\w./-]*[\w-]/g, (m) =>
       words(m).some((x) => HANDBACK.has(x)) ? m.replaceAll('/', ' ') : 'it',
     )
@@ -496,6 +519,21 @@ function asked(answer: string): Grant {
   return settled(g);
 }
 
+const PUSH_WORD =
+  /\b(push|pushes|pushing|pushed|ship|ships|shipping|shipped|forcepush|forcepushing)\b/i;
+const PR_WORD = /\b(openpr|openingpr)\b/i;
+
+// A push or PR mentioned without being asked for holds, read by mention rather
+// than grammar since a hold only makes the agent ask. Commits are not held.
+export function holdsOf(prompt: string, previousAnswer = ''): boolean {
+  const grant = grantOf(prompt, previousAnswer);
+  const text = prPhrase(unquote(forcePhrase(prompt)));
+  if (PUSH_WORD.test(text) && !covers(grant, 'push')) return true;
+  if (PR_WORD.test(text) && !grant.pr) return true;
+  const offered = asked(previousAnswer);
+  return HOLD.test(text) && !covers(grant, 'push') && (covers(offered, 'push') || offered.pr);
+}
+
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // "No problem" and "no worries" agree; they retract nothing.
   const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
@@ -507,15 +545,16 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     // A list item or an emphasised label names a step; it does not ask for it.
     .filter((line) => !/^\s*(\d+[.)]|[-*•])\s|^\s*[*_]+[^*_]+[*_]+\s*$/.test(line))
     .join('\n');
-  const g: MutableGrant = { commit: false, push: 'none' };
+  const g: MutableGrant = { commit: false, push: 'none', pr: false };
   // What the previous sentence left: "we commit; then push" describes across
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
-  for (const sentence of sentences(unquote(forcePhrase(typed)))) {
+  for (const sentence of sentences(prPhrase(unquote(forcePhrase(typed))))) {
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
       g.commit = false;
       g.push = 'none';
+      g.pr = false;
       prev = 'none';
       continue;
     }
@@ -529,7 +568,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     }
     // One clause that withholds withholds its whole sentence: "push it, but
     // not until CI passes" grants nothing.
-    const mine: MutableGrant = { commit: false, push: 'none' };
+    const mine: MutableGrant = { commit: false, push: 'none', pr: false };
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
@@ -546,6 +585,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     }
     if (!withheld) {
       g.commit ||= mine.commit;
+      g.pr ||= mine.pr;
       raise(g, mine.push);
     }
     // Only a semicolon ties two sentences together, and only around the verbs:

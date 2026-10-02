@@ -14,12 +14,13 @@ import { added, madeBy, MARK, type Entry } from './attribution';
 import {
   aliasCommits,
   classify,
+  opensPr,
   possibleAliases,
   shownCommand,
   type Classification,
   type PushSpec,
 } from './command';
-import { covers, grantOf, NO_GRANT, type Grant } from './consent';
+import { covers, grantOf, holdsOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -44,9 +45,26 @@ import {
   type Repo,
   type Run,
 } from './git';
+import {
+  asks,
+  configured,
+  STRICTEST,
+  effective,
+  stopBeforeOf,
+  where,
+  type Ladder,
+  type Step,
+  type StopBefore,
+} from './ladder';
 import { KINDS, parseRecord, type Recording } from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
-import { unasked } from './push-verdict';
+import {
+  askingReason,
+  parseDryRun,
+  unasked,
+  type DefaultBranch,
+  type Needed,
+} from './push-verdict';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
@@ -78,7 +96,10 @@ type LedgerHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger' }
 type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_record' }>;
 type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch' }>;
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
-type ConfigHook = MatchedHook<'config.set', { key: 'review-cycle.enabled' }>;
+type ConfigHook = MatchedHook<
+  'config.set',
+  { key: 'review-cycle.enabled' | 'review-cycle.stopBefore' }
+>;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
 type NotebookHook = MatchedHook<'tool.call', { tool: 'NotebookEdit' }>;
@@ -148,6 +169,10 @@ type GateState = {
   reviewerChanges: string[];
   // False when the user switched the gate off; the ledger is still served.
   gateOn: boolean;
+  // From user or managed settings, which alone reach the register options.
+  stopBefore: StopBefore | null;
+  // "don't push yet" makes every step ask until a message asks for one.
+  held: boolean;
 };
 
 const state: GateState = {
@@ -170,6 +195,8 @@ const state: GateState = {
   droppedSince: 0,
   reviewerChanges: [],
   gateOn: true,
+  stopBefore: null,
+  held: false,
 };
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -310,7 +337,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'status',
       description:
-        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether the user's latest message asked for a push. Read-only.",
+        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. Read-only.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -326,7 +353,10 @@ async function onPromptSubmit(
 ): Promise<Output<HookFor<'prompt.submit'>>> {
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
+    // What a held message asks for still runs: "push it; don't open a PR yet".
     const grant = grantOf(e.text, state.lastAnswer);
+    if (holdsOf(e.text, state.lastAnswer)) state.held = true;
+    else if (covers(grant, 'push') || grant.pr) state.held = false;
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
@@ -691,10 +721,11 @@ async function onMonitor(
   const judged =
     bashTouchesGate(e.command) ||
     classify(e.command, state.shellAliases).kind !== 'none' ||
+    opensPr(e.command, state.shellAliases) ||
     possibleAliases(e.command, state.shellAliases).length > 0;
   if (!judged) return next(e);
   return deny(
-    'Monitor runs commands the gate does not check. Run a command that commits, pushes, calls a git alias or writes settings with the Bash tool.',
+    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens a pull request, calls a git alias or writes settings with the Bash tool.',
   );
 }
 
@@ -803,6 +834,16 @@ async function judgeBash(
   const cls = classify(e.command, state.shellAliases);
   if (cls.kind === 'refuse') return deny(cls.reason);
   if (cls.kind === 'none') {
+    let unasked: Unasked = null;
+    // Only a pull request is stopped by a newer message; other commands run.
+    let since: number | null = null;
+    if (opensPr(e.command, state.shellAliases)) {
+      if (e.agentId) return deny(SUBAGENT);
+      const ladder = await ladderOf($);
+      if (!permitted(granted, ladder).pr) return deny(prRefusal(e.command, ladder));
+      if (!granted.pr) unasked = { step: 'pr', ladder };
+      since = message;
+    }
     const candidates = possibleAliases(e.command, state.shellAliases);
     if (candidates.length > 0) {
       const configured = await run($, ['git', 'config', '--get-regexp', String.raw`^alias\.`]);
@@ -824,7 +865,7 @@ async function judgeBash(
         }
       }
     }
-    const r = await watch($, await ensureRoot($), e, next, 'unchecked');
+    const r = await watch($, await ensureRoot($), e, next, 'unchecked', granted, since, unasked);
     if (state.aliasError === null || state.aliasErrorShown || r.deny !== undefined) return r;
     state.aliasErrorShown = true;
     return {
@@ -845,20 +886,24 @@ async function judgeBash(
       `this commits or pushes from another worktree of this repository (${target.top}). Do it from ${root.top}, where the gate can check it.`,
     );
   }
-  if (e.agentId) {
-    return deny(
-      'subagents do not commit or push in this repository. Report back to the main session instead.',
-    );
-  }
+  if (e.agentId) return deny(SUBAGENT);
 
   // A commit needs only a review: it stays local, and undoing one costs a reset.
   const unreviewed = await reviewed($, root.top, cls);
   if (unreviewed !== null) return deny(unreviewed);
 
-  const refused = cls.push && pushRefusal(e.command, cls.commit !== null, cls.push, granted);
-  if (refused) return deny(refused);
+  if (cls.commit && !cls.commit.dryRun && !granted.commit) {
+    const ladder = await ladderOf($);
+    if (!permitted(granted, ladder).commit) return deny(commitRefusal(e.command, ladder));
+  }
+  let ran: Unasked = null;
+  if (cls.push) {
+    const verdict = await judgePush($, root.top, e.command, cls.commit !== null, cls.push, granted);
+    if ('deny' in verdict) return deny(verdict.deny);
+    ran = verdict.ran;
+  }
   const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
-  return watch($, root, e, next, checked, granted, message);
+  return watch($, root, e, next, checked, granted, message, ran);
 }
 
 // The refusal when a reviewer has not seen all of what a real commit would
@@ -892,22 +937,172 @@ const MAX_SHOWN = 300;
 
 const LEASE = '`--force-with-lease --force-if-includes`';
 
-// The gate does not ask: the agent asks in its reply, so the user can answer
-// with anything at all. Their next message grants through the consent grammar.
-// Null when the grant covers the push.
-function pushRefusal(
+const SUBAGENT =
+  'subagents do not commit, push or open pull requests in this repository. Report back to the main session instead.';
+
+// `unreadable` names the settings file that could not be read, and why.
+type InForce = Ladder & { unreadable?: string };
+// A step that runs without the user asking for it directly: by the ladder,
+// noted; or a push a requested pull request needs (`forPr`), not noted.
+type Unasked = { step: Step; ladder: Ladder; forPr?: true } | null;
+
+// The rung in force: the local file's, else the user's, made earlier by the
+// project file's. Settings that cannot be read stop before every step.
+async function ladderOf($: $): Promise<InForce> {
+  const rungs: Partial<Record<'project' | 'local', StopBefore | null>> = {};
+  for (const source of ['project', 'local'] as const) {
+    try {
+      const settings = await $.settings.read({ source });
+      rungs[source] = configured(settings.pluginConfigs);
+    } catch (error) {
+      const unreadable = `${where(source)}: ${messageOf(error)}`;
+      return { stopBefore: STRICTEST, source: 'default', unreadable };
+    }
+  }
+  return effective(state.stopBefore, rungs.project ?? null, rungs.local ?? null);
+}
+
+// What may run: what the user asked for, and what the ladder lets through.
+// A hold stops a push and a pull request, never a commit.
+type Allowed = Readonly<Record<Step, boolean>>;
+function permitted(granted: Grant, ladder: Ladder): Allowed {
+  const free = (step: Step) => !asks(ladder, step);
+  return {
+    commit: granted.commit || free('commit'),
+    push: covers(granted, 'push') || (!state.held && free('push')),
+    pr: granted.pr || (!state.held && free('pr')),
+  };
+}
+
+// Shown to the user as a dim line, and to the agent, so the step is never
+// silent. Worded as having run, not succeeded: the command may still fail.
+const STEP_NAME: Record<Step, string> = {
+  commit: 'a commit',
+  push: 'a push',
+  pr: 'a pull request',
+};
+
+function ranUnasked($: $, { step, ladder }: NonNullable<Unasked>): string {
+  const line = `review-cycle: ran ${STEP_NAME[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`;
+  $.ui.log(line);
+  return line;
+}
+
+// Git's own credential prompt fails instead of waiting, so the push asks.
+const NO_PROMPT = { GIT_TERMINAL_PROMPT: '0' };
+// Also after the push's options, to beat a -q or --verify; the leading
+// --dry-run is the one no option value can swallow. Measured on git 2.56.
+// A submodule push runs that submodule's hooks, which --no-verify misses.
+const DRY_RUN = [
+  '--dry-run',
+  '--porcelain',
+  '--no-verify',
+  '--no-quiet',
+  '--recurse-submodules=no',
+];
+
+// Why a push asks whatever the setting, or null. Off the ladder: a push that
+// changes a remote's default branch, pushes a tag, deletes or force-updates a
+// ref, and one the gate cannot see the targets of. Git itself names the refs
+// a push updates, with its own push config applied, through a dry run.
+async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | null> {
+  if (spec.deletes) return 'it deletes a remote branch';
+  if (spec.every) return 'it pushes every branch';
+  if (spec.tags) return 'it pushes tags';
+  if (spec.argv === null) return 'its remote or branch is built at run time';
+  if (spec.after !== null) {
+    return `\`git ${spec.after}\` runs before it in the same command, which can change where it goes (run that step on its own first, and the push is judged after it)`;
+  }
+  const { config, args, end } = spec.argv;
+  const probe = ['--dry-run', ...args.slice(0, end), ...DRY_RUN, ...args.slice(end)];
+  const dry = await run($, ['git', ...config, 'push', ...probe], { cwd: top, env: NO_PROMPT });
+  if (dry.exitCode !== 0) {
+    return `a dry run of it, which shows what it would push, failed (${firstLine(dry.stderr) || `exit ${dry.exitCode}`})`;
+  }
+  const refs = parseDryRun(dry.stdout);
+  const defaults = new Map<string, DefaultBranch>();
+  for (const url of new Set(refs.map((r) => r.url))) {
+    const head = await run($, ['git', 'ls-remote', '--symref', url, 'HEAD'], {
+      cwd: top,
+      env: NO_PROMPT,
+    });
+    const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head.stdout)?.[1];
+    if (head.exitCode === 0 && branch !== undefined) defaults.set(url, { branch });
+    else defaults.set(url, { unreadable: firstLine(head.stderr) || 'no default branch named' });
+  }
+  return askingReason(refs, defaults);
+}
+
+// What the push may run, or why not: a grant covers it, or a plain push the
+// ladder or a requested pull request lets through, unless it always asks.
+async function judgePush(
+  $: $,
+  top: string,
   command: string,
   commits: boolean,
   spec: PushSpec,
   granted: Grant,
-): string | null {
+): Promise<{ deny: string } | { ran: Unasked }> {
   const missing = unasked(spec, granted);
-  if (missing === null) return null;
+  if (missing === null) return { ran: null };
+  const ladder = await ladderOf($);
+  const forPr = granted.pr && !state.held;
+  // Only a push something would let through is worth checking further.
+  const loose = missing === 'push' && (forPr || permitted(granted, ladder).push);
+  const always = loose ? await alwaysAsks($, top, spec) : null;
+  if (loose && always === null) {
+    return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
+  }
+  return { deny: pushRefusal(command, commits, missing, granted, ladder, always) };
+}
+
+function quote(command: string): string {
   const shown = shownCommand(command, state.shellAliases);
-  const quoted = shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
+  return shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
+}
+
+// The agent asks in its reply, naming the step and its target, and ends its turn.
+function askThem(naming: string, example: string, command: string): string {
+  return `stop and ask them in your reply, naming ${naming} with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${quote(command)}`;
+}
+
+// Why the user's latest message does not cover the step, the setting
+// included when its files could not be read.
+function notAsked(what: string, ladder: InForce, holdable: boolean): string {
+  const why =
+    holdable && state.held
+      ? `the user held off pushing and hasn't asked for ${what} since`
+      : `the user's latest message doesn't ask for ${what}`;
+  return ladder.unreadable === undefined
+    ? why
+    : `could not read ${ladder.unreadable}, so the gate stops before every step, and ${why}`;
+}
+
+function commitRefusal(command: string, ladder: InForce): string {
+  const setting =
+    ladder.unreadable === undefined
+      ? `, and the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)})`
+      : '';
+  return `${notAsked('a commit', ladder, false)}${setting}, so nothing ran. To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', command)}`;
+}
+
+function prRefusal(command: string, ladder: InForce): string {
+  return `${notAsked('a pull request', ladder, true)}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', command)}`;
+}
+
+// The gate does not ask: the agent asks in its reply, so the user can answer
+// with anything at all. Their next message grants through the consent grammar.
+// `always` is why this push asks whatever the setting, when it does.
+function pushRefusal(
+  command: string,
+  commits: boolean,
+  missing: Needed,
+  granted: Grant,
+  ladder: InForce,
+  always: string | null,
+): string {
   const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
-  const ask = (example: string) =>
-    `stop and ask them in your reply, naming what it pushes and where with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${quoted}`;
+  const ask = (example: string) => askThem('what it pushes and where', example, command);
   switch (missing) {
     case 'bare': {
       const leaseToo = covers(granted, 'lease') ? '' : ', which also needs their request';
@@ -917,7 +1112,8 @@ function pushRefusal(
       return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('"Force-push `fix/x` to `origin` with a lease?"')}`;
     }
     case 'push': {
-      return `the user's latest message doesn't ask for a push, so nothing ran.${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+      const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
+      return `${notAsked('a push', ladder, true)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {
       const unhandled: never = missing;
@@ -950,19 +1146,21 @@ async function watch(
   granted: Grant = state.message.grant,
   // The message count `granted` was read at; a newer message stops the call.
   message: number | null = null,
+  unasked: Unasked = null,
 ): Promise<Output<BashHook>> {
-  if (root === null) return next(e);
   const git = gitOf($);
   let start: Start | null = null;
   let startError: unknown = null;
-  try {
-    const head = await headOf(git, root.top);
-    const unborn = head === EMPTY_TREE;
-    const log = unborn ? [] : await headLog(git, root.top, MARK);
-    const count = await headLogCount(git, root.top, unborn);
-    start = { head, refs: await remoteRefs(git, root.top), log, count };
-  } catch (error) {
-    startError = error;
+  if (root !== null) {
+    try {
+      const head = await headOf(git, root.top);
+      const unborn = head === EMPTY_TREE;
+      const log = unborn ? [] : await headLog(git, root.top, MARK);
+      const count = await headLogCount(git, root.top, unborn);
+      start = { head, refs: await remoteRefs(git, root.top), log, count };
+    } catch (error) {
+      startError = error;
+    }
   }
   if (message !== null && state.messages !== message) {
     return deny(
@@ -975,6 +1173,13 @@ async function watch(
   }
   const r = await next(e);
   const notes: string[] = [];
+  if (unasked !== null && !unasked.forPr && r.deny === undefined) {
+    notes.push(ranUnasked($, unasked));
+  }
+  if (root === null) {
+    if (notes.length === 0 || r.deny !== undefined) return r;
+    return { ...r, context: [...(r.context ?? []), ...notes] };
+  }
   const failed = (what: string, error: unknown) => {
     const why = error instanceof Error ? error.message : String(error);
     notes.push(
@@ -986,9 +1191,13 @@ async function watch(
   } else {
     try {
       const pushed = await pushedRefs(git, root.top, start.refs, await remoteRefs(git, root.top));
-      if (pushed.length > 0 && !covers(granted, 'push')) {
+      // A push the gate judged was told already; one from a script was not.
+      if (pushed.length > 0 && !covers(granted, 'push') && unasked?.step !== 'push') {
+        const ladder = await ladderOf($);
         notes.push(
-          `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
+          permitted(granted, ladder).push
+            ? ranUnasked($, { step: 'push', ladder })
+            : `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
       }
     } catch (error) {
@@ -1077,9 +1286,17 @@ async function onStatus(
     reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,
     pushRequested: covers(state.message.grant, 'push'),
+    prRequested: state.message.grant.pr,
     error: null,
     worktreeTree: null,
   };
+  const ladder = await ladderOf($);
+  const may = permitted(state.message.grant, ladder);
+  const from = ladder.unreadable === undefined ? where(ladder.source) : 'unreadable settings';
+  status.stopBefore = { ...ladder, from, held: state.held };
+  status.mayCommit = may.commit;
+  status.mayPush = may.push;
+  status.mayOpenPr = may.pr;
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
@@ -1337,7 +1554,7 @@ function onStatusOff(
 
 function onConfigSet($: $, e: Input<ConfigHook>, next: NextOf<ConfigHook>): ReturnType<ConfigHook> {
   if (e.origin?.kind !== 'composer') {
-    return { deny: "review-cycle's gate is switched only by the user in /config." };
+    return { deny: "review-cycle's settings are changed only by the user in /config." };
   }
   return next(e);
 }
@@ -1366,7 +1583,10 @@ function onBashError(
       ? 'it ran out of time; running it again may work'
       : next.error.kind);
   const cls = classify(e.command, state.shellAliases);
-  if (cls.kind === 'none' && possibleAliases(e.command, state.shellAliases).length === 0) {
+  const quiet =
+    possibleAliases(e.command, state.shellAliases).length === 0 &&
+    !opensPr(e.command, state.shellAliases);
+  if (cls.kind === 'none' && quiet) {
     return withNote(
       next(e),
       `review-cycle could not watch this command (${why}); a commit it made would not be reported. Tell the user.`,
@@ -1379,7 +1599,9 @@ function onBashError(
 
 export const register: Register = (on, options) => {
   state.gateOn = options.enabled !== false;
+  state.stopBefore = stopBeforeOf(options.stopBefore);
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
+  on('config.set', { key: 'review-cycle.stopBefore' }, onConfigSet);
   on('tool.call', { tool: 'Edit' }, onEditSlop);
   on('tool.call', { tool: 'Write' }, onWriteSlop);
   on('session.start', onSessionStart);

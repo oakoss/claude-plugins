@@ -9,7 +9,7 @@ type Handler = (...args: unknown[]) => unknown;
 type Next = (e: unknown) => Promise<unknown>;
 
 // Every handler registered for each `event:matcher`, in registration order.
-function load(enabled: boolean): Map<string, Handler[]> {
+function load(enabled: boolean, stopBefore?: string): Map<string, Handler[]> {
   const hooks = new Map<string, Handler[]>();
   const on = (event: string, a: unknown, b?: unknown) => {
     const matcher = typeof a === 'function' ? undefined : (a as { tool?: string; key?: string });
@@ -18,7 +18,7 @@ function load(enabled: boolean): Map<string, Handler[]> {
     hooks.set(key, [...(hooks.get(key) ?? []), handler]);
     return { catch: () => null };
   };
-  (register as unknown as (on: unknown, options: unknown) => void)(on, { enabled });
+  (register as unknown as (on: unknown, options: unknown) => void)(on, { enabled, stopBefore });
   return hooks;
 }
 
@@ -106,6 +106,28 @@ describe('with the gate on', () => {
     const hooks = load(true);
     expect(hooks.get('tool.call:Edit')).toHaveLength(3);
     expect(hooks.get('tool.call:Write')).toHaveLength(3);
+  });
+  test('the stop-before value from the options reaches the gate', async () => {
+    const logs: string[] = [];
+    const $$ = {
+      ...$,
+      env: { get: () => Promise.resolve(null) },
+      fs: { ...$.fs, list: () => Promise.reject(new Error('none')) },
+      session: { cwd: () => Promise.resolve('/tmp') },
+      settings: { read: () => Promise.resolve({}) },
+      ui: { log: (text: string) => void logs.push(text) },
+    };
+    const e = { tool: 'Bash', command: 'gh pr create --fill' };
+    const runs = Object.assign(() => edited(), { signal: { aborted: false } });
+    const [never] = load(true, 'never stop').get('tool.call:Bash') ?? [];
+    expect(await never?.($$, e, runs)).toMatchObject({ result: 'edited' });
+    expect(logs).toEqual([
+      'review-cycle: ran a pull request without asking, since the stop-before setting is never stop (/config).',
+    ]);
+    const [unset] = load(true).get('tool.call:Bash') ?? [];
+    expect(await unset?.($$, e, runs)).toEqual({
+      deny: expect.stringContaining("doesn't ask for a pull request"),
+    });
   });
   test('an edit or write to its own switch is refused, whichever hook runs first', async () => {
     const hooks = load(true);

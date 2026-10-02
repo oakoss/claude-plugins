@@ -19,8 +19,12 @@ import {
   type Word,
 } from './shell';
 
+// The mode must come before the name: `git config <name> <value> --get` still
+// writes (measured on git 2.56).
 function readsConfig(args: Word[]): boolean {
-  return args.some((w) => /^(--get(-all|-regexp)?|--list|-l)$/.test(w.text));
+  const named = args.findIndex((w) => !w.text.startsWith('-'));
+  const before = named === -1 ? args : args.slice(0, named);
+  return before.some((w) => /^(--get(-all|-regexp)?|--list|-l)$/.test(w.text));
 }
 
 export const BUILTIN_RUNNERS: ReadonlySet<string> = new Set(['.', 'eval', 'source']);
@@ -548,6 +552,12 @@ export type PushSpec = {
   remote: 'default' | 'dynamic' | { name: string };
   // The refspecs after the remote; null when one is built at run time.
   refspecs: string[] | null;
+  // The push as git is given it, `-c` options then the words after `push`,
+  // for the gate to repeat as a dry run; null when a word is built at run time.
+  // `end` is the index of the `--` that ends its options, else the length.
+  argv: { config: string[]; args: string[]; end: number } | null;
+  // An earlier step that can retarget the push, unseen by a dry run run first.
+  after: string | null;
 };
 
 type Gated = {
@@ -594,6 +604,10 @@ const PUSH_VALUE_LONG = new Set(['repo', 'push-option', 'receive-pack', 'exec'])
 const PUSH_ATTACHED_LONG = new Set(['signed', 'recurse-submodules']);
 const PUSH_FLAGS_SHORT = new Set(['u', 'v', 'q', 'n', '4', '6']);
 
+const valueless = (option: string) => ({
+  refuse: `git push ${option} without a value. Give it one, or leave it out`,
+});
+
 export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
   const spec: PushSpec = {
     force: 'none',
@@ -602,6 +616,10 @@ export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
     every: false,
     remote: 'default',
     refspecs: [],
+    argv: args.some((w) => w.dynamic)
+      ? null
+      : { config: [], args: args.map((w) => w.text), end: args.length },
+    after: null,
   };
   const bare = () => (spec.force = 'bare');
   const lease = () => (spec.force = spec.force === 'bare' ? 'bare' : 'lease');
@@ -620,6 +638,7 @@ export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
     }
     if (t === '--') {
       options = false;
+      if (spec.argv !== null) spec.argv.end = i;
       continue;
     }
     if (t.startsWith('--')) {
@@ -639,7 +658,7 @@ export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
         if (name === 'repo') {
           repo = attached ? { ...arg, text: t.slice(t.indexOf('=') + 1) } : (args[i + 1] ?? null);
         }
-        if (!attached) i++;
+        if (!attached && ++i >= args.length) return valueless(`--${name}`);
       } else if (!PUSH_FLAGS_LONG.has(name) && !PUSH_ATTACHED_LONG.has(name)) {
         return {
           refuse: `git push --${name}, an option the gate does not know. Spell it out in full`,
@@ -653,7 +672,7 @@ export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
       else if (letter === 'd') spec.deletes = true;
       else if (letter === 'o') {
         // `-o value` or `-ovalue`: the rest of the word, or the next, is the value.
-        if (j === t.length - 1) i++;
+        if (j === t.length - 1 && ++i >= args.length) return valueless('-o');
         break;
       } else if (!PUSH_FLAGS_SHORT.has(letter)) {
         return {
@@ -1008,6 +1027,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
   let history: string | null = null;
   let push: PushSpec | null = null;
   let movedIndex: string | null = null;
+  let retargeted: string | null = null;
   for (const [i, { st, k }] of pairs.entries()) {
     if (st.op !== '' && st.op !== '&&' && st.op !== ';' && st.op !== '\n') {
       return {
@@ -1041,6 +1061,8 @@ function judge(command: string, aliases: ShellAliases): Classification {
     if ((NEUTRAL.has(g.sub) || fastForwardOnly(g)) && !commit && history === null && !push) {
       // A pull moves HEAD, and `--squash` stages what it brings in.
       if (MOVES_INDEX.has(g.sub) || g.sub === 'pull') movedIndex = g.sub;
+      // Any of them can move HEAD, a branch, an upstream or a remote URL.
+      retargeted ??= g.sub;
       continue;
     }
     if (RESTAGE.has(g.sub)) {
@@ -1070,7 +1092,12 @@ function judge(command: string, aliases: ShellAliases): Classification {
       if (push) return { kind: 'refuse', reason: `more than one push. ${SHAPE}` };
       const spec = pushSpec(g.args);
       if ('refuse' in spec) return { kind: 'refuse', reason: spec.refuse };
-      push = spec;
+      push = {
+        ...spec,
+        argv: spec.argv === null ? null : { ...spec.argv, config: g.config },
+        // `git rebase <upstream> <branch>` checks the branch out first.
+        after: retargeted ?? history,
+      };
     } else {
       if (commit || history || push)
         return {
@@ -1121,6 +1148,42 @@ function tame(text: string): string {
     .replaceAll(/[\p{Zs}\t]*\r?\n\s*/gu, ' ⏎ ')
     .replaceAll(/[\p{Zs}\t]+/gu, ' ')
     .replaceAll(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '\u{FFFD}');
+}
+
+// gh's options that take a value: `gh -R o/r pr create`, `gh pr -R o/r create`.
+const GH_VALUE = new Set(['-R', '--repo', '--hostname']);
+const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new)\b/;
+
+// Skips options, and the value of each one that takes a value.
+function pastOptions(words: string[], from: number): number {
+  let i = from;
+  while (words[i]?.startsWith('-')) i += GH_VALUE.has(words[i] ?? '') ? 2 : 1;
+  return i;
+}
+
+// As for git, `gh` at any word runs unless the first word is a data command:
+// `timeout 60 gh pr create`, `sudo -u bot gh …`. Quoted text is not read, so
+// `bash -c "gh pr create"` goes unseen: a well-meaning agent writes it plainly.
+function ghCreatesPr(st: Statement): boolean {
+  const words = st.words.map((w) => w.text);
+  const first = basename(words[0] ?? '');
+  // `gh` is a data command to the git check: what it is given never runs git.
+  if (first !== 'gh' && DATA.has(first)) return false;
+  return words.some((word, at) => {
+    if (basename(word) !== 'gh') return false;
+    const sub = pastOptions(words, at + 1);
+    if (words[sub] !== 'pr') return false;
+    const verb = words[pastOptions(words, sub + 1)];
+    return verb === 'create' || verb === 'new';
+  });
+}
+
+// Whether the command opens a pull request with `gh pr create` (or its alias
+// `gh pr new`), read as text when the command does not parse.
+export function opensPr(command: string, aliases: ShellAliases = new Map()): boolean {
+  const parsed = parse(command, aliases);
+  if ('error' in parsed) return GH_PR.test(parsed.text);
+  return every(parsed.statements, (st) => (ghCreatesPr(st) ? 'pr' : null)) !== null;
 }
 
 // The command as the gate's push refusal quotes it: every line, runs of spaces

@@ -1,9 +1,10 @@
-// Decides whether a change to a settings file switches review-cycle off. Pure.
+// Decides whether a change to a settings file switches or configures
+// review-cycle. Pure.
 //
 // Claude Code reloads a plugin when user settings change, so an agent that
-// edits `enabledPlugins` or `pluginConfigs` mid-session turns the gate off
-// without passing through `config.set`. Any JSON file counts, because a
-// settings file can be passed with `--settings` under any name.
+// edits `enabledPlugins` or `pluginConfigs` mid-session turns the gate off or
+// loosens it without passing through `config.set`. Any JSON file counts,
+// because a settings file can be passed with `--settings` under any name.
 
 import { parse, type Statement, type Word } from './shell';
 
@@ -12,8 +13,8 @@ const SWITCHES = ['enabledPlugins', 'pluginConfigs'] as const;
 // The key outside the plugin tables that stops every installed mod loading.
 const HOOKS_OFF = 'disableAllHooks';
 
-// Every line of text naming a switch, for files `JSON.parse` rejects: Claude
-// Code may still read one with a byte-order mark, comments or a trailing comma.
+// Every line of text naming a switch, for files that do not parse even with
+// comments and trailing commas removed.
 const SWITCH_TEXT = /"(enabledPlugins|pluginConfigs|disableAllHooks|review-cycle[^"]*)"[^\n]*/g;
 
 export function isJsonPath(path: string): boolean {
@@ -26,12 +27,38 @@ function objectOf(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+// The text as JSON, with what Claude Code also accepts removed: a byte-order
+// mark, comments and trailing commas. Strings are copied untouched.
+function strictJson(text: string): string {
+  let out = '';
+  let i = text.startsWith(String.fromCodePoint(0xfe_ff)) ? 1 : 0;
+  while (i < text.length) {
+    const c = text[i] ?? '';
+    if (c === '"') {
+      const end = /^"(?:[^"\\]|\\.)*"/s.exec(text.slice(i))?.[0] ?? text.slice(i);
+      out += end;
+      i += end.length;
+    } else if (text.startsWith('//', i)) {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? text.length : nl;
+    } else if (text.startsWith('/*', i)) {
+      const close = text.indexOf('*/', i + 2);
+      i = close === -1 ? text.length : close + 2;
+    } else {
+      if (c === '}' || c === ']') out = out.replace(/,\s*$/, '');
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
 // Everything in the text that switches the gate, as comparable text. null
 // when the text is not a JSON object.
 function gateEntries(text: string): string | null {
   let parsed: Record<string, unknown> | null;
   try {
-    parsed = objectOf(JSON.parse(text));
+    parsed = objectOf(JSON.parse(strictJson(text)));
   } catch {
     return null;
   }
@@ -65,7 +92,11 @@ export function touchesGate(before: string | null, after: string): boolean {
   const was = before === null ? '[]' : gateEntries(before);
   const now = gateEntries(after);
   if (was !== null && now !== null) return was !== now;
-  // Either side is not plain JSON: compare the lines that name a switch.
+  // Claude Code ignores a file it cannot parse, so repairing or breaking one
+  // that names a switch turns that switch on or off.
+  const named = (before ?? '').match(SWITCH_TEXT) !== null || after.match(SWITCH_TEXT) !== null;
+  if ((was === null) !== (now === null) && named) return true;
+  // Neither side parses: compare the lines that name a switch.
   return switchText(before ?? '') !== switchText(after);
 }
 

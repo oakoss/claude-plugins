@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "review-cycle",
-      "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push you did not request.",
+      "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push or pull request you did not request, unless you let it go further.",
       "version": "0.24.0",
       "author": {
         "name": "Oak OSS",

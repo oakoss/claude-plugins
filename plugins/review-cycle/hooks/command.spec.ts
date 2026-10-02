@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { aliasCommits, classify, possibleAliases, shownCommand } from './command';
+import { aliasCommits, classify, opensPr, possibleAliases, shownCommand } from './command';
 import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
 
 const HEREDOC_MESSAGE = `git commit -m "$(cat <<'EOF'
@@ -742,6 +742,9 @@ describe('refuses every other shape that commits or pushes', () => {
     'timeout 30 git pull --ff-only',
     "git pull --ff-only <<'EOF'\ngit push origin main\nEOF",
     'git config core.hooksPath /dev/null && git commit -m x',
+    // A mode after the name and value still writes.
+    'git config core.hooksPath /dev/null --get && git commit -m x',
+    'git config remote.origin.pushurl ../b.git -l && git push',
     'X=$(echo x >> a.ts) && git commit -am m',
     'X=`touch a.ts` && git commit -m m',
     'X=1 > a.ts && git commit -am m',
@@ -1288,5 +1291,83 @@ describe('push arguments', () => {
       'git push --forc, an option the gate does not know',
     );
     expect(readable('git push -x')).toContain('git push -x, an option the gate does not know');
+  });
+  // A dry run appends flags, which a valueless option would take as its value.
+  test.each([
+    ['git push origin main -o', '-o'],
+    ['git push origin main --repo', '--repo'],
+    ['git push origin --push-option', '--push-option'],
+  ])('%s is refused for its valueless %s', (command, option) => {
+    expect(readable(command)).toContain(`git push ${option} without a value`);
+  });
+  test('options end at the `--` that ends them, not one given as a value', () => {
+    expect(pushOf('git push origin -- main')).toEqual(
+      expect.objectContaining({ argv: { config: [], args: ['origin', '--', 'main'], end: 1 } }),
+    );
+    expect(pushOf('git push -o -- origin main')).toEqual(
+      expect.objectContaining({
+        argv: { config: [], args: ['-o', '--', 'origin', 'main'], end: 4 },
+      }),
+    );
+  });
+  test.each([
+    ['git checkout main && git push', 'checkout'],
+    ['git switch main && git merge fix/x && git push origin HEAD', 'switch'],
+    ['git branch -f fix/x main && git push origin fix/x', 'branch'],
+    ['git tag v1 && git push', 'tag'],
+    ['git remote set-url origin ../other.git && git push', 'remote'],
+    ['git fetch --set-upstream origin main && git push', 'fetch'],
+    ['git stash branch main && git push', 'stash'],
+    ['git rebase origin/main main && git push', 'rebase'],
+    ['git checkout main && git switch dev && git push', 'checkout'],
+    ['git status && git log -1 && git push', null],
+    ['git commit -m x && git push', null],
+    ['git push', null],
+  ])('%s: the step before that can retarget it is %s', (command, after) => {
+    expect(pushOf(command)).toEqual(expect.objectContaining({ after }));
+  });
+});
+
+describe('opening a pull request', () => {
+  test.each([
+    'gh pr create --fill',
+    'gh -R oakoss/x pr create --title t --body b',
+    'gh --repo=oakoss/x pr new',
+    'cd sub && GH_TOKEN=x gh pr create --draft',
+    'echo "$(gh pr create --fill)"',
+    '/opt/homebrew/bin/gh pr create',
+    'gh --repo oakoss/x pr create',
+    'gh --hostname ghe.example pr create',
+    'gh pr -R oakoss/x create',
+    'env GH_TOKEN=x gh pr create',
+    'env -u GH_TOKEN gh pr create',
+    'sudo -u bot gh pr create',
+    'timeout 60 gh pr create --fill',
+    'nice -n 5 gh pr create',
+    'xargs gh pr create',
+    'flock /tmp/l gh pr create',
+    'gh pr create --title "unterminated',
+  ])('%s', (command) => {
+    expect(opensPr(command)).toBe(true);
+  });
+  test.each([
+    'gh pr view 12',
+    'gh pr list',
+    'echo "gh pr create"',
+    'grep -r "gh pr create" docs',
+    'gh issue create --title pr',
+    'echo gh pr create',
+    'grep gh pr create docs',
+    'bash -c "gh pr view 1; echo create"',
+    // Quoted text is not read: a well-meaning agent writes the command plainly.
+    'bash -c "gh pr create --fill"',
+    "eval 'gh pr create'",
+    'git log --grep "gh pr create"',
+    'gh pr comment 5 --body "will gh pr create a follow-up"',
+  ])('%s opens none', (command) => {
+    expect(opensPr(command)).toBe(false);
+  });
+  test('an alias that expands to it opens one', () => {
+    expect(opensPr('mkpr', new Map([['mkpr', 'gh pr create --fill']]))).toBe(true);
   });
 });
