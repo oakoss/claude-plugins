@@ -2,13 +2,13 @@ import { describe, expect, test } from 'vitest';
 
 import { grantOf } from './consent';
 
-const NONE = { push: false, force: false, bareForce: false };
+const NONE = { push: 'none' };
 // A commit needs no request, so asking for one settles nothing beyond the push.
 const COMMIT = NONE;
-const PUSH = { push: true, force: false, bareForce: false };
+const PUSH = { push: 'push' };
 const BOTH = PUSH;
-const LEASE = { push: true, force: true, bareForce: false };
-const BARE = { push: true, force: true, bareForce: true };
+const LEASE = { push: 'lease' };
+const BARE = { push: 'bare' };
 
 describe('grants on a request', () => {
   const cases: [string, object][] = [

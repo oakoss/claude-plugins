@@ -1245,15 +1245,20 @@ describe('push arguments', () => {
     );
     expect(pushOf('git push --prune origin')).toEqual(expect.objectContaining({ deletes: true }));
     expect(pushOf('git push origin tag v1')).toEqual(expect.objectContaining({ tags: true }));
+    // No remote, and one built at run time, are told apart.
+    expect(pushOf('git push')).toEqual(expect.objectContaining({ remote: 'default' }));
+    expect(pushOf('git push "$R" main')).toEqual(
+      expect.objectContaining({ remote: 'dynamic', refspecs: ['main'] }),
+    );
     // A repository argument wins over --repo, as in git.
     expect(pushOf('git push --repo=upstream')).toEqual(
-      expect.objectContaining({ remote: 'upstream', refspecs: [] }),
+      expect.objectContaining({ remote: { name: 'upstream' }, refspecs: [] }),
     );
     expect(pushOf('git push --repo upstream')).toEqual(
-      expect.objectContaining({ remote: 'upstream', refspecs: [] }),
+      expect.objectContaining({ remote: { name: 'upstream' }, refspecs: [] }),
     );
     expect(pushOf('git push --repo=upstream origin main')).toEqual(
-      expect.objectContaining({ remote: 'origin', refspecs: ['main'] }),
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
     );
     expect(pushOf('git push --tags --no-follow-tags origin main')).toEqual(
       expect.objectContaining({ tags: true }),
@@ -1262,16 +1267,20 @@ describe('push arguments', () => {
       expect.objectContaining({ tags: false }),
     );
     expect(pushOf('git push --push-option ci.skip origin main')).toEqual(
-      expect.objectContaining({ remote: 'origin', refspecs: ['main'] }),
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
     );
     expect(pushOf('git push -oci.skip origin main')).toEqual(
-      expect.objectContaining({ remote: 'origin', refspecs: ['main'] }),
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
     );
     expect(pushOf('git push -o ci.skip origin HEAD:main')).toEqual(
-      expect.objectContaining({ remote: 'origin', refspecs: ['HEAD:main'], force: 'none' }),
+      expect.objectContaining({
+        remote: { name: 'origin' },
+        refspecs: ['HEAD:main'],
+        force: 'none',
+      }),
     );
     expect(pushOf('git push origin "$BRANCH"')).toEqual(
-      expect.objectContaining({ remote: 'origin', refspecs: null }),
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: null }),
     );
   });
   test('an option the gate does not know is refused, an abbreviation included', () => {

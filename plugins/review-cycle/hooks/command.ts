@@ -544,7 +544,8 @@ export type PushSpec = {
   deletes: boolean;
   // --all, --branches or --mirror.
   every: boolean;
-  remote: string | null;
+  // `default` when none is given, so git's configured default applies.
+  remote: 'default' | 'dynamic' | { name: string };
   // The refspecs after the remote; null when one is built at run time.
   refspecs: string[] | null;
 };
@@ -599,7 +600,7 @@ export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
     tags: false,
     deletes: false,
     every: false,
-    remote: null,
+    remote: 'default',
     refspecs: [],
   };
   const bare = () => (spec.force = 'bare');
@@ -663,7 +664,7 @@ export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
   }
   // `--repo` stands in for the remote argument, which wins when both are given.
   const [remote = repo ?? undefined, ...refspecs] = positional;
-  if (remote !== undefined) spec.remote = remote.dynamic ? null : remote.text;
+  if (remote !== undefined) spec.remote = remote.dynamic ? 'dynamic' : { name: remote.text };
   spec.refspecs = refspecs.some((w) => w.dynamic) ? null : refspecs.map((w) => w.text);
   // Read from the text as written, so `"+$B"` still shows its `+`.
   for (const [k, { text: r }] of refspecs.entries()) {

@@ -19,7 +19,7 @@ import {
   type Classification,
   type PushSpec,
 } from './command';
-import { grantOf, NO_GRANT, type Grant } from './consent';
+import { covers, grantOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -46,6 +46,7 @@ import {
 } from './git';
 import { KINDS, parseRecord, type Recording } from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
+import { unasked } from './push-verdict';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
@@ -893,29 +894,36 @@ const LEASE = '`--force-with-lease --force-if-includes`';
 
 // The gate does not ask: the agent asks in its reply, so the user can answer
 // with anything at all. Their next message grants through the consent grammar.
-// A force push has to be asked for by name, and a bare --force named apart
-// from a lease; null when the grant covers the push.
+// Null when the grant covers the push.
 function pushRefusal(
   command: string,
   commits: boolean,
   spec: PushSpec,
   granted: Grant,
 ): string | null {
+  const missing = unasked(spec, granted);
+  if (missing === null) return null;
   const shown = shownCommand(command, state.shellAliases);
   const quoted = shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
   const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
   const ask = (example: string) =>
     `stop and ask them in your reply, naming what it pushes and where with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${quoted}`;
-  if (spec.force === 'bare' && !granted.bareForce) {
-    return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for one, so nothing ran.${alone} Use ${LEASE} instead${granted.force ? '' : ', which also needs their request'}; if they want a bare --force, ${ask('"Force-push `fix/x` to `origin` without a lease?"')}`;
+  switch (missing) {
+    case 'bare': {
+      const leaseToo = covers(granted, 'lease') ? '' : ', which also needs their request';
+      return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for one, so nothing ran.${alone} Use ${LEASE} instead${leaseToo}; if they want a bare --force, ${ask('"Force-push `fix/x` to `origin` without a lease?"')}`;
+    }
+    case 'lease': {
+      return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('"Force-push `fix/x` to `origin` with a lease?"')}`;
+    }
+    case 'push': {
+      return `the user's latest message doesn't ask for a push, so nothing ran.${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+    }
+    default: {
+      const unhandled: never = missing;
+      throw new Error(`no refusal for the push level ${String(unhandled)}`);
+    }
   }
-  if (spec.force === 'lease' && !granted.force) {
-    return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('"Force-push `fix/x` to `origin` with a lease?"')}`;
-  }
-  if (!granted.push) {
-    return `the user's latest message doesn't ask for a push, so nothing ran.${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
-  }
-  return null;
 }
 
 type Checked = 'commit' | 'history' | 'push' | 'unchecked';
@@ -978,7 +986,7 @@ async function watch(
   } else {
     try {
       const pushed = await pushedRefs(git, root.top, start.refs, await remoteRefs(git, root.top));
-      if (pushed.length > 0 && !granted.push) {
+      if (pushed.length > 0 && !covers(granted, 'push')) {
         notes.push(
           `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -1068,7 +1076,7 @@ async function onStatus(
     cappedReviews: state.capped,
     reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,
-    pushRequested: state.message.grant.push,
+    pushRequested: covers(state.message.grant, 'push'),
     error: null,
     worktreeTree: null,
   };
