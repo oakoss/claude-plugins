@@ -23,9 +23,9 @@ function readsConfig(args: Word[]): boolean {
   return args.some((w) => /^(--get(-all|-regexp)?|--list|-l)$/.test(w.text));
 }
 
-const BUILTIN_RUNNERS = new Set(['.', 'eval', 'source']);
+export const BUILTIN_RUNNERS: ReadonlySet<string> = new Set(['.', 'eval', 'source']);
 // Commands that run their arguments, or their standard input, as code.
-const INTERPRETERS = new Set([
+export const INTERPRETERS: ReadonlySet<string> = new Set([
   'bash',
   'sh',
   'zsh',
@@ -55,7 +55,7 @@ const INTERPRETERS = new Set([
   'sudo',
   'doas',
 ]);
-const KEYWORDS = new Set([
+export const KEYWORDS: ReadonlySet<string> = new Set([
   '!',
   '{',
   '}',
@@ -199,7 +199,7 @@ type Kind =
   // `always` refusals stand whatever the command's text mentions.
   | { kind: 'refuse'; reason: string; always?: boolean };
 
-function basename(p: string): string {
+export function basename(p: string): string {
   return p.slice(p.lastIndexOf('/') + 1);
 }
 
@@ -318,7 +318,7 @@ function textOf(st: Statement): string {
   return [...st.words.map((w) => w.text), ...st.heredocs.map((h) => h.body)].join(' ');
 }
 
-function every(
+export function every(
   list: Statement[],
   visit: (st: Statement, nested: boolean) => string | null,
   nested = false,

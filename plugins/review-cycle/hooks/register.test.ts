@@ -1131,6 +1131,90 @@ function contextOf(r: unknown): string[] {
   return (r as { context?: string[] }).context ?? [];
 }
 
+function captures(w: World): number {
+  return w.calls.filter((c) => c.argv.join(' ') === 'git add -A').length;
+}
+
+function edits(this: World) {
+  this.work['a.ts'] = 'two';
+}
+
+describe('a Bash command that changes files', () => {
+  test('runs, with a note naming what changed and pointing at Edit and Write', async ($, on) => {
+    fakeWorld(on, { shell: edits });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'files changed while this command ran: a.ts.')).toBe(true);
+    expect(has(contextOf(r), 'make file changes with Edit or Write')).toBe(true);
+  });
+  test('gets no note when nothing changed', async ($, on) => {
+    fakeWorld(on);
+    const r = await bash($, "sed -i '' 's/zzz/y/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'files changed while this command ran')).toBe(false);
+  });
+  test('is not measured when it cannot write', async ($, on) => {
+    const w = fakeWorld(on, { shell: edits });
+    const r = await bash($, 'git status --porcelain');
+    expect(captures(w)).toBe(0);
+    expect(has(contextOf(r), 'files changed while this command ran')).toBe(false);
+  });
+  test('is not measured for a reviewer leg, whose writes the gate reports', async ($, on) => {
+    const w = fakeWorld(on);
+    const id = await legUnderWay($);
+    const before = captures(w);
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts", { agentId: id });
+    expect(has(contextOf(r), 'files changed while this command ran')).toBe(false);
+    expect(captures(w) - before).toBeLessThanOrEqual(2);
+  });
+  test('is not measured in the background, which returns before the command ends', async ($, on) => {
+    const w = fakeWorld(on, { shell: edits });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts", { run_in_background: true });
+    expect(captures(w)).toBe(0);
+    expect(has(contextOf(r), 'files changed while this command ran')).toBe(false);
+  });
+  test('says so when git fails, and the command still runs', async ($, on) => {
+    fakeWorld(on, { shell: edits, fail: (a) => a === 'git add -A' });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'could not check which files this command changed')).toBe(true);
+  });
+  test('says so when the capture after the command throws', async ($, on) => {
+    let adds = 0;
+    fakeWorld(on, { shell: edits, reject: (a) => a === 'git add -A' && ++adds === 2 });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(adds).toBe(2);
+    expect(has(contextOf(r), 'could not check which files this command changed')).toBe(true);
+  });
+  test('says so when git cannot compare the trees', async ($, on) => {
+    fakeWorld(on, { shell: edits, fail: (a) => a.startsWith('git diff-tree') });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(has(contextOf(r), 'git could not compare the trees')).toBe(true);
+  });
+  test('outside a repository it runs unmeasured, and the gate keeps its notes', async ($, on) => {
+    const w = fakeWorld(on, {
+      shell: edits,
+      git: (a) =>
+        a.includes('--show-toplevel')
+          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          : null,
+    });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(captures(w)).toBe(0);
+    expect(has(contextOf(r), 'could not check which files')).toBe(false);
+    expect(has(contextOf(r), "could not read the user's shell aliases")).toBe(true);
+  });
+  test("a runner that throws keeps the gate's own notes", async ($, on) => {
+    fakeWorld(on, { shell: edits, reject: (a) => a === 'git add -A' });
+    const r = await bash($, "sed -i '' 's/one/two/' a.ts");
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'could not check which files this command changed')).toBe(true);
+    expect(has(contextOf(r), 'could not read the user')).toBe(true);
+  });
+});
+
 describe('comment slop', () => {
   const FILE = '/repo/f.ts';
   const SLOP = '// ===== HELPERS =====\nconst a = 1;\n';
@@ -2826,7 +2910,7 @@ describe('reviewer containment', () => {
       w.work['a.ts'] = 'two';
     };
     const r = await bash($, 'echo hi > a.ts');
-    expect(ran(r) && !has(r.context ?? [], 'changed while')).toBe(true);
+    expect(ran(r) && !has(r.context ?? [], 'of the repository under review changed')).toBe(true);
     expect(await reviewerChanges($)).toEqual([]);
   });
   test('a working tree that cannot be built leaves the other parts compared', async ($, on) => {

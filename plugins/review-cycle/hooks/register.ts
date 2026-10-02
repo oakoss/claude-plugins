@@ -20,6 +20,7 @@ import {
 } from './command';
 import { grantOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
+import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   coverageOf,
   firstLine,
@@ -28,6 +29,7 @@ import {
   prospectTree,
   headLog,
   headLogCount,
+  messageOf,
   pushedRefs,
   remoteRefs,
   repoAt,
@@ -760,6 +762,38 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
 }
 
+// A note, never a refusal: the command has already run. Reviewer legs are
+// compared by the gate already, and a background command is still running
+// when the call returns. Never throws, so the gate's own notes always arrive.
+async function onBashEdits(
+  $: $,
+  e: Input<BashHook>,
+  next: NextOf<BashHook>,
+): Promise<Output<BashHook>> {
+  const skip =
+    runningLeg(e.agentId) !== null ||
+    e.run_in_background === true ||
+    !mayWrite(e.command, state.shellAliases);
+  if (skip) return next(e);
+  let root: Repo | null;
+  // onBash, registered first, has already looked the root up; this guards a
+  // registration order where it has not.
+  try {
+    root = await ensureRoot($);
+  } catch (error) {
+    return withNote(next(e), editsSkipped(messageOf(error)));
+  }
+  if (root === null) return next(e);
+  const { top } = root;
+  const git = gitOf($);
+  const { result, note } = await measureEdits(
+    () => worktreeTree(git, top),
+    (before, after) => reviewablePaths(git, top, before, after),
+    () => next(e),
+  );
+  return note === null ? result : withNote(result, note);
+}
+
 async function judgeBash(
   $: $,
   e: Input<BashHook>,
@@ -1123,10 +1157,6 @@ async function registerScratch($: $): Promise<void> {
   }
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function onScratch(
   $: $,
   _e: Input<ScratchHook>,
@@ -1349,7 +1379,7 @@ function onConfigSet($: $, e: Input<ConfigHook>, next: NextOf<ConfigHook>): Retu
 }
 
 async function withNote(
-  result: Promise<Output<BashHook>>,
+  result: Output<BashHook> | Promise<Output<BashHook>>,
   note: string,
 ): Promise<Output<BashHook>> {
   const r = await result;
@@ -1403,6 +1433,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', onTurnComplete);
   on('tool.call', { tool: 'Skill' }, onSkill);
   on('tool.call', { tool: 'Bash' }, onBash).catch(onBashError);
+  on('tool.call', { tool: 'Bash' }, onBashEdits);
   on('tool.call', { tool: 'Edit' }, onEditContained);
   on('tool.call', { tool: 'Write' }, onWriteContained);
   on('tool.call', { tool: 'Edit' }, onEdit).catch(onEditError);

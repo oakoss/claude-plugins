@@ -32,6 +32,10 @@ export function firstLine(s: string): string {
   return s.trim().split('\n')[0] ?? '';
 }
 
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // The repository at `dir` (or the given cwd), 'none' when there is none, and
 // a throw when git could not say.
 export async function repoAt(git: Git, dir: string | null, cwd?: string): Promise<Repo | 'none'> {
