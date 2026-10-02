@@ -2167,35 +2167,127 @@ describe('the question dialog', () => {
       questions: [{ question: 'Push the branch?', options: [{ label: 'Push' }] }],
     });
     expect(denied(await bash($, 'git push'), "doesn't ask for a push")).toBe(true);
-    expect(w.asked).toHaveLength(2);
+    expect(w.asked).toHaveLength(1);
   });
 });
 
-function pickFirst(q: Question): string | undefined {
-  return q.options[0]?.label;
-}
-
-describe("the gate's own question", () => {
-  test('asks about a push the user did not ask for; the pick grants it', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
+describe('a push the user did not ask for', () => {
+  test('is refused with a request to ask in the reply, and no dialog', async ($, on) => {
+    const w = fakeWorld(on);
     await say($, 'fix the parser');
-    expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(w.asked).toHaveLength(1);
-    expect(w.asked?.[0]).toMatchObject({
-      question: 'The agent wants to push: git push. Allow it?',
-      header: 'review-cycle',
-      options: [{ label: 'Push' }, { label: "Don't push" }],
+    const r = await bash($, 'git push origin fix/x');
+    expect(denied(r, "the user's latest message doesn't ask for a push, so nothing ran.")).toBe(
+      true,
+    );
+    expect(denied(r, 'stop and ask them in your reply')).toBe(true);
+    expect(denied(r, 'The command: git push origin fix/x')).toBe(true);
+    expect(w.asked).toBeUndefined();
+  });
+  test('runs once the next message says yes to the question', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    await ($ as any).turn.complete({
+      answer: 'Fixed.\nPush fix/x to origin?',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'main-1',
+      reason: 'answer',
     });
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
   });
-  test('a pick allows only the call it was asked about', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
+  test('stays refused when the next message asks for something else', async ($, on) => {
+    fakeWorld(on);
     await say($, 'fix the parser');
-    expect(ran(await bash($, 'git push origin a'))).toBe(true);
-    await bash($, 'git push origin b');
-    expect(w.asked).toHaveLength(2);
+    await ($ as any).turn.complete({
+      answer: 'Fixed.\nPush fix/x to origin?',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'main-1',
+      reason: 'answer',
+    });
+    await say($, 'not yet, rename the helper first');
+    expect(denied(await bash($, 'git push origin fix/x'), "doesn't ask for a push")).toBe(true);
   });
-  test('a reviewed commit is not reported as one the user did not ask for', async ($, on) => {
-    const w = fakeWorld(on, {
+  test('a reviewed commit with it is refused whole, naming the commit on its own', async ($, on) => {
+    fakeWorld(on);
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'git commit -am x && git push');
+    expect(denied(r, 'To commit without pushing, run the commit on its own.')).toBe(true);
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+  });
+  test('a push alone does not mention a commit', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push'), 'To commit without pushing')).toBe(false);
+  });
+  test('names what a shell alias expands to', async ($, on) => {
+    fakeWorld(on, { shellAliases: "alias -- ship='git push --force origin main'\n" });
+    await say($, 'fix the parser');
+    expect(
+      denied(
+        await bash($, 'ship'),
+        'The command: ship (aliases expanded: git push --force origin main)',
+      ),
+    ).toBe(true);
+  });
+  test('quotes only the start of a long command', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    const r = await bash($, `git push origin ${'x'.repeat(400)}`);
+    expect(denied(r, `The command: git push origin ${'x'.repeat(284)}…`)).toBe(true);
+    expect(denied(r, 'x'.repeat(286))).toBe(false);
+  });
+  test('a commit no reviewer saw is refused for the review first', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git commit -am x && git push'), 'never reviewed')).toBe(true);
+  });
+  test('a dry run needs neither a review nor a request', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git commit --dry-run -am x'))).toBe(true);
+  });
+  test('a push typed into the running turn grants it', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'fix the parser');
+    await ($ as any).prompt.submit({
+      text: 'push it',
+      origin: { kind: 'composer' },
+      wait: false,
+      turnId: 't',
+    });
+    expect(ran(await bash($, 'git push'))).toBe(true);
+  });
+  test('a shell alias that runs another program for git is refused first', async ($, on) => {
+    fakeWorld(on, { shellAliases: "alias -- git='hub'\n" });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push'), '`git` is a shell alias here (for `hub`)')).toBe(true);
+  });
+});
+
+describe('a push the user asked for', () => {
+  test('is not reported as one the user did not ask for', async ($, on) => {
+    const head = 'c'.repeat(40);
+    const theirs = 'd'.repeat(40);
+    fakeWorld(on, {
+      refs: { 'refs/remotes/origin/main': head },
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/main': theirs };
+        this.reflogs = {
+          'refs/remotes/origin/main': [`${theirs} update by push`, `${head} fetch`],
+        };
+      },
+    });
+    await say($, 'push it');
+    const r = await bash($, 'git push');
+    expect(ran(r)).toBe(true);
+    expect(contextOf(r)).toEqual([]);
+  });
+  test('a reviewed commit beside it is not reported either', async ($, on) => {
+    fakeWorld(on, {
       commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
       shell(this: World) {
         this.head = 'd'.repeat(40);
@@ -2206,218 +2298,12 @@ describe("the gate's own question", () => {
     const r = await bash($, 'git commit -am x');
     expect(ran(r)).toBe(true);
     expect(contextOf(r)).toEqual([]);
-    expect(w.asked).toBeUndefined();
   });
-  test('a decline lasts until the next typed message', async ($, on) => {
-    const w = fakeWorld(on, { dialog: (q) => q.options[1]?.label });
-    await say($, 'fix the parser');
-    await bash($, 'git push');
-    await say($, 'next thing');
-    await bash($, 'git push');
-    expect(w.asked).toHaveLength(2);
-  });
-  test('a declined verb is named alone, and blocks a command that also needs it', async ($, on) => {
-    const w = fakeWorld(on, { dialog: (q) => q.options[1]?.label });
-    await review($);
-    await say($, 'fix the parser');
-    await bash($, 'git push');
-    const r = await bash($, 'git commit -am x && git push');
-    expect(denied(r, 'turned down the push when')).toBe(true);
-    expect(w.asked).toHaveLength(1);
-  });
-  test('a message the user sends while the dialog is open overtakes the answer', async ($, on) => {
-    const w = fakeWorld(on, {
-      dialog: async (q) => {
-        await say($, 'wait, not yet');
-        return q.options[1]?.label;
-      },
-    });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'while the gate was asking')).toBe(true);
-    w.dialog = pickFirst;
-    expect(ran(await bash($, 'git push'))).toBe(true);
-  });
-  test('a call while a question is open is refused without asking', async ($, on) => {
-    const w = fakeWorld(on, {
-      dialog: async (q) => {
-        for (let i = 0; i < 20; i++) await Promise.resolve();
-        return q.options[0]?.label;
-      },
-    });
-    await say($, 'fix the parser');
-    const [first, second] = await Promise.all([bash($, 'git push'), bash($, 'git push origin b')]);
-    expect(ran(first)).toBe(true);
-    expect(denied(second, 'already asking the user about another command')).toBe(true);
-    expect(w.asked).toHaveLength(1);
-    expect(ran(await bash($, 'git push origin b'))).toBe(true);
-  });
-  test('a message during the review check before asking stops the question', async ($, on) => {
-    let fired = false;
-    const w = fakeWorld(on, {
-      dialog: pickFirst,
-      git: (a) => {
-        if (!fired && a.includes('write-tree')) {
-          fired = true;
-          void ($ as any).prompt.submit({
-            text: 'stop',
-            origin: { kind: 'composer' },
-            wait: false,
-            turnId: 't',
-          });
-        }
-        return null;
-      },
-    });
-    await review($);
-    await say($, 'fix the parser');
-    fired = false;
-    expect(denied(await bash($, 'git commit -am x && git push'), 'so it did not ask them')).toBe(
-      true,
-    );
-    expect(w.asked ?? []).toEqual([]);
-  });
-  test('an edit while the push dialog is open refuses the commit with it', async ($, on) => {
-    const w: World = fakeWorld(on, {
-      dialog: (q) => {
-        w.work = { 'a.ts': 'edited' };
-        return q.options[0]?.label;
-      },
-    });
-    await review($);
-    await say($, 'fix the parser');
-    const r = await bash($, 'git commit -am x && git push');
-    expect(denied(r, 'edited after the last review: a.ts')).toBe(true);
-  });
-  test('a review check that fails after the pick refuses the command', async ($, on) => {
-    let picked = false;
-    const ran: string[] = [];
-    fakeWorld(on, {
-      dialog: (q) => {
-        picked = true;
-        return q.options[0]?.label;
-      },
-      fail: (a) => picked && a.includes('write-tree'),
-      shell: (command) => {
-        ran.push(command);
-      },
-    });
-    await review($);
-    await say($, 'fix the parser');
-    const r = await bash($, 'git commit -am x && git push');
-    expect(denied(r, 'failed while checking this command')).toBe(true);
-    expect(ran).toEqual([]);
-  });
-  test('a reviewed change while the push dialog is open does not stop the command', async ($, on) => {
-    const w: World = fakeWorld(on, {
-      dialog: async (q) => {
-        w.work = { 'a.ts': 'two' };
-        await review($);
-        return q.options[0]?.label;
-      },
-    });
-    await review($);
-    await say($, 'fix the parser');
-    expect(ran(await bash($, 'git commit -am x && git push'))).toBe(true);
-  });
-  test(
-    'a call a hook above abandons does not hold off the next question',
-    {
-      plugins: [
-        {
-          name: 'above',
-          tier: 'prepend',
-          register(on) {
-            on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-              if (!e.command.includes('abandoned')) return next(e);
-              void next(e);
-              for (let i = 0; i < 500; i++) await Promise.resolve();
-              return { deny: 'above' };
-            });
-          },
-        },
-      ],
-    },
-    async ($, on) => {
-      let release: ((label: string) => void) | undefined;
-      fakeWorld(on, {
-        dialog: (q) =>
-          q.question.includes('abandoned')
-            ? new Promise<string>((resolve) => {
-                release = resolve;
-              })
-            : q.options[0]?.label,
-      });
-      await say($, 'fix the parser');
-      expect(denied(await bash($, 'git push origin abandoned'), 'above')).toBe(true);
-      expect(ran(await bash($, 'git push'))).toBe(true);
-      release?.('Push');
-    },
-  );
-  test(
-    'a call abandoned before the question is not asked about, nor run',
-    {
-      plugins: [
-        {
-          name: 'above',
-          tier: 'prepend',
-          register(on) {
-            on('tool.call', { tool: 'Bash' }, async (_$, e, next) => {
-              if (!e.command.includes('early')) return next(e);
-              void next(e);
-              for (let i = 0; i < 3; i++) await Promise.resolve();
-              return { deny: 'above' };
-            });
-          },
-        },
-      ],
-    },
-    async ($, on) => {
-      const ran: string[] = [];
-      const w = fakeWorld(on, {
-        dialog: pickFirst,
-        shell: (command) => {
-          ran.push(command);
-        },
-      });
-      await say($, 'fix the parser');
-      expect(denied(await bash($, 'git push origin early'), 'above')).toBe(true);
-      await say($, 'push it');
-      expect(denied(await bash($, 'git push origin early'), 'above')).toBe(true);
-      for (let i = 0; i < 500; i++) await Promise.resolve();
-      expect(w.asked ?? []).toEqual([]);
-      expect(ran).toEqual([]);
-    },
-  );
-  test('a shell alias that runs another program for git is refused before asking', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst, shellAliases: "alias -- git='hub'\n" });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), '`git` is a shell alias here (for `hub`)')).toBe(true);
-    expect(w.asked ?? []).toEqual([]);
-    expect(ran(await bash($, String.raw`\git push`))).toBe(true);
-    expect(w.asked?.[0]?.question).toBe(String.raw`The agent wants to push: \git push. Allow it?`);
-  });
-  test('a shell alias for git that adds a committing inline alias is refused', async ($, on) => {
-    fakeWorld(on, { shellAliases: "alias -- git='git -c alias.st=push'\n" });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git st'), 'is an alias that commits or pushes')).toBe(true);
-  });
-  test('a shell alias that only adds git options is asked about, expanded', async ($, on) => {
-    const w = fakeWorld(on, {
-      dialog: pickFirst,
-      shellAliases: "alias -- git='git --no-pager'\n",
-    });
-    await say($, 'fix the parser');
-    expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(w.asked?.[0]?.question).toBe(
-      'The agent wants to push: git push (aliases expanded: git --no-pager push). Allow it?',
-    );
-  });
-  test('a message while the gate resolves the repository stops the question', async ($, on) => {
+  test('a message the user sends while the gate reads the repository stops it', async ($, on) => {
     let armed = false;
-    const w = fakeWorld(on, {
-      dialog: pickFirst,
+    fakeWorld(on, {
       git: (a) => {
-        if (armed && a.includes('--show-toplevel')) {
+        if (armed && a.includes('for-each-ref')) {
           armed = false;
           void ($ as any).prompt.submit({
             text: 'stop',
@@ -2429,54 +2315,16 @@ describe("the gate's own question", () => {
         return null;
       },
     });
-    await say($, 'fix the parser');
+    await say($, 'push it');
     armed = true;
-    expect(denied(await bash($, 'git push'), 'so it did not ask them')).toBe(true);
-    expect(w.asked ?? []).toEqual([]);
+    expect(denied(await bash($, 'git push'), 'while the gate was checking')).toBe(true);
   });
-  test('a failed question does not block the next one', async ($, on) => {
-    const w = fakeWorld(on, { dialog: {} });
-    await say($, 'fix the parser');
-    await bash($, 'git push');
-    w.dialog = pickFirst;
-    expect(ran(await bash($, 'git push'))).toBe(true);
-  });
-  test('a prompt queued while the dialog is open overtakes the answer', async ($, on) => {
+  test('a message during the review check of a commit and push stops both', async ($, on) => {
+    let armed = false;
     fakeWorld(on, {
-      dialog: async (q) => {
-        await ($ as any).prompt.submit({
-          text: 'wait',
-          origin: { kind: 'composer' },
-          wait: false,
-          turnId: 't',
-        });
-        return q.options[0]?.label;
-      },
-    });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'while the gate was asking')).toBe(true);
-  });
-  test("another session's prompt does not overtake the answer", async ($, on) => {
-    const w = fakeWorld(on, {
-      dialog: async (q) => {
-        await say($, 'hi', 'peer');
-        return q.options[0]?.label;
-      },
-    });
-    await say($, 'fix the parser');
-    expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(w.asked).toHaveLength(1);
-  });
-  test('a message after the answer, while the gate reads the repository, stops the command', async ($, on) => {
-    let answered = false;
-    fakeWorld(on, {
-      dialog: (q) => {
-        answered = true;
-        return q.options[0]?.label;
-      },
       git: (a) => {
-        if (answered && a.includes('for-each-ref')) {
-          answered = false;
+        if (armed && a.includes('write-tree')) {
+          armed = false;
           void ($ as any).prompt.submit({
             text: 'stop',
             origin: { kind: 'composer' },
@@ -2487,146 +2335,45 @@ describe("the gate's own question", () => {
         return null;
       },
     });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'while the gate was checking')).toBe(true);
-  });
-  test('a picked push is not reported as one the user did not ask for', async ($, on) => {
-    const head = 'c'.repeat(40);
-    const theirs = 'd'.repeat(40);
-    fakeWorld(on, {
-      dialog: pickFirst,
-      refs: { 'refs/remotes/origin/main': head },
-      shell(this: World) {
-        this.refs = { 'refs/remotes/origin/main': theirs };
-        this.reflogs = {
-          'refs/remotes/origin/main': [`${theirs} update by push`, `${head} fetch`],
-        };
-      },
-    });
-    await say($, 'fix the parser');
-    const r = await bash($, 'git push');
-    expect(ran(r)).toBe(true);
-    expect(contextOf(r)).toEqual([]);
-  });
-  test('a merge is not reported as a commit the user did not ask for', async ($, on) => {
-    const theirs = 'd'.repeat(40);
-    const w = fakeWorld(on, {
-      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, [theirs]: { 'a.ts': 'merged' } },
-      shell(this: World) {
-        this.head = theirs;
-        this.headLog = [`${theirs} merge topic: Merge made by the 'ort' strategy.`];
-      },
-    });
-    await say($, 'fix the parser');
-    const r = await bash($, 'git merge topic');
-    expect(ran(r)).toBe(true);
-    expect(contextOf(r)).toEqual([]);
-    expect(w.asked).toBeUndefined();
-  });
-  test('a dry run needs neither a review nor an answer', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
-    await say($, 'fix the parser');
-    expect(ran(await bash($, 'git commit --dry-run -am x'))).toBe(true);
-    expect(w.asked).toBeUndefined();
-  });
-  test('an alias whose expansion is too long to show is refused without asking', async ($, on) => {
-    const w = fakeWorld(on, {
-      dialog: pickFirst,
-      shellAliases: `alias -- ship='git push origin ${'x'.repeat(600)}'\n`,
-    });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'ship'), 'too long for the gate to show the user')).toBe(true);
-    expect(w.asked ?? []).toEqual([]);
-  });
-  test('the question shows what a shell alias expands to', async ($, on) => {
-    const w = fakeWorld(on, {
-      dialog: pickFirst,
-      shellAliases: "alias -- ship='git push --force origin main'\n",
-    });
-    await say($, 'fix the parser');
-    await bash($, 'ship');
-    expect(w.asked?.[0]?.question).toBe(
-      'The agent wants to push: ship (aliases expanded: git push --force origin main). Allow it?',
-    );
-  });
-  test('a commit no reviewer saw is refused without asking', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git commit -am x'), 'never reviewed')).toBe(true);
-    expect(w.asked ?? []).toEqual([]);
-  });
-  test('turning it down refuses, and a retry is refused without asking', async ($, on) => {
-    const w = fakeWorld(on, { dialog: (q) => q.options[1]?.label });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'turned down the push')).toBe(true);
-    expect(denied(await bash($, 'git push'), 'turned down the push')).toBe(true);
-    expect(w.asked).toHaveLength(1);
-  });
-  test('a prompt queued into the turn lets the gate ask again', async ($, on) => {
-    const w = fakeWorld(on, { dialog: (q) => q.options[1]?.label });
-    await say($, 'fix the parser');
-    await bash($, 'git push');
-    await ($ as any).prompt.submit({
-      text: 'and the tests',
-      origin: { kind: 'composer' },
-      wait: false,
-      turnId: 't',
-    });
-    await bash($, 'git push');
-    expect(w.asked).toHaveLength(2);
-  });
-  test('an answer that is not the grant label grants nothing', async ($, on) => {
-    fakeWorld(on, { dialog: () => 'Push (Recommended)' });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'with: "Push (Recommended)"')).toBe(true);
-  });
-  test('typed text is passed to the agent, and a retry asks again', async ($, on) => {
-    const w = fakeWorld(on, { dialog: () => 'yes but to origin' });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), '"yes but to origin"')).toBe(true);
-    await bash($, 'git push origin');
-    expect(w.asked).toHaveLength(2);
-  });
-  test('no answer refuses as an unasked push, and a retry asks again', async ($, on) => {
-    const w = fakeWorld(on, { dialog: {} });
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'git push'), 'got no answer when it asked them (')).toBe(true);
-    await bash($, 'git push');
-    expect(w.asked).toHaveLength(2);
-  });
-  test('a reviewed commit and a push ask only about the push', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
     await review($);
-    await say($, 'fix the parser');
-    expect(ran(await bash($, 'git commit -am x && git push'))).toBe(true);
-    expect(w.asked?.map((q) => q.options.map((o) => o.label))).toEqual([['Push', "Don't push"]]);
+    await say($, 'commit and push');
+    armed = true;
+    expect(
+      denied(await bash($, 'git commit -am x && git push'), 'while the gate was checking'),
+    ).toBe(true);
   });
-  test('a history command and a push ask only about the push', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
-    await say($, 'fix the parser');
-    expect(ran(await bash($, 'git pull --rebase && git push'))).toBe(true);
-    expect(w.asked?.[0]?.question).toBe(
-      'The agent wants to push: git pull --rebase && git push. Allow it?',
-    );
-  });
-  test('the question shows every line of the command, with whitespace and controls tamed', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
-    await say($, 'fix the parser');
-    await bash($, 'git status        \n\n  git push   --force origin "a\u001B[2Jb"');
-    expect(w.asked?.[0]?.question).toBe(
-      'The agent wants to push: git status ⏎ git push --force origin "a�[2Jb". Allow it?',
-    );
-  });
-  test('a command too long to show is refused without asking', async ($, on) => {
-    const w = fakeWorld(on, { dialog: pickFirst });
-    await say($, 'fix the parser');
-    const r = await bash($, `git push origin ${'x'.repeat(500)}`);
-    expect(denied(r, 'too long for the gate to show the user (516 characters; 500 at most)')).toBe(
-      true,
-    );
-    expect(w.asked ?? []).toEqual([]);
-    expect(ran(await bash($, `git push origin ${'x'.repeat(484)}`))).toBe(true);
-  });
+  test(
+    'a call a hook above abandons does not run',
+    {
+      plugins: [
+        {
+          name: 'above',
+          tier: 'prepend',
+          register(on) {
+            on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+              if (!e.command.includes('abandoned')) return next(e);
+              // Gives up while the gate is still reading the repository.
+              void next(e);
+              return { deny: 'above' };
+            });
+          },
+        },
+      ],
+    },
+    async ($, on) => {
+      const ranCommands: string[] = [];
+      fakeWorld(on, {
+        shell: (command) => {
+          ranCommands.push(command);
+        },
+      });
+      await say($, 'push it');
+      expect(denied(await bash($, 'git push origin abandoned'), 'above')).toBe(true);
+      await settle();
+      expect(ranCommands).toEqual([]);
+      expect(ran(await bash($, 'git push'))).toBe(true);
+    },
+  );
 });
 
 // A leg still under way: spawned, not yet complete.

@@ -419,10 +419,26 @@ function asked(answer: string): Grant {
   const g: MutableGrant = { commit: false, push: false };
   // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
-  const tail = unquote(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n')).replaceAll(
-    /;(?=\s*(and|then)\b)/gi,
-    ',',
-  );
+  // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
+  // object or destination a push may take, but not the branch a delete needs.
+  // Only here, in the agent's offer: a user's "push it to `later`" defers. A
+  // ref ends on a word character, so a sentence's closing period stays, and
+  // one joining hand-back words ("rather/prefer") stays words.
+  const named = answer
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .slice(-3)
+    .join('\n')
+    // A backticked hand-back stays a word: "or would you `rather` do it?".
+    .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>
+      words(name).some((x) => HANDBACK.has(x)) ? name.replaceAll('/', ' ') : 'it',
+    );
+  const tail = unquote(named)
+    .replaceAll(/[\w.-]+\/[\w./-]*[\w-]/g, (m) =>
+      words(m).some((x) => HANDBACK.has(x)) ? m.replaceAll('/', ' ') : 'it',
+    )
+    .replaceAll(/;(?=\s*(and|then)\b)/gi, ',');
   for (const q of sentences(tail)) {
     if (!q.trim().endsWith('?') || words(q).some((x) => HANDBACK.has(x))) continue;
     // "Do we commit, then push?" asks how work goes; its "then push" offers nothing.

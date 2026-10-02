@@ -9,7 +9,7 @@ After you implement changes, `review-cycle` fans out parallel reviewers, applies
 The gate asks one question of a commit and one of a push:
 
 - **Did a reviewer see it?** Every path a commit records must hold content some review-cycle reviewer saw — unchanged from when that reviewer was spawned until it reported. An edit after the last review, an inline fix included, is unreviewed until a reviewer sees it again. A reviewed commit needs nothing else: it stays on your machine, and undoing one is a `git reset`, so the agent commits reviewed work without asking you.
-- **Did you ask for the push?** The latest message you typed has to ask for one ("push it", "ship it", "ok, we can push", or "delete the branch", since deleting a remote branch is a push) or answer yes to the agent's question about one. Any of these allows every push until your next message, not only the one you named. When it doesn't, the gate asks you itself, in a dialog with fixed choices (**Push** / **Don't push**). The dialog shows the whole command, with any shell aliases it uses expanded, and picking **Push** allows that one command; if the command also commits, the gate checks the review again after you answer. Turning it down stops the gate asking again until your next message, and a message you send while the dialog is open replaces the question. The agent's own question dialogs never grant anything. Messages from other sessions, background-task notifications and subagents never count, and a `-p` run, with no one to ask, is refused. Another plugin that answers question dialogs on your behalf can answer the gate's too.
+- **Did you ask for the push?** The latest message you typed has to ask for one ("push it", "ship it", "ok, we can push", or "delete the branch", since deleting a remote branch is a push) or answer yes to the agent's question about one. Any of these allows every push until your next message, not only the one you named. When it doesn't, the gate refuses the command and tells the agent to stop and ask you in its reply, naming what it would push and where ("Push `fix/x` to origin?"), with the command quoted and any shell aliases expanded. There is no dialog: you answer in your next message, so "yes" allows it, and anything else, such as "not yet, rename the helper first", is simply your next request. If the command also commits, the refusal says to run the commit on its own. Question dialogs, the agent's own or another plugin's, never grant anything. Messages from other sessions, background-task notifications and subagents never count, and a `-p` run, with no one to answer, stays refused.
 
 Both answers come from what the gate watched in this session: which reviewers the engine spawned, what the working tree held when each started and finished, and which prompts you typed. None of it is a file, so there is nothing to mark, accept, or forge.
 
@@ -236,13 +236,7 @@ The gate did not load. Run `/review-cycle:init`: it reports whether the gate is 
 The refusal lists the paths and why. `edited after the last review` means content changed after the last reviewer saw it — an inline fix, cleanup, or an edit made while a reviewer was running. Run `/review-cycle:review` again; it scopes itself to what changed. `never reviewed` after a session restart is expected: the gate remembers reviews for the session only.
 
 **"The user's latest message doesn't ask for a push."**
-The gate asked and got no answer; the refusal names why, such as a dismissed dialog, or a `-p` run with no one to ask. To push anyway, ask in your next message ("push it"). A request made several prompts ago does not carry over, and neither does one relayed by another session.
-
-**"The user turned down the push when the gate asked."**
-You picked **Don't push**, so the gate does not ask again until your next message. Ask for the push there if you changed your mind.
-
-**"This command is too long for the gate to show the user."**
-The gate shows the whole command in its dialog, and does not ask about one longer than 500 characters as shown. Ask for the push in your message, or have the agent run a shorter command.
+The agent tried to push without your asking, and should now be asking you in its reply. Answer yes to its question, or ask in your next message ("push it"). A request made several prompts ago does not carry over, and neither does one relayed by another session; a `-p` run has no one to answer, so its push stays refused.
 
 **A commit landed and the agent reported unreviewed content.**
 Usually a pre-commit hook that rewrites files (a formatter) changed content after the gate checked it. Run the formatter before the review — the cycle's canonicalize phase does this when it can find the project's commands — or scope the hook to staged files.

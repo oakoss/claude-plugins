@@ -11,4 +11,7 @@ test('the review skill commits a clean result and pushes only on request', () =>
   expect(text).toContain('held off a commit');
   expect(text).toContain("Push only when the user's latest message asked for one");
   expect(text).toContain('After "ship it", also open the pull request.');
+  expect(text).toContain(
+    'Without a request, the gate refuses the push; ask them in your reply, naming what it pushes and where, and end your turn.',
+  );
 });
