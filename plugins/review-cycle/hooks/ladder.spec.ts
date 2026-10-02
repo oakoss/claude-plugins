@@ -41,6 +41,10 @@ describe('the rung in force', () => {
   test('defaults to stopping before a push', () => {
     expect(effective(null, null, null)).toEqual({ stopBefore: 'push', source: 'default' });
   });
+  // The option arrives default-filled, so `push` from the user is the default.
+  test('a user value equal to the default is reported as the default', () => {
+    expect(effective('push', null, null)).toEqual({ stopBefore: 'push', source: 'default' });
+  });
   test('an equal project rung leaves the user as the source', () => {
     expect(effective('open PR', 'open PR', null).source).toBe('user');
   });
@@ -49,7 +53,10 @@ describe('the rung in force', () => {
       stopBefore: 'open PR',
       source: 'project',
     });
-    expect(effective('push', 'never stop', null)).toEqual({ stopBefore: 'push', source: 'user' });
+    expect(effective('open PR', 'never stop', null)).toEqual({
+      stopBefore: 'open PR',
+      source: 'user',
+    });
     expect(effective(null, 'merge', null)).toEqual({ stopBefore: 'push', source: 'default' });
   });
   test('the local file sets any rung', () => {

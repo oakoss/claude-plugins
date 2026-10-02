@@ -53,8 +53,10 @@ export function effective(
   local: StopBefore | null,
 ): Ladder {
   if (local !== null) return { stopBefore: local, source: 'local' };
+  // Claude Code fills in the option's default, so a user value equal to it
+  // cannot be told from no value at all.
   const mine: Ladder =
-    user === null
+    user === null || user === DEFAULT_STOP
       ? { stopBefore: DEFAULT_STOP, source: 'default' }
       : { stopBefore: user, source: 'user' };
   if (project !== null && rank(project) < rank(mine.stopBefore)) {
