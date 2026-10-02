@@ -18,7 +18,6 @@ import {
   possibleAliases,
   shownCommand,
   type Classification,
-  type PushSpec,
 } from './command';
 import { covers, grantOf, holdsOf, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
@@ -45,6 +44,7 @@ import {
   type Repo,
   type Run,
 } from './git';
+import type { PushSpec } from './git-args';
 import {
   asks,
   configured,

@@ -152,6 +152,16 @@ describe('gates the accepted shapes', () => {
       expect.objectContaining({ commit: { ...PLAIN, amend: true } }),
     );
   });
+  // `-S` and `-u` take only the rest of the word, so `p` in `-Spkey` and `o`
+  // in `-uno` are values, not the refused -p and -o.
+  test.each([
+    'git commit -uno -m x',
+    'git commit -Spkey -m x',
+    'git commit --gpg-sign=K -m x',
+    'git commit --untracked-files=no -m x',
+  ])('%s', (command) => {
+    expect(classify(command)).toEqual(expect.objectContaining({ kind: 'gated', commit: PLAIN }));
+  });
   test('--dry-run', () => {
     expect(classify('git commit --dry-run')).toEqual(
       expect.objectContaining({ commit: { ...PLAIN, dryRun: true } }),
@@ -1242,12 +1252,32 @@ describe('push arguments', () => {
       expect.objectContaining({ deletes: true }),
     );
     expect(pushOf('git push origin :old')).toEqual(expect.objectContaining({ deletes: true }));
+    expect(pushOf('git push -d origin old')).toEqual(expect.objectContaining({ deletes: true }));
+    expect(pushOf('git push --branches origin')).toEqual(expect.objectContaining({ every: true }));
+    expect(pushOf('git push --force-if-includes origin main')).toEqual(
+      expect.objectContaining({ force: 'lease' }),
+    );
     expect(pushOf('git push --all')).toEqual(expect.objectContaining({ every: true }));
     expect(pushOf('git push --mirror')).toEqual(
       expect.objectContaining({ every: true, deletes: true }),
     );
     expect(pushOf('git push --prune origin')).toEqual(expect.objectContaining({ deletes: true }));
     expect(pushOf('git push origin tag v1')).toEqual(expect.objectContaining({ tags: true }));
+    expect(pushOf('git push origin HEAD:refs/tags/v1')).toEqual(
+      expect.objectContaining({ tags: true }),
+    );
+    expect(pushOf('git push origin +refs/tags/v1')).toEqual(
+      expect.objectContaining({ tags: true, force: 'bare' }),
+    );
+    // `tag` with no name after it is a branch called tag.
+    expect(pushOf('git push origin tag')).toEqual(expect.objectContaining({ tags: false }));
+    // After `--`, a word that looks like an option is a refspec.
+    expect(pushOf('git push origin -- --force')).toEqual(
+      expect.objectContaining({ force: 'none', refspecs: ['--force'] }),
+    );
+    expect(pushOf('git push --signed=if-asked --recurse-submodules=check origin main')).toEqual(
+      expect.objectContaining({ remote: { name: 'origin' }, refspecs: ['main'] }),
+    );
     // No remote, and one built at run time, are told apart.
     expect(pushOf('git push')).toEqual(expect.objectContaining({ remote: 'default' }));
     expect(pushOf('git push "$R" main')).toEqual(
@@ -1291,6 +1321,15 @@ describe('push arguments', () => {
       'git push --forc, an option the gate does not know',
     );
     expect(readable('git push -x')).toContain('git push -x, an option the gate does not know');
+  });
+  test.each([
+    ['git commit -- -a', 'git commit with pathspecs'],
+    ['git commit -', 'git commit with pathspecs'],
+    ['git commit -m x -- "$F"', 'git commit with pathspecs'],
+    ['git commit "$F"', 'git commit with a pathspec built from a variable'],
+    ['git commit --patch', 'git commit --patch, which stages interactively'],
+  ])('%s is refused: %s', (command, reason) => {
+    expect(readable(command)).toContain(reason);
   });
   // A dry run appends flags, which a valueless option would take as its value.
   test.each([

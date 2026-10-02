@@ -10,6 +10,7 @@
 // a quoted heredoc into `cat`. Handed to anything that runs code — a shell,
 // an interpreter, `xargs`, `find -exec` — it is refused.
 
+import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
 import {
   assignmentName,
   parse,
@@ -530,36 +531,6 @@ function hidden(statements: Statement[], text: string, aliases: ShellAliases): s
   });
 }
 
-export type CommitSpec = {
-  all: boolean;
-  amend: boolean;
-  dryRun: boolean;
-  // The commit's own `-c` options, which `-a` staging must see too.
-  config: string[];
-};
-
-export type PushSpec = {
-  // `lease` is --force-with-lease or --force-if-includes; `bare` is --force,
-  // -f, --mirror or a `+refspec`, which overwrite whatever the remote holds.
-  force: 'none' | 'lease' | 'bare';
-  // --tags, --follow-tags, a refs/tags/ refspec or `tag <name>`.
-  tags: boolean;
-  // --delete, -d, --prune, --mirror or a `:ref` refspec.
-  deletes: boolean;
-  // --all, --branches or --mirror.
-  every: boolean;
-  // `default` when none is given, so git's configured default applies.
-  remote: 'default' | 'dynamic' | { name: string };
-  // The refspecs after the remote; null when one is built at run time.
-  refspecs: string[] | null;
-  // The push as git is given it, `-c` options then the words after `push`,
-  // for the gate to repeat as a dry run; null when a word is built at run time.
-  // `end` is the index of the `--` that ends its options, else the length.
-  argv: { config: string[]; args: string[]; end: number } | null;
-  // An earlier step that can retarget the push, unseen by a dry run run first.
-  after: string | null;
-};
-
 type Gated = {
   kind: 'gated';
   // Directory the git statements run in, relative to the shell's cwd.
@@ -572,130 +543,6 @@ type Gated = {
   | { commit: null; history: null; push: PushSpec }
 );
 
-// As for commit, git accepts any unambiguous prefix of a long option, so only
-// these exact names are read and any other is refused.
-const PUSH_FLAGS_LONG = new Set([
-  'set-upstream',
-  'verbose',
-  'quiet',
-  'progress',
-  'no-progress',
-  'verify',
-  'no-verify',
-  'dry-run',
-  'porcelain',
-  'atomic',
-  'no-atomic',
-  // Accepted but not read: a tag flag anywhere counts as a tag push, which
-  // errs toward asking (git keeps --tags and --follow-tags apart).
-  'no-tags',
-  'no-follow-tags',
-  'thin',
-  'no-thin',
-  'ipv4',
-  'ipv6',
-  'no-force-with-lease',
-  'no-force-if-includes',
-  'no-recurse-submodules',
-  'no-signed',
-]);
-const PUSH_VALUE_LONG = new Set(['repo', 'push-option', 'receive-pack', 'exec']);
-// Options whose value may only be attached: `--signed=if-asked`.
-const PUSH_ATTACHED_LONG = new Set(['signed', 'recurse-submodules']);
-const PUSH_FLAGS_SHORT = new Set(['u', 'v', 'q', 'n', '4', '6']);
-
-const valueless = (option: string) => ({
-  refuse: `git push ${option} without a value. Give it one, or leave it out`,
-});
-
-export function pushSpec(args: Word[]): PushSpec | { refuse: string } {
-  const spec: PushSpec = {
-    force: 'none',
-    tags: false,
-    deletes: false,
-    every: false,
-    remote: 'default',
-    refspecs: [],
-    argv: args.some((w) => w.dynamic)
-      ? null
-      : { config: [], args: args.map((w) => w.text), end: args.length },
-    after: null,
-  };
-  const bare = () => (spec.force = 'bare');
-  const lease = () => (spec.force = spec.force === 'bare' ? 'bare' : 'lease');
-  const positional: Word[] = [];
-  let repo: Word | null = null;
-  let options = true;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === undefined) break;
-    // An option is read by its name even when its value is built at run
-    // time: `--force-with-lease=main:$expect`.
-    const t = arg.text;
-    if (!options || !t.startsWith('-') || t === '-') {
-      positional.push(arg);
-      continue;
-    }
-    if (t === '--') {
-      options = false;
-      if (spec.argv !== null) spec.argv.end = i;
-      continue;
-    }
-    if (t.startsWith('--')) {
-      const name = t.slice(2).split('=')[0] ?? '';
-      if (name === 'force') bare();
-      else if (name === 'force-with-lease' || name === 'force-if-includes') lease();
-      else if (name === 'tags' || name === 'follow-tags') spec.tags = true;
-      else if (name === 'delete' || name === 'prune') spec.deletes = true;
-      else if (name === 'all' || name === 'branches') spec.every = true;
-      else if (name === 'mirror') {
-        // git help push: refs are "force updated" and missing ones "removed".
-        bare();
-        spec.deletes = true;
-        spec.every = true;
-      } else if (PUSH_VALUE_LONG.has(name)) {
-        const attached = t.includes('=');
-        if (name === 'repo') {
-          repo = attached ? { ...arg, text: t.slice(t.indexOf('=') + 1) } : (args[i + 1] ?? null);
-        }
-        if (!attached && ++i >= args.length) return valueless(`--${name}`);
-      } else if (!PUSH_FLAGS_LONG.has(name) && !PUSH_ATTACHED_LONG.has(name)) {
-        return {
-          refuse: `git push --${name}, an option the gate does not know. Spell it out in full`,
-        };
-      }
-      continue;
-    }
-    for (let j = 1; j < t.length; j++) {
-      const letter = t.charAt(j);
-      if (letter === 'f') bare();
-      else if (letter === 'd') spec.deletes = true;
-      else if (letter === 'o') {
-        // `-o value` or `-ovalue`: the rest of the word, or the next, is the value.
-        if (j === t.length - 1 && ++i >= args.length) return valueless('-o');
-        break;
-      } else if (!PUSH_FLAGS_SHORT.has(letter)) {
-        return {
-          refuse: `git push -${letter}, an option the gate does not know. Spell it out in full`,
-        };
-      }
-    }
-  }
-  // `--repo` stands in for the remote argument, which wins when both are given.
-  const [remote = repo ?? undefined, ...refspecs] = positional;
-  if (remote !== undefined) spec.remote = remote.dynamic ? 'dynamic' : { name: remote.text };
-  spec.refspecs = refspecs.some((w) => w.dynamic) ? null : refspecs.map((w) => w.text);
-  // Read from the text as written, so `"+$B"` still shows its `+`.
-  for (const [k, { text: r }] of refspecs.entries()) {
-    if (r.startsWith('+')) bare();
-    if (r.startsWith(':')) spec.deletes = true;
-    if (/(^|:)refs\/tags\//.test(r.replace(/^\+/, ''))) spec.tags = true;
-    // `git push origin tag v1` pushes refs/tags/v1.
-    if (r === 'tag' && k < refspecs.length - 1) spec.tags = true;
-  }
-  return spec;
-}
-
 export type Classification = { kind: 'none' } | { kind: 'refuse'; reason: string } | Gated;
 
 const SHAPE =
@@ -705,137 +552,6 @@ function joinDir(base: string, dirs: string[]): string {
   let d = base;
   for (const x of dirs) d = x.startsWith('/') ? x : d === '.' ? x : `${d}/${x}`;
   return d;
-}
-
-const COMMIT_VALUE_SHORT = new Set(['m', 'F', 'C', 'c', 't']);
-// Git also accepts any unambiguous prefix of a long option (`--ame` amends),
-// so only these exact names are read; any other long option is refused.
-const COMMIT_FLAGS_LONG = new Set([
-  'all',
-  'amend',
-  'dry-run',
-  'no-edit',
-  'edit',
-  'no-verify',
-  'verify',
-  'signoff',
-  'no-signoff',
-  'no-gpg-sign',
-  'allow-empty',
-  'allow-empty-message',
-  'quiet',
-  'verbose',
-  'status',
-  'no-status',
-  'reset-author',
-  'short',
-  'branch',
-  'porcelain',
-  'long',
-  'null',
-  'no-post-rewrite',
-  'gpg-sign',
-  'untracked-files',
-]);
-const COMMIT_VALUE_LONG = new Set([
-  'message',
-  'file',
-  'reuse-message',
-  'reedit-message',
-  'template',
-  'author',
-  'date',
-  'cleanup',
-  'fixup',
-  'squash',
-  'trailer',
-]);
-
-function commitSpec(args: Word[]): CommitSpec | { refuse: string } {
-  const spec: CommitSpec = { all: false, amend: false, dryRun: false, config: [] };
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === undefined) break;
-    const t = arg.text;
-    if (arg.dynamic && !t.startsWith('-')) {
-      // A dynamic word here is only acceptable as an option's value, which
-      // the option branches below consume; standing alone it is a pathspec.
-      return {
-        refuse:
-          'git commit with a pathspec built from a variable or substitution. Stage with `git add`, then commit',
-      };
-    }
-    if (t === '--') {
-      if (i + 1 < args.length)
-        return {
-          refuse:
-            'git commit with pathspecs. Stage them with `git add`, then run `git commit` alone',
-        };
-      continue;
-    }
-    if (t.startsWith('--')) {
-      const name = t.slice(2).split('=')[0] ?? '';
-      const value = t.includes('=');
-      if (name === 'all') spec.all = true;
-      else if (name === 'amend') spec.amend = true;
-      else if (name === 'dry-run') spec.dryRun = true;
-      else if (name === 'patch' || name === 'interactive')
-        return { refuse: `git commit --${name}, which stages interactively` };
-      else if (name === 'include' || name === 'only')
-        return {
-          refuse: `git commit --${name}. Stage with \`git add\`, then run \`git commit\` alone`,
-        };
-      else if (name === 'pathspec-from-file')
-        return { refuse: 'git commit --pathspec-from-file. Stage with `git add`, then commit' };
-      else if (COMMIT_VALUE_LONG.has(name)) {
-        if (!value) i++;
-      } else if (!COMMIT_FLAGS_LONG.has(name)) {
-        return {
-          refuse: `git commit --${name}, an option the gate does not know. Spell it out in full`,
-        };
-      }
-      continue;
-    }
-    if (t.startsWith('-') && t.length > 1) {
-      for (let j = 1; j < t.length; j++) {
-        const f = t[j] ?? '';
-        if (f === 'a') spec.all = true;
-        else if (f === 'p') return { refuse: 'git commit -p, which stages interactively' };
-        else if (f === 'i' || f === 'o')
-          return {
-            refuse: `git commit -${f}. Stage with \`git add\`, then run \`git commit\` alone`,
-          };
-        else if (f === 'S' || f === 'u') break;
-        else if (COMMIT_VALUE_SHORT.has(f)) {
-          if (j === t.length - 1) i++;
-          break;
-        }
-      }
-      continue;
-    }
-    return {
-      refuse: 'git commit with pathspecs. Stage them with `git add`, then run `git commit` alone',
-    };
-  }
-  return spec;
-}
-
-function addArgv(g: GitCall): string[] | { refuse: string } {
-  for (const w of g.args) {
-    if (w.dynamic)
-      return { refuse: 'git add with an argument built from a variable or substitution' };
-    if (w.text.includes('{') && w.pattern)
-      return { refuse: 'git add with a brace expansion; list the paths' };
-    if (
-      /^(-p|-i|-e|--patch|--interactive|--edit)$/.test(w.text) ||
-      /^-[a-zA-Z]*[pie][a-zA-Z]*$/.test(w.text)
-    ) {
-      return { refuse: `git add ${w.text}, which stages interactively` };
-    }
-    if (w.text.startsWith('--pathspec-from-file'))
-      return { refuse: 'git add --pathspec-from-file' };
-  }
-  return [...g.config, 'add', ...g.args.map((w) => w.text)];
 }
 
 // Git calls anywhere in the command whose subcommand git does not ship under
@@ -1085,7 +801,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
           reason: `git add joined with \`${st.op === '\n' ? 'a newline' : st.op}\`. ${SHAPE}`,
         };
       }
-      const argv = addArgv(g);
+      const argv = addArgv(g.config, g.args);
       if ('refuse' in argv) return { kind: 'refuse', reason: `${argv.refuse}. ${SHAPE}` };
       adds.push(argv);
     } else if (g.sub === 'push') {
