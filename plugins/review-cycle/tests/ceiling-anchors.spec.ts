@@ -29,4 +29,7 @@ test('the ceiling is 2 light and 3 full, and the last iteration holds its findin
   );
   expect(text).toContain('ceiling of <max> reached, N findings held');
   expect(text).toContain('<criterion from fix-vs-defer policy | held at the ceiling>');
+  expect(text.split('\n').find((l) => l.startsWith('description:'))).toContain(
+    "at the round limit it holds that round's findings unfixed, and asks whether to apply them or commit with them deferred.",
+  );
 });
