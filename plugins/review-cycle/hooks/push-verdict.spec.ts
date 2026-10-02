@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { classify, type PushSpec } from './command';
+import { classify } from './command';
 import type { PushLevel } from './consent';
+import type { PushSpec } from './git-args';
 import { askingReason, neededFor, parseDryRun, unasked, type DefaultBranch } from './push-verdict';
 
 function specOf(command: string): PushSpec {

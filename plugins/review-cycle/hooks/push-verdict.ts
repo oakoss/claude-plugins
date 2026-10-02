@@ -1,7 +1,7 @@
 // Whether the user's request covers a push the gate is judging. Pure.
 
-import type { PushSpec } from './command';
 import { covers, type Grant, type PushLevel } from './consent';
+import type { PushSpec } from './git-args';
 
 export type Needed = Exclude<PushLevel, 'none'>;
 
