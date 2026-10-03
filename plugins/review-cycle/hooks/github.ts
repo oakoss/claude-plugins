@@ -302,11 +302,13 @@ function reviewOf(query: string, call: ApiCall): GhAction {
     return { kind: 'approve' };
   }
   if (values.some((v) => v === undefined || v === null)) return unreadEvent;
-  // A review given a whole input object (`input: $input`), or no event at all,
-  // may carry its event in any value read at run time.
-  const opaque = args.length === 0 || /\binput\s*:\s*\$/.test(query);
-  if (opaque && [...call.fields.values()].includes(null)) return unreadEvent;
-  return { kind: 'comment' };
+  // A review given a whole input object (`input: $input`) carries its event in
+  // that variable or its `[event]` key, either of which may be read at run time.
+  const objects = [...query.matchAll(/\binput\s*:\s*\$(\w+)/g)].map((m) => m[1]);
+  const hidden = [...call.fields].some(
+    ([k, v]) => v === null && objects.some((o) => k === o || k === `${o}[event]`),
+  );
+  return hidden ? unreadEvent : { kind: 'comment' };
 }
 
 // The query with its strings and comments blanked, so text inside them names

@@ -243,6 +243,12 @@ describe('gh api graphql', () => {
     const query =
       'mutation($b: String) { addPullRequestReview(input:{event: COMMENT, body: $b}) { x } }';
     expect(q(query, '-F b=@notes.md')).toEqual(['comment']);
+    const input =
+      'mutation($input: AddPullRequestReviewInput!) { addPullRequestReview(input: $input) { x } }';
+    expect(q(input, "-f 'input[event]=COMMENT' -F 'input[body]=@notes.md'")).toEqual(['comment']);
+    const literal =
+      'mutation($b: String) { addPullRequestReview(input:{pullRequestId: "x", body: $b}) { x } }';
+    expect(q(literal, '-F b=@notes.md')).toEqual(['comment']);
   });
   test('a variable named event is read from its field, not its definition', () => {
     const query =
