@@ -12,7 +12,7 @@
 
 import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
 import { apiActions, type GhAction, type GhContext, type Unnamed } from './github';
-import { publishAt } from './publish';
+import { PUBLISH_TEXT, publishActionsOf } from './publish';
 import {
   assignmentName,
   parse,
@@ -991,7 +991,6 @@ const RELEASE_WRITES = new Set(['create', 'new', 'edit', 'delete', 'delete-asset
 const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new|ready)\b/;
 const GH_WRITE =
   /\bgh\b[^|;&\n]*\b((pr\s+(?:[^\s;&|]+\s+)*?(merge|review|comment)|issue\s+(?:[^\s;&|]+\s+)*?comment|release\s+(?:[^\s;&|]+\s+)*?(create|new|edit|delete|upload))\b|api\s(?:[^|;&\n]*\s)?(-X|--method|-[fF]|--field|--raw-field|--input))/;
-const PUBLISH = /\b(npm|pnpm|yarn|bun|cargo)\b[^|;&\n]*\bpublish\b|\boakum\b[^|;&\n]*\brelease\b/;
 
 const isRepo = (t: string) => t === '-R' || t === '--repo';
 const namesRepo = (t: string) => isRepo(t) || t.startsWith('--repo=') || /^-R./.test(t);
@@ -1171,15 +1170,11 @@ function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
   // `gh` is a data command to the git check: what it is given never runs git.
   if (first !== 'gh' && DATA.has(first)) return [];
   const found: GhAction[] = [];
-  // The words after `npm run` are a script's name and arguments, not commands.
-  let scripted = false;
+  const published = publishActionsOf(st.words);
   for (const [at, word] of st.words.entries()) {
-    const tool = basename(word.text);
-    const underYarn = st.words.slice(0, at).some((w) => basename(w.text) === 'yarn');
-    const published = scripted ? null : publishAt(tool, st.words, at, underYarn);
-    if (published === 'script') scripted = true;
-    else if (published) found.push(published);
-    if (tool !== 'gh') continue;
+    const publish = published.get(at);
+    if (publish) found.push(publish);
+    if (basename(word.text) !== 'gh') continue;
     const before = st.words.slice(0, at);
     const fed = before.some((w) => FROM_INPUT.has(basename(w.text)));
     // `env -C dir`, `sudo -D dir`: the merge runs where the lookup does not.
@@ -1201,7 +1196,7 @@ export function ghActions(command: string, aliases: ShellAliases = new Map()): G
   if ('error' in parsed) {
     const found: GhAction[] = [];
     if (GH_PR.test(parsed.text)) found.push({ kind: 'pr' });
-    if (GH_WRITE.test(parsed.text) || PUBLISH.test(parsed.text)) {
+    if (GH_WRITE.test(parsed.text) || PUBLISH_TEXT.test(parsed.text)) {
       found.push({ kind: 'unread', why: 'it does not parse', remedy: 'Write it so it parses.' });
     }
     return found;

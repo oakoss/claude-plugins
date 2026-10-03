@@ -91,11 +91,30 @@ describe('package publishes are the release step', () => {
 
   test('a publisher command built at run time before a publish word is unread', () => {
     expect(kinds('npm "$CMD" publish')).toEqual(['unread']);
+    expect(kinds('npm "$CMD" pub')).toEqual(['unread']);
   });
-  test('a command that does not parse is refused when it publishes', () => {
-    expect(kinds('npm publish "')).toEqual(['unread']);
-    expect(kinds('oakum release "')).toEqual(['unread']);
-    expect(kinds('npm test "')).toEqual([]);
+  test('only Yarn running npm makes its dry run unknown', () => {
+    expect(kinds('timeout 60 npm publish --dry-run')).toEqual([]);
+  });
+  test.each([
+    'npm publish "',
+    'pnpm publish "',
+    'yarn publish "',
+    'bun publish "',
+    'cargo publish "',
+    'oakum release "',
+  ])('%s does not parse, and is refused as a publish', (command) => {
+    expect(kinds(command)).toEqual(['unread']);
+  });
+  test.each(['npm test "', 'cargo build --release "', 'echo publish "', 'echo release "'])(
+    '%s does not parse, and publishes nothing',
+    (command) => {
+      expect(kinds(command)).toEqual([]);
+    },
+  );
+  test('publishes and gh steps keep their word order', () => {
+    expect(kinds('xargs gh pr merge 1 npm publish')).toEqual(['unread', 'release']);
+    expect(kinds('npm publish gh pr ready')).toEqual(['release', 'pr']);
   });
 });
 
