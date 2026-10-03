@@ -177,6 +177,8 @@ describe('gh api graphql', () => {
     ['mutation { resolveReviewThread(input:{}) { clientMutationId } }', ['comment']],
     ['mutation { createCommitOnBranch(input:{}) { clientMutationId } }', ['push']],
     ['mutation { createLinkedBranch(input:{}) { clientMutationId } }', ['push']],
+    ['mutation { markPullRequestReadyForReview(input:{}) { clientMutationId } }', ['pr']],
+    ['mutation { convertPullRequestToDraft(input:{}) { clientMutationId } }', []],
     ['mutation { updatePullRequestBranch(input:{}) { clientMutationId } }', ['push']],
     ['mutation { mergePullRequest (input:{pullRequestId:"x"}) { x } }', ['merge']],
     ['mutation { addComment(input:{subjectId:"x", body:"createRef(x)"}) { x } }', ['comment']],
@@ -348,7 +350,10 @@ describe('GitHub MCP tools', () => {
     ],
     ['mcp__github__update_pull_request_branch', {}, { kind: 'push', ref: 'head' }],
     ['mcp__github__list_pull_requests', {}, null],
-    ['mcp__github__update_pull_request', { draft: false }, null],
+    ['mcp__github__update_pull_request', { draft: false }, { kind: 'pr' }],
+    ['mcp__github__update_pull_request', { draft: true }, null],
+    ['mcp__github__update_pull_request', { draft: 'false' }, { kind: 'pr' }],
+    ['mcp__github__update_pull_request', { title: 'x' }, null],
   ])('%s %j', (tool, input, expected) => {
     expect(mcpAction(tool, input)).toEqual(expected);
   });

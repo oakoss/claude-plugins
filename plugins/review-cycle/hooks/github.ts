@@ -237,6 +237,7 @@ function restAction(
 const BY_ID: GhAction = { kind: 'merge', admin: false, lookup: { cannot: 'unnamed' } };
 const MUTATIONS: Record<string, Readonly<GhAction> | 'review' | 'ref'> = {
   createPullRequest: { kind: 'pr' },
+  markPullRequestReadyForReview: { kind: 'pr' },
   revertPullRequest: { kind: 'pr' },
   mergePullRequest: BY_ID,
   enablePullRequestAutoMerge: BY_ID,
@@ -412,6 +413,7 @@ const MCP_TOOLS = [
   'merge_pull_request',
   'pull_request_review_write',
   'update_pull_request_branch',
+  'update_pull_request',
   ...MCP_COMMENT,
   ...MCP_PUSH,
 ];
@@ -473,6 +475,10 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
     return { kind: text(input.event)?.toUpperCase() === 'APPROVE' ? 'approve' : 'comment' };
   }
   if (name === 'update_pull_request_branch') return { kind: 'push', ref: 'head' };
+  // Marking a draft ready for review is the pull request step; other edits are not.
+  if (name === 'update_pull_request') {
+    return input.draft === false || input.draft === 'false' ? { kind: 'pr' } : null;
+  }
   if (MCP_COMMENT.has(name)) return { kind: 'comment' };
   // gh's lookup of the default branch needs the repository spelled out.
   if (repo === null) return { kind: 'push', ref: { asks: 'it does not name its repository' } };

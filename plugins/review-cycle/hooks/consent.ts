@@ -70,6 +70,9 @@ const REQUESTED: Record<string, Verb[]> = {
   release: ['release'],
   // "cut a release", read as one word by `prPhrase`.
   cutrelease: ['release'],
+  publish: ['release'],
+  // "mark it ready for review", read as one word by `prPhrase`.
+  markready: ['pr'],
   address: ['comment'],
   reply: ['comment'],
   respond: ['comment'],
@@ -87,15 +90,23 @@ const OFFERED: Record<string, Verb[]> = {
   approving: ['approve'],
   releasing: ['release'],
   cuttingrelease: ['release'],
+  publishing: ['release'],
+  markingready: ['pr'],
   addressing: ['comment'],
   replying: ['comment'],
   responding: ['comment'],
 };
 
 // "open a PR", "create the pull request", "opening a new draft PR"; "cut a
-// release", "publish the new release".
+// release", "publish the new release"; "mark it ready for review", "ready for
+// review".
 function prPhrase(text: string): string {
   return text
+    .replaceAll(
+      /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
+      (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
+    )
+    .replaceAll(/\bready for review\b/gi, 'markready')
     .replaceAll(
       /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
       (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
@@ -263,6 +274,39 @@ const TAIL = new Set([
   'feedback',
   'comments',
   'comment',
+]);
+
+// What a publish or release may also name: "publish the package to npm". Kept
+// out of TAIL, so "push to npm" asks for no git push.
+const PACKAGE = new Set(['package', 'packages', 'crate', 'crates', 'npm', 'registry']);
+const PUBLISH_TAIL = new Set([
+  'it',
+  'this',
+  'that',
+  'them',
+  'these',
+  'those',
+  'all',
+  'of',
+  'my',
+  'our',
+  'your',
+  'me',
+  'as',
+  'well',
+  'the',
+  'a',
+  'version',
+  // A backticked name: "Publish `review-cycle@0.25.0`?".
+  'quoted',
+  'to',
+  'now',
+  'please',
+  'thanks',
+  'too',
+  'again',
+  'right',
+  'away',
 ]);
 
 // After these, only a destination: "push to main", not "commit to this approach".
@@ -457,13 +501,24 @@ function words(text: string): string[] {
 // names a source, not where the push goes.
 function isTail(tail: string[], verb: string): boolean {
   if (/^(merg|approv)/.test(verb)) return namesPullRequest(tail);
-  // "Release 0.25.0?", "Reply to the review on #116?".
-  const numbered = /^(releas|cut|address|repl|respond)/.test(verb);
+  // "Release 0.25.0?", "Publish 0.25.0?", "Reply to the review on #116?".
+  const numbered = /^(releas|cut|publish|address|repl|respond)/.test(verb);
+  const packaged = /^(releas|cutrel|cuttingrel|publish)/.test(verb);
   for (const [i, word] of tail.entries()) {
+    // A publish goes to or on a registry: "publish to npm", not "publish to it".
+    const where = word === 'to' || word === 'on';
+    const after = tail.slice(i + 1).find((x) => !/^(the|a|my|our|your)$/.test(x)) ?? '';
+    if (verb.startsWith('publish') && where && !PACKAGE.has(after)) return false;
     if (numbered && (word === 'on' || /^\d+$/.test(word))) continue;
+    if (packaged && PACKAGE.has(word)) continue;
+    // "Publish branch" is a first push in editors, so a publish names no git work.
+    if (verb.startsWith('publish') && !PUBLISH_TAIL.has(word)) return false;
     if (!TAIL.has(word)) return false;
     if (word === 'from' && !verb.endsWith('pr')) return false;
-    if (TOWARD.has(word) && !DESTINATION.has(tail[i + 1] ?? '')) return false;
+    const next = tail[i + 1] ?? '';
+    if (TOWARD.has(word) && !DESTINATION.has(next) && !(packaged && PACKAGE.has(next))) {
+      return false;
+    }
     if ((word === 'message' || word === 'msg') && !tail.slice(0, i).includes('with')) return false;
   }
   return true;
@@ -637,10 +692,11 @@ function asked(answer: string): Grant {
 
 const PUSH_WORD =
   /\b(push|pushes|pushing|pushed|ship|ships|shipping|shipped|forcepush|forcepushing)\b/i;
-const PR_WORD = /\b(openpr|openingpr)\b/i;
+const PR_WORD = /\b(openpr|openingpr|markready|markingready)\b/i;
 const MERGE_WORD = /\b(merge|merges|merging|merged)\b/i;
 const APPROVE_WORD = /\b(approve|approves|approving|approved)\b/i;
-const RELEASE_WORD = /\b(release|releases|releasing|released|cutrelease|cuttingrelease)\b/i;
+const RELEASE_WORD =
+  /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
 // A step mentioned without being asked for holds every step but a commit, read
 // by mention rather than grammar since a hold only makes the agent ask.

@@ -48,6 +48,34 @@ describe('merges, approvals, releases and review replies', () => {
     ['cut a release', RELEASE],
     ['ok, publish the new release', RELEASE],
     ['the release notes look good', NONE],
+    ['publish it', RELEASE],
+    ['ok, publish to npm', RELEASE],
+    ['publish the package', RELEASE],
+    ['publish to crates', RELEASE],
+    ['publish the docs to the wiki', NONE],
+    ['publish the package to npm', RELEASE],
+    ['release the package', RELEASE],
+    // Package words belong to a publish: "push to npm" asks for no git push.
+    ['push to npm', NONE],
+    ['push the package', NONE],
+    ['commit the package', NONE],
+    // "Publish branch" is an editor's first push, not a release.
+    ['publish the branch', NONE],
+    ['publish the PR to github', NONE],
+    ['publish the changes', NONE],
+    ['publish them', RELEASE],
+    ['publish all packages', RELEASE],
+    ['publish my package to npm', RELEASE],
+    ['commit, push and publish it as well', { ...BOTH, release: true }],
+    ['publish on npm', RELEASE],
+    ['publish it to the registry', RELEASE],
+    ['publish to the npm registry', RELEASE],
+    ['publish to it', NONE],
+    ['publish to the', NONE],
+    ['publish to github', NONE],
+    ['mark it ready for review', PR],
+    ['mark the PR as ready', PR],
+    ['ok, ready for review', PR],
     ['address the review comments', REPLY],
     ['reply to the reviewer', REPLY],
     ['address the PR feedback and push', { ...REPLY, push: 'push' }],
@@ -61,6 +89,18 @@ describe('merges, approvals, releases and review replies', () => {
   test('a yes to an offered merge or release grants it', () => {
     expect(grantOf('yes', 'Merge #116 now?')).toEqual(MERGE);
     expect(grantOf('yes', 'Should I cut the release?')).toEqual(RELEASE);
+    expect(grantOf('yes', 'Publish `review-cycle@0.25.0` to npm?')).toEqual(RELEASE);
+    expect(grantOf('yes', 'Should I mark #119 ready for review?')).toEqual(PR);
+  });
+  test('a mention of publishing or of a ready pull request holds', () => {
+    expect(holdsOf('did it publish?')).toBe(true);
+    expect(holdsOf('push to npm')).toBe(true);
+    expect(grantOf('yes', 'Should I publish #119?')).toEqual(RELEASE);
+    expect(grantOf('yes', 'Should I publish it to the npm registry?')).toEqual(RELEASE);
+    expect(grantOf('yes', 'Publish `x@1` to the registry?')).toEqual(RELEASE);
+    expect(holdsOf('is it ready for review?')).toBe(true);
+    expect(holdsOf('publish it')).toBe(false);
+    expect(liftsHold(grantOf('publish it'))).toBe(true);
   });
   // The questions the gate's refusals give the agent to ask (register.ts GH_ASK).
   test.each([

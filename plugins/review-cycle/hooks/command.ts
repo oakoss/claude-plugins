@@ -12,6 +12,7 @@
 
 import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
 import { apiActions, type GhAction, type GhContext } from './github';
+import { publishAt } from './publish';
 import {
   assignmentName,
   parse,
@@ -987,9 +988,10 @@ const MERGE_VALUE = new Set([
 const RELEASE_WRITES = new Set(['create', 'new', 'edit', 'delete', 'delete-asset', 'upload']);
 // Read as text when the command does not parse: opening a pull request, and
 // any other gh write, which then cannot be read further.
-const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new)\b/;
+const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new|ready)\b/;
 const GH_WRITE =
   /\bgh\b[^|;&\n]*\b((pr\s+(?:[^\s;&|]+\s+)*?(merge|review|comment)|issue\s+(?:[^\s;&|]+\s+)*?comment|release\s+(?:[^\s;&|]+\s+)*?(create|new|edit|delete|upload))\b|api\s(?:[^|;&\n]*\s)?(-X|--method|-[fF]|--field|--raw-field|--input))/;
+const PUBLISH = /\b(npm|pnpm|yarn|bun|cargo)\b[^|;&\n]*\bpublish\b|\boakum\b[^|;&\n]*\brelease\b/;
 
 const isRepo = (t: string) => t === '-R' || t === '--repo';
 const namesRepo = (t: string) => isRepo(t) || t.startsWith('--repo=') || /^-R./.test(t);
@@ -1127,6 +1129,12 @@ function ghAt(
       return { kind: flagSet(rest, 'approve', 'a', 'bFR') ? 'approve' : 'comment' };
     }
     if (verb === 'comment') return { kind: 'comment' };
+    // `--undo` turns it back into a draft, which asks nobody to review it.
+    if (verb === 'ready') {
+      // A value built at run time may be `false`, which marks it ready.
+      const built = rest.some((w) => w.dynamic && w.text.startsWith('--undo='));
+      return flagSet(rest, 'undo', null, '') && !built ? null : { kind: 'pr' };
+    }
   }
   if (group === 'issue' && verb === 'comment') return { kind: 'comment' };
   if (group === 'release' && RELEASE_WRITES.has(verb)) return { kind: 'release' };
@@ -1136,7 +1144,7 @@ function ghAt(
 // Commands that hand their input to the command they run.
 const FROM_INPUT = new Set(['xargs', 'parallel']);
 
-// As for git, `gh` at any word runs unless the first word is a data command:
+// As for git, `gh` or a publisher at any word runs unless the first word is a data command:
 // `timeout 60 gh pr create`, `sudo -u bot gh …`. Quoted text is not read, so
 // `bash -c "gh pr create"` goes unseen: a well-meaning agent writes it plainly.
 function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
@@ -1144,8 +1152,15 @@ function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
   // `gh` is a data command to the git check: what it is given never runs git.
   if (first !== 'gh' && DATA.has(first)) return [];
   const found: GhAction[] = [];
+  // The words after `npm run` are a script's name and arguments, not commands.
+  let scripted = false;
   for (const [at, word] of st.words.entries()) {
-    if (basename(word.text) !== 'gh') continue;
+    const tool = basename(word.text);
+    const underYarn = st.words.slice(0, at).some((w) => basename(w.text) === 'yarn');
+    const published = scripted ? null : publishAt(tool, st.words, at, underYarn);
+    if (published === 'script') scripted = true;
+    else if (published) found.push(published);
+    if (tool !== 'gh') continue;
     const before = st.words.slice(0, at);
     const fed = before.some((w) => FROM_INPUT.has(basename(w.text)));
     // `env -C dir`, `sudo -D dir`: the merge runs where the lookup does not.
@@ -1159,14 +1174,17 @@ function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
   return found;
 }
 
-// Every gh command in the command that opens, merges, approves, comments on,
-// releases or pushes, read as text when the command does not parse.
+// Every gh command or package publish in the command that opens, merges,
+// approves, comments on, releases or pushes, read as text when the command
+// does not parse.
 export function ghActions(command: string, aliases: ShellAliases = new Map()): GhAction[] {
   const parsed = parse(command, aliases);
   if ('error' in parsed) {
     const found: GhAction[] = [];
     if (GH_PR.test(parsed.text)) found.push({ kind: 'pr' });
-    if (GH_WRITE.test(parsed.text)) found.push({ kind: 'unread', why: 'it does not parse' });
+    if (GH_WRITE.test(parsed.text) || PUBLISH.test(parsed.text)) {
+      found.push({ kind: 'unread', why: 'it does not parse', remedy: 'Write it so it parses.' });
+    }
     return found;
   }
   const found: GhAction[] = [];
