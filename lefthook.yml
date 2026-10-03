@@ -35,10 +35,12 @@ pre-commit:
       run: pnpm typecheck
     oxlint:
       glob: '*.{ts,js,cjs,mjs}'
+      exclude: ['types/**']
       run: pnpm exec oxlint --fix {staged_files}
       stage_fixed: true
     oxfmt:
       glob: '*.{ts,js,cjs,mjs,json}'
+      exclude: ['types/**']
       run: pnpm exec oxfmt {staged_files}
       stage_fixed: true
     beads:
