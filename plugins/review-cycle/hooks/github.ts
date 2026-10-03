@@ -3,11 +3,12 @@
 
 import type { Word } from './shell';
 
+// `head` is a pull request's own branch, looked up by `gh pr view <head>`.
 // `asks` says why the push asks whatever the setting; a `force` one needs a
 // request for a bare force, since the API has no lease.
 export type PushRef =
   | { branch: string; repo: string | null }
-  | 'head'
+  | { head: readonly string[] }
   | { asks: string; force?: true };
 
 export type Unnamed = { cannot: 'elsewhere' | 'beside' | 'unnamed' };
@@ -133,13 +134,18 @@ function readApi(words: Word[]): ApiCall {
   return call;
 }
 
-// A branch as GitHub's ref APIs take it, or why the push it names asks.
+// A branch as GitHub's ref APIs take it, or why the push it names asks: `null`
+// is a name read at run time, `undefined` none at all.
 function branchOf(name: string | null | undefined, missing: string): string | { asks: string } {
+  if (name === null) {
+    return { asks: 'the branch it names is built at run time or read from a file' };
+  }
   if (name?.startsWith('refs/tags/')) return { asks: 'it pushes a tag' };
+  if (name?.startsWith('refs/') && !name.startsWith('refs/heads/')) {
+    return { asks: `it writes \`${name}\`, which is no branch` };
+  }
   const branch = name?.replace(/^refs\/heads\//, '');
-  if (branch === undefined || branch === '') return { asks: missing };
-  if (branch.startsWith('refs/')) return { asks: `it writes \`${branch}\`, which is no branch` };
-  return branch;
+  return branch === undefined || branch === '' ? { asks: missing } : branch;
 }
 
 // Where a push lands: `moved` when something outside its words picks the
@@ -188,7 +194,14 @@ function restAction(
             : { cannot: 'unnamed' };
     return { kind: 'merge', admin: false, lookup };
   }
-  if (pull?.[2] === 'update-branch') return { kind: 'push', ref: 'head' };
+  if (pull?.[2] === 'update-branch') {
+    const number = pull[1] ?? '';
+    const unlookable = where === 'moved' || (where === 'beside' && repo === null);
+    if (unlookable || !/^\d+$/.test(number)) {
+      return { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } };
+    }
+    return { kind: 'push', ref: { head: [number, ...(repo === null ? [] : ['--repo', repo])] } };
+  }
   if (pull?.[2] === 'reviews' || pull?.[2]?.startsWith('reviews/')) {
     if (unknown('event')) {
       return {
@@ -214,7 +227,7 @@ function restAction(
   }
   if (path === 'git/refs' && method === 'POST') {
     const ref = field('ref');
-    const named = ref?.startsWith('refs/') ? ref : null;
+    const named = ref === null || ref?.startsWith('refs/') ? ref : undefined;
     return push(named, 'the ref it creates is not written out');
   }
   const ref = /^git\/refs\/(heads|tags)\/(.+)$/.exec(path);
@@ -235,7 +248,7 @@ function restAction(
 // GitHub has none that writes a release. A review approves when its event
 // says APPROVE.
 const BY_ID: GhAction = { kind: 'merge', admin: false, lookup: { cannot: 'unnamed' } };
-const MUTATIONS: Record<string, Readonly<GhAction> | 'review' | 'ref'> = {
+const MUTATIONS: Record<string, Readonly<GhAction> | 'review' | 'ref' | 'update'> = {
   createPullRequest: { kind: 'pr' },
   markPullRequestReadyForReview: { kind: 'pr' },
   revertPullRequest: { kind: 'pr' },
@@ -244,7 +257,7 @@ const MUTATIONS: Record<string, Readonly<GhAction> | 'review' | 'ref'> = {
   enqueuePullRequest: BY_ID,
   addPullRequestReview: 'review',
   submitPullRequestReview: 'review',
-  updatePullRequestBranch: { kind: 'push', ref: 'head' },
+  updatePullRequestBranch: 'update',
   ...Object.fromEntries(
     [
       'addComment',
@@ -291,18 +304,20 @@ function reviewOf(query: string, call: ApiCall): GhAction {
   // Every review in the query counts, so one that approves is never read as a
   // comment. `(?<!\$)` skips a variable's definition (`$event: …Event`).
   const args = [...query.matchAll(/(?<!\$)\bevent\s*:\s*(\$?\w+)/g)].map((m) => m[1] ?? '');
+  // A variable no field sets takes its default; a declared one with neither
+  // sends no event (a pending review), and an undeclared one is unread.
   const values = args.map((arg) => {
     if (!arg.startsWith('$')) return arg;
     const name = arg.slice(1);
-    return call.fields.has(name)
-      ? call.fields.get(name)
-      : new RegExp(String.raw`\$${name}\s*:\s*[\w!]+\s*=\s*(\w+)`).exec(query)?.[1];
+    if (call.fields.has(name)) return call.fields.get(name);
+    const declared = new RegExp(String.raw`\$${name}\s*:\s*[^,)=$]*(?:=\s*(\w+))?`).exec(query);
+    return declared === null ? null : (declared[1] ?? '');
   });
   const keys = [...call.fields.keys()].filter((k) => /(^|\[)event\]?$/.test(k));
   if (values.some((v) => approves(v)) || keys.some((k) => approves(call.fields.get(k)))) {
     return { kind: 'approve' };
   }
-  if (values.some((v) => v === undefined || v === null)) return unreadEvent;
+  if (values.includes(null)) return unreadEvent;
   // A review given a whole input object (`input: $input`) carries its event in
   // that variable or its `[event]` key, either of which may be read at run time.
   const objects = [...query.matchAll(/\binput\s*:\s*\$(\w+)/g)].map((m) => m[1]);
@@ -336,11 +351,28 @@ function graphqlActions(call: ApiCall): GhAction[] {
     if (!new RegExp(String.raw`\b${name}\s*\(`).test(ops)) continue;
     if (action === 'review') found.push(reviewOf(ops, call));
     else if (action === 'ref') {
+      // `force: $f` reads the field that sets `$f`.
+      const forced = (value: string | undefined) => {
+        const name = /^\$(\w+)$/.exec(value ?? '')?.[1];
+        const set = name === undefined ? value : call.fields.get(name);
+        return set !== 'false';
+      };
       const force =
-        /\bforce\s*:(?!\s*false\b)/.test(ops) ||
+        [...ops.matchAll(/\bforce\s*:\s*(\$?\w+)/g)].some((m) => forced(m[1])) ||
         [...call.fields].some(([k, v]) => /(^|\[)force\]?$/.test(k) && v !== 'false');
       const asks = 'the gate does not read which branch a GraphQL mutation writes';
       found.push({ kind: 'push', ref: force ? { asks, force: true } : { asks } });
+    } else if (action === 'update') {
+      // A rebase rewrites the branch, as `gh pr update-branch --rebase` does.
+      const method = (value: string | undefined) => {
+        const name = /^\$(\w+)$/.exec(value ?? '')?.[1];
+        return name === undefined ? value : call.fields.get(name);
+      };
+      const rebases =
+        [...ops.matchAll(/\bupdateMethod\s*:\s*(\$?\w+)/g)].some((m) => method(m[1]) !== 'MERGE') ||
+        [...call.fields].some(([k, v]) => /(^|\[)updateMethod\]?$/.test(k) && v !== 'MERGE');
+      const asks = 'it names the pull request whose branch it updates by id';
+      found.push({ kind: 'push', ref: rebases ? { asks, force: true } : { asks } });
     } else found.push(action);
   }
   return found;
@@ -474,7 +506,13 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   if (name === 'pull_request_review_write') {
     return { kind: text(input.event)?.toUpperCase() === 'APPROVE' ? 'approve' : 'comment' };
   }
-  if (name === 'update_pull_request_branch') return { kind: 'push', ref: 'head' };
+  if (name === 'update_pull_request_branch') {
+    const number = text(input.pullNumber);
+    if (number === null || !/^\d+$/.test(number) || repo === null) {
+      return { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } };
+    }
+    return { kind: 'push', ref: { head: [number, '--repo', repo] } };
+  }
   // Marking a draft ready for review is the pull request step; other edits are not.
   if (name === 'update_pull_request') {
     return input.draft === false || input.draft === 'false' ? { kind: 'pr' } : null;
@@ -482,6 +520,6 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   if (MCP_COMMENT.has(name)) return { kind: 'comment' };
   // gh's lookup of the default branch needs the repository spelled out.
   if (repo === null) return { kind: 'push', ref: { asks: 'it does not name its repository' } };
-  const branch = branchOf(text(input.branch), 'it names no branch');
+  const branch = branchOf(text(input.branch) ?? undefined, 'it names no branch');
   return { kind: 'push', ref: typeof branch === 'string' ? { branch, repo } : branch };
 }

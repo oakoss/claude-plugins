@@ -391,9 +391,12 @@ class Lexer {
             text += expanded;
             dynamic = true;
             // These give several words even in double quotes: "$@", "${a[@]}",
-            // zsh's "${(@)a}", "${=x}" and "${(s: :)x}" (measured in bash and zsh).
+            // "${u:-$@}", bash's "${!p@}", zsh's "${(@)a}", "${=x}", "${(s: :)x}"
+            // and "${(Z+c+)x}" (measured in bash and zsh).
             const zshIndex = /^\$\w+$/.test(expanded) && this.s.startsWith('[@]', this.i);
-            if (zshIndex || /^\$(@|\{[#!]?@|\{[^}]*\[@\]|\{=|\{\([^)]*[@sfz0])/.test(expanded)) {
+            const several =
+              /^\$(@|\{[#!]?@|\{[^}]*\[@\]|\{=|\{\([^)]*[@sfzZ0]|\{![^}]*@\}|\{[^}]*\$\{?@)/;
+            if (zshIndex || several.test(expanded)) {
               splits = true;
             }
           } else {

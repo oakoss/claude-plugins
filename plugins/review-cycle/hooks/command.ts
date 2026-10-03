@@ -11,7 +11,7 @@
 // an interpreter, `xargs`, `find -exec` — it is refused.
 
 import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
-import { apiActions, type GhAction, type GhContext } from './github';
+import { apiActions, type GhAction, type GhContext, type Unnamed } from './github';
 import { publishAt } from './publish';
 import {
   assignmentName,
@@ -1051,9 +1051,12 @@ function builtArgs(rest: Word[], values: ReadonlySet<string>): boolean {
 
 const REVIEW_VALUE = new Set(['-b', '--body', '-F', '--body-file', '-R', '--repo']);
 
-// What `gh pr merge` names for `gh pr view` to look up, or why it cannot be.
-function mergeOf(words: Word[], from: number, repo: Word | null, context: GhContext): GhAction {
-  const rest = words.slice(from);
+// What a `gh pr` command names for `gh pr view` to look up, or why it cannot be.
+function lookupOf(
+  rest: Word[],
+  repo: Word | null,
+  context: GhContext,
+): readonly string[] | Unnamed {
   let selector: Word | null = null;
   let target = repo;
   for (let i = 0; i < rest.length; i++) {
@@ -1064,13 +1067,18 @@ function mergeOf(words: Word[], from: number, repo: Word | null, context: GhCont
     } else if (MERGE_VALUE.has(t)) i++;
     else if (!t.startsWith('-') && selector === null) selector = rest[i] ?? null;
   }
-  const admin = flagSet(rest, 'admin', null, '');
-  if (context === 'beside') return { kind: 'merge', admin, lookup: { cannot: 'beside' } };
-  if (context === 'elsewhere' || target?.dynamic) {
-    return { kind: 'merge', admin, lookup: { cannot: 'elsewhere' } };
-  }
-  const lookup = [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
-  return { kind: 'merge', admin, lookup };
+  if (context === 'beside') return { cannot: 'beside' };
+  if (context === 'elsewhere' || target?.dynamic) return { cannot: 'elsewhere' };
+  return [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
+}
+
+function mergeOf(words: Word[], from: number, repo: Word | null, context: GhContext): GhAction {
+  const rest = words.slice(from);
+  return {
+    kind: 'merge',
+    admin: flagSet(rest, 'admin', null, ''),
+    lookup: lookupOf(rest, repo, context),
+  };
 }
 
 // The gh command at `at`. An alias or extension is not read, so the agent
@@ -1134,6 +1142,17 @@ function ghAt(
       // A value built at run time may be `false`, which marks it ready.
       const built = rest.some((w) => w.dynamic && w.text.startsWith('--undo='));
       return flagSet(rest, 'undo', null, '') && !built ? null : { kind: 'pr' };
+    }
+    // Merges or rebases the base into the pull request's own branch.
+    if (verb === 'update-branch') {
+      if (fed || builtArgs(rest, new Set(['-R', '--repo']))) return unreadArgs;
+      if (flagSet(rest, 'rebase', null, '')) {
+        return { kind: 'push', ref: { asks: "it rebases the pull request's branch", force: true } };
+      }
+      const lookup = lookupOf(rest, seen.repo, context);
+      return 'cannot' in lookup
+        ? { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } }
+        : { kind: 'push', ref: { head: lookup } };
     }
   }
   if (group === 'issue' && verb === 'comment') return { kind: 'comment' };

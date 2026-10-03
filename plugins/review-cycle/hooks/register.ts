@@ -772,8 +772,13 @@ function onGithubToolError(
   next: NextOf<GithubHook> & Caught,
 ): ReturnType<CatchHandler<GithubHook>> {
   if (next.called) return next(e);
+  const why =
+    next.error.message ??
+    (next.error.kind === 'timeout'
+      ? 'it ran out of time; calling it again may work'
+      : next.error.kind);
   return deny(
-    `the gate could not check this call (${next.error.message ?? next.error.kind}), so it is refused.`,
+    `the gate could not check this call (${why}), so it is refused. Tell the user; they can make the change on GitHub themselves.`,
   );
 }
 
@@ -1163,7 +1168,7 @@ async function ghRead(
 
 const CANNOT: Record<'elsewhere' | 'unnamed', string> = {
   elsewhere:
-    'where it merges is picked at run time (a `--repo` built at run time, `GH_REPO=`, `GIT_DIR=`, `env -C`), so the gate cannot tell a release from a merge',
+    'something outside the words the gate looks up picks where it merges (a `--repo` built at run time, `GH_REPO=`, `GIT_DIR=`, `env -C`, `--hostname`, a URL on another host), so the gate cannot tell a release from a merge',
   unnamed:
     'it does not name the pull request by number and repository, so the gate cannot tell a release from a merge',
 };
@@ -1182,16 +1187,47 @@ async function mergeStep(
 // Why a push the ladder lets through asks anyway, or null: one to the
 // default branch, or one whose branch the gate cannot tell.
 async function pushAsks($: $, ref: PushRef): Promise<string | null> {
-  if (ref === 'head') return null;
   if ('asks' in ref) return ref.asks;
-  const args = ['repo', 'view', ...(ref.repo === null ? [] : [ref.repo])];
+  let { branch, repo } = 'head' in ref ? { branch: '', repo: null as string | null } : ref;
+  if ('head' in ref) {
+    const head = await ghRead(
+      $,
+      [
+        'pr',
+        'view',
+        ...ref.head,
+        '--json',
+        'url,isCrossRepository,headRefName',
+        '--jq',
+        String.raw`"\(.isCrossRepository) \(.url) \(.headRefName)"`,
+      ],
+      'the pull request it updates',
+    );
+    if ('asks' in head) return head.asks;
+    const read = /^(true|false) https:\/\/([^/\s]+\/[^/\s]+\/[^/\s]+)\/pull\/\d+ (\S+)$/.exec(
+      head.out,
+    );
+    if (read === null) return `looking up the pull request it updates printed \`${head.out}\``;
+    if (read[1] === 'true') return "it updates a branch in the pull request's fork";
+    // HOST/OWNER/NAME from the pull request's URL, so an Enterprise host survives.
+    repo = read[2] ?? null;
+    branch = read[3] ?? '';
+  }
   const r = await ghRead(
     $,
-    [...args, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
+    [
+      'repo',
+      'view',
+      ...(repo === null ? [] : [repo]),
+      '--json',
+      'defaultBranchRef',
+      '--jq',
+      '.defaultBranchRef.name',
+    ],
     'the default branch',
   );
   if ('asks' in r) return r.asks;
-  return r.out === ref.branch ? `it pushes to \`${ref.branch}\`, the default branch` : null;
+  return r.out === branch ? `it pushes to \`${branch}\`, the default branch` : null;
 }
 
 // Each example is one the consent grammar grants on a yes (consent.spec.ts).

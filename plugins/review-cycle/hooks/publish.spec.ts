@@ -61,6 +61,8 @@ describe('package publishes are the release step', () => {
     'cargo publish --dry-run',
     'cargo publish -n',
     'cargo publish -qn',
+    'cargo publish -npn',
+    'cargo publish -n -q',
     'npm --dry-run publish',
     'npm --json view publish',
     'npm -g i pub',
