@@ -12,7 +12,8 @@ const PUBLISH_VALUES = ['--tag', '--access', '--otp', '--registry', '--loglevel'
 type Publisher = {
   values: ReadonlySet<string>;
   publishes: 'publish' | 'release';
-  // The shortest abbreviation the tool accepts: npm takes any from `pub`.
+  // The shortest abbreviation the tool accepts: npm takes any from `pu`
+  // (npm 11.17: `npm pu --help` prints "Publish a package"; `npm p` is unknown).
   abbreviates?: string;
   // Words that pass the command on: `pnpm recursive publish`.
   passes?: ReadonlySet<string>;
@@ -30,7 +31,7 @@ const PUBLISHERS: Record<string, Publisher> = {
       ...PUBLISH_VALUES,
     ]),
     publishes: 'publish',
-    abbreviates: 'pub',
+    abbreviates: 'pu',
     dryRuns: true,
   },
   pnpm: {
