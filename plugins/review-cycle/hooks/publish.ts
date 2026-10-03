@@ -11,8 +11,9 @@ import type { Word } from './shell';
 const PUBLISH_VALUES = ['--tag', '--access', '--otp', '--registry', '--loglevel'];
 type Publisher = {
   values: ReadonlySet<string>;
-  // The words that publish: npm takes any abbreviation from `pub`.
-  publishes: (word: string) => boolean;
+  publishes: 'publish' | 'release';
+  // The shortest abbreviation the tool accepts: npm takes any from `pub`.
+  abbreviates?: string;
   // Words that pass the command on: `pnpm recursive publish`.
   passes?: ReadonlySet<string>;
   // Whether `--dry-run` is known to skip the upload.
@@ -28,7 +29,8 @@ const PUBLISHERS: Record<string, Publisher> = {
       '--cache',
       ...PUBLISH_VALUES,
     ]),
-    publishes: (w) => /^pub(l(i(sh?)?)?)?$/.test(w),
+    publishes: 'publish',
+    abbreviates: 'pub',
     dryRuns: true,
   },
   pnpm: {
@@ -43,20 +45,38 @@ const PUBLISHERS: Record<string, Publisher> = {
       '--workspace-concurrency',
       ...PUBLISH_VALUES,
     ]),
-    publishes: (w) => w === 'publish',
+    publishes: 'publish',
     passes: new Set(['recursive', 'm', 'multi']),
     dryRuns: true,
   },
-  yarn: { values: new Set(['--cwd']), publishes: (w) => w === 'publish', dryRuns: false },
-  bun: { values: new Set(['--cwd']), publishes: (w) => w === 'publish', dryRuns: true },
+  yarn: { values: new Set(['--cwd']), publishes: 'publish', dryRuns: false },
+  bun: { values: new Set(['--cwd']), publishes: 'publish', dryRuns: true },
   cargo: {
     values: new Set(['-Z', '--config', '-C', '--color']),
-    publishes: (w) => w === 'publish',
+    publishes: 'publish',
     dryRuns: true,
   },
   // `oakum release` has no dry run.
-  oakum: { values: new Set(), publishes: (w) => w === 'release', dryRuns: false },
+  oakum: { values: new Set(), publishes: 'release', dryRuns: false },
 };
+
+function publishes(publisher: Publisher, word: string): boolean {
+  const { abbreviates } = publisher;
+  if (abbreviates) return word.startsWith(abbreviates) && publisher.publishes.startsWith(word);
+  return word === publisher.publishes;
+}
+
+// A publish read as text, for a command that does not parse: a publisher, then
+// its command written in full later on the same line.
+const toolsByCommand = new Map<string, string[]>();
+for (const [tool, { publishes }] of Object.entries(PUBLISHERS)) {
+  toolsByCommand.set(publishes, [...(toolsByCommand.get(publishes) ?? []), tool]);
+}
+export const PUBLISH_TEXT = new RegExp(
+  [...toolsByCommand]
+    .map(([command, tools]) => String.raw`\b(${tools.join('|')})\b[^|;&\n]*\b${command}\b`)
+    .join('|'),
+);
 
 // The package managers whose `run` hands the rest of the words to a script.
 const RUNS_SCRIPTS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
@@ -85,11 +105,29 @@ function cargoCluster(cluster: string): boolean {
   return false;
 }
 
+const basename = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+
+// The publish each word starts, by its index: a publisher at any word runs
+// (`timeout 60 npm publish`, `npx oakum release`). The words after `npm run`
+// are a script's name and arguments, so the scan stops there.
+export function publishActionsOf(words: Word[]): ReadonlyMap<number, GhAction> {
+  const found = new Map<number, GhAction>();
+  // A Yarn command running npm (`yarn --cwd x npm publish`).
+  let underYarn = false;
+  for (const [at, word] of words.entries()) {
+    const tool = basename(word.text);
+    const published = publishAt(tool, words, at, underYarn);
+    if (published === 'script') break;
+    if (published) found.set(at, published);
+    underYarn ||= tool === 'yarn';
+  }
+  return found;
+}
+
 // The publish a word starts, when `tool` (its basename) is a publisher:
-// `npm publish`, `pnpm -r publish`, `cargo +nightly publish`, `npx oakum
-// release`. `script` when the words after it are a package script's.
-// `underYarn` is a Yarn command running it (`yarn --cwd x npm publish`).
-export function publishAt(
+// `npm publish`, `pnpm -r publish`, `cargo +nightly publish`. `script` when
+// the words after it are a package script's.
+function publishAt(
   tool: string,
   words: Word[],
   at: number,
@@ -110,7 +148,7 @@ export function publishAt(
   if (command === undefined) return null;
   const later = words.slice(i + 1).map((w) => w.text);
   if (command.dynamic) {
-    if (!later.some((t) => publisher.publishes(t))) return null;
+    if (!later.some((t) => publishes(publisher, t))) return null;
     return {
       kind: 'unread',
       why: `its \`${name}\` command is built at run time`,
@@ -118,7 +156,7 @@ export function publishAt(
     };
   }
   if (RUNS_SCRIPTS.has(name) && /^(run|run-script)$/.test(command.text)) return 'script';
-  if (!publisher.publishes(command.text)) return null;
+  if (!publishes(publisher, command.text)) return null;
   // `yarn npm publish` is Yarn's, whose dry run the gate does not know.
   const dryRuns = publisher.dryRuns && !(name === 'npm' && underYarn);
   const all = words.slice(at + 1).map((w) => w.text);
