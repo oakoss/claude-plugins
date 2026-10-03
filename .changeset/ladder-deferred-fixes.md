@@ -1,7 +1,0 @@
----
-review-cycle: patch
----
-
-Updating a pull request's branch from its base is now the push step in every form: `gh pr update-branch`, the GitHub MCP tool `update_pull_request_branch`, and `gh api …/pulls/<n>/update-branch`. The gate looks up the pull request's head branch and asks when it is the repository's default branch, as other GitHub pushes do. One it cannot look up, one whose branch lives in a fork, and a rebase (`gh pr update-branch --rebase`, or GraphQL's `updateMethod: REBASE`, which rewrite the branch and so need a request for a bare force) ask whatever the setting. A pull request named by URL is checked against its own repository's default branch.
-
-The gate asks less where it asked for nothing: `cargo publish -npn` is a dry run; a GraphQL ref mutation whose `force` is a variable set to `false` is not forced; a branch named `refs/heads/refs/topic` is a branch; and a GraphQL review whose declared event variable nothing sets is a comment. Refusals name their cause more exactly: a branch read at run time or from a file (`-F branch=@b.txt`) says so instead of "names no branch", the merge refusal for another repository or host no longer says the place is "picked at run time", and a GitHub MCP call the gate failed to check tells the agent to hand the change to the user. More quoted shell forms that split into several words (`"${u:-$@}"`, `"${u:-${@}}"`, bash's `"${!prefix@}"`, zsh's `"${(Z+c+)x}"`) are read as splitting, so a flag hidden in one is refused.
