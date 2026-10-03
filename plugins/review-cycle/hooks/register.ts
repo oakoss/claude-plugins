@@ -1246,7 +1246,7 @@ async function judgeGh(
       case 'unread': {
         const remedy = action.remedy ?? 'Run the gh command itself, written out.';
         return {
-          deny: `${action.why}, so the gate cannot tell what it does on GitHub, and nothing ran. ${remedy} The command: ${shown}`,
+          deny: `${action.why}, so the gate cannot tell which step it takes, and nothing ran. ${remedy} The command: ${shown}`,
         };
       }
       case 'comment': {

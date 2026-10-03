@@ -3004,6 +3004,34 @@ describe('the stop-before setting', () => {
     expect(denied(r, "doesn't ask for a push")).toBe(true);
     expect(denied(r, '"Push `fix/x` to `origin`?"')).toBe(true);
   });
+  test('a package publish is the release step', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') } });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'pnpm -r publish'), "doesn't ask for a release")).toBe(true);
+    expect(denied(await bash($, 'pnpm exec oakum release'), 'a release')).toBe(true);
+    expect(ran(await bash($, 'npm publish --dry-run'))).toBe(true);
+    await say($, 'publish it');
+    expect(ran(await bash($, 'pnpm -r publish'))).toBe(true);
+  });
+  test('a publish below the rung runs, noted; a subagent is refused', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'fix the parser');
+    const r = await bash($, 'cargo publish');
+    expect(has(contextOf(r), 'ran a release without asking')).toBe(true);
+    const sub = await bash($, 'npm publish', { agentId: 'sub-1' });
+    expect(denied(sub, 'subagents do not commit, push, open, merge')).toBe(true);
+  });
+  test('marking a pull request ready is the pull request step', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('open PR') } });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr ready 119'), "doesn't ask for a pull request")).toBe(true);
+    const draft = { owner: 'o', repo: 'r', pullNumber: 119, draft: false };
+    const mcpReady = await mcp($, 'mcp__github__update_pull_request', draft);
+    expect(denied(mcpReady, "doesn't ask for a pull request")).toBe(true);
+    expect(ran(await bash($, 'gh pr ready 119 --undo'))).toBe(true);
+    await say($, 'mark it ready for review');
+    expect(ran(await bash($, 'gh pr ready 119'))).toBe(true);
+  });
   test('a GitHub MCP write from a subagent is refused', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') } });
     await say($, 'ship it');
