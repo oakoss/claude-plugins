@@ -516,7 +516,7 @@ function isTail(tail: string[], verb: string): boolean {
     if (!TAIL.has(word)) return false;
     if (word === 'from' && !verb.endsWith('pr')) return false;
     const next = tail[i + 1] ?? '';
-    if (TOWARD.has(word) && !DESTINATION.has(next) && !(packaged && PACKAGE.has(next))) {
+    if (TOWARD.has(word) && !DESTINATION.has(next) && !(packaged && PACKAGE.has(after))) {
       return false;
     }
     if ((word === 'message' || word === 'msg') && !tail.slice(0, i).includes('with')) return false;

@@ -69,6 +69,8 @@ describe('merges, approvals, releases and review replies', () => {
     ['commit, push and publish it as well', { ...BOTH, release: true }],
     ['publish on npm', RELEASE],
     ['publish it to the registry', RELEASE],
+    ['publish it to our registry', RELEASE],
+    ['publish it to my registry', RELEASE],
     ['publish to the npm registry', RELEASE],
     ['publish to it', NONE],
     ['publish to the', NONE],
