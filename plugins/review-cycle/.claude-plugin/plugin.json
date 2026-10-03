@@ -1,6 +1,6 @@
 {
   "name": "review-cycle",
-  "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push or pull request you did not request, unless you let it go further.",
+  "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push, pull request, merge or release you did not request, unless you let it go further.",
   "version": "0.24.0",
   "author": {
     "name": "Oak OSS",
@@ -21,7 +21,7 @@
     "stopBefore": {
       "type": "string",
       "title": "Stop before",
-      "description": "The first step the agent asks you about unless you requested it: commit, push, open PR, merge, release, or never stop. Steps before it run without asking; a force push, a push to the default branch, a tag push and a remote delete always ask. A project's .claude/settings.json can only stop earlier; .claude/settings.local.json can set any step. Only you can change this, here in /config.",
+      "description": "The first step the agent asks you about unless you requested it: commit, push, open PR, merge, release, or never stop. Steps before it run without asking; a force push, a push to the default branch, a tag push, a remote delete, a merge with --admin and a comment on GitHub always ask. A project's .claude/settings.json can only stop earlier; .claude/settings.local.json can set any step. Only you can change this, here in /config.",
       "options": ["commit", "push", "open PR", "merge", "release", "never stop"],
       "default": "push"
     }

@@ -19,18 +19,37 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 
 // What the user's message asked for. `push` is only what they asked to push:
 // the push a pull request needs is judged by the gate, which still asks
-// before a tag or default-branch push it would carry.
-export type Grant = Readonly<{ commit: boolean; push: PushLevel; pr: boolean }>;
+// before a tag or default-branch push it would carry. `comment` is a reply on
+// a pull request, asked for by addressing its review.
+export type Grant = Readonly<{
+  commit: boolean;
+  push: PushLevel;
+  pr: boolean;
+  merge: boolean;
+  approve: boolean;
+  release: boolean;
+  comment: boolean;
+}>;
 
-export const NO_GRANT: Grant = Object.freeze({ commit: false, push: 'none', pr: false });
+export const NO_GRANT: Grant = Object.freeze({
+  commit: false,
+  push: 'none',
+  pr: false,
+  merge: false,
+  approve: false,
+  release: false,
+  comment: false,
+});
 
 // Compared by rank, so a level added between two others keeps its meaning.
 export function covers(grant: Grant, level: PushLevel): boolean {
   return pushRank(grant.push) >= pushRank(level);
 }
 
-type Verb = 'commit' | 'push' | 'force' | 'pr';
-type MutableGrant = { commit: boolean; push: PushLevel; pr: boolean };
+type Verb = 'commit' | 'push' | 'force' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+type MutableGrant = { -readonly [K in keyof Grant]: Grant[K] };
+
+const fresh = (): MutableGrant => ({ ...NO_GRANT });
 
 function raise(g: MutableGrant, level: PushLevel): void {
   if (pushRank(level) > pushRank(g.push)) g.push = level;
@@ -46,6 +65,14 @@ const REQUESTED: Record<string, Verb[]> = {
   forcepush: ['push', 'force'],
   // "open a PR", read as one word by `prPhrase`.
   openpr: ['pr'],
+  merge: ['merge'],
+  approve: ['approve'],
+  release: ['release'],
+  // "cut a release", read as one word by `prPhrase`.
+  cutrelease: ['release'],
+  address: ['comment'],
+  reply: ['comment'],
+  respond: ['comment'],
 };
 
 const OFFERED: Record<string, Verb[]> = {
@@ -56,14 +83,27 @@ const OFFERED: Record<string, Verb[]> = {
   deleting: ['push'],
   forcepushing: ['push', 'force'],
   openingpr: ['pr'],
+  merging: ['merge'],
+  approving: ['approve'],
+  releasing: ['release'],
+  cuttingrelease: ['release'],
+  addressing: ['comment'],
+  replying: ['comment'],
+  responding: ['comment'],
 };
 
-// "open a PR", "create the pull request", "opening a new draft PR".
+// "open a PR", "create the pull request", "opening a new draft PR"; "cut a
+// release", "publish the new release".
 function prPhrase(text: string): string {
-  return text.replaceAll(
-    /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
-    (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
-  );
+  return text
+    .replaceAll(
+      /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
+      (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
+    )
+    .replaceAll(
+      /\b(?:(cut|create|make|publish|do)|(cutting|creating|making|publishing|doing))\s+(?:(?:a|an|the|new)\s+)*release\b/gi,
+      (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
+    );
 }
 
 // A bare --force named apart from a lease ("`--force`", "bare force push",
@@ -215,6 +255,14 @@ const TAIL = new Set([
   'quoted',
   'lease',
   'nolease',
+  'version',
+  'review',
+  'reviews',
+  'reviewer',
+  'reviewers',
+  'feedback',
+  'comments',
+  'comment',
 ]);
 
 // After these, only a destination: "push to main", not "commit to this approach".
@@ -230,7 +278,52 @@ const DESTINATION = new Set([
   'it',
   'pr',
   'branch',
+  'review',
+  'reviewer',
+  'reviewers',
+  'feedback',
+  'comments',
 ]);
+
+// A merge or approval names a pull request: "merge it", "merge the PR",
+// "approve 116". A tail naming branches or a destination ("merge main into
+// it") asks for a local `git merge`, which the push checks judge.
+const PULL_REQUEST = new Set([
+  'it',
+  'this',
+  'that',
+  'the',
+  'pr',
+  'now',
+  'please',
+  'thanks',
+  'too',
+  'again',
+  'right',
+  'away',
+]);
+// A pull request first, then at most the base it goes into: "merge 116 into
+// main", but not "merge main into it" or "merge this into the PR", which
+// name branches to merge locally.
+const BASE = new Set(['main', 'master', 'base', 'default']);
+function namesPullRequest(tail: string[]): boolean {
+  const into = tail.findIndex((x) => TOWARD.has(x) || x === 'on');
+  const named = into === -1 ? tail : tail.slice(0, into);
+  if (!named.every((x) => PULL_REQUEST.has(x) || /^\d+$/.test(x))) return false;
+  if (into === -1) return true;
+  const where = tail.slice(into + 1);
+  const pr = named.some((x) => /^\d+$/.test(x) || x === 'pr' || x === 'it' || x === 'this');
+  return (
+    pr &&
+    /^(into|to|against)$/.test(tail[into] ?? '') &&
+    where.some((x) => BASE.has(x)) &&
+    where.every((x) => BASE.has(x) || x === 'the' || x === 'branch')
+  );
+}
+
+// Replying names the review it answers, so "address the TODO comments" asks
+// for nothing on GitHub.
+const REVIEW = new Set(['review', 'reviews', 'reviewer', 'reviewers', 'feedback', 'pr']);
 
 // Opening a part joined by "and" or "then", these carry over to the parts
 // after it: "I didn't ask you to review and commit", "they review then commit".
@@ -363,7 +456,11 @@ function words(text: string): string[] {
 // "from" names a pull request's head ("open a PR from fix/x"); after a push it
 // names a source, not where the push goes.
 function isTail(tail: string[], verb: string): boolean {
+  if (/^(merg|approv)/.test(verb)) return namesPullRequest(tail);
+  // "Release 0.25.0?", "Reply to the review on #116?".
+  const numbered = /^(releas|cut|address|repl|respond)/.test(verb);
   for (const [i, word] of tail.entries()) {
+    if (numbered && (word === 'on' || /^\d+$/.test(word))) continue;
     if (!TAIL.has(word)) return false;
     if (word === 'from' && !verb.endsWith('pr')) return false;
     if (TOWARD.has(word) && !DESTINATION.has(tail[i + 1] ?? '')) return false;
@@ -394,7 +491,9 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
 }
 
 function isObject(verb: string, tail: string[]): boolean {
-  return !verb.startsWith('delet') || tail.at(-1) === 'branch';
+  if (verb.startsWith('delet')) return tail.at(-1) === 'branch';
+  if (/^(address|repl|respond)/.test(verb)) return tail.some((x) => REVIEW.has(x));
+  return true;
 }
 
 // What a clause leaves for the clauses after it in the sentence: a mood
@@ -435,6 +534,10 @@ function grammarGrant(
       if (granted.includes('push')) raise(into, 'push');
       if (granted.includes('force')) raise(into, 'lease');
       if (granted.includes('pr')) into.pr = true;
+      if (granted.includes('merge')) into.merge = true;
+      if (granted.includes('approve')) into.approve = true;
+      if (granted.includes('release')) into.release = true;
+      if (granted.includes('comment')) into.comment = true;
       // "push it with `--force`", "force push it without a lease"; not a
       // `--force` given as the commit message.
       const bare = tail.indexOf('nolease');
@@ -481,12 +584,25 @@ function isQuestion(sentence: string): boolean {
 }
 
 function settled(g: MutableGrant): Grant {
-  return Object.freeze({ commit: g.commit, push: g.push, pr: g.pr });
+  return Object.freeze({ ...g });
+}
+
+// Each step a grant can name besides the push level.
+const STEPS = ['commit', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
+
+function merged(into: MutableGrant, from: MutableGrant): void {
+  for (const step of STEPS) into[step] ||= from[step];
+  raise(into, from.push);
+}
+
+// Any step beyond the push the grant names.
+function asksBeyondPush(g: Grant): boolean {
+  return g.pr || g.merge || g.approve || g.release || g.comment;
 }
 
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string): Grant {
-  const g: MutableGrant = { commit: false, push: 'none', pr: false };
+  const g = fresh();
   // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
@@ -522,16 +638,33 @@ function asked(answer: string): Grant {
 const PUSH_WORD =
   /\b(push|pushes|pushing|pushed|ship|ships|shipping|shipped|forcepush|forcepushing)\b/i;
 const PR_WORD = /\b(openpr|openingpr)\b/i;
+const MERGE_WORD = /\b(merge|merges|merging|merged)\b/i;
+const APPROVE_WORD = /\b(approve|approves|approving|approved)\b/i;
+const RELEASE_WORD = /\b(release|releases|releasing|released|cutrelease|cuttingrelease)\b/i;
 
-// A push or PR mentioned without being asked for holds, read by mention rather
-// than grammar since a hold only makes the agent ask. Commits are not held.
+// A step mentioned without being asked for holds every step but a commit, read
+// by mention rather than grammar since a hold only makes the agent ask.
 export function holdsOf(prompt: string, previousAnswer = ''): boolean {
   const grant = grantOf(prompt, previousAnswer);
   const text = prPhrase(unquote(forcePhrase(prompt)));
   if (PUSH_WORD.test(text) && !covers(grant, 'push')) return true;
   if (PR_WORD.test(text) && !grant.pr) return true;
+  if (MERGE_WORD.test(text) && !grant.merge) return true;
+  if (APPROVE_WORD.test(text) && !grant.approve) return true;
+  if (RELEASE_WORD.test(text) && !grant.release) return true;
   const offered = asked(previousAnswer);
-  return HOLD.test(text) && !covers(grant, 'push') && (covers(offered, 'push') || offered.pr);
+  return (
+    HOLD.test(text) &&
+    !covers(grant, 'push') &&
+    !asksBeyondPush(grant) &&
+    (covers(offered, 'push') || asksBeyondPush(offered))
+  );
+}
+
+// Whether a message asks for a step on the way out: a push, a pull request, a
+// merge or a release. An approval or a reply asks for none of them.
+export function liftsHold(grant: Grant): boolean {
+  return covers(grant, 'push') || grant.pr || grant.merge || grant.release;
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
@@ -545,16 +678,14 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     // A list item or an emphasised label names a step; it does not ask for it.
     .filter((line) => !/^\s*(\d+[.)]|[-*•])\s|^\s*[*_]+[^*_]+[*_]+\s*$/.test(line))
     .join('\n');
-  const g: MutableGrant = { commit: false, push: 'none', pr: false };
+  let g = fresh();
   // What the previous sentence left: "we commit; then push" describes across
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
   for (const sentence of sentences(prPhrase(unquote(forcePhrase(typed))))) {
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
-      g.commit = false;
-      g.push = 'none';
-      g.pr = false;
+      g = fresh();
       prev = 'none';
       continue;
     }
@@ -568,7 +699,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     }
     // One clause that withholds withholds its whole sentence: "push it, but
     // not until CI passes" grants nothing.
-    const mine: MutableGrant = { commit: false, push: 'none', pr: false };
+    const mine = fresh();
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
@@ -583,11 +714,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (left === 'mood') withheld = true;
       else if (left !== 'none') carry = left;
     }
-    if (!withheld) {
-      g.commit ||= mine.commit;
-      g.pr ||= mine.pr;
-      raise(g, mine.push);
-    }
+    if (!withheld) merged(g, mine);
     // Only a semicolon ties two sentences together, and only around the verbs:
     // "I fixed it. Then push it." asks.
     const tied =

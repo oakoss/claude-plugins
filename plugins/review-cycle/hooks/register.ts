@@ -14,12 +14,13 @@ import { added, madeBy, MARK, type Entry } from './attribution';
 import {
   aliasCommits,
   classify,
-  opensPr,
+  ghActions,
   possibleAliases,
   shownCommand,
   type Classification,
+  type GhAction,
 } from './command';
-import { covers, grantOf, holdsOf, NO_GRANT, type Grant } from './consent';
+import { covers, grantOf, holdsOf, liftsHold, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -356,7 +357,7 @@ async function onPromptSubmit(
     // What a held message asks for still runs: "push it; don't open a PR yet".
     const grant = grantOf(e.text, state.lastAnswer);
     if (holdsOf(e.text, state.lastAnswer)) state.held = true;
-    else if (covers(grant, 'push') || grant.pr) state.held = false;
+    else if (liftsHold(grant)) state.held = false;
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
@@ -721,11 +722,11 @@ async function onMonitor(
   const judged =
     bashTouchesGate(e.command) ||
     classify(e.command, state.shellAliases).kind !== 'none' ||
-    opensPr(e.command, state.shellAliases) ||
+    ghActions(e.command, state.shellAliases).length > 0 ||
     possibleAliases(e.command, state.shellAliases).length > 0;
   if (!judged) return next(e);
   return deny(
-    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens a pull request, calls a git alias or writes settings with the Bash tool.',
+    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens, merges, approves or comments on a pull request, releases, calls a git alias or writes settings with the Bash tool.',
   );
 }
 
@@ -833,17 +834,14 @@ async function judgeBash(
   await loadShellAliases($);
   const cls = classify(e.command, state.shellAliases);
   if (cls.kind === 'refuse') return deny(cls.reason);
+  // A gh command beside a commit or push is refused by classify.
   if (cls.kind === 'none') {
-    let unasked: Unasked = null;
-    // Only a pull request is stopped by a newer message; other commands run.
-    let since: number | null = null;
-    if (opensPr(e.command, state.shellAliases)) {
-      if (e.agentId) return deny(SUBAGENT);
-      const ladder = await ladderOf($);
-      if (!permitted(granted, ladder).pr) return deny(prRefusal(e.command, ladder));
-      if (!granted.pr) unasked = { step: 'pr', ladder };
-      since = message;
-    }
+    const actions = ghActions(e.command, state.shellAliases);
+    if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
+    const gh = await judgeGh($, e.command, actions, granted);
+    if ('deny' in gh) return deny(gh.deny);
+    // Only a GitHub step is stopped by a newer message; other commands run.
+    const since = actions.length > 0 ? message : null;
     const candidates = possibleAliases(e.command, state.shellAliases);
     if (candidates.length > 0) {
       const configured = await run($, ['git', 'config', '--get-regexp', String.raw`^alias\.`]);
@@ -865,7 +863,7 @@ async function judgeBash(
         }
       }
     }
-    const r = await watch($, await ensureRoot($), e, next, 'unchecked', granted, since, unasked);
+    const r = await watch($, await ensureRoot($), e, next, 'unchecked', granted, since, gh.ran);
     if (state.aliasError === null || state.aliasErrorShown || r.deny !== undefined) return r;
     state.aliasErrorShown = true;
     return {
@@ -896,11 +894,11 @@ async function judgeBash(
     const ladder = await ladderOf($);
     if (!permitted(granted, ladder).commit) return deny(commitRefusal(e.command, ladder));
   }
-  let ran: Unasked = null;
+  const ran: Unasked[] = [];
   if (cls.push) {
     const verdict = await judgePush($, root.top, e.command, cls.commit !== null, cls.push, granted);
     if ('deny' in verdict) return deny(verdict.deny);
-    ran = verdict.ran;
+    if (verdict.ran !== null) ran.push(verdict.ran);
   }
   const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
   return watch($, root, e, next, checked, granted, message, ran);
@@ -938,13 +936,13 @@ const MAX_SHOWN = 300;
 const LEASE = '`--force-with-lease --force-if-includes`';
 
 const SUBAGENT =
-  'subagents do not commit, push or open pull requests in this repository. Report back to the main session instead.';
+  'subagents do not commit, push, open, merge, approve or comment on pull requests, or release, in this repository. Report back to the main session instead.';
 
 // `unreadable` names the settings file that could not be read, and why.
 type InForce = Ladder & { unreadable?: string };
 // A step that runs without the user asking for it directly: by the ladder,
 // noted; or a push a requested pull request needs (`forPr`), not noted.
-type Unasked = { step: Step; ladder: Ladder; forPr?: true } | null;
+type Unasked = { step: Step; ladder: Ladder; forPr?: true };
 
 // The rung in force: the local file's, else the user's, made earlier by the
 // project file's. Settings that cannot be read stop before every step.
@@ -963,7 +961,7 @@ async function ladderOf($: $): Promise<InForce> {
 }
 
 // What may run: what the user asked for, and what the ladder lets through.
-// A hold stops a push and a pull request, never a commit.
+// A hold stops every step but a commit.
 type Allowed = Readonly<Record<Step, boolean>>;
 function permitted(granted: Grant, ladder: Ladder): Allowed {
   const free = (step: Step) => !asks(ladder, step);
@@ -971,6 +969,9 @@ function permitted(granted: Grant, ladder: Ladder): Allowed {
     commit: granted.commit || free('commit'),
     push: covers(granted, 'push') || (!state.held && free('push')),
     pr: granted.pr || (!state.held && free('pr')),
+    merge: granted.merge || (!state.held && free('merge')),
+    approve: granted.approve || (!state.held && free('approve')),
+    release: granted.release || (!state.held && free('release')),
   };
 }
 
@@ -980,9 +981,12 @@ const STEP_NAME: Record<Step, string> = {
   commit: 'a commit',
   push: 'a push',
   pr: 'a pull request',
+  merge: 'a merge',
+  approve: 'an approval',
+  release: 'a release',
 };
 
-function ranUnasked($: $, { step, ladder }: NonNullable<Unasked>): string {
+function ranUnasked($: $, { step, ladder }: Unasked): string {
   const line = `review-cycle: ran ${STEP_NAME[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`;
   $.ui.log(line);
   return line;
@@ -1042,7 +1046,7 @@ async function judgePush(
   commits: boolean,
   spec: PushSpec,
   granted: Grant,
-): Promise<{ deny: string } | { ran: Unasked }> {
+): Promise<{ deny: string } | { ran: Unasked | null }> {
   const missing = unasked(spec, granted);
   if (missing === null) return { ran: null };
   const ladder = await ladderOf($);
@@ -1071,7 +1075,7 @@ function askThem(naming: string, example: string, command: string): string {
 function notAsked(what: string, ladder: InForce, holdable: boolean): string {
   const why =
     holdable && state.held
-      ? `the user held off pushing and hasn't asked for ${what} since`
+      ? `the user held off and hasn't asked for ${what} since`
       : `the user's latest message doesn't ask for ${what}`;
   return ladder.unreadable === undefined
     ? why
@@ -1088,6 +1092,135 @@ function commitRefusal(command: string, ladder: InForce): string {
 
 function prRefusal(command: string, ladder: InForce): string {
   return `${notAsked('a pull request', ladder, true)}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', command)}`;
+}
+
+// The branch oakum's version pull request comes from: merging it is the release.
+const VERSION_BRANCH = 'oakum/version-packages';
+// How long the user waits on a gh read before the step asks instead.
+const LOOKUP_MS = 5000;
+
+// Which step a `gh pr merge` is: a release when it merges the version pull
+// request. A lookup that fails says why, and the merge asks.
+async function mergeStep(
+  $: $,
+  lookup: string[] | 'elsewhere',
+): Promise<{ step: 'merge' | 'release' } | { asks: string }> {
+  if (lookup === 'elsewhere') {
+    return {
+      asks: 'where it merges is picked at run time (a `--repo` built at run time, `GH_REPO=`, `GIT_DIR=`, `env -C`), so the gate cannot tell a release from a merge',
+    };
+  }
+  try {
+    const r = await $.process.run(
+      ['gh', 'pr', 'view', ...lookup, '--json', 'headRefName', '--jq', '.headRefName'],
+      { timeoutMs: LOOKUP_MS, env: { GH_PROMPT_DISABLED: '1' } },
+    );
+    if (r.exitCode !== 0) {
+      const why = firstLine(r.stderr) || `it ended with no output, exit ${r.exitCode}`;
+      return { asks: `looking up the pull request it merges failed (${why})` };
+    }
+    return { step: r.stdout.trim() === VERSION_BRANCH ? 'release' : 'merge' };
+  } catch (error) {
+    return { asks: `looking up the pull request it merges failed (${messageOf(error)})` };
+  }
+}
+
+// Each example is one the consent grammar grants on a yes (consent.spec.ts).
+const GH_ASK: Record<'merge' | 'approve' | 'release' | 'comment', [string, string, string]> = {
+  merge: ['a merge', 'the pull request', '"Merge #116?"'],
+  approve: ['an approval', 'the pull request', '"Approve #116?"'],
+  release: ['a release', 'the version it releases', '"Release `v0.25.0`?"'],
+  comment: [
+    'a comment on GitHub',
+    'where it goes and what it says',
+    '"Reply to the review on #116?"',
+  ],
+};
+
+function ghRefusal(
+  command: string,
+  kind: keyof typeof GH_ASK,
+  ladder: InForce,
+  always: string | null,
+): string {
+  const [what, naming, example] = GH_ASK[kind];
+  const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
+  return `${notAsked(what, ladder, true)}, so nothing ran.${asksAnyway} To go ahead, ${askThem(naming, example, command)}`;
+}
+
+// What the gh commands in a command may run, or the refusal of the first one
+// that may not. A comment is off the ladder: it needs the user's request.
+async function judgeGh(
+  $: $,
+  command: string,
+  actions: readonly GhAction[],
+  granted: Grant,
+): Promise<{ deny: string } | { ran: Unasked[] }> {
+  const ran: Unasked[] = [];
+  if (actions.length === 0) return { ran };
+  const ladder = await ladderOf($);
+  const may = permitted(granted, ladder);
+  for (const action of actions) {
+    switch (action.kind) {
+      case 'pr': {
+        if (!may.pr) return { deny: prRefusal(command, ladder) };
+        if (!granted.pr) ran.push({ step: 'pr', ladder });
+        break;
+      }
+      case 'unread': {
+        return {
+          deny: `${action.why}, so the gate cannot tell what it does on GitHub, and nothing ran. Run the gh command itself, written out. The command: ${quote(command)}`,
+        };
+      }
+      case 'comment': {
+        if (!granted.comment) return { deny: ghRefusal(command, 'comment', ladder, null) };
+        break;
+      }
+      case 'approve': {
+        if (!may.approve) return { deny: ghRefusal(command, 'approve', ladder, null) };
+        if (!granted.approve) ran.push({ step: 'approve', ladder });
+        break;
+      }
+      case 'release': {
+        if (!may.release) return { deny: ghRefusal(command, 'release', ladder, null) };
+        if (!granted.release) ran.push({ step: 'release', ladder });
+        break;
+      }
+      case 'merge': {
+        if (action.admin) {
+          return {
+            deny: `--admin merges past branch protection, which the gate never lets an agent do, so nothing ran. Give the user the command to run themselves, and say why it needs --admin. The command: ${quote(command)}`,
+          };
+        }
+        // Allowed either way, a merge needs no lookup to tell which it is.
+        if (may.merge && may.release) {
+          if (!granted.merge && !granted.release) ran.push({ step: 'merge', ladder });
+          break;
+        }
+        if (action.lookup === 'beside') {
+          return {
+            deny: `other steps in the same command can change which pull request \`gh pr merge\` reaches, so the gate cannot tell a release from a merge, and nothing ran. Run \`gh pr merge\` as its own command. The command: ${quote(command)}`,
+          };
+        }
+        const which = await mergeStep($, action.lookup);
+        if ('asks' in which && may.merge) {
+          return {
+            deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('the pull request', '"Merge and release #62?"', command)}`,
+          };
+        }
+        if ('asks' in which) return { deny: ghRefusal(command, 'merge', ladder, which.asks) };
+        const step = which.step;
+        if (!may[step]) return { deny: ghRefusal(command, step, ladder, null) };
+        if (!granted[step]) ran.push({ step, ladder });
+        break;
+      }
+      default: {
+        const unhandled: never = action;
+        throw new Error(`no judgment for the gh action ${JSON.stringify(unhandled)}`);
+      }
+    }
+  }
+  return { ran };
 }
 
 // The gate does not ask: the agent asks in its reply, so the user can answer
@@ -1146,7 +1279,7 @@ async function watch(
   granted: Grant = state.message.grant,
   // The message count `granted` was read at; a newer message stops the call.
   message: number | null = null,
-  unasked: Unasked = null,
+  ran: readonly Unasked[] = [],
 ): Promise<Output<BashHook>> {
   const git = gitOf($);
   let start: Start | null = null;
@@ -1173,8 +1306,8 @@ async function watch(
   }
   const r = await next(e);
   const notes: string[] = [];
-  if (unasked !== null && !unasked.forPr && r.deny === undefined) {
-    notes.push(ranUnasked($, unasked));
+  if (r.deny === undefined) {
+    for (const step of ran) if (!step.forPr) notes.push(ranUnasked($, step));
   }
   if (root === null) {
     if (notes.length === 0 || r.deny !== undefined) return r;
@@ -1192,7 +1325,8 @@ async function watch(
     try {
       const pushed = await pushedRefs(git, root.top, start.refs, await remoteRefs(git, root.top));
       // A push the gate judged was told already; one from a script was not.
-      if (pushed.length > 0 && !covers(granted, 'push') && unasked?.step !== 'push') {
+      const judged = ran.some((step) => step.step === 'push');
+      if (pushed.length > 0 && !covers(granted, 'push') && !judged) {
         const ladder = await ladderOf($);
         notes.push(
           permitted(granted, ladder).push
@@ -1297,6 +1431,9 @@ async function onStatus(
   status.mayCommit = may.commit;
   status.mayPush = may.push;
   status.mayOpenPr = may.pr;
+  status.mayMerge = may.merge;
+  status.mayRelease = may.release;
+  status.commentRequested = state.message.grant.comment;
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
@@ -1585,7 +1722,7 @@ function onBashError(
   const cls = classify(e.command, state.shellAliases);
   const quiet =
     possibleAliases(e.command, state.shellAliases).length === 0 &&
-    !opensPr(e.command, state.shellAliases);
+    ghActions(e.command, state.shellAliases).length === 0;
   if (cls.kind === 'none' && quiet) {
     return withNote(
       next(e),

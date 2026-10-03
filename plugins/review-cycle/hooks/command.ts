@@ -391,7 +391,7 @@ function runsCode(
   for (const [i, w] of words.entries()) {
     if (w.dynamic) continue;
     const name = basename(w.text);
-    const runs = RUNS_SHELL[name];
+    const runs = Object.hasOwn(RUNS_SHELL, name) ? RUNS_SHELL[name] : undefined;
     if (runs && runs.test(own) && MENTION.test(own)) {
       return `\`${name}\` running a git commit or push`;
     }
@@ -866,40 +866,335 @@ function tame(text: string): string {
     .replaceAll(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '\u{FFFD}');
 }
 
+// A gh command the ladder judges. `merge` carries the arguments that name its
+// pull request to `gh pr view`, or why they cannot (see mergeOf), and whether
+// it bypasses branch protection with --admin; `unread` is one the gate cannot
+// read, such as a gh alias.
+export type GhAction =
+  | { kind: 'pr' }
+  | { kind: 'merge'; admin: boolean; lookup: string[] | 'elsewhere' | 'beside' }
+  | { kind: 'approve' }
+  | { kind: 'comment' }
+  | { kind: 'release' }
+  | { kind: 'unread'; why: string };
+
+// gh's own commands (gh 2.102.0's `gh --help`). Any other word is a gh alias
+// or an extension, which the gate does not read.
+const GH_COMMANDS = new Set([
+  'agent-task',
+  'alias',
+  'api',
+  'attestation',
+  'auth',
+  'browse',
+  'cache',
+  'codespace',
+  'cs',
+  'completion',
+  'config',
+  'copilot',
+  'discussion',
+  'extension',
+  'ext',
+  'extensions',
+  'gist',
+  'gpg-key',
+  'help',
+  'issue',
+  'label',
+  'licenses',
+  'org',
+  'pr',
+  'preview',
+  'project',
+  'release',
+  'repo',
+  'ruleset',
+  'run',
+  'search',
+  'secret',
+  'skill',
+  'ssh-key',
+  'status',
+  'variable',
+  'version',
+  'workflow',
+]);
+// The verbs of the groups the ladder reads; any other word there is an alias
+// (`pr m`), so it asks.
+const GH_VERBS: Record<string, ReadonlySet<string>> = {
+  pr: new Set([
+    'create',
+    'new',
+    'list',
+    'ls',
+    'status',
+    'checkout',
+    'co',
+    'checks',
+    'close',
+    'comment',
+    'diff',
+    'edit',
+    'lock',
+    'merge',
+    'ready',
+    'reopen',
+    'revert',
+    'review',
+    'unlock',
+    'update-branch',
+    'view',
+  ]),
+  issue: new Set([
+    'create',
+    'new',
+    'list',
+    'ls',
+    'status',
+    'close',
+    'comment',
+    'delete',
+    'develop',
+    'edit',
+    'lock',
+    'pin',
+    'reopen',
+    'transfer',
+    'unlock',
+    'unpin',
+    'view',
+  ]),
+  release: new Set([
+    'create',
+    'new',
+    'list',
+    'ls',
+    'delete',
+    'delete-asset',
+    'download',
+    'edit',
+    'upload',
+    'verify',
+    'verify-asset',
+    'view',
+  ]),
+};
+
 // gh's options that take a value: `gh -R o/r pr create`, `gh pr -R o/r create`.
 const GH_VALUE = new Set(['-R', '--repo', '--hostname']);
+// `gh pr merge`'s options that take a value.
+const MERGE_VALUE = new Set([
+  '-b',
+  '--body',
+  '-F',
+  '--body-file',
+  '-t',
+  '--subject',
+  '--match-head-commit',
+  '-A',
+  '--author-email',
+]);
+const RELEASE_WRITES = new Set(['create', 'new', 'edit', 'delete', 'delete-asset', 'upload']);
+// Read as text when the command does not parse: opening a pull request, and
+// any other gh write, which then cannot be read further.
 const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new)\b/;
+const GH_WRITE =
+  /\bgh\b[^|;&\n]*\b(pr\s+(?:[^\s;&|]+\s+)*?(merge|review|comment)|issue\s+(?:[^\s;&|]+\s+)*?comment|release\s+(?:[^\s;&|]+\s+)*?(create|new|edit|delete|upload))\b/;
 
-// Skips options, and the value of each one that takes a value.
-function pastOptions(words: string[], from: number): number {
+const isRepo = (t: string) => t === '-R' || t === '--repo';
+const namesRepo = (t: string) => isRepo(t) || t.startsWith('--repo=') || /^-R./.test(t);
+
+// The repository an option names: `-R o/r`, `-Ro/r`, `--repo o/r`, `--repo=o/r`.
+function repoAt(words: Word[], i: number): Word | null {
+  const w = words[i];
+  const t = w?.text ?? '';
+  if (w && t.startsWith('--repo=')) return { ...w, text: t.slice('--repo='.length) };
+  if (w && /^-R./.test(t)) return { ...w, text: t.slice(2) };
+  return words[i + 1] ?? null;
+}
+
+// Skips options from `i`, noting the repository one names.
+function pastOptions(words: Word[], from: number, into: { repo: Word | null }): number {
   let i = from;
-  while (words[i]?.startsWith('-')) i += GH_VALUE.has(words[i] ?? '') ? 2 : 1;
+  while (words[i]?.text.startsWith('-')) {
+    const t = words[i]?.text ?? '';
+    if (namesRepo(t)) into.repo = repoAt(words, i);
+    i += GH_VALUE.has(t) ? 2 : 1;
+  }
   return i;
 }
+
+// Go's strconv.ParseBool, which gh's flags use: `--approve=0` is unset.
+const FALSE = new Set(['0', 'f', 'F', 'false', 'False', 'FALSE']);
+
+// Whether a gh boolean flag is set, as gh's flag parser reads it: `--name`,
+// `--name=<true>`, or its letter in a short cluster before a letter that takes
+// the rest as its value (`-ab LGTM` approves, `-a=false` does not).
+function flagSet(words: Word[], long: string, short: string | null, valueLetters: string): boolean {
+  return words.some(({ text: t }) => {
+    if (t === `--${long}`) return true;
+    if (t.startsWith(`--${long}=`)) return !FALSE.has(t.slice(long.length + 3));
+    if (short === null || !/^-[^-]/.test(t)) return false;
+    for (let i = 1; i < t.length; i++) {
+      const letter = t.charAt(i);
+      if (letter === short) return t[i + 1] === '=' ? !FALSE.has(t.slice(i + 2)) : true;
+      if (valueLetters.includes(letter)) return false;
+    }
+    return false;
+  });
+}
+
+// Whether a word built at run time may be a flag or a selector rather than
+// the value of an option that takes one (`-b "$BODY"`, `--subject="$S"`,
+// `-b"$BODY"`). Unquoted, a value may split into words that are flags.
+function builtArgs(rest: Word[], values: ReadonlySet<string>): boolean {
+  return rest.some((w, i) => {
+    if (!w.dynamic) return false;
+    if (w.splits) return true;
+    if (values.has(rest[i - 1]?.text ?? '')) return false;
+    const option = /^(--[^=]+)=/.exec(w.text)?.[1] ?? /^(-[^-])./.exec(w.text)?.[1];
+    return option === undefined || !values.has(option);
+  });
+}
+
+const REVIEW_VALUE = new Set(['-b', '--body', '-F', '--body-file', '-R', '--repo']);
+
+// What `gh pr merge` names for `gh pr view` to look up, or why it cannot be:
+// `elsewhere` when something outside its words picks the repository
+// (`GH_REPO=`, `env -C`), `beside` when other steps share the command.
+function mergeOf(
+  words: Word[],
+  from: number,
+  repo: Word | null,
+  context: 'fixed' | 'elsewhere' | 'beside',
+): GhAction {
+  const rest = words.slice(from);
+  let selector: Word | null = null;
+  let target = repo;
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]?.text ?? '';
+    if (namesRepo(t)) {
+      target = repoAt(rest, i);
+      if (isRepo(t)) i++;
+    } else if (MERGE_VALUE.has(t)) i++;
+    else if (!t.startsWith('-') && selector === null) selector = rest[i] ?? null;
+  }
+  const admin = flagSet(rest, 'admin', null, '');
+  const lookup =
+    context !== 'fixed' || target?.dynamic
+      ? context === 'beside'
+        ? context
+        : 'elsewhere'
+      : [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
+  return { kind: 'merge', admin, lookup };
+}
+
+// The gh command at `at`. An alias or extension is not read, so the agent
+// writes gh's own words; `fed` is xargs or parallel supplying the rest.
+function ghAt(
+  words: Word[],
+  at: number,
+  context: 'fixed' | 'elsewhere' | 'beside',
+  fed: boolean,
+): GhAction | null {
+  const seen = { repo: null as Word | null };
+  const sub = pastOptions(words, at + 1, seen);
+  const group = words[sub]?.text;
+  const fromInput = { kind: 'unread', why: 'its gh command comes from its input' } as const;
+  if (group === undefined) return fed ? fromInput : null;
+  if (words[sub]?.dynamic) return { kind: 'unread', why: 'its gh command is built at run time' };
+  if (!GH_COMMANDS.has(group)) {
+    return {
+      kind: 'unread',
+      why: `\`gh ${group}\` is a gh alias or extension, which the gate does not read`,
+    };
+  }
+  const verbs = GH_VERBS[group];
+  if (verbs === undefined) return null;
+  const verbAt = pastOptions(words, sub + 1, seen);
+  const verb = words[verbAt]?.text;
+  if (verb === undefined) return fed ? fromInput : null;
+  if (words[verbAt]?.dynamic) return { kind: 'unread', why: 'its gh command is built at run time' };
+  if (!verbs.has(verb)) {
+    return {
+      kind: 'unread',
+      why: `\`gh ${group} ${verb}\` is a gh alias, which the gate does not read`,
+    };
+  }
+  const w = words;
+  const rest = w.slice(verbAt + 1);
+  // A flag built at run time or fed by xargs could approve, merge with
+  // --admin or point --repo elsewhere, which the words do not show.
+  const unreadArgs = {
+    kind: 'unread',
+    why: `the arguments of \`gh pr ${verb}\` are built at run time or come from its input`,
+  } as const;
+  if (group === 'pr') {
+    if (verb === 'create' || verb === 'new' || verb === 'revert') return { kind: 'pr' };
+    if (verb === 'merge') {
+      if (fed || builtArgs(rest, new Set([...MERGE_VALUE, '-R', '--repo']))) return unreadArgs;
+      return mergeOf(w, verbAt + 1, seen.repo, context);
+    }
+    if (verb === 'review') {
+      if (fed || builtArgs(rest, REVIEW_VALUE)) return unreadArgs;
+      return { kind: flagSet(rest, 'approve', 'a', 'bFR') ? 'approve' : 'comment' };
+    }
+    if (verb === 'comment') return { kind: 'comment' };
+  }
+  if (group === 'issue' && verb === 'comment') return { kind: 'comment' };
+  if (group === 'release' && RELEASE_WRITES.has(verb)) return { kind: 'release' };
+  return null;
+}
+
+// Commands that hand their input to the command they run.
+const FROM_INPUT = new Set(['xargs', 'parallel']);
 
 // As for git, `gh` at any word runs unless the first word is a data command:
 // `timeout 60 gh pr create`, `sudo -u bot gh …`. Quoted text is not read, so
 // `bash -c "gh pr create"` goes unseen: a well-meaning agent writes it plainly.
-function ghCreatesPr(st: Statement): boolean {
-  const words = st.words.map((w) => w.text);
-  const first = basename(words[0] ?? '');
+function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
+  const first = basename(st.words[0]?.text ?? '');
   // `gh` is a data command to the git check: what it is given never runs git.
-  if (first !== 'gh' && DATA.has(first)) return false;
-  return words.some((word, at) => {
-    if (basename(word) !== 'gh') return false;
-    const sub = pastOptions(words, at + 1);
-    if (words[sub] !== 'pr') return false;
-    const verb = words[pastOptions(words, sub + 1)];
-    return verb === 'create' || verb === 'new';
+  if (first !== 'gh' && DATA.has(first)) return [];
+  const found: GhAction[] = [];
+  for (const [at, word] of st.words.entries()) {
+    if (basename(word.text) !== 'gh') continue;
+    const before = st.words.slice(0, at);
+    const fed = before.some((w) => FROM_INPUT.has(basename(w.text)));
+    // `env -C dir`, `sudo -D dir`: the merge runs where the lookup does not.
+    // gh finds its repository through git, so GIT_DIR= and the like move it too.
+    const moved = before.some((w) => /^(GH_(REPO|HOST)|GIT_\w+)=|^-[CD]|^--chdir/.test(w.text));
+    const context = moved ? 'elsewhere' : alone ? 'fixed' : 'beside';
+    const action = ghAt(st.words, at, context, fed);
+    if (action) found.push(action);
+  }
+  return found;
+}
+
+// Every gh command in the command that opens, merges, approves, comments on or
+// releases, read as text when the command does not parse.
+export function ghActions(command: string, aliases: ShellAliases = new Map()): GhAction[] {
+  const parsed = parse(command, aliases);
+  if ('error' in parsed) {
+    const found: GhAction[] = [];
+    if (GH_PR.test(parsed.text)) found.push({ kind: 'pr' });
+    if (GH_WRITE.test(parsed.text)) found.push({ kind: 'unread', why: 'it does not parse' });
+    return found;
+  }
+  const found: GhAction[] = [];
+  const alone = parsed.statements.length === 1;
+  every(parsed.statements, (st, nested) => {
+    found.push(...ghActionsOf(st, alone && !nested));
+    return null;
   });
+  return found;
 }
 
 // Whether the command opens a pull request with `gh pr create` (or its alias
-// `gh pr new`), read as text when the command does not parse.
+// `gh pr new`).
 export function opensPr(command: string, aliases: ShellAliases = new Map()): boolean {
-  const parsed = parse(command, aliases);
-  if ('error' in parsed) return GH_PR.test(parsed.text);
-  return every(parsed.statements, (st) => (ghCreatesPr(st) ? 'pr' : null)) !== null;
+  return ghActions(command, aliases).some((a) => a.kind === 'pr');
 }
 
 // The command as the gate's push refusal quotes it: every line, runs of spaces

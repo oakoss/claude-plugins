@@ -2227,7 +2227,7 @@ describe('a push the user did not ask for', () => {
       reason: 'answer',
     });
     await say($, 'not yet, rename the helper first');
-    expect(denied(await bash($, 'git push origin fix/x'), 'held off pushing')).toBe(true);
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off and')).toBe(true);
   });
   test('a reviewed commit with it is refused whole, naming the commit on its own', async ($, on) => {
     fakeWorld(on);
@@ -2501,6 +2501,19 @@ function remoteSide(
   };
 }
 
+// GitHub as the gate sees it: `gh pr view` names the merged pull request's
+// branch, or fails when `head` is 'fail'.
+function github(head: string): (a: string) => Partial<Run> | null {
+  return (a) => {
+    if (a.startsWith('gh pr view')) {
+      return head === 'fail'
+        ? { exitCode: 1, stderr: 'no pull requests found for branch "x"' }
+        : { stdout: `${head}\n` };
+    }
+    return null;
+  };
+}
+
 // A world on fix/x whose next Bash call moves origin/fix/x, as a push does.
 function pushing(setup: Partial<World>): Partial<World> {
   return {
@@ -2588,7 +2601,7 @@ describe('the stop-before setting', () => {
   test('a held pull request request lets no push through', async ($, on) => {
     fakeWorld(on, pushing({}));
     await say($, 'open a PR. do not push.');
-    expect(denied(await bash($, 'git push -u origin HEAD'), 'held off pushing')).toBe(true);
+    expect(denied(await bash($, 'git push -u origin HEAD'), 'held off and')).toBe(true);
   });
   test("a script's push under a pull request request is still reported", async ($, on) => {
     fakeWorld(on, pushing({}));
@@ -2780,7 +2793,150 @@ describe('the stop-before setting', () => {
   test('Monitor refuses a pull request', async ($, on) => {
     fakeWorld(on);
     const r = await $.tool.call({ tool: 'Monitor', command: 'gh pr create --fill' } as never);
-    expect(denied(r, 'opens a pull request')).toBe(true);
+    expect(denied(r, 'opens, merges, approves or comments on a pull request')).toBe(true);
+    const merge = await $.tool.call({ tool: 'Monitor', command: 'gh pr merge 116' } as never);
+    expect(denied(merge, 'Monitor runs commands the gate does not check')).toBe(true);
+  });
+  test('a merge asks at a merge rung and runs once asked for', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr merge 116 --squash'), "doesn't ask for a merge")).toBe(true);
+    await say($, 'merge it');
+    expect(ran(await bash($, 'gh pr merge 116 --squash --delete-branch'))).toBe(true);
+  });
+  test('a merge below the rung runs, noted', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr merge 116');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'ran a merge without asking')).toBe(true);
+    const view = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(view?.argv).toEqual([
+      'gh',
+      'pr',
+      'view',
+      '116',
+      '--json',
+      'headRefName',
+      '--jq',
+      '.headRefName',
+    ]);
+    expect(view?.init?.timeoutMs).toBe(5000);
+  });
+  test("merging oakum's version pull request is a release", async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('oakum/version-packages'),
+    });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr merge 62'), "doesn't ask for a release")).toBe(true);
+    await say($, 'release it');
+    expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
+  });
+  test('a merge whose pull request cannot be looked up asks where a release would', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
+    await say($, 'fix the parser');
+    expect(
+      denied(await bash($, 'gh pr merge'), 'looking up the pull request it merges failed'),
+    ).toBe(true);
+    expect(denied(await bash($, 'gh pr merge "$PR"'), 'built at run time')).toBe(true);
+    expect(
+      denied(
+        await bash($, 'env -C ../other gh pr merge 62'),
+        'where it merges is picked at run time',
+      ),
+    ).toBe(true);
+    expect(
+      denied(
+        await bash($, 'gh pr merge 62 && echo merged'),
+        'Run `gh pr merge` as its own command',
+      ),
+    ).toBe(true);
+    // Asked for both, the merge runs whichever it is.
+    await say($, 'merge it and release it');
+    expect(ran(await bash($, 'gh pr merge'))).toBe(true);
+  });
+  test('a lookup that throws asks', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      reject: (a) => a.startsWith('gh pr view'),
+    });
+    await say($, 'fix the parser');
+    expect(
+      denied(await bash($, 'gh pr merge 62'), 'looking up the pull request it merges failed'),
+    ).toBe(true);
+  });
+  test('--admin is handed to the user, even when the merge was asked for', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'merge it');
+    const r = await bash($, 'gh pr merge 116 --admin=true');
+    expect(denied(r, 'past branch protection')).toBe(true);
+    expect(denied(r, 'Give the user the command to run themselves')).toBe(true);
+  });
+  test('an approval and a merge are asked for apart', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'approve it');
+    expect(denied(await bash($, 'gh pr merge 116'), "doesn't ask for a merge")).toBe(true);
+    expect(ran(await bash($, 'gh pr review 116 -a'))).toBe(true);
+    await say($, 'merge it');
+    expect(denied(await bash($, 'gh pr review 116 --approve=true'), 'an approval')).toBe(true);
+  });
+  test('an approval below the rung runs, noted as one; a hold stops it', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr review 116 -ab LGTM');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'ran an approval without asking')).toBe(true);
+    await say($, "don't merge yet");
+    expect(denied(await bash($, 'gh pr review 116 -a'), 'held off')).toBe(true);
+    expect(denied(await bash($, 'gh release create v1'), 'held off')).toBe(true);
+  });
+  test('a comment always asks unless the review is addressed', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr comment 116 --body done'), 'a comment on GitHub')).toBe(
+      true,
+    );
+    expect(denied(await bash($, 'gh pr review 116 -c -b ok'), 'a comment on GitHub')).toBe(true);
+    expect(denied(await bash($, 'gh issue comment 9 --body ok'), 'a comment on GitHub')).toBe(true);
+    await say($, 'address the review comments');
+    expect(ran(await bash($, 'gh pr comment 116 --body done'))).toBe(true);
+  });
+  test('a reply lifts no hold', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, "don't push yet");
+    await say($, 'address the review comments');
+    expect(denied(await bash($, 'git push'), 'held off')).toBe(true);
+  });
+  test('a gh alias is refused, asked for or not, and gh is never asked for its aliases', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'merge it');
+    const r = await bash($, 'gh m 116');
+    expect(denied(r, '`gh m` is a gh alias or extension')).toBe(true);
+    expect(denied(r, 'Run the gh command itself, written out')).toBe(true);
+    expect(denied(await bash($, 'gh pr m 116'), '`gh pr m` is a gh alias')).toBe(true);
+    expect(ran(await bash($, 'gh pr view 116'))).toBe(true);
+    expect(w.calls.some((c) => c.argv.join(' ') === 'gh alias list')).toBe(false);
+  });
+  test('a merge asked for whose lookup fails asks for a release too', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
+    await say($, 'merge it');
+    const r = await bash($, 'gh pr merge 62');
+    expect(denied(r, 'the merge may be a release, which the user has not allowed')).toBe(true);
+    expect(denied(r, '"Merge and release #62?"')).toBe(true);
+  });
+  test('a held merge asks; one beside a commit is refused', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, "don't merge yet");
+    expect(
+      denied(await bash($, 'gh pr merge 116'), "held off and hasn't asked for a merge since"),
+    ).toBe(true);
+    await review($);
+    await say($, 'commit it and merge it');
+    expect(
+      denied(await bash($, 'git commit -am x && gh pr merge 116'), '`gh` alongside a commit'),
+    ).toBe(true);
   });
   test('the project file cannot stop later than the user', async ($, on) => {
     fakeWorld(on, { settings: { project: stops('never stop') } });
@@ -2809,7 +2965,7 @@ describe('the stop-before setting', () => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "push it; don't open a PR yet");
     expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(denied(await bash($, 'gh pr create'), 'held off pushing')).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off and')).toBe(true);
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
     expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
   });
@@ -2839,9 +2995,9 @@ describe('the stop-before setting', () => {
   test('a hold makes every step ask until a message asks for one', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "don't push yet");
-    expect(denied(await bash($, 'git push'), 'held off pushing')).toBe(true);
+    expect(denied(await bash($, 'git push'), 'held off and')).toBe(true);
     await say($, 'rename the helper');
-    expect(denied(await bash($, 'gh pr create'), 'held off pushing')).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off and')).toBe(true);
     await say($, 'push it');
     expect(ran(await bash($, 'git push'))).toBe(true);
     await say($, 'rename it back');
@@ -2851,7 +3007,7 @@ describe('the stop-before setting', () => {
     fakeWorld(on, { settings: { local: stops('never stop') } });
     await say($, 'ship it');
     const r = await bash($, 'gh pr create --fill', { agentId: 'sub-1' });
-    expect(denied(r, 'subagents do not commit, push or open pull requests')).toBe(true);
+    expect(denied(r, 'subagents do not commit, push, open, merge')).toBe(true);
   });
   test('the status tool reports what may run and why', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('open PR') } });

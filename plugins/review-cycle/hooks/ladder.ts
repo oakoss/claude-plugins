@@ -12,8 +12,16 @@ export const DEFAULT_STOP: StopBefore = 'push';
 export const STRICTEST: StopBefore = RUNGS[0];
 
 // The steps the gate judges, in rung order.
-export type Step = 'commit' | 'push' | 'pr';
-const STEP_RUNG: Record<Step, StopBefore> = { commit: 'commit', push: 'push', pr: 'open PR' };
+export type Step = 'commit' | 'push' | 'pr' | 'merge' | 'approve' | 'release';
+const STEP_RUNG: Record<Step, StopBefore> = {
+  commit: 'commit',
+  push: 'push',
+  pr: 'open PR',
+  merge: 'merge',
+  // An approval can be all a merge waits for.
+  approve: 'merge',
+  release: 'release',
+};
 
 export type Source = 'default' | 'user' | 'project' | 'local';
 export type Ladder = Readonly<{ stopBefore: StopBefore; source: Source }>;
