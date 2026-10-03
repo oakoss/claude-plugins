@@ -2428,6 +2428,36 @@ describe('a push the user asked for', () => {
       expect(ran(await bash($, 'git push'))).toBe(true);
     },
   );
+  test(
+    'a GitHub MCP call a hook above abandons does not run',
+    {
+      plugins: [
+        {
+          name: 'above',
+          tier: 'prepend',
+          register(on) {
+            on('tool.call', { tool: 'mcp__github__create_pull_request' }, async ($, e, next) => {
+              void next(e);
+              return { deny: 'above' };
+            });
+          },
+        },
+      ],
+    },
+    async ($, on) => {
+      const calls: string[] = [];
+      fakeWorld(on, {
+        settings: { local: stops('never stop') },
+        shell: (command) => {
+          calls.push(command);
+        },
+      });
+      await say($, 'fix the parser');
+      expect(denied(await mcp($, 'mcp__github__create_pull_request', {}), 'above')).toBe(true);
+      await settle();
+      expect(calls).toEqual([]);
+    },
+  );
 });
 
 // A leg still under way: spawned, not yet complete.
@@ -3064,6 +3094,21 @@ describe('the stop-before setting', () => {
     expect(ran(await mcp($, 'mcp__github__push_files', { ...files, branch: 'main' }))).toBe(true);
     expect(w.calls.slice(looked).some((c) => c.argv.join(' ').startsWith('gh repo view'))).toBe(
       false,
+    );
+  });
+  test('a hold stops a GitHub MCP pull request at every rung', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, "don't open a PR yet");
+    expect(denied(await mcp($, 'mcp__github__create_pull_request', {}), 'held off')).toBe(true);
+  });
+  test('a requested pull request lets no GitHub API push through', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('push') }, git: github('fix/x') });
+    await say($, 'open a PR');
+    const files = { owner: 'o', repo: 'r', files: [], message: 'm', branch: 'fix/x' };
+    const r = await mcp($, 'mcp__github__push_files', files);
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(await bash($, 'gh pr update-branch 7 -R o/r'), "doesn't ask for a push")).toBe(
+      true,
     );
   });
   test('a GitHub MCP push asks at the default setting', async ($, on) => {

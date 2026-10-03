@@ -23,6 +23,19 @@ import { covers, grantOf, holdsOf, liftsHold, NO_GRANT, type Grant } from './con
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
+  askThem,
+  judgeGh,
+  notAsked,
+  parsePullRequest,
+  permitted,
+  PR_FIELDS,
+  PR_JQ,
+  type GhLookups,
+  type InForce,
+  type Lookup,
+  type Unasked as GhUnasked,
+} from './gh-verdict';
+import {
   coverageOf,
   firstLine,
   headOf,
@@ -45,15 +58,13 @@ import {
   type Run,
 } from './git';
 import type { PushSpec } from './git-args';
-import { MCP_GITHUB, mcpAction, shownCall, type GhAction, type PushRef } from './github';
+import { MCP_GITHUB, mcpAction, shownCall } from './github';
 import {
-  asks,
   configured,
   STRICTEST,
   effective,
   stopBeforeOf,
   where,
-  type Ladder,
   type Step,
   type StopBefore,
 } from './ladder';
@@ -62,6 +73,7 @@ import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import {
   askingReason,
   parseDryRun,
+  pushOutcome,
   unasked,
   type DefaultBranch,
   type Needed,
@@ -753,17 +765,35 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const gh = await judgeGh($, shown, [action], state.message.grant);
+  const gh = await judgeGh(shown, [action], state.message.grant, state.held, ghLookups($));
   if ('deny' in gh) return deny(gh.deny);
-  if (state.messages !== message) {
-    return deny(
-      'the user sent a new message while the gate was checking this call, so it did not run. Act on their message.',
-    );
-  }
+  const stale = overtaken(message, next.signal, 'call');
+  if (stale !== null) return stale;
   const r = await next(e);
   if (r.deny !== undefined) return r;
-  const notes = gh.ran.map((step) => ranUnasked($, step));
+  const notes = unaskedNotes($, gh.ran);
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
+}
+
+// Why a judged call does not run after all: a newer message than the one its
+// grant was read at (`message`), or an abort, past which nothing would report
+// what ran.
+function overtaken(message: number, signal: AbortSignal, what: string): { deny: string } | null {
+  if (state.messages !== message) {
+    return deny(
+      `the user sent a new message while the gate was checking this ${what}, so it did not run. Act on their message.`,
+    );
+  }
+  if (signal.aborted) {
+    return deny('the call was interrupted while the gate was checking it, so it did not run.');
+  }
+  return null;
+}
+
+// The notes for the steps a call ran unasked; a push a requested pull request
+// needs is not noted.
+function unaskedNotes($: $, ran: readonly Unasked[]): string[] {
+  return ran.filter((step) => !step.forPr).map((step) => ranUnasked($, step));
 }
 
 function onGithubToolError(
@@ -879,7 +909,7 @@ async function judgeBash(
   if (cls.kind === 'none') {
     const actions = ghActions(e.command, state.shellAliases);
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
-    const gh = await judgeGh($, quote(e.command), actions, granted);
+    const gh = await judgeGh(quote(e.command), actions, granted, state.held, ghLookups($));
     if ('deny' in gh) return deny(gh.deny);
     // Only a GitHub step is stopped by a newer message; other commands run.
     const since = actions.length > 0 ? message : null;
@@ -933,7 +963,9 @@ async function judgeBash(
 
   if (cls.commit && !cls.commit.dryRun && !granted.commit) {
     const ladder = await ladderOf($);
-    if (!permitted(granted, ladder).commit) return deny(commitRefusal(e.command, ladder));
+    if (!permitted(granted, ladder, state.held).commit) {
+      return deny(commitRefusal(e.command, ladder));
+    }
   }
   const ran: Unasked[] = [];
   if (cls.push) {
@@ -979,11 +1011,8 @@ const LEASE = '`--force-with-lease --force-if-includes`';
 const SUBAGENT =
   'subagents do not commit, push, open, merge, approve or comment on pull requests, or release, in this repository. Report back to the main session instead.';
 
-// `unreadable` names the settings file that could not be read, and why.
-type InForce = Ladder & { unreadable?: string };
-// A step that runs without the user asking for it directly: by the ladder,
-// noted; or a push a requested pull request needs (`forPr`), not noted.
-type Unasked = { step: Step; ladder: Ladder; forPr?: true };
+// A push a requested pull request needs (`forPr`) runs unasked, not noted.
+type Unasked = GhUnasked & { forPr?: true };
 
 // The rung in force: the local file's, else the user's, made earlier by the
 // project file's. Settings that cannot be read stop before every step.
@@ -999,21 +1028,6 @@ async function ladderOf($: $): Promise<InForce> {
     }
   }
   return effective(state.stopBefore, rungs.project ?? null, rungs.local ?? null);
-}
-
-// What may run: what the user asked for, and what the ladder lets through.
-// A hold stops every step but a commit.
-type Allowed = Readonly<Record<Step, boolean>>;
-function permitted(granted: Grant, ladder: Ladder): Allowed {
-  const free = (step: Step) => !asks(ladder, step);
-  return {
-    commit: granted.commit || free('commit'),
-    push: covers(granted, 'push') || (!state.held && free('push')),
-    pr: granted.pr || (!state.held && free('pr')),
-    merge: granted.merge || (!state.held && free('merge')),
-    approve: granted.approve || (!state.held && free('approve')),
-    release: granted.release || (!state.held && free('release')),
-  };
 }
 
 // Shown to the user as a dim line, and to the agent, so the step is never
@@ -1092,13 +1106,15 @@ async function judgePush(
   if (missing === null) return { ran: null };
   const ladder = await ladderOf($);
   const forPr = granted.pr && !state.held;
-  // Only a push something would let through is worth checking further.
-  const loose = missing === 'push' && (forPr || permitted(granted, ladder).push);
-  const always = loose ? await alwaysAsks($, top, spec) : null;
-  if (loose && always === null) {
-    return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
+  const letsThrough = forPr || permitted(granted, ladder, state.held).push;
+  const outcome = await pushOutcome(missing, letsThrough, () => alwaysAsks($, top, spec));
+  if (outcome.kind === 'covered') return { ran: null };
+  if (outcome.kind === 'refused') {
+    return {
+      deny: pushRefusal(command, commits, outcome.missing, granted, ladder, outcome.always),
+    };
   }
-  return { deny: pushRefusal(command, commits, missing, granted, ladder, always) };
+  return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
 }
 
 function quote(command: string): string {
@@ -1106,48 +1122,20 @@ function quote(command: string): string {
   return shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
 }
 
-// The agent asks in its reply, naming the step and its target, and ends its turn.
-// `shown` is the call as the refusal quotes it.
-function askThem(naming: string, example: string, shown: string): string {
-  return `stop and ask them in your reply, naming ${naming} with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${shown}`;
-}
-
-// Why the user's latest message does not cover the step, the setting
-// included when its files could not be read.
-function notAsked(what: string, ladder: InForce, holdable: boolean): string {
-  const why =
-    holdable && state.held
-      ? `the user held off and hasn't asked for ${what} since`
-      : `the user's latest message doesn't ask for ${what}`;
-  return ladder.unreadable === undefined
-    ? why
-    : `could not read ${ladder.unreadable}, so the gate stops before every step, and ${why}`;
-}
-
 function commitRefusal(command: string, ladder: InForce): string {
   const setting =
     ladder.unreadable === undefined
       ? `, and the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)})`
       : '';
-  return `${notAsked('a commit', ladder, false)}${setting}, so nothing ran. To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`;
+  return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`;
 }
 
-function prRefusal(shown: string, ladder: InForce): string {
-  return `${notAsked('a pull request', ladder, true)}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
-}
-
-// The branch oakum's version pull request comes from: merging it is the release.
-const VERSION_BRANCH = 'oakum/version-packages';
 // How long the user waits on a gh read before the step asks instead.
 const LOOKUP_MS = 5000;
 
 // What a gh read printed, or why it asks: "looking up <what> failed (…)" or
 // "… printed nothing".
-async function ghRead(
-  $: $,
-  args: string[],
-  what: string,
-): Promise<{ out: string } | { asks: string }> {
+async function ghRead($: $, args: string[], what: string): Promise<Lookup> {
   try {
     const r = await $.process.run(['gh', ...args], {
       timeoutMs: LOOKUP_MS,
@@ -1166,190 +1154,36 @@ async function ghRead(
   }
 }
 
-const CANNOT: Record<'elsewhere' | 'unnamed', string> = {
-  elsewhere:
-    'something outside the words the gate looks up picks where it merges (a `--repo` built at run time, `GH_REPO=`, `GIT_DIR=`, `env -C`, `--hostname`, a URL on another host), so the gate cannot tell a release from a merge',
-  unnamed:
-    'it does not name the pull request by number and repository, so the gate cannot tell a release from a merge',
-};
-
-// Which step a merge is: a release when it merges the version pull request.
-// A lookup that fails says why, and the merge asks.
-async function mergeStep(
-  $: $,
-  lookup: readonly string[],
-): Promise<{ step: 'merge' | 'release' } | { asks: string }> {
-  const args = ['pr', 'view', ...lookup, '--json', 'headRefName', '--jq', '.headRefName'];
-  const r = await ghRead($, args, 'the pull request it merges');
-  return 'asks' in r ? r : { step: r.out === VERSION_BRANCH ? 'release' : 'merge' };
-}
-
-// Why a push the ladder lets through asks anyway, or null: one to the
-// default branch, or one whose branch the gate cannot tell.
-async function pushAsks($: $, ref: PushRef): Promise<string | null> {
-  if ('asks' in ref) return ref.asks;
-  let { branch, repo } = 'head' in ref ? { branch: '', repo: null as string | null } : ref;
-  if ('head' in ref) {
-    const head = await ghRead(
-      $,
-      [
-        'pr',
-        'view',
-        ...ref.head,
-        '--json',
-        'url,isCrossRepository,headRefName',
-        '--jq',
-        String.raw`"\(.isCrossRepository) \(.url) \(.headRefName)"`,
-      ],
-      'the pull request it updates',
-    );
-    if ('asks' in head) return head.asks;
-    const read = /^(true|false) https:\/\/([^/\s]+\/[^/\s]+\/[^/\s]+)\/pull\/\d+ (\S+)$/.exec(
-      head.out,
-    );
-    if (read === null) return `looking up the pull request it updates printed \`${head.out}\``;
-    if (read[1] === 'true') return "it updates a branch in the pull request's fork";
-    // HOST/OWNER/NAME from the pull request's URL, so an Enterprise host survives.
-    repo = read[2] ?? null;
-    branch = read[3] ?? '';
-  }
-  const r = await ghRead(
-    $,
-    [
-      'repo',
-      'view',
-      ...(repo === null ? [] : [repo]),
-      '--json',
-      'defaultBranchRef',
-      '--jq',
-      '.defaultBranchRef.name',
-    ],
-    'the default branch',
-  );
-  if ('asks' in r) return r.asks;
-  return r.out === branch ? `it pushes to \`${branch}\`, the default branch` : null;
-}
-
-// Each example is one the consent grammar grants on a yes (consent.spec.ts).
-const GH_ASK: Record<
-  'merge' | 'approve' | 'release' | 'comment' | 'push',
-  [string, string, string]
-> = {
-  merge: ['a merge', 'the pull request', '"Merge #116?"'],
-  approve: ['an approval', 'the pull request', '"Approve #116?"'],
-  release: ['a release', 'the version it releases', '"Release `v0.25.0`?"'],
-  comment: [
-    'a comment on GitHub',
-    'where it goes and what it says',
-    '"Reply to the review on #116?"',
-  ],
-  push: ['a push', 'what it pushes and where', '"Push `fix/x` to `origin`?"'],
-};
-
-function ghRefusal(
-  shown: string,
-  kind: keyof typeof GH_ASK,
-  ladder: InForce,
-  always: string | null,
-): string {
-  const [what, naming, example] = GH_ASK[kind];
-  const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
-  const unreviewed =
-    kind === 'push' ? ' It writes to GitHub directly, so no review covers it.' : '';
-  return `${notAsked(what, ladder, true)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
-}
-
-// What the GitHub writes in a call may run, or the refusal of the first one
-// that may not. A comment is off the ladder: it needs the user's request.
-// `shown` is the call as a refusal quotes it.
-async function judgeGh(
-  $: $,
-  shown: string,
-  actions: readonly GhAction[],
-  granted: Grant,
-): Promise<{ deny: string } | { ran: Unasked[] }> {
-  const ran: Unasked[] = [];
-  if (actions.length === 0) return { ran };
-  const ladder = await ladderOf($);
-  const may = permitted(granted, ladder);
-  for (const action of actions) {
-    switch (action.kind) {
-      case 'pr': {
-        if (!may.pr) return { deny: prRefusal(shown, ladder) };
-        if (!granted.pr) ran.push({ step: 'pr', ladder });
-        break;
-      }
-      case 'unread': {
-        const remedy = action.remedy ?? 'Run the gh command itself, written out.';
-        return {
-          deny: `${action.why}, so the gate cannot tell which step it takes, and nothing ran. ${remedy} The command: ${shown}`,
-        };
-      }
-      case 'comment': {
-        if (!granted.comment) return { deny: ghRefusal(shown, 'comment', ladder, null) };
-        break;
-      }
-      case 'approve': {
-        if (!may.approve) return { deny: ghRefusal(shown, 'approve', ladder, null) };
-        if (!granted.approve) ran.push({ step: 'approve', ladder });
-        break;
-      }
-      case 'release': {
-        if (!may.release) return { deny: ghRefusal(shown, 'release', ladder, null) };
-        if (!granted.release) ran.push({ step: 'release', ladder });
-        break;
-      }
-      case 'push': {
-        const forced = typeof action.ref === 'object' && 'force' in action.ref;
-        if (forced && !covers(granted, 'bare')) {
-          return {
-            deny: `a forced ref update overwrites whatever the branch holds, with no lease, and the user's latest message doesn't ask for a bare force, so nothing ran. If they want one, ${askThem('what it overwrites and where', '"Force-push `fix/x` to `origin` without a lease?"', shown)}`,
-          };
-        }
-        if (covers(granted, 'push')) break;
-        if (!may.push) return { deny: ghRefusal(shown, 'push', ladder, null) };
-        const always = await pushAsks($, action.ref);
-        if (always !== null) return { deny: ghRefusal(shown, 'push', ladder, always) };
-        ran.push({ step: 'push', ladder });
-        break;
-      }
-      case 'merge': {
-        if (action.admin) {
-          return {
-            deny: `--admin merges past branch protection, which the gate never lets an agent do, so nothing ran. Give the user the command to run themselves, and say why it needs --admin. The command: ${shown}`,
-          };
-        }
-        // Allowed either way, a merge needs no lookup to tell which it is.
-        if (may.merge && may.release) {
-          if (!granted.merge && !granted.release) ran.push({ step: 'merge', ladder });
-          break;
-        }
-        const { lookup } = action;
-        let which: Awaited<ReturnType<typeof mergeStep>>;
-        if (!('cannot' in lookup)) which = await mergeStep($, lookup);
-        else if (lookup.cannot === 'beside') {
-          return {
-            deny: `other steps in the same command can change which pull request the merge reaches, so the gate cannot tell a release from a merge, and nothing ran. Run the merge as its own command. The command: ${shown}`,
-          };
-        } else which = { asks: CANNOT[lookup.cannot] };
-        if ('asks' in which && may.merge) {
-          return {
-            deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('the pull request', '"Merge and release #62?"', shown)}`,
-          };
-        }
-        if ('asks' in which) return { deny: ghRefusal(shown, 'merge', ladder, which.asks) };
-        const step = which.step;
-        if (!may[step]) return { deny: ghRefusal(shown, step, ladder, null) };
-        if (!granted[step]) ran.push({ step, ladder });
-        break;
-      }
-      default: {
-        const unhandled: never = action;
-        throw new Error(`no judgment for the gh action ${JSON.stringify(unhandled)}`);
-      }
-    }
-  }
-  return { ran };
+// The gh reads GitHub judging needs, each failing into a reason to ask.
+function ghLookups($: $): GhLookups {
+  return {
+    ladder: () => ladderOf($),
+    mergeHead: (lookup) =>
+      ghRead(
+        $,
+        ['pr', 'view', ...lookup, '--json', 'headRefName', '--jq', '.headRefName'],
+        'the pull request it merges',
+      ),
+    pullRequest: async (head) => {
+      const args = ['pr', 'view', ...head, '--json', PR_FIELDS, '--jq', PR_JQ];
+      const r = await ghRead($, args, 'the pull request it updates');
+      return r.asks === undefined ? parsePullRequest(r.out) : { asks: r.asks };
+    },
+    defaultBranch: (repo) =>
+      ghRead(
+        $,
+        [
+          'repo',
+          'view',
+          ...(repo === null ? [] : [repo]),
+          '--json',
+          'defaultBranchRef',
+          '--jq',
+          '.defaultBranchRef.name',
+        ],
+        'the default branch',
+      ),
+  };
 }
 
 // The gate does not ask: the agent asks in its reply, so the user can answer
@@ -1375,7 +1209,7 @@ function pushRefusal(
     }
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
-      return `${notAsked('a push', ladder, true)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+      return `${notAsked('a push', ladder, true, state.held)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {
       const unhandled: never = missing;
@@ -1424,20 +1258,10 @@ async function watch(
       startError = error;
     }
   }
-  if (message !== null && state.messages !== message) {
-    return deny(
-      'the user sent a new message while the gate was checking this command, so it did not run. Act on their message.',
-    );
-  }
-  // Past an abort the dispatch has moved on, so nothing would report what ran.
-  if (message !== null && next.signal.aborted) {
-    return deny('the call was interrupted while the gate was checking it, so it did not run.');
-  }
+  const stale = message === null ? null : overtaken(message, next.signal, 'command');
+  if (stale !== null) return stale;
   const r = await next(e);
-  const notes: string[] = [];
-  if (r.deny === undefined) {
-    for (const step of ran) if (!step.forPr) notes.push(ranUnasked($, step));
-  }
+  const notes = r.deny === undefined ? unaskedNotes($, ran) : [];
   if (root === null) {
     if (notes.length === 0 || r.deny !== undefined) return r;
     return { ...r, context: [...(r.context ?? []), ...notes] };
@@ -1458,7 +1282,7 @@ async function watch(
       if (pushed.length > 0 && !covers(granted, 'push') && !judged) {
         const ladder = await ladderOf($);
         notes.push(
-          permitted(granted, ladder).push
+          permitted(granted, ladder, state.held).push
             ? ranUnasked($, { step: 'push', ladder })
             : `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -1554,7 +1378,7 @@ async function onStatus(
     worktreeTree: null,
   };
   const ladder = await ladderOf($);
-  const may = permitted(state.message.grant, ladder);
+  const may = permitted(state.message.grant, ladder, state.held);
   const from = ladder.unreadable === undefined ? where(ladder.source) : 'unreadable settings';
   status.stopBefore = { ...ladder, from, held: state.held };
   status.mayCommit = may.commit;
