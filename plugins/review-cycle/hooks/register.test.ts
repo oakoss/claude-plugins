@@ -2503,15 +2503,20 @@ function remoteSide(
 
 // GitHub as the gate sees it: `gh pr view` names the merged pull request's
 // branch, or fails when `head` is 'fail'.
-function github(head: string): (a: string) => Partial<Run> | null {
+function github(head: string, defaultBranch = 'main'): (a: string) => Partial<Run> | null {
   return (a) => {
     if (a.startsWith('gh pr view')) {
       return head === 'fail'
         ? { exitCode: 1, stderr: 'no pull requests found for branch "x"' }
         : { stdout: `${head}\n` };
     }
+    if (a.startsWith('gh repo view')) return { stdout: `${defaultBranch}\n` };
     return null;
   };
+}
+
+async function mcp($: any, tool: string, args: Record<string, unknown>, extra = {}) {
+  return $.tool.call({ tool, ...args, ...extra });
 }
 
 // A world on fix/x whose next Bash call moves origin/fix/x, as a push does.
@@ -2847,10 +2852,7 @@ describe('the stop-before setting', () => {
       ),
     ).toBe(true);
     expect(
-      denied(
-        await bash($, 'gh pr merge 62 && echo merged'),
-        'Run `gh pr merge` as its own command',
-      ),
+      denied(await bash($, 'gh pr merge 62 && echo merged'), 'Run the merge as its own command'),
     ).toBe(true);
     // Asked for both, the merge runs whichever it is.
     await say($, 'merge it and release it');
@@ -2937,6 +2939,149 @@ describe('the stop-before setting', () => {
     expect(
       denied(await bash($, 'git commit -am x && gh pr merge 116'), '`gh` alongside a commit'),
     ).toBe(true);
+  });
+  test('a GitHub MCP merge is judged as gh pr merge, under any server name', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const pr = { owner: 'o', repo: 'r', pullNumber: 116, commit_message: 'long text' };
+    const r = await mcp($, 'mcp__github__merge_pull_request', pr);
+    expect(denied(r, "doesn't ask for a merge")).toBe(true);
+    expect(
+      denied(r, 'mcp__github__merge_pull_request {"owner":"o","repo":"r","pullNumber":116}'),
+    ).toBe(true);
+    const other = 'mcp__gh__work__merge_pull_request';
+    expect(denied(await mcp($, other, pr), "doesn't ask for a merge")).toBe(true);
+    await say($, 'merge it');
+    expect(denied(await mcp($, other, pr), 'review-cycle')).toBe(false);
+    const view = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(view?.argv.slice(3, 6)).toEqual(['116', '--repo', 'o/r']);
+  });
+  test('a GitHub MCP review approves only with APPROVE', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') } });
+    await say($, 'fix the parser');
+    const review = { owner: 'o', repo: 'r', pullNumber: 116, method: 'create' };
+    const r = await mcp($, 'mcp__github__pull_request_review_write', {
+      ...review,
+      event: 'APPROVE',
+    });
+    expect(has(contextOf(r), 'ran an approval without asking')).toBe(true);
+    const comment = { ...review, event: 'COMMENT' };
+    expect(
+      denied(await mcp($, 'mcp__github__pull_request_review_write', comment), 'a comment'),
+    ).toBe(true);
+    expect(
+      denied(await mcp($, 'mcp__github__add_issue_comment', { issue_number: 9 }), 'a comment'),
+    ).toBe(true);
+  });
+  test('a GitHub MCP commit is a push, and asks on the default branch', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const files = { owner: 'o', repo: 'r', files: [], message: 'm' };
+    const r = await mcp($, 'mcp__github__push_files', { ...files, branch: 'fix/x' });
+    expect(has(contextOf(r), 'ran a push without asking')).toBe(true);
+    const view = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh repo view');
+    expect(view?.argv.slice(3)).toEqual([
+      'o/r',
+      '--json',
+      'defaultBranchRef',
+      '--jq',
+      '.defaultBranchRef.name',
+    ]);
+    const main = await mcp($, 'mcp__github__push_files', { ...files, branch: 'main' });
+    expect(denied(main, 'it pushes to `main`, the default branch')).toBe(true);
+    expect(denied(main, 'It writes to GitHub directly, so no review covers it.')).toBe(true);
+    await say($, 'push it');
+    const looked = w.calls.length;
+    expect(ran(await mcp($, 'mcp__github__push_files', { ...files, branch: 'main' }))).toBe(true);
+    expect(w.calls.slice(looked).some((c) => c.argv.join(' ').startsWith('gh repo view'))).toBe(
+      false,
+    );
+  });
+  test('a GitHub MCP push asks at the default setting', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await mcp($, 'mcp__github__create_or_update_file', { branch: 'fix/x' });
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(r, '"Push `fix/x` to `origin`?"')).toBe(true);
+  });
+  test('a GitHub MCP write from a subagent is refused', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'ship it');
+    const r = await mcp($, 'mcp__github__create_pull_request', {}, { agentId: 'sub-1' });
+    expect(denied(r, 'subagents do not commit, push, open, merge')).toBe(true);
+  });
+  const unreadDefaults: [Partial<Run> | 'reject', string][] = [
+    [{ exitCode: 1, stderr: 'HTTP 404' }, 'looking up the default branch failed (HTTP 404)'],
+    [{ stdout: '\n' }, 'looking up the default branch printed nothing'],
+    ['reject', 'looking up the default branch failed'],
+  ];
+  for (const [answer, why] of unreadDefaults) {
+    test(`a GitHub push asks when ${why}`, async ($, on) => {
+      fakeWorld(on, {
+        settings: { local: stops('never stop') },
+        git: (a) => (a.startsWith('gh repo view') && answer !== 'reject' ? answer : null),
+        reject: (a) => answer === 'reject' && a.startsWith('gh repo view'),
+      });
+      await say($, 'fix the parser');
+      const push = { owner: 'o', repo: 'r', branch: 'fix/x' };
+      expect(denied(await mcp($, 'mcp__github__push_files', push), why)).toBe(true);
+    });
+  }
+  test('a forced ref update needs a bare force, not a push request', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'push it');
+    const force = 'gh api -X PATCH repos/o/r/git/refs/heads/main -F force=true -f sha=abc';
+    const r = await bash($, force);
+    expect(denied(r, "doesn't ask for a bare force")).toBe(true);
+    expect(denied(r, '"Force-push `fix/x` to `origin` without a lease?"')).toBe(true);
+    await say($, 'force push it without a lease');
+    expect(ran(await bash($, force))).toBe(true);
+  });
+  test('a GitHub MCP merge without a number asks where a release could follow', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
+    await say($, 'merge it');
+    const r = await mcp($, 'mcp__github__merge_pull_request', { pullNumber: 5 });
+    expect(denied(r, 'does not name the pull request by number and repository')).toBe(true);
+    expect(w.calls.some((c) => c.argv.join(' ').startsWith('gh pr view'))).toBe(false);
+  });
+  test('a GitHub MCP call a newer message overtakes does not run', async ($, on) => {
+    let typed = false;
+    const w = fakeWorld(on, {
+      settings: { local: stops('never stop') },
+      settingsRead: () => {
+        if (typed) return;
+        typed = true;
+        void say($, "actually, don't open it yet");
+      },
+    });
+    await say($, 'fix the parser');
+    const r = await mcp($, 'mcp__github__create_pull_request', {});
+    expect(denied(r, 'sent a new message')).toBe(true);
+    expect(w.logs ?? []).toEqual([]);
+  });
+  test('a gh api push to a feature branch runs below the rung, noted', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh api -X PUT repos/o/r/contents/a.md -f branch=fix/x -f message=m');
+    expect(has(contextOf(r), 'ran a push without asking')).toBe(true);
+  });
+  test('gh api writes are judged by endpoint', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    expect(
+      denied(
+        await bash($, 'gh api -X PUT repos/{owner}/{repo}/pulls/116/merge'),
+        "doesn't ask for a merge",
+      ),
+    ).toBe(true);
+    expect(
+      denied(
+        await bash($, 'gh api repos/{owner}/{repo}/contents/a.md -X PUT -f branch=main'),
+        'it pushes to `main`, the default branch',
+      ),
+    ).toBe(true);
+    expect(denied(await bash($, 'gh api graphql -f query="$Q"'), 'Write the query out')).toBe(true);
+    expect(ran(await bash($, 'gh api repos/{owner}/{repo}/pulls/116'))).toBe(true);
   });
   test('the project file cannot stop later than the user', async ($, on) => {
     fakeWorld(on, { settings: { project: stops('never stop') } });

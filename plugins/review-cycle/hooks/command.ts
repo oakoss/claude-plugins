@@ -11,6 +11,7 @@
 // an interpreter, `xargs`, `find -exec` — it is refused.
 
 import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
+import { apiActions, type GhAction, type GhContext } from './github';
 import {
   assignmentName,
   parse,
@@ -866,18 +867,6 @@ function tame(text: string): string {
     .replaceAll(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '\u{FFFD}');
 }
 
-// A gh command the ladder judges. `merge` carries the arguments that name its
-// pull request to `gh pr view`, or why they cannot (see mergeOf), and whether
-// it bypasses branch protection with --admin; `unread` is one the gate cannot
-// read, such as a gh alias.
-export type GhAction =
-  | { kind: 'pr' }
-  | { kind: 'merge'; admin: boolean; lookup: string[] | 'elsewhere' | 'beside' }
-  | { kind: 'approve' }
-  | { kind: 'comment' }
-  | { kind: 'release' }
-  | { kind: 'unread'; why: string };
-
 // gh's own commands (gh 2.102.0's `gh --help`). Any other word is a gh alias
 // or an extension, which the gate does not read.
 const GH_COMMANDS = new Set([
@@ -1000,7 +989,7 @@ const RELEASE_WRITES = new Set(['create', 'new', 'edit', 'delete', 'delete-asset
 // any other gh write, which then cannot be read further.
 const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new)\b/;
 const GH_WRITE =
-  /\bgh\b[^|;&\n]*\b(pr\s+(?:[^\s;&|]+\s+)*?(merge|review|comment)|issue\s+(?:[^\s;&|]+\s+)*?comment|release\s+(?:[^\s;&|]+\s+)*?(create|new|edit|delete|upload))\b/;
+  /\bgh\b[^|;&\n]*\b((pr\s+(?:[^\s;&|]+\s+)*?(merge|review|comment)|issue\s+(?:[^\s;&|]+\s+)*?comment|release\s+(?:[^\s;&|]+\s+)*?(create|new|edit|delete|upload))\b|api\s(?:[^|;&\n]*\s)?(-X|--method|-[fF]|--field|--raw-field|--input))/;
 
 const isRepo = (t: string) => t === '-R' || t === '--repo';
 const namesRepo = (t: string) => isRepo(t) || t.startsWith('--repo=') || /^-R./.test(t);
@@ -1060,15 +1049,8 @@ function builtArgs(rest: Word[], values: ReadonlySet<string>): boolean {
 
 const REVIEW_VALUE = new Set(['-b', '--body', '-F', '--body-file', '-R', '--repo']);
 
-// What `gh pr merge` names for `gh pr view` to look up, or why it cannot be:
-// `elsewhere` when something outside its words picks the repository
-// (`GH_REPO=`, `env -C`), `beside` when other steps share the command.
-function mergeOf(
-  words: Word[],
-  from: number,
-  repo: Word | null,
-  context: 'fixed' | 'elsewhere' | 'beside',
-): GhAction {
+// What `gh pr merge` names for `gh pr view` to look up, or why it cannot be.
+function mergeOf(words: Word[], from: number, repo: Word | null, context: GhContext): GhAction {
   const rest = words.slice(from);
   let selector: Word | null = null;
   let target = repo;
@@ -1081,12 +1063,11 @@ function mergeOf(
     else if (!t.startsWith('-') && selector === null) selector = rest[i] ?? null;
   }
   const admin = flagSet(rest, 'admin', null, '');
-  const lookup =
-    context !== 'fixed' || target?.dynamic
-      ? context === 'beside'
-        ? context
-        : 'elsewhere'
-      : [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
+  if (context === 'beside') return { kind: 'merge', admin, lookup: { cannot: 'beside' } };
+  if (context === 'elsewhere' || target?.dynamic) {
+    return { kind: 'merge', admin, lookup: { cannot: 'elsewhere' } };
+  }
+  const lookup = [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
   return { kind: 'merge', admin, lookup };
 }
 
@@ -1095,9 +1076,9 @@ function mergeOf(
 function ghAt(
   words: Word[],
   at: number,
-  context: 'fixed' | 'elsewhere' | 'beside',
+  context: GhContext,
   fed: boolean,
-): GhAction | null {
+): GhAction | GhAction[] | null {
   const seen = { repo: null as Word | null };
   const sub = pastOptions(words, at + 1, seen);
   const group = words[sub]?.text;
@@ -1109,6 +1090,11 @@ function ghAt(
       kind: 'unread',
       why: `\`gh ${group}\` is a gh alias or extension, which the gate does not read`,
     };
+  }
+  if (group === 'api') {
+    // `gh --hostname h api …` sends it to another host.
+    const host = words.slice(at + 1, sub).some((w) => /^--hostname(=|$)/.test(w.text));
+    return apiActions(words.slice(sub + 1), host ? 'elsewhere' : context, fed);
   }
   const verbs = GH_VERBS[group];
   if (verbs === undefined) return null;
@@ -1167,13 +1153,14 @@ function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
     const moved = before.some((w) => /^(GH_(REPO|HOST)|GIT_\w+)=|^-[CD]|^--chdir/.test(w.text));
     const context = moved ? 'elsewhere' : alone ? 'fixed' : 'beside';
     const action = ghAt(st.words, at, context, fed);
-    if (action) found.push(action);
+    if (Array.isArray(action)) found.push(...action);
+    else if (action) found.push(action);
   }
   return found;
 }
 
-// Every gh command in the command that opens, merges, approves, comments on or
-// releases, read as text when the command does not parse.
+// Every gh command in the command that opens, merges, approves, comments on,
+// releases or pushes, read as text when the command does not parse.
 export function ghActions(command: string, aliases: ShellAliases = new Map()): GhAction[] {
   const parsed = parse(command, aliases);
   if ('error' in parsed) {

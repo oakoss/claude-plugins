@@ -1518,8 +1518,8 @@ describe('gh steps', () => {
     ]);
   });
   test('a pull request something else may pick cannot be looked up', () => {
-    const elsewhere = [{ kind: 'merge', admin: false, lookup: 'elsewhere' }];
-    const beside = [{ kind: 'merge', admin: false, lookup: 'beside' }];
+    const elsewhere = [{ kind: 'merge', admin: false, lookup: { cannot: 'elsewhere' } }];
+    const beside = [{ kind: 'merge', admin: false, lookup: { cannot: 'beside' } }];
     expect(ghActions('GH_REPO=o/r gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('env -C ../other gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('env --chdir=/tmp gh pr merge 62')).toEqual(elsewhere);
@@ -1530,9 +1530,7 @@ describe('gh steps', () => {
     expect(ghActions('cd ../other && gh pr merge 62')).toEqual(beside);
     expect(ghActions('gh pr checkout 62 && gh pr merge')).toEqual(beside);
     expect(ghActions('export GH_REPO=o/r; gh pr merge 62')).toEqual(beside);
-    expect(ghActions('gh pr merge 116 && echo merged')).toEqual([
-      { kind: 'merge', admin: false, lookup: 'beside' },
-    ]);
+    expect(ghActions('gh pr merge 116 && echo merged')).toEqual(beside);
     // gh's settings that pick no pull request leave the lookup in place.
     expect(ghActions('GH_PROMPT_DISABLED=1 gh pr merge 62')).toEqual([
       { kind: 'merge', admin: false, lookup: ['62'] },
