@@ -217,6 +217,10 @@ A message that mentions pushing, shipping, opening a pull request, merging, appr
 
 The gate reads these gh commands wherever they run as a command, as it reads git: behind variable assignments or a wrapper such as `env`, `sudo` or `timeout`, with gh's options before or after `pr`. Text inside quotes is not read, so `bash -c "gh pr create"` goes unseen. A gh command beside a git commit or push in one command is refused; run them apart. Monitor refuses them, as it does a push. Subagents never commit, push, open, merge, approve or comment on a pull request, or release, in the project, whatever the setting.
 
+### The review nudge
+
+When a turn ends with changes no reviewer has seen, the gate prompts the agent to run `/review-cycle:review`, once per message of yours. It stays quiet when the turn's last message ends with a question mark, bold or italic included, since the agent is waiting on your answer. `review-cycle.nudge`, in `/config` (on by default), turns it off. Per project, `{ "options": { "nudge": false } }` under `pluginConfigs` in `.claude/settings.json` turns it off there, for a repository where reviews do not pay, such as a notes vault; your `.claude/settings.local.json` decides either way, over both. A settings file the gate cannot read, or a `nudge` that is not `true` or `false`, sets nothing, and the other settings decide. The commit gate is unaffected: a commit still needs a review.
+
 ### Add the policies to your global CLAUDE.md
 
 The skills embed the comment, fix-vs-defer, and evidence policies, so the cycle itself works without setup. But if you want the same policies active outside the cycle (when Claude is implementing code or addressing a single PR comment), copy the snippets from `reference/policies.md` into `~/.claude/CLAUDE.md`.

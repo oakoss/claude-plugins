@@ -1929,13 +1929,17 @@ describe('reviews that do not count, and say so', () => {
   });
 });
 
+function nudge(value: boolean) {
+  return { pluginConfigs: { 'review-cycle': { options: { nudge: value } } } };
+}
+
 function nudges(w: World): string[] {
   return (w.prompts ?? []).filter((p) => p.startsWith('review-cycle: this turn left'));
 }
 
-async function endTurn($: any, reason = 'answer') {
+async function endTurn($: any, reason = 'answer', answer = 'done') {
   await $.turn.complete({
-    answer: 'done',
+    answer,
     durationMs: 1,
     isAborted: reason === 'aborted',
     turnId: 'main',
@@ -1970,6 +1974,70 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'three' };
     await endTurn($);
     expect(nudges(w)).toHaveLength(1);
+  });
+  test('a turn that ends by asking the user something is not nudged', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($, 'answer', 'Fixed. Commit the changes to `fix/x`?');
+    expect(nudges(w)).toEqual([]);
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test("a project's settings turn the nudge off; the local file decides", async ($, on) => {
+    const w = fakeWorld(on, { settings: { project: nudge(false) } });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+    w.settings = { project: nudge(false), local: nudge(true) };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a settings file that cannot be read sets nothing', async ($, on) => {
+    const w = fakeWorld(on, { settings: { project: 'throw' } });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('one unreadable file leaves the other one in force', async ($, on) => {
+    const w = fakeWorld(on, { settings: { project: 'throw', local: nudge(false) } });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+    w.settings = { project: nudge(false), local: 'throw' };
+    await endTurn($);
+    expect(nudges(w)).toEqual([]);
+  });
+  test('a nudge value that is not a boolean sets nothing', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { project: { pluginConfigs: { 'review-cycle': { options: { nudge: 'false' } } } } },
+    });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    expect(nudges(w)).toHaveLength(1);
+  });
+  test('a turn with nothing to nudge reads no settings', async ($, on) => {
+    let reads = 0;
+    fakeWorld(on, { settingsRead: () => void reads++ });
+    await say($, 'fix it');
+    const before = reads;
+    await endTurn($);
+    expect(reads).toBe(before);
+  });
+  test('only the user changes the nudge setting', async ($, on) => {
+    fakeWorld(on);
+    const change = {
+      key: 'review-cycle.nudge',
+      value: false,
+      previous: true,
+      provider: { plugin: 'review-cycle', tier: 'user' as const },
+    };
+    const byPlugin = await $.config.set({ ...change, origin: { kind: 'plugin', name: 'other' } });
+    expect(byPlugin).toEqual({ deny: expect.stringContaining('only by the user') });
   });
   test('a turn that changed nothing is not nudged, whatever was unreviewed before', async ($, on) => {
     const w = fakeWorld(on);
