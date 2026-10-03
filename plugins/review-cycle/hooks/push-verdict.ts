@@ -65,3 +65,25 @@ export function unasked(spec: PushSpec, grant: Grant): Needed | null {
   const needed = neededFor(spec);
   return covers(grant, needed) ? null : needed;
 }
+
+// What a push may do, git's or GitHub's: run when the grant covers it, run
+// unasked when something lets a plain push through and nothing makes it ask,
+// or be refused for the level it is missing. `alwaysAsks` runs only for a
+// push something would let through.
+export type PushOutcome =
+  | { kind: 'covered' }
+  | { kind: 'unasked' }
+  | { kind: 'refused'; missing: 'push'; always: string | null }
+  | { kind: 'refused'; missing: Exclude<Needed, 'push'>; always: null };
+
+export async function pushOutcome(
+  missing: Needed | null,
+  letsThrough: boolean,
+  alwaysAsks: () => Promise<string | null>,
+): Promise<PushOutcome> {
+  if (missing === null) return { kind: 'covered' };
+  if (missing !== 'push') return { kind: 'refused', missing, always: null };
+  const always = letsThrough ? await alwaysAsks() : null;
+  if (letsThrough && always === null) return { kind: 'unasked' };
+  return { kind: 'refused', missing, always };
+}

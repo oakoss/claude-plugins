@@ -3,7 +3,14 @@ import { describe, expect, test } from 'vitest';
 import { classify } from './command';
 import { NO_GRANT, type PushLevel } from './consent';
 import type { PushSpec } from './git-args';
-import { askingReason, neededFor, parseDryRun, unasked, type DefaultBranch } from './push-verdict';
+import {
+  askingReason,
+  neededFor,
+  parseDryRun,
+  pushOutcome,
+  unasked,
+  type DefaultBranch,
+} from './push-verdict';
 
 function specOf(command: string): PushSpec {
   const c = classify(command);
@@ -96,5 +103,46 @@ describe("what git's dry run says a push updates", () => {
     expect(askingReason(parseDryRun('Done\n'), MAIN)).toBe(
       'its dry run named no ref it would update',
     );
+  });
+});
+
+// A push's own reason to ask, recording each time it is checked.
+function asked(reason: string | null) {
+  const calls: number[] = [];
+  const check = () => {
+    calls.push(1);
+    return Promise.resolve(reason);
+  };
+  return { calls, check };
+}
+
+describe('what a push not covered may do', () => {
+  test('a covered push runs and checks nothing', async () => {
+    const a = asked('x');
+    expect(await pushOutcome(null, false, a.check)).toEqual({ kind: 'covered' });
+    expect(a.calls).toEqual([]);
+  });
+  test('a plain push something lets through runs unasked unless it always asks', async () => {
+    expect(await pushOutcome('push', true, asked(null).check)).toEqual({ kind: 'unasked' });
+    expect(await pushOutcome('push', true, asked('it pushes a tag').check)).toEqual({
+      kind: 'refused',
+      missing: 'push',
+      always: 'it pushes a tag',
+    });
+  });
+  test('nothing lets it through, or it forces: refused, with nothing checked', async () => {
+    for (const [missing, lets] of [
+      ['push', false],
+      ['lease', true],
+      ['bare', true],
+    ] as const) {
+      const a = asked('x');
+      expect(await pushOutcome(missing, lets, a.check)).toEqual({
+        kind: 'refused',
+        missing,
+        always: null,
+      });
+      expect(a.calls).toEqual([]);
+    }
   });
 });
