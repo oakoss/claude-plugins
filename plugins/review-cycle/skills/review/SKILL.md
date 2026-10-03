@@ -171,7 +171,7 @@ Call the `mcp__review-cycle__status` tool and run:
 git config --local --list
 ```
 
-Record the status tool's `snapshot` value, its `worktreeTree` (this iteration's `<spawnTree>`, which Phase 6 diffs against), and the config listing verbatim into the Phase 9 summary draft as you take them — the loop ends turns between here and Phase 4, and a baseline you have to remember is one you will compare against badly. Write any scratch file outside the repository; one inside it is a change a reviewer never saw.
+Record the status tool's `snapshot` value, its `worktreeTree` (this iteration's `<spawnTree>`, which Phase 6 diffs against; keep every iteration's), the time (`date +%s`, the start of the iteration's wall-clock), and the config listing verbatim into the Phase 9 summary draft as you take them — the loop ends turns between here and Phase 4, and a baseline you have to remember is one you will compare against badly. Write any scratch file outside the repository; one inside it is a change a reviewer never saw.
 
 Re-take both in Phase 4 before aggregating and compare. `snapshot` is a digest of HEAD and every reviewable change against it, blob ids included, so it moves with content, staging that reaches the tree, and commits; a `git status` comparison misses an empty commit. The config listing covers a repository-local identity, which the snapshot never reads and which mis-authors every later commit. What escapes both: the excluded paths (`.beads/**`, `.trekker/**`, editor directories, the project's `ignore` patterns), untracked gitignored files, and anything under `.git/` other than HEAD — a worktree registration, a written hook, the stash. That residual is why reviewers work outside the repository rather than in a subdirectory of it.
 
@@ -380,6 +380,10 @@ A full reviewer re-fan-out is only worth its wall-clock when this iteration's fi
 
 **Track where the fixes land.** Before deciding, record `git diff --name-only <spawnTree> <worktreeTree>` in the summary draft: `<spawnTree>` is the `worktreeTree` Phase 3's status call returned before this iteration's fan-out, and `<worktreeTree>` is the status tool's now. That is this iteration's fix set. From the second iteration that applied fixes, a file in every fixing iteration's set means the fixes are not converging there. Name it with the latest hunks (`git diff -U0 <spawnTree> <worktreeTree> -- <file> | grep '^@@'`) and say that repeated patching at one site argues for the structural fix, cutting or deferring the piece that keeps drawing findings, rather than another round. A flagged file stays on the summary's `Churn:` line even when the loop later converges. Churn covers loop iterations only, not Phase 8's pass.
 
+**Count the findings this cycle's fixes caused.** From iteration 2, attribute each finding this iteration aggregated: to this cycle's fixes when it cites a line inside `git diff <iteration 1's spawnTree> <spawnTree>` or says one of those fixes is wrong, otherwise to the original work. Record `iteration N: X of Y from this cycle's fixes`, and the pass type when it was a confirmation pass, whose findings nearly all cite fix lines by design. When most of a full iteration's findings came from this cycle's fixes, the loop is generating its own work: say so in the summary, where the user decides between more patches, the structural fix, and cutting the fix that keeps drawing findings. The count changes nothing in the loop: a fix a finding shows is wrong is still fixed, as the bar above requires.
+
+**Record each iteration's cost as its legs report.** Take the time again (`date +%s`) at the loop decision; the difference from Phase 3's is the iteration's wall-clock. A subagent can notify more than once, each time with its running usage (`subagent_tokens`, `duration_ms`), so keep only its latest. A capped leg's notification reports no usage, and a Codex leg's reports none either. Codex runs the review in a child session of the `session id` its output prints; read that child's total, once the leg has finished, with `grep -rl --include='rollout-*.jsonl' '"parent_thread_id":"<session id>"' ~/.codex/sessions | xargs grep -ho '"total_token_usage":{[^}]*}' | tail -1` (measured on codex-cli 0.160.0). Its total counts cached input, so report it apart from the subagents' tokens rather than adding the two. Name every leg whose usage was not reported, so a total never reads as complete when it is not. The cost covers loop iterations only, not Phases 7 and 8.
+
 Then decide. The loop converges on an iteration that applies **no** fixes: only then did a reviewer see the tree as it now stands. Every fix, however small, is content no reviewer has seen, and the commit gate refuses it until one does.
 
 - NO inline fixes applied and none held at the ceiling (everything clean or correctly deferred) → exit loop, converged.
@@ -459,6 +463,8 @@ Canonicalization: ran (<commands>) | partial (<tool> unavailable) | no project c
 Reviewers dropped (stalled): none | <names, each nudged once before dropping>
 Reviewers capped (over budget): none | <each `cappedReviews` entry from the status tool, and whether TaskStop stopped it>
 Churn: none | <file[:hunks] in every fixing iteration's set (N of N fixing iterations)>
+Convergence: iteration 1 only | <iteration N: X of Y from this cycle's fixes[ (confirmation pass)]>, ... [— the loop is generating its own work]
+Cost: <iteration N: W min wall-clock, L legs, T subagent tokens, C Codex tokens[, not reported: <legs>]>, ... | not recorded (<reason>)
 Scratch swept: <N processes ended, directory removed> | <errors> | not swept (<reason>)
 Findings fixed inline: X
   - file:line — issue (source)
@@ -481,6 +487,8 @@ Structural suggestions (report-only — prompt to address the ones you want):
 
 Final state: clean / N findings remain
 ```
+
+**When anything was deferred or raised as a question, follow the summary, before any question Phase 10 asks, with a paste-ready markdown block** for the pull request description, since the summary is gone with the session: `## Known issues` with one bullet per deferred finding (`` `file:line` — the finding (deferred: the reason) ``), then `### Open questions` with one bullet per question. It repeats the summary, nothing new, and leaves out findings still held at the ceiling, which Phase 10 asks about, and a heading with nothing under it. Never file it in a tracker; when you open the pull request yourself, put it in the body, with any held findings the user chose in Phase 10 to defer added first.
 
 ### Phase 10: Finish
 
