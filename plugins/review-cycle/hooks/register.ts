@@ -1300,8 +1300,7 @@ async function judgeGh(
         break;
       }
       case 'push': {
-        const forced = typeof action.ref === 'object' && 'force' in action.ref;
-        if (forced && !covers(granted, 'bare')) {
+        if ('asks' in action.ref && action.ref.force && !covers(granted, 'bare')) {
           return {
             deny: `a forced ref update overwrites whatever the branch holds, with no lease, and the user's latest message doesn't ask for a bare force, so nothing ran. If they want one, ${askThem('what it overwrites and where', '"Force-push `fix/x` to `origin` without a lease?"', shown)}`,
           };

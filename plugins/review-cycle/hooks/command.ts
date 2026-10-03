@@ -11,7 +11,7 @@
 // an interpreter, `xargs`, `find -exec` — it is refused.
 
 import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
-import { apiActions, type GhAction, type GhContext, type Unnamed } from './github';
+import { apiActions, asking, type GhAction, type GhContext, type Unlookable } from './github';
 import { publishAt } from './publish';
 import {
   assignmentName,
@@ -1056,7 +1056,7 @@ function lookupOf(
   rest: Word[],
   repo: Word | null,
   context: GhContext,
-): readonly string[] | Unnamed {
+): readonly string[] | Unlookable {
   let selector: Word | null = null;
   let target = repo;
   for (let i = 0; i < rest.length; i++) {
@@ -1147,11 +1147,11 @@ function ghAt(
     if (verb === 'update-branch') {
       if (fed || builtArgs(rest, new Set(['-R', '--repo']))) return unreadArgs;
       if (flagSet(rest, 'rebase', null, '')) {
-        return { kind: 'push', ref: { asks: "it rebases the pull request's branch", force: true } };
+        return { kind: 'push', ref: asking("it rebases the pull request's branch", true) };
       }
       const lookup = lookupOf(rest, seen.repo, context);
       return 'cannot' in lookup
-        ? { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } }
+        ? { kind: 'push', ref: asking('the pull request it updates cannot be looked up', false) }
         : { kind: 'push', ref: { head: lookup } };
     }
   }

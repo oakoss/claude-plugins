@@ -3066,6 +3066,16 @@ describe('the stop-before setting', () => {
       false,
     );
   });
+  test('a requested pull request lets no GitHub API push through', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('push') }, git: github('fix/x') });
+    await say($, 'open a PR');
+    const files = { owner: 'o', repo: 'r', files: [], message: 'm', branch: 'fix/x' };
+    const r = await mcp($, 'mcp__github__push_files', files);
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(await bash($, 'gh pr update-branch 7 -R o/r'), "doesn't ask for a push")).toBe(
+      true,
+    );
+  });
   test('a GitHub MCP push asks at the default setting', async ($, on) => {
     fakeWorld(on, { git: github('fix/x') });
     await say($, 'fix the parser');

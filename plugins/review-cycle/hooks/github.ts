@@ -3,26 +3,31 @@
 
 import type { Word } from './shell';
 
-// `head` is a pull request's own branch, looked up by `gh pr view <head>`.
+// Where a gh write runs: `elsewhere` when something outside its words picks
+// the repository, `beside` when another step in the command may.
+export type GhContext = 'fixed' | 'elsewhere' | 'beside';
+
 // `asks` says why the push asks whatever the setting; a `force` one needs a
 // request for a bare force, since the API has no lease.
-export type PushRef =
-  | { branch: string; repo: string | null }
-  | { head: readonly string[] }
-  | { asks: string; force?: true };
+export type Asking = { asks: string; force: boolean };
+export const asking = (asks: string, force: boolean): Asking => ({ asks, force });
 
-export type Unnamed = { cannot: 'elsewhere' | 'beside' | 'unnamed' };
+// `head` is a pull request's own branch, looked up by `gh pr view <head>`.
+export type PushRef =
+  | { branch: string; repo: string | null; force?: never }
+  | { head: readonly string[]; force?: never }
+  | Asking;
+
+export type Unlookable = { cannot: Exclude<GhContext, 'fixed'> | 'unnamed' };
 
 export type GhAction =
   | { kind: 'pr' }
-  | { kind: 'merge'; admin: boolean; lookup: readonly string[] | Unnamed }
+  | { kind: 'merge'; admin: boolean; lookup: readonly string[] | Unlookable }
   | { kind: 'approve' }
   | { kind: 'comment' }
   | { kind: 'release' }
   | { kind: 'push'; ref: PushRef }
   | { kind: 'unread'; why: string; remedy?: string };
-
-export type GhContext = 'fixed' | 'elsewhere' | 'beside';
 
 // `gh api`'s options that take a value (gh 2.102.0's `gh api --help`), and
 // the short ones among them, which take the rest of a cluster (`-XPOST`).
@@ -136,31 +141,29 @@ function readApi(words: Word[]): ApiCall {
 
 // A branch as GitHub's ref APIs take it, or why the push it names asks: `null`
 // is a name read at run time, `undefined` none at all.
-function branchOf(name: string | null | undefined, missing: string): string | { asks: string } {
+function branchOf(name: string | null | undefined, missing: string): string | Asking {
   if (name === null) {
-    return { asks: 'the branch it names is built at run time or read from a file' };
+    return asking('the branch it names is built at run time or read from a file', false);
   }
-  if (name?.startsWith('refs/tags/')) return { asks: 'it pushes a tag' };
+  if (name?.startsWith('refs/tags/')) return asking('it pushes a tag', false);
   if (name?.startsWith('refs/') && !name.startsWith('refs/heads/')) {
-    return { asks: `it writes \`${name}\`, which is no branch` };
+    return asking(`it writes \`${name}\`, which is no branch`, false);
   }
   const branch = name?.replace(/^refs\/heads\//, '');
-  return branch === undefined || branch === '' ? { asks: missing } : branch;
+  return branch === undefined || branch === '' ? asking(missing, false) : branch;
 }
 
-// Where a push lands: `moved` when something outside its words picks the
-// repository, `beside` when another step in the command may.
 function pushRef(
   name: string | null | undefined,
   missing: string,
   repo: string | null,
-  where: 'fixed' | 'moved' | 'beside',
+  where: GhContext,
 ): PushRef {
-  if (where === 'moved') return { asks: 'where it pushes is picked outside its words' };
+  if (where === 'elsewhere') return asking('where it pushes is picked outside its words', false);
   const branch = branchOf(name, missing);
   if (typeof branch !== 'string') return branch;
   if (where === 'beside' && repo === null) {
-    return { asks: 'another step in the command can change which repository it reaches' };
+    return asking('another step in the command can change which repository it reaches', false);
   }
   return { branch, repo };
 }
@@ -171,7 +174,7 @@ function restAction(
   path: string,
   repo: string | null,
   call: ApiCall,
-  where: 'fixed' | 'moved' | 'beside',
+  where: GhContext,
 ): GhAction | null {
   const field = (key: string) => (call.unnamed || call.input ? null : call.fields.get(key));
   const unknown = (key: string) => call.input || call.unnamed || call.fields.get(key) === null;
@@ -184,21 +187,22 @@ function restAction(
   const pull = /^pulls\/([^/]+)\/(.+)$/.exec(path);
   if (pull?.[2] === 'merge') {
     const number = pull[1] ?? '';
-    const lookup: readonly string[] | Unnamed =
-      where === 'moved'
-        ? { cannot: 'elsewhere' }
-        : where === 'beside'
-          ? { cannot: 'beside' }
-          : /^\d+$/.test(number)
-            ? [number, ...(repo === null ? [] : ['--repo', repo])]
-            : { cannot: 'unnamed' };
+    const lookup: readonly string[] | Unlookable =
+      where !== 'fixed'
+        ? { cannot: where }
+        : /^\d+$/.test(number)
+          ? [number, ...(repo === null ? [] : ['--repo', repo])]
+          : { cannot: 'unnamed' };
     return { kind: 'merge', admin: false, lookup };
   }
   if (pull?.[2] === 'update-branch') {
     const number = pull[1] ?? '';
-    const unlookable = where === 'moved' || (where === 'beside' && repo === null);
+    const unlookable = where === 'elsewhere' || (where === 'beside' && repo === null);
     if (unlookable || !/^\d+$/.test(number)) {
-      return { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } };
+      return {
+        kind: 'push',
+        ref: asking('the pull request it updates cannot be looked up', false),
+      };
     }
     return { kind: 'push', ref: { head: [number, ...(repo === null ? [] : ['--repo', repo])] } };
   }
@@ -223,7 +227,7 @@ function restAction(
     return push(field('branch'), 'the branch it updates is not written out');
   }
   if (/^branches\/.+\/rename$/.test(path)) {
-    return { kind: 'push', ref: { asks: 'it renames a branch' } };
+    return { kind: 'push', ref: asking('it renames a branch', false) };
   }
   if (path === 'git/refs' && method === 'POST') {
     const ref = field('ref');
@@ -233,11 +237,11 @@ function restAction(
   const ref = /^git\/refs\/(heads|tags)\/(.+)$/.exec(path);
   if (ref) {
     const name = ref[2] ?? '';
-    if (ref[1] === 'tags') return { kind: 'push', ref: { asks: 'it pushes a tag' } };
-    if (method === 'DELETE') return { kind: 'push', ref: { asks: `it deletes \`${name}\`` } };
+    if (ref[1] === 'tags') return { kind: 'push', ref: asking('it pushes a tag', false) };
+    if (method === 'DELETE') return { kind: 'push', ref: asking(`it deletes \`${name}\``, false) };
     const force = field('force');
     if (force === null || (force !== undefined && force !== 'false')) {
-      return { kind: 'push', ref: { asks: `it force-updates \`${name}\``, force: true } };
+      return { kind: 'push', ref: asking(`it force-updates \`${name}\``, true) };
     }
     return push(name, '');
   }
@@ -247,8 +251,12 @@ function restAction(
 // GraphQL mutations that are ladder steps (GitHub's schema, read 2026-10-03);
 // GitHub has none that writes a release. A review approves when its event
 // says APPROVE.
-const BY_ID: GhAction = { kind: 'merge', admin: false, lookup: { cannot: 'unnamed' } };
-const MUTATIONS: Record<string, Readonly<GhAction> | 'review' | 'ref' | 'update'> = {
+const BY_ID = {
+  kind: 'merge',
+  admin: false,
+  lookup: { cannot: 'unnamed' },
+} as const satisfies GhAction;
+const MUTATIONS: Record<string, GhAction | 'review' | 'ref' | 'update'> = {
   createPullRequest: { kind: 'pr' },
   markPullRequestReadyForReview: { kind: 'pr' },
   revertPullRequest: { kind: 'pr' },
@@ -361,7 +369,7 @@ function graphqlActions(call: ApiCall): GhAction[] {
         [...ops.matchAll(/\bforce\s*:\s*(\$?\w+)/g)].some((m) => forced(m[1])) ||
         [...call.fields].some(([k, v]) => /(^|\[)force\]?$/.test(k) && v !== 'false');
       const asks = 'the gate does not read which branch a GraphQL mutation writes';
-      found.push({ kind: 'push', ref: force ? { asks, force: true } : { asks } });
+      found.push({ kind: 'push', ref: asking(asks, force) });
     } else if (action === 'update') {
       // A rebase rewrites the branch, as `gh pr update-branch --rebase` does.
       const method = (value: string | undefined) => {
@@ -372,7 +380,7 @@ function graphqlActions(call: ApiCall): GhAction[] {
         [...ops.matchAll(/\bupdateMethod\s*:\s*(\$?\w+)/g)].some((m) => method(m[1]) !== 'MERGE') ||
         [...call.fields].some(([k, v]) => /(^|\[)updateMethod\]?$/.test(k) && v !== 'MERGE');
       const asks = 'it names the pull request whose branch it updates by id';
-      found.push({ kind: 'push', ref: rebases ? { asks, force: true } : { asks } });
+      found.push({ kind: 'push', ref: asking(asks, rebases) });
     } else found.push(action);
   }
   return found;
@@ -424,7 +432,7 @@ export function apiActions(words: Word[], context: GhContext, fed: boolean): GhA
   const placeholder = owner === '{owner}' && name === '{repo}';
   const elsewhere =
     context === 'elsewhere' || call.hostname || host || (!placeholder && /[{}]/.test(owner + name));
-  const where = elsewhere ? 'moved' : context === 'beside' ? 'beside' : 'fixed';
+  const where = elsewhere ? 'elsewhere' : context;
   const action = restAction(method, path, placeholder ? null : `${owner}/${name}`, call, where);
   return action === null ? [] : [action];
 }
@@ -509,7 +517,10 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   if (name === 'update_pull_request_branch') {
     const number = text(input.pullNumber);
     if (number === null || !/^\d+$/.test(number) || repo === null) {
-      return { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } };
+      return {
+        kind: 'push',
+        ref: asking('the pull request it updates cannot be looked up', false),
+      };
     }
     return { kind: 'push', ref: { head: [number, '--repo', repo] } };
   }
@@ -519,7 +530,7 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   }
   if (MCP_COMMENT.has(name)) return { kind: 'comment' };
   // gh's lookup of the default branch needs the repository spelled out.
-  if (repo === null) return { kind: 'push', ref: { asks: 'it does not name its repository' } };
+  if (repo === null) return { kind: 'push', ref: asking('it does not name its repository', false) };
   const branch = branchOf(text(input.branch) ?? undefined, 'it names no branch');
   return { kind: 'push', ref: typeof branch === 'string' ? { branch, repo } : branch };
 }

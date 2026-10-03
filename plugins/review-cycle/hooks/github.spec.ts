@@ -6,6 +6,12 @@ import { MCP_GITHUB, mcpAction, shownCall, type GhAction } from './github';
 const kinds = (command: string) => ghActions(command).map((a) => a.kind);
 const one = (command: string): GhAction | undefined => ghActions(command)[0];
 const q = (query: string, extra = '') => kinds(`gh api graphql -f query='${query}' ${extra}`);
+// An expected ref that asks names its force only when it forces.
+const ref = (r: object) => ('asks' in r && !('force' in r) ? { ...r, force: false } : r);
+const withRef = (a: object | null) =>
+  a !== null && 'ref' in a && typeof a.ref === 'object' && a.ref !== null
+    ? { ...a, ref: ref(a.ref) }
+    : a;
 const update = (method: string, extra = '') =>
   one(
     `gh api graphql -f query='mutation { updatePullRequestBranch(input:{pullRequestId: "x", updateMethod: ${method}}) { x } }' ${extra}`,
@@ -144,8 +150,8 @@ describe('gh api', () => {
       'cd ../other && gh api -X PUT repos/{owner}/{repo}/contents/a -f branch=x',
       { asks: 'another step in the command can change which repository it reaches' },
     ],
-  ])('%s pushes', (command, ref) => {
-    expect(one(command)).toEqual({ kind: 'push', ref });
+  ])('%s pushes', (command, expected) => {
+    expect(one(command)).toEqual({ kind: 'push', ref: ref(expected) });
   });
 
   test.each([
@@ -242,7 +248,7 @@ describe('gh api graphql', () => {
     const plain = 'mutation { updateRef(input:{refId: "x", oid: "y"}) { x } }';
     expect(one(`gh api graphql -f query='${plain}'`)).toEqual({
       kind: 'push',
-      ref: { asks: 'the gate does not read which branch a GraphQL mutation writes' },
+      ref: { asks: 'the gate does not read which branch a GraphQL mutation writes', force: false },
     });
     const unforced = 'mutation { updateRef(input:{refId: "x", oid: "y", force: false}) { x } }';
     expect(one(`gh api graphql -f query='${unforced}'`)).not.toMatchObject({
@@ -423,7 +429,7 @@ describe('GitHub MCP tools', () => {
     ['mcp__github__update_pull_request', { draft: 'false' }, { kind: 'pr' }],
     ['mcp__github__update_pull_request', { title: 'x' }, null],
   ])('%s %j', (tool, input, expected) => {
-    expect(mcpAction(tool, input)).toEqual(expected);
+    expect(mcpAction(tool, input)).toEqual(withRef(expected));
   });
   test('the matcher takes any server name and only the write tools', () => {
     expect(MCP_GITHUB.test('mcp__github__merge_pull_request')).toBe(true);
