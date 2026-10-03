@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, holdsOf } from './consent';
+import { grantOf, holdsOf, liftsHold, NO_GRANT } from './consent';
 
-const NONE = { commit: false, push: 'none', pr: false };
+const NONE = NO_GRANT;
 const COMMIT = { ...NONE, commit: true };
 const PUSH = { ...NONE, push: 'push' };
 const BOTH = { ...COMMIT, push: 'push' };
@@ -13,6 +13,86 @@ const PR = { ...NONE, pr: true };
 const PUSH_PR = { ...PUSH, pr: true };
 const COMMIT_PR = { ...COMMIT, pr: true };
 const SHIP = { ...BOTH, pr: true };
+
+const MERGE = { ...NONE, merge: true };
+const APPROVE = { ...NONE, approve: true };
+const RELEASE = { ...NONE, release: true };
+const REPLY = { ...NONE, comment: true };
+
+describe('merges, approvals, releases and review replies', () => {
+  const cases: [string, object][] = [
+    ['merge it', MERGE],
+    ['Ok, merge the PR', MERGE],
+    ['Can we merge 73?', MERGE],
+    ['lets merge it when its ready', NONE],
+    // A local `git merge`, which the push checks judge when it is pushed.
+    ['merge main into it', NONE],
+    ['merge origin/main into the branch', NONE],
+    ['merge 116 into main', MERGE],
+    ['merge the PR into main', MERGE],
+    ['merge it into the main branch', MERGE],
+    // A merge into anything but the base names a local merge.
+    ['merge into main', NONE],
+    ['merge now into main', NONE],
+    ['merge 116 into feature-x', NONE],
+    ['merge this into the PR', NONE],
+    ['merge it into the branch', NONE],
+    ['merge it from main', NONE],
+    ['address the comments', NONE],
+    // "push on" carries on; it asks for nothing.
+    ['Good, push on.', NONE],
+    ['commit on it', NONE],
+    ['approve it', APPROVE],
+    ['approve the PR and merge it', { ...APPROVE, merge: true }],
+    ['release it', RELEASE],
+    ['cut a release', RELEASE],
+    ['ok, publish the new release', RELEASE],
+    ['the release notes look good', NONE],
+    ['address the review comments', REPLY],
+    ['reply to the reviewer', REPLY],
+    ['address the PR feedback and push', { ...REPLY, push: 'push' }],
+    ['address the TODO comments in the code', NONE],
+    // Shipping stops at the pull request.
+    ['ship it', SHIP],
+  ];
+  test.each(cases)('%s', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
+  });
+  test('a yes to an offered merge or release grants it', () => {
+    expect(grantOf('yes', 'Merge #116 now?')).toEqual(MERGE);
+    expect(grantOf('yes', 'Should I cut the release?')).toEqual(RELEASE);
+  });
+  // The questions the gate's refusals give the agent to ask (register.ts GH_ASK).
+  test.each([
+    ['Merge #116?', MERGE],
+    ['Approve #116?', APPROVE],
+    // A bare version's dots end sentences; backticked, it names what is released.
+    ['Release `v0.25.0`?', RELEASE],
+    ['Reply to the review on #116?', REPLY],
+    ['Merge and release #62?', { ...MERGE, release: true }],
+  ])('a yes to the refusal\'s "%s" grants it', (question, grant) => {
+    expect(grantOf('yes', question)).toEqual(grant);
+    expect(holdsOf('not yet', question)).toBe(true);
+  });
+  test('an approval or a reply does not lift a hold; a merge does', () => {
+    expect(liftsHold(grantOf('approve it'))).toBe(false);
+    expect(liftsHold(grantOf('address the review comments'))).toBe(false);
+    expect(liftsHold(grantOf('merge it'))).toBe(true);
+    expect(liftsHold(grantOf('release it'))).toBe(true);
+  });
+  test.each([
+    "don't merge yet",
+    'did the merge go through?',
+    'the release notes look good',
+    'no need to approve it',
+  ])('%s holds', (prompt) => {
+    expect(holdsOf(prompt)).toBe(true);
+  });
+  test('"not yet" to an offered merge holds; a merge request does not', () => {
+    expect(holdsOf('not yet', 'Merge #116 now?')).toBe(true);
+    expect(holdsOf('merge it')).toBe(false);
+  });
+});
 
 describe('grants on a request', () => {
   const cases: [string, object][] = [
@@ -84,7 +164,6 @@ describe('grants nothing on a mention', () => {
     "No, the commit isn't the problem, pushing would hurt but that can be handled with local changes and a push with force-with-lease. What really gets me is agents would just commit changes without going through the review cycle and that would give me doubt if the code is of good quality.",
     "Reviews shouldn't be needed on ever turn. I think before doing a commit is the best time and it keeps the review churn down.",
     'Essential I want the agents to go off be agentic as needed and before committing changes run the reviews needed if needed. But they would skip reviews or marked as reviewed then commit.',
-    'Can we merge 73?',
     "don't commit yet",
     "no, don't commit",
     'hold off on committing',

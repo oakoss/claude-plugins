@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { classify } from './command';
-import type { PushLevel } from './consent';
+import { NO_GRANT, type PushLevel } from './consent';
 import type { PushSpec } from './git-args';
 import { askingReason, neededFor, parseDryRun, unasked, type DefaultBranch } from './push-verdict';
 
@@ -11,7 +11,7 @@ function specOf(command: string): PushSpec {
   return c.push;
 }
 
-const grant = (push: PushLevel) => ({ commit: false, push, pr: false });
+const grant = (push: PushLevel) => ({ ...NO_GRANT, push });
 
 describe('the request a push needs', () => {
   test.each([

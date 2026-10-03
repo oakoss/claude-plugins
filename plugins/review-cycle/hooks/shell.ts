@@ -10,6 +10,8 @@ export type Word = {
   dynamic: boolean;
   // True when an unquoted glob or brace would make the shell rewrite it.
   pattern: boolean;
+  // Set when an unquoted expansion may split it into several words.
+  splits?: true;
 };
 
 export type Op = '&&' | '||' | '|' | ';' | '&' | '\n' | '';
@@ -319,6 +321,7 @@ class Lexer {
   word(cur: Statement): Word {
     let text = '';
     let dynamic = false;
+    let splits = false;
     let pattern = false;
     let bracket = false;
     let brace = false;
@@ -384,8 +387,15 @@ class Lexer {
             if (this.ch(1) !== '\n') text += this.ch(1);
             this.i += 2;
           } else if (d === '$' || d === '`') {
-            text += this.expansion(cur);
+            const expanded = this.expansion(cur);
+            text += expanded;
             dynamic = true;
+            // These give several words even in double quotes: "$@", "${a[@]}",
+            // zsh's "${(@)a}", "${=x}" and "${(s: :)x}" (measured in bash and zsh).
+            const zshIndex = /^\$\w+$/.test(expanded) && this.s.startsWith('[@]', this.i);
+            if (zshIndex || /^\$(@|\{[#!]?@|\{[^}]*\[@\]|\{=|\{\([^)]*[@sfz0])/.test(expanded)) {
+              splits = true;
+            }
           } else {
             text += d;
             this.i++;
@@ -394,6 +404,7 @@ class Lexer {
       } else if (c === '$' || c === '`') {
         text += this.expansion(cur);
         dynamic = true;
+        splits = true;
       } else {
         if (c === '~' && this.i === start) dynamic = true;
         // `[` and `{` start a pattern only once an unquoted `]` or `}` closes
@@ -408,7 +419,7 @@ class Lexer {
         this.i++;
       }
     }
-    return { text, dynamic, pattern };
+    return splits ? { text, dynamic, pattern, splits } : { text, dynamic, pattern };
   }
 
   private ansiEnd(from: number): number {

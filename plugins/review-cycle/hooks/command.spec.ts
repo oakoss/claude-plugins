@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
-import { aliasCommits, classify, opensPr, possibleAliases, shownCommand } from './command';
+import {
+  aliasCommits,
+  classify,
+  ghActions,
+  opensPr,
+  possibleAliases,
+  shownCommand,
+} from './command';
 import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
 
 const HEREDOC_MESSAGE = `git commit -m "$(cat <<'EOF'
@@ -1408,5 +1415,130 @@ describe('opening a pull request', () => {
   });
   test('an alias that expands to it opens one', () => {
     expect(opensPr('mkpr', new Map([['mkpr', 'gh pr create --fill']]))).toBe(true);
+  });
+});
+
+function kinds(command: string, aliases: [string, string][] = []) {
+  return ghActions(command, new Map(aliases)).map((a) => a.kind);
+}
+
+describe('gh steps', () => {
+  test.each([
+    ['gh pr merge 116 --squash --delete-branch', ['merge']],
+    ['gh pr merge --auto', ['merge']],
+    ['gh pr review 116 --approve', ['approve']],
+    ['gh pr review -a', ['approve']],
+    ['gh pr review 116 -c -b "looks good"', ['comment']],
+    ['gh pr review 116 --request-changes -b fix', ['comment']],
+    ['gh pr comment 116 --body done', ['comment']],
+    ['gh issue comment 9 --body done', ['comment']],
+    ['gh release create v1.0.0 --notes x', ['release']],
+    ['gh release delete v1.0.0 --yes', ['release']],
+    ['gh release upload v1 dist.tgz', ['release']],
+    ['gh release view v1', []],
+    ['gh release list', []],
+    ['gh pr view 116', []],
+    ['gh pr checks 116', []],
+    ['gh issue create --title x', []],
+    ['gh pr review 116 --approve && gh pr merge 116', ['approve', 'merge']],
+    ['echo "gh pr merge 116"', []],
+    ['grep gh pr merge docs', []],
+    ['gh pr merge 116 --title "unterminated', ['unread']],
+  ])('%s', (command, expected) => {
+    expect(kinds(command)).toEqual(expected);
+  });
+  test('a merge names its pull request and repository for the lookup', () => {
+    expect(ghActions('gh pr merge 116 --squash -b "x y"')).toEqual([
+      { kind: 'merge', admin: false, lookup: ['116'] },
+    ]);
+    expect(ghActions('gh -R oakoss/x pr merge')).toEqual([
+      { kind: 'merge', admin: false, lookup: ['--repo', 'oakoss/x'] },
+    ]);
+    expect(ghActions('gh pr merge https://github.com/o/r/pull/5 --repo=o/r --admin')).toEqual([
+      { kind: 'merge', admin: true, lookup: ['https://github.com/o/r/pull/5', '--repo', 'o/r'] },
+    ]);
+    // A value built at run time is read; a selector or flag built at run time
+    // could approve, use --admin or point elsewhere, so it is not.
+    expect(ghActions('gh pr merge --subject "$S" 116')).toEqual([
+      { kind: 'merge', admin: false, lookup: ['116'] },
+    ]);
+    expect(kinds('gh pr merge "$PR"')).toEqual(['unread']);
+    expect(kinds('gh pr merge 116 $(echo --admin)')).toEqual(['unread']);
+    expect(kinds('printf -- --admin | xargs gh pr merge 116')).toEqual(['unread']);
+    expect(kinds('gh pr review 116 -b "$BODY" -c')).toEqual(['comment']);
+    expect(kinds('gh pr review 116 -b"$BODY" -c')).toEqual(['comment']);
+    // Unquoted, a value splits, and a word in it can be a flag.
+    expect(kinds('gh pr review 116 -b $(cat reply.txt)')).toEqual(['unread']);
+    expect(kinds('gh pr review 116 --body=$(cat reply.txt)')).toEqual(['unread']);
+    expect(kinds('gh pr merge 5 -b $(printf "x --admin")')).toEqual(['unread']);
+    expect(kinds('gh pr review 116 -b "$(cat reply.txt)"')).toEqual(['comment']);
+    // These split even in double quotes.
+    expect(kinds(`gh pr merge 62 -b "\${a[@]}"`)).toEqual(['unread']);
+    expect(kinds('gh pr merge 62 -b "$@"')).toEqual(['unread']);
+    expect(kinds('gh pr review 5 --body="$a[@]"')).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${(@)a}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${=X}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${a[*]}" -c`)).toEqual(['comment']);
+    expect(kinds('gh pr review 116 $F')).toEqual(['unread']);
+    expect(kinds('gh pr review 116 --approve="$A"')).toEqual(['unread']);
+    expect(kinds('printf -- --approve | xargs gh pr review 116')).toEqual(['unread']);
+  });
+  test('a gh alias or extension is not read, so it is unread', () => {
+    expect(kinds('gh m 116')).toEqual(['unread']);
+    expect(kinds('gh pr m 116')).toEqual(['unread']);
+    expect(kinds('gh dash')).toEqual(['unread']);
+    expect(kinds('gh "$SUB" 116')).toEqual(['unread']);
+    // A shell alias for gh is expanded first.
+    expect(kinds('g m 116', [['g', 'gh']])).toEqual(['unread']);
+    expect(kinds('g pr merge 116', [['g', 'gh']])).toEqual(['merge']);
+    expect(kinds('gh co 116')).toEqual(['unread']);
+    expect(kinds('gh pr co 116')).toEqual([]);
+  });
+  test('a gh command xargs completes from its input is unread', () => {
+    expect(kinds("printf 'merge 116' | xargs gh pr")).toEqual(['unread']);
+    expect(kinds('xargs gh < cmds')).toEqual(['unread']);
+  });
+  test('flags are read as gh reads them', () => {
+    expect(kinds('gh pr review 1 --approve=true')).toEqual(['approve']);
+    expect(kinds('gh pr review 1 -ab LGTM')).toEqual(['approve']);
+    expect(kinds('gh pr review 1 -a=true')).toEqual(['approve']);
+    expect(kinds('gh pr review 1 --approve=false -c')).toEqual(['comment']);
+    expect(kinds('gh pr review 1 --approve=0 -c')).toEqual(['comment']);
+    expect(kinds('gh pr review 1 --approve=F -c')).toEqual(['comment']);
+    expect(kinds('gh pr review 1 -a=false -c')).toEqual(['comment']);
+    expect(kinds('gh pr review 1 -ba')).toEqual(['comment']);
+    expect(ghActions('gh pr merge 1 --admin=0')).toEqual([
+      { kind: 'merge', admin: false, lookup: ['1'] },
+    ]);
+    expect(ghActions('gh pr merge 1 --admin=true')).toEqual([
+      { kind: 'merge', admin: true, lookup: ['1'] },
+    ]);
+    expect(ghActions('gh pr merge 1 -Ro/r')).toEqual([
+      { kind: 'merge', admin: false, lookup: ['1', '--repo', 'o/r'] },
+    ]);
+  });
+  test('a pull request something else may pick cannot be looked up', () => {
+    const elsewhere = [{ kind: 'merge', admin: false, lookup: 'elsewhere' }];
+    const beside = [{ kind: 'merge', admin: false, lookup: 'beside' }];
+    expect(ghActions('GH_REPO=o/r gh pr merge 62')).toEqual(elsewhere);
+    expect(ghActions('env -C ../other gh pr merge 62')).toEqual(elsewhere);
+    expect(ghActions('env --chdir=/tmp gh pr merge 62')).toEqual(elsewhere);
+    expect(ghActions('sudo -D /tmp gh pr merge 62')).toEqual(elsewhere);
+    expect(ghActions('env GIT_DIR=../other/.git gh pr merge 62')).toEqual(elsewhere);
+    expect(ghActions('gh pr merge 62 -R "$REPO"')).toEqual(elsewhere);
+    expect(kinds('echo 62 | xargs gh pr merge')).toEqual(['unread']);
+    expect(ghActions('cd ../other && gh pr merge 62')).toEqual(beside);
+    expect(ghActions('gh pr checkout 62 && gh pr merge')).toEqual(beside);
+    expect(ghActions('export GH_REPO=o/r; gh pr merge 62')).toEqual(beside);
+    expect(ghActions('gh pr merge 116 && echo merged')).toEqual([
+      { kind: 'merge', admin: false, lookup: 'beside' },
+    ]);
+    // gh's settings that pick no pull request leave the lookup in place.
+    expect(ghActions('GH_PROMPT_DISABLED=1 gh pr merge 62')).toEqual([
+      { kind: 'merge', admin: false, lookup: ['62'] },
+    ]);
+  });
+  test('a word on Object.prototype is no command', () => {
+    expect(classify('git push && ls toString x').kind).not.toBe('error');
   });
 });
