@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, holdsOf, liftsHold, NO_GRANT } from './consent';
+import { FAMILIES, grantOf, holdsOf, liftsHold, NO_GRANT } from './consent';
 
 const NONE = NO_GRANT;
 const COMMIT = { ...NONE, commit: true };
@@ -115,6 +115,37 @@ describe('merges, approvals, releases and review replies', () => {
   ])('a yes to the refusal\'s "%s" grants it', (question, grant) => {
     expect(grantOf('yes', question)).toEqual(grant);
     expect(holdsOf('not yet', question)).toBe(true);
+  });
+  test.each([
+    ['Should I respond to the review on #116?', REPLY],
+    ['Should I respond to the comments?', NONE],
+    ['Should I reply to the comments?', NONE],
+    ['Should I address the review on #116?', REPLY],
+    ['Should I cut a release on 116?', RELEASE],
+    ['Should I cut a release of the crate?', RELEASE],
+    ['Should I ship it from fix/x?', NONE],
+  ])('a yes to "%s" grants exactly that', (question, grant) => {
+    expect(grantOf('yes', question)).toEqual(grant);
+  });
+  // An offer's verb in its -ing form: "Shall I go ahead with pushing?".
+  test.each([
+    ['pushing', PUSH],
+    ['opening a PR', PR],
+    ['merging #116', MERGE],
+    ['approving #116', APPROVE],
+    ['cutting a release', RELEASE],
+    ['publishing to npm', RELEASE],
+    ['marking it ready for review', PR],
+    ['addressing the review', REPLY],
+    ['replying to the review', REPLY],
+    ['responding to the review', REPLY],
+  ])('a yes to going ahead with %s grants it', (offer, grant) => {
+    expect(grantOf('yes', `Shall I go ahead with ${offer}?`)).toEqual(grant);
+  });
+  test('each verb form belongs to one family and is a word the grammar reads', () => {
+    const forms = FAMILIES.flatMap((f) => f.forms);
+    expect(new Set(forms).size).toBe(forms.length);
+    for (const form of forms) expect(form).toMatch(/^[a-z0-9'-]+$/);
   });
   test('an approval or a reply does not lift a hold; a merge does', () => {
     expect(liftsHold(grantOf('approve it'))).toBe(false);
