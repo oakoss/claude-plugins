@@ -24,6 +24,12 @@
       "description": "The first step the agent asks you about unless you requested it: commit, push, open PR, merge, release, or never stop. Steps before it run without asking; a force push, a push to the default branch, a tag push, a remote delete, a merge with --admin and a comment on GitHub always ask. A project's .claude/settings.json can only stop earlier; .claude/settings.local.json can set any step. Only you can change this, here in /config.",
       "options": ["commit", "push", "open PR", "merge", "release", "never stop"],
       "default": "push"
+    },
+    "nudge": {
+      "type": "boolean",
+      "title": "Review nudge",
+      "description": "At the end of a turn that left changes no reviewer has seen, prompt the agent to run /review-cycle:review, unless its last message ends with a question mark. A project's .claude/settings.json can turn it off; .claude/settings.local.json can set it either way. Only you can change this, here in /config.",
+      "default": true
     }
   }
 }

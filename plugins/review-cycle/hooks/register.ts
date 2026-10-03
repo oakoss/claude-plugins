@@ -70,6 +70,7 @@ import {
 } from './ladder';
 import { KINDS, parseRecord, type Recording } from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
+import { asksUser, nudgeOf, nudgeOn } from './nudge';
 import {
   askingReason,
   parseDryRun,
@@ -112,7 +113,7 @@ type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch'
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type ConfigHook = MatchedHook<
   'config.set',
-  { key: 'review-cycle.enabled' | 'review-cycle.stopBefore' }
+  { key: 'review-cycle.enabled' | 'review-cycle.stopBefore' | 'review-cycle.nudge' }
 >;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
@@ -185,6 +186,8 @@ type GateState = {
   gateOn: boolean;
   // From user or managed settings, which alone reach the register options.
   stopBefore: StopBefore | null;
+  // The user's /config value for the end-of-turn review nudge.
+  nudge: boolean;
   // "don't push yet" makes every step ask until a message asks for one.
   held: boolean;
 };
@@ -210,6 +213,7 @@ const state: GateState = {
   reviewerChanges: [],
   gateOn: true,
   stopBefore: null,
+  nudge: true,
   held: false,
 };
 
@@ -391,13 +395,29 @@ async function onPromptSubmit(
   return next(e);
 }
 
+// The nudge as the settings set it. A file that cannot be read sets nothing,
+// so the others decide: the nudge only prompts a review.
+async function nudgeWanted($: $): Promise<boolean> {
+  const set: Partial<Record<'project' | 'local', boolean | null>> = {};
+  for (const source of ['project', 'local'] as const) {
+    let settings: { pluginConfigs?: unknown } | null;
+    try {
+      settings = await $.settings.read({ source });
+    } catch {
+      continue;
+    }
+    set[source] = nudgeOf(settings?.pluginConfigs);
+  }
+  return nudgeOn(state.nudge, set.project ?? null, set.local ?? null);
+}
+
 // At the end of a main-loop turn that changed the tree, content no reviewer
 // has seen gets one prompt telling the agent to review it, so the agent does
 // not stop to ask the user whether to. Once per user message, and not while a
 // review is under way.
 async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<void> {
   const message = state.message;
-  if (message.nudged || e.reason !== 'answer') return;
+  if (message.nudged || e.reason !== 'answer' || asksUser(e.answer)) return;
   const root = state.root;
   const since = message.tree;
   if (!root || since === null) return;
@@ -422,6 +442,7 @@ async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<vo
   if (c === null) return;
   const rows = c.rows.filter((row) => touched.has(row.path));
   if (uncoveredOf(rows).length === 0) return;
+  if (!(await nudgeWanted($))) return;
   message.nudged = true;
   const text = `review-cycle: this turn left changes no reviewer has seen (${explain({ ...c, rows })}). Invoke /review-cycle:review via the Skill tool now, then report back. Skip it only if the user's latest message said not to review, or your last message asked them something they must answer first.`;
   // Not awaited: the prompt enters once this turn has ended. A hook's refusal
@@ -1690,8 +1711,10 @@ function onBashError(
 export const register: Register = (on, options) => {
   state.gateOn = options.enabled !== false;
   state.stopBefore = stopBeforeOf(options.stopBefore);
+  state.nudge = options.nudge !== false;
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
   on('config.set', { key: 'review-cycle.stopBefore' }, onConfigSet);
+  on('config.set', { key: 'review-cycle.nudge' }, onConfigSet);
   on('tool.call', { tool: 'Edit' }, onEditSlop);
   on('tool.call', { tool: 'Write' }, onWriteSlop);
   on('session.start', onSessionStart);
