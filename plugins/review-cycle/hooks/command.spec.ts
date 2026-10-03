@@ -1478,6 +1478,12 @@ describe('gh steps', () => {
     expect(kinds('gh pr review 5 --body="$a[@]"')).toEqual(['unread']);
     expect(kinds(`gh pr review 5 -b "\${(@)a}"`)).toEqual(['unread']);
     expect(kinds(`gh pr review 5 -b "\${=X}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${(f)X}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${(Z+c+)X}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${u:-$@}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${!pre@}"`)).toEqual(['unread']);
+    expect(kinds(`gh pr review 5 -b "\${u:-x}" -c`)).toEqual(['comment']);
+    expect(kinds(`gh pr review 5 -b "\${u:-\${@}}"`)).toEqual(['unread']);
     expect(kinds(`gh pr review 5 -b "\${a[*]}" -c`)).toEqual(['comment']);
     expect(kinds('gh pr review 116 $F')).toEqual(['unread']);
     expect(kinds('gh pr review 116 --approve="$A"')).toEqual(['unread']);

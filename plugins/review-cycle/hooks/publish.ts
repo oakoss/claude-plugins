@@ -70,15 +70,19 @@ function dryRun(name: string, words: string[]): boolean {
     if (value !== undefined) dry = !/^(false|0)$/.test(value);
     else if (t === '--dry-run') dry = !/^(false|0)$/.test(words[i + 1] ?? '');
     else if (t === '--no-dry-run') dry = false;
-    else if (
-      name === 'cargo' &&
-      /^-[a-mo-zA-Z]*n/.test(t) &&
-      !/^-[a-zA-Z]*[pjFZC][a-zA-Z]*n/.test(t)
-    ) {
-      dry = true;
-    }
+    else if (name === 'cargo' && /^-[a-zA-Z]+$/.test(t)) dry ||= cargoCluster(t);
   }
   return dry;
+}
+
+// Whether a cluster of cargo's short options holds `-n` before a letter that
+// takes the rest of the cluster as its value (`-pn` names package `n`).
+function cargoCluster(cluster: string): boolean {
+  for (const letter of cluster.slice(1)) {
+    if (letter === 'n') return true;
+    if ('pjFZC'.includes(letter)) return false;
+  }
+  return false;
 }
 
 // The publish a word starts, when `tool` (its basename) is a publisher:

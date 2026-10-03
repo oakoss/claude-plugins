@@ -6,6 +6,10 @@ import { MCP_GITHUB, mcpAction, shownCall, type GhAction } from './github';
 const kinds = (command: string) => ghActions(command).map((a) => a.kind);
 const one = (command: string): GhAction | undefined => ghActions(command)[0];
 const q = (query: string, extra = '') => kinds(`gh api graphql -f query='${query}' ${extra}`);
+const update = (method: string, extra = '') =>
+  one(
+    `gh api graphql -f query='mutation { updatePullRequestBranch(input:{pullRequestId: "x", updateMethod: ${method}}) { x } }' ${extra}`,
+  );
 
 describe('gh api', () => {
   test.each([
@@ -65,6 +69,7 @@ describe('gh api', () => {
   });
 
   const DEFAULT = { asks: 'it names no branch, so it commits to the default branch' };
+  const BUILT = { asks: 'the branch it names is built at run time or read from a file' };
   test.each([
     ['gh api -X PUT repos/o/r/contents/a.md -f branch=fix/x', { branch: 'fix/x', repo: 'o/r' }],
     [
@@ -78,9 +83,14 @@ describe('gh api', () => {
       'gh api repos/{owner}/{repo}/git/refs -f ref=refs/notes/x -f sha=abc',
       { asks: 'it writes `refs/notes/x`, which is no branch' },
     ],
-    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -f branch="$B"', DEFAULT],
-    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -F branch={branch}', DEFAULT],
-    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -f "$K=main"', DEFAULT],
+    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -f branch="$B"', BUILT],
+    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -F branch={branch}', BUILT],
+    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -F branch=@b.txt', BUILT],
+    ['gh api -X PUT repos/{owner}/{repo}/contents/a.md -f "$K=main"', BUILT],
+    [
+      'gh api -X PUT repos/o/r/contents/a.md -f branch=refs/heads/refs/topic',
+      { branch: 'refs/topic', repo: 'o/r' },
+    ],
     [
       'gh api repos/{owner}/{repo}/merges -f base=fix/x -f head=main',
       { branch: 'fix/x', repo: null },
@@ -104,7 +114,24 @@ describe('gh api', () => {
       { asks: 'it force-updates `x`', force: true },
     ],
     ['gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/old', { asks: 'it deletes `old`' }],
-    ['gh api -X PUT repos/{owner}/{repo}/pulls/116/update-branch', 'head'],
+    ['gh api -X PUT repos/{owner}/{repo}/pulls/116/update-branch', { head: ['116'] }],
+    ['gh api -X PUT repos/o/r/pulls/116/update-branch', { head: ['116', '--repo', 'o/r'] }],
+    [
+      'GH_REPO=o/r gh api -X PUT repos/{owner}/{repo}/pulls/116/update-branch',
+      { asks: 'the pull request it updates cannot be looked up' },
+    ],
+    [
+      'cd ../x && gh api -X PUT repos/{owner}/{repo}/pulls/7/update-branch',
+      { asks: 'the pull request it updates cannot be looked up' },
+    ],
+    [
+      'gh api -X PUT repos/o/r/pulls/main/update-branch',
+      { asks: 'the pull request it updates cannot be looked up' },
+    ],
+    [
+      'gh api repos/{owner}/{repo}/git/refs -f ref="$R" -f sha=abc',
+      { asks: 'the branch it names is built at run time or read from a file' },
+    ],
     [
       'GH_REPO=o/r gh api -X PUT repos/{owner}/{repo}/contents/a -f branch=x',
       { asks: 'where it pushes is picked outside its words' },
@@ -180,6 +207,7 @@ describe('gh api graphql', () => {
     ['mutation { markPullRequestReadyForReview(input:{}) { clientMutationId } }', ['pr']],
     ['mutation { convertPullRequestToDraft(input:{}) { clientMutationId } }', []],
     ['mutation { updatePullRequestBranch(input:{}) { clientMutationId } }', ['push']],
+    ['mutation { updatePullRequestBranch(input:{updateMethod: MERGE}) { x } }', ['push']],
     ['mutation { mergePullRequest (input:{pullRequestId:"x"}) { x } }', ['merge']],
     ['mutation { addComment(input:{subjectId:"x", body:"createRef(x)"}) { x } }', ['comment']],
     [
@@ -201,6 +229,13 @@ describe('gh api graphql', () => {
       ghActions("gh api graphql -f query='mutation { mergePullRequest(input:{}) { x } }'")[0],
     ).toMatchObject({ lookup: { cannot: 'unnamed' } });
   });
+  test('a pull request branch update that rebases needs a bare force', () => {
+    expect(update('REBASE')).toMatchObject({ ref: { force: true } });
+    expect(update('MERGE')).not.toMatchObject({ ref: { force: true } });
+    expect(update('$m', '-f m=REBASE')).toMatchObject({ ref: { force: true } });
+    expect(update('$m', '-f m=MERGE')).not.toMatchObject({ ref: { force: true } });
+    expect(update('$m', '-f m="$M"')).toMatchObject({ ref: { force: true } });
+  });
   test('a ref mutation that forces needs a bare force', () => {
     const force = 'mutation { updateRef(input:{refId: "x", oid: "y", force: true}) { x } }';
     expect(one(`gh api graphql -f query='${force}'`)).toMatchObject({ ref: { force: true } });
@@ -217,6 +252,14 @@ describe('gh api graphql', () => {
     expect(
       one(`gh api graphql -f query='${input}' -F 'input[force]=true' -f 'input[oid]=y'`),
     ).toMatchObject({ ref: { force: true } });
+    const variable = 'mutation($f: Boolean) { updateRef(input:{refId: "x", force: $f}) { x } }';
+    expect(one(`gh api graphql -f query='${variable}' -F f=false`)).not.toMatchObject({
+      ref: { force: true },
+    });
+    expect(one(`gh api graphql -f query='${variable}' -F f=true`)).toMatchObject({
+      ref: { force: true },
+    });
+    expect(one(`gh api graphql -f query='${variable}'`)).toMatchObject({ ref: { force: true } });
   });
   test('a review event in a variable is read from its field', () => {
     const query =
@@ -225,7 +268,13 @@ describe('gh api graphql', () => {
     expect(q(query, '-f e=COMMENT')).toEqual(['comment']);
     expect(q(query, '-f e="$E"')).toEqual(['unread']);
     expect(q(query, '-f e=COMMENT -f note=APPROVE')).toEqual(['comment']);
-    expect(q(query)).toEqual(['unread']);
+    // No field and no default send no event: a pending review.
+    expect(q(query)).toEqual(['comment']);
+    const spaced =
+      'mutation($e: PullRequestReviewEvent ! = APPROVE) { addPullRequestReview(input:{event: $e}) { x } }';
+    expect(q(spaced)).toEqual(['approve']);
+    const undeclared = 'mutation { addPullRequestReview(input:{event: $e}) { x } }';
+    expect(q(undeclared)).toEqual(['unread']);
   });
   test('an approving review beside a commenting one approves', () => {
     const two =
@@ -348,7 +397,26 @@ describe('GitHub MCP tools', () => {
       { owner: 'o', repo: 'r', branch: 'x' },
       { kind: 'push', ref: { branch: 'x', repo: 'o/r' } },
     ],
-    ['mcp__github__update_pull_request_branch', {}, { kind: 'push', ref: 'head' }],
+    [
+      'mcp__github__update_pull_request_branch',
+      { owner: 'o', pullNumber: 7 },
+      { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } },
+    ],
+    [
+      'mcp__github__update_pull_request_branch',
+      { owner: 'o', repo: 'r', pullNumber: 'x' },
+      { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } },
+    ],
+    [
+      'mcp__github__update_pull_request_branch',
+      {},
+      { kind: 'push', ref: { asks: 'the pull request it updates cannot be looked up' } },
+    ],
+    [
+      'mcp__github__update_pull_request_branch',
+      { owner: 'o', repo: 'r', pullNumber: 7 },
+      { kind: 'push', ref: { head: ['7', '--repo', 'o/r'] } },
+    ],
     ['mcp__github__list_pull_requests', {}, null],
     ['mcp__github__update_pull_request', { draft: false }, { kind: 'pr' }],
     ['mcp__github__update_pull_request', { draft: true }, null],

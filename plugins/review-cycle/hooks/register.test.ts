@@ -2503,12 +2503,18 @@ function remoteSide(
 
 // GitHub as the gate sees it: `gh pr view` names the merged pull request's
 // branch, or fails when `head` is 'fail'.
-function github(head: string, defaultBranch = 'main'): (a: string) => Partial<Run> | null {
+function github(
+  head: string,
+  defaultBranch = 'main',
+  fork = false,
+  repo = 'github.com/o/r',
+): (a: string) => Partial<Run> | null {
   return (a) => {
     if (a.startsWith('gh pr view')) {
-      return head === 'fail'
-        ? { exitCode: 1, stderr: 'no pull requests found for branch "x"' }
-        : { stdout: `${head}\n` };
+      if (head === 'fail') return { exitCode: 1, stderr: 'no pull requests found for branch "x"' };
+      // The update-branch lookup's jq prints fork, pull request URL and head branch.
+      const update = a.includes('isCrossRepository');
+      return { stdout: update ? `${fork} https://${repo}/pull/7 ${head}\n` : `${head}\n` };
     }
     if (a.startsWith('gh repo view')) return { stdout: `${defaultBranch}\n` };
     return null;
@@ -2848,7 +2854,7 @@ describe('the stop-before setting', () => {
     expect(
       denied(
         await bash($, 'env -C ../other gh pr merge 62'),
-        'where it merges is picked at run time',
+        'something outside the words the gate looks up picks where it merges',
       ),
     ).toBe(true);
     expect(
@@ -2972,6 +2978,69 @@ describe('the stop-before setting', () => {
     expect(
       denied(await mcp($, 'mcp__github__add_issue_comment', { issue_number: 9 }), 'a comment'),
     ).toBe(true);
+  });
+  test("updating a pull request's branch asks when its head is the default branch", async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('open PR') }, git: github('main') });
+    await say($, 'fix the parser');
+    const pr = { owner: 'o', repo: 'r', pullNumber: 7 };
+    const r = await mcp($, 'mcp__github__update_pull_request_branch', pr);
+    expect(denied(r, 'it pushes to `main`, the default branch')).toBe(true);
+  });
+  test("updating a feature pull request's branch runs below the rung, noted", async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const pr = { owner: 'o', repo: 'r', pullNumber: 7 };
+    const r = await mcp($, 'mcp__github__update_pull_request_branch', pr);
+    expect(has(contextOf(r), 'ran a push without asking')).toBe(true);
+    const view = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(view?.argv.slice(3, 6)).toEqual(['7', '--repo', 'o/r']);
+    const repo = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh repo view');
+    expect(repo?.argv[3]).toBe('github.com/o/r');
+  });
+  test("a pull request's branch update asks when its head cannot be looked up", async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fail') });
+    await say($, 'fix the parser');
+    const pr = { owner: 'o', repo: 'r', pullNumber: 7 };
+    const r = await mcp($, 'mcp__github__update_pull_request_branch', pr);
+    expect(denied(r, 'looking up the pull request it updates failed')).toBe(true);
+  });
+  test("a fork pull request's branch update asks whatever the setting", async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('never stop') },
+      git: github('develop', 'main', true),
+    });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr update-branch 7');
+    expect(denied(r, "it updates a branch in the pull request's fork")).toBe(true);
+  });
+  test('gh pr update-branch is a push to the pull request branch', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr update-branch 7 -R o/r');
+    expect(has(contextOf(r), 'ran a push without asking')).toBe(true);
+    const view = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(view?.argv.slice(3, 6)).toEqual(['7', '--repo', 'o/r']);
+    expect(denied(await bash($, 'gh pr update-branch 7 --rebase'), 'bare force')).toBe(true);
+    const moved = await bash($, 'cd ../x && gh pr update-branch 7');
+    expect(denied(moved, 'the pull request it updates cannot be looked up')).toBe(true);
+  });
+  test("a pull request named by URL is checked against its own repository's default", async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('open PR') },
+      git: github('release', 'release', false, 'ghe.example.com/o2/r2'),
+    });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr update-branch https://ghe.example.com/o2/r2/pull/7');
+    expect(denied(r, 'it pushes to `release`, the default branch')).toBe(true);
+    const repo = w.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'gh repo view');
+    expect(repo?.argv[3]).toBe('ghe.example.com/o2/r2');
+  });
+  test('a GraphQL rebase of a pull request branch needs a bare force', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'push it');
+    const rebase =
+      'gh api graphql -f query=\'mutation { updatePullRequestBranch(input: {pullRequestId: "X", updateMethod: REBASE}) { clientMutationId } }\'';
+    expect(denied(await bash($, rebase), 'bare force')).toBe(true);
   });
   test('a GitHub MCP commit is a push, and asks on the default branch', async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fix/x') });
