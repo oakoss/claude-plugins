@@ -13,7 +13,7 @@
 
 // How far the user's message lets a push go; each level covers those before
 // it.
-export const PUSH_LEVELS = ['none', 'push', 'lease', 'bare'] as const;
+const PUSH_LEVELS = ['none', 'push', 'lease', 'bare'] as const;
 export type PushLevel = (typeof PUSH_LEVELS)[number];
 export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level);
 
@@ -55,47 +55,86 @@ function raise(g: MutableGrant, level: PushLevel): void {
   if (pushRank(level) > pushRank(g.push)) g.push = level;
 }
 
-const REQUESTED: Record<string, Verb[]> = {
-  commit: ['commit'],
-  push: ['push'],
-  ship: ['commit', 'push', 'pr'],
-  // Deleting a remote branch is a push; only with "branch" last.
-  delete: ['push'],
-  // "force push" and "force-push", read as one word by `forcePhrase`.
-  forcepush: ['push', 'force'],
-  // "open a PR", read as one word by `prPhrase`.
-  openpr: ['pr'],
-  merge: ['merge'],
-  approve: ['approve'],
-  release: ['release'],
-  // "cut a release", read as one word by `prPhrase`.
-  cutrelease: ['release'],
-  publish: ['release'],
-  // "mark it ready for review", read as one word by `prPhrase`.
-  markready: ['pr'],
-  address: ['comment'],
-  reply: ['comment'],
-  respond: ['comment'],
-};
+// A verb family: the word a request uses and the one an offer uses ("push",
+// "pushing"), what it grants, and what may follow it.
+type Family = Readonly<
+  {
+    forms: readonly [request: string, offer: string];
+    grants: readonly Verb[];
+    // What the tail must name for the verb to ask.
+    object?: (tail: readonly string[]) => boolean;
+  } &
+    // A merge or approval names a pull request, and nothing else.
+    (
+      | { tail: 'pull-request'; numbered?: never; packaged?: never; from?: never }
+      // A publish names a version or a registry, never git work.
+      | { tail: 'publish'; numbered: true; packaged: true; from?: never }
+      | {
+          tail?: never;
+          // A number or "on": "Release 0.25.0?", "Reply to the review on #116?".
+          numbered?: true;
+          // A package or registry: "release the crate", "cut a release to npm".
+          packaged?: true;
+          // "from" names a pull request's head; after a push it names a source.
+          from?: true;
+        }
+    )
+>;
 
-const OFFERED: Record<string, Verb[]> = {
-  ...REQUESTED,
-  committing: ['commit'],
-  pushing: ['push'],
-  shipping: ['commit', 'push', 'pr'],
-  deleting: ['push'],
-  forcepushing: ['push', 'force'],
-  openingpr: ['pr'],
-  merging: ['merge'],
-  approving: ['approve'],
-  releasing: ['release'],
-  cuttingrelease: ['release'],
-  publishing: ['release'],
-  markingready: ['pr'],
-  addressing: ['comment'],
-  replying: ['comment'],
-  responding: ['comment'],
-};
+// Replying names the review it answers, so "address the TODO comments" asks
+// for nothing on GitHub.
+const REVIEW = new Set(['review', 'reviews', 'reviewer', 'reviewers', 'feedback', 'pr']);
+const reply = (forms: Family['forms']): Family => ({
+  forms,
+  grants: ['comment'],
+  numbered: true,
+  object: (tail) => tail.some((x) => REVIEW.has(x)),
+});
+const releasing = (forms: Family['forms']): Family => ({
+  forms,
+  grants: ['release'],
+  numbered: true,
+  packaged: true,
+});
+
+const FAMILIES: readonly Family[] = [
+  { forms: ['commit', 'committing'], grants: ['commit'] },
+  { forms: ['push', 'pushing'], grants: ['push'] },
+  { forms: ['ship', 'shipping'], grants: ['commit', 'push', 'pr'] },
+  // Deleting a remote branch is a push; only with "branch" last.
+  { forms: ['delete', 'deleting'], grants: ['push'], object: (tail) => tail.at(-1) === 'branch' },
+  // "force push" and "force-push", read as one word by `forcePhrase`.
+  { forms: ['forcepush', 'forcepushing'], grants: ['push', 'force'] },
+  // "open a PR", read as one word by `prPhrase`.
+  { forms: ['openpr', 'openingpr'], grants: ['pr'], from: true },
+  { forms: ['merge', 'merging'], grants: ['merge'], tail: 'pull-request' },
+  { forms: ['approve', 'approving'], grants: ['approve'], tail: 'pull-request' },
+  releasing(['release', 'releasing']),
+  // "cut a release", read as one word by `prPhrase`.
+  releasing(['cutrelease', 'cuttingrelease']),
+  {
+    forms: ['publish', 'publishing'],
+    grants: ['release'],
+    tail: 'publish',
+    numbered: true,
+    packaged: true,
+  },
+  // "mark it ready for review", read as one word by `prPhrase`.
+  { forms: ['markready', 'markingready'], grants: ['pr'] },
+  reply(['address', 'addressing']),
+  reply(['reply', 'replying']),
+  reply(['respond', 'responding']),
+];
+
+// Every verb form, request and offer, as a copy the table never reads.
+export const VERB_FORMS: readonly string[] = FAMILIES.flatMap((f) => f.forms);
+
+const REQUESTED: Readonly<Record<string, Family>> = Object.fromEntries(
+  FAMILIES.map((f) => [f.forms[0], f]),
+);
+const OFFERED: Readonly<Record<string, Family>> = Object.fromEntries(
+  FAMILIES.flatMap((f) => f.forms.map((form) => [form, f])),
+);
 
 // "open a PR", "create the pull request", "opening a new draft PR"; "cut a
 // release", "publish the new release"; "mark it ready for review", "ready for
@@ -365,10 +404,6 @@ function namesPullRequest(tail: string[]): boolean {
   );
 }
 
-// Replying names the review it answers, so "address the TODO comments" asks
-// for nothing on GitHub.
-const REVIEW = new Set(['review', 'reviews', 'reviewer', 'reviewers', 'feedback', 'pr']);
-
 // Opening a part joined by "and" or "then", these carry over to the parts
 // after it: "I didn't ask you to review and commit", "they review then commit".
 const MOOD =
@@ -497,26 +532,22 @@ function words(text: string): string[] {
 
 // "commit it", "push to main now": nothing but tail words, with "to" naming a
 // destination and a message only in "with a message".
-// "from" names a pull request's head ("open a PR from fix/x"); after a push it
-// names a source, not where the push goes.
-function isTail(tail: string[], verb: string): boolean {
-  if (/^(merg|approv)/.test(verb)) return namesPullRequest(tail);
-  // "Release 0.25.0?", "Publish 0.25.0?", "Reply to the review on #116?".
-  const numbered = /^(releas|cut|publish|address|repl|respond)/.test(verb);
-  const packaged = /^(releas|cutrel|cuttingrel|publish)/.test(verb);
+function isTail(tail: string[], family: Family): boolean {
+  if (family.tail === 'pull-request') return namesPullRequest(tail);
+  const publish = family.tail === 'publish';
   for (const [i, word] of tail.entries()) {
     // A publish goes to or on a registry: "publish to npm", not "publish to it".
     const where = word === 'to' || word === 'on';
     const after = tail.slice(i + 1).find((x) => !/^(the|a|my|our|your)$/.test(x)) ?? '';
-    if (verb.startsWith('publish') && where && !PACKAGE.has(after)) return false;
-    if (numbered && (word === 'on' || /^\d+$/.test(word))) continue;
-    if (packaged && PACKAGE.has(word)) continue;
+    if (publish && where && !PACKAGE.has(after)) return false;
+    if (family.numbered && (word === 'on' || /^\d+$/.test(word))) continue;
+    if (family.packaged && PACKAGE.has(word)) continue;
     // "Publish branch" is a first push in editors, so a publish names no git work.
-    if (verb.startsWith('publish') && !PUBLISH_TAIL.has(word)) return false;
+    if (publish && !PUBLISH_TAIL.has(word)) return false;
     if (!TAIL.has(word)) return false;
-    if (word === 'from' && !verb.endsWith('pr')) return false;
+    if (word === 'from' && !family.from) return false;
     const next = tail[i + 1] ?? '';
-    if (TOWARD.has(word) && !DESTINATION.has(next) && !(packaged && PACKAGE.has(after))) {
+    if (TOWARD.has(word) && !DESTINATION.has(next) && !(family.packaged && PACKAGE.has(after))) {
       return false;
     }
     if ((word === 'message' || word === 'msg') && !tail.slice(0, i).includes('with')) return false;
@@ -545,12 +576,6 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
   return true;
 }
 
-function isObject(verb: string, tail: string[]): boolean {
-  if (verb.startsWith('delet')) return tail.at(-1) === 'branch';
-  if (/^(address|repl|respond)/.test(verb)) return tail.some((x) => REVIEW.has(x));
-  return true;
-}
-
 // What a clause leaves for the clauses after it in the sentence: a mood
 // withholds all of them, a description those that continue it with "and" or
 // "then".
@@ -560,7 +585,7 @@ type Carry = 'none' | 'mood' | 'described';
 // its own request: "fix the parser and commit it".
 function grammarGrant(
   clause: string,
-  verbs: Record<string, Verb[]>,
+  verbs: Readonly<Record<string, Family>>,
   lead: Set<string>,
   into: MutableGrant,
   agreed = false,
@@ -575,16 +600,16 @@ function grammarGrant(
   let described = false;
   for (const part of parts) {
     const at = part.findIndex((x) => Object.hasOwn(verbs, x));
-    const verb = part[at] ?? '';
+    const family = verbs[part[at] ?? ''];
     const tail = part.slice(at + 1);
     const asks =
-      at !== -1 &&
+      family !== undefined &&
       !described &&
       isLead(part.slice(0, at), lead, agreed) &&
-      isTail(tail, verb) &&
-      isObject(verb, tail);
+      isTail(tail, family) &&
+      (family.object?.(tail) ?? true);
     if (asks) {
-      const granted = verbs[verb] ?? [];
+      const granted = family.grants;
       if (granted.includes('commit')) into.commit = true;
       if (granted.includes('push')) raise(into, 'push');
       if (granted.includes('force')) raise(into, 'lease');
