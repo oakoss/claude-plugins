@@ -2,7 +2,7 @@
 review-cycle: minor
 ---
 
-A new `/config` setting, Stop before (`review-cycle.stopBefore`), picks the first step the agent asks you about: `commit`, `push` (the default, as before), `open PR`, `merge`, `release` or `never stop`. Steps before it run without asking; each push or pull request that runs that way logs a dim line ("ran a push without asking…") naming the setting and where it came from, and tells the agent, a push a script makes included. Merge and release are not gated yet. The line can move as a project grows: stop before `commit` while little is written down, and later at `push` or past it. A commit still needs a review first, whatever the setting.
+A new `/config` setting, Stop before (`review-cycle.stopBefore`), picks the first step the agent asks you about: `commit`, `push` (the default, as before), `open PR`, `merge`, `release` or `never stop`. Steps before it run without asking; each push, pull request, merge, approval or release that runs that way logs a dim line ("ran a push without asking…") naming the setting and where it came from, and tells the agent, a push a script makes included. The line can move as a project grows: stop before `commit` while little is written down, and later at `push` or past it. A commit still needs a review first, whatever the setting.
 
 A project's `.claude/settings.json` can set it under `pluginConfigs`, but only to stop earlier than your own value; your gitignored `.claude/settings.local.json` can set any step. A value outside the options in either file, or a file the gate cannot read, stops before every step, `commit` included. Only you can change it, in `/config` or by hand; repairing a broken settings file that names review-cycle counts as a change.
 
