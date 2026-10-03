@@ -13,7 +13,7 @@
 
 // How far the user's message lets a push go; each level covers those before
 // it.
-export const PUSH_LEVELS = ['none', 'push', 'lease', 'bare'] as const;
+const PUSH_LEVELS = ['none', 'push', 'lease', 'bare'] as const;
 export type PushLevel = (typeof PUSH_LEVELS)[number];
 export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level);
 
@@ -97,7 +97,7 @@ const releasing = (forms: Family['forms']): Family => ({
   packaged: true,
 });
 
-export const FAMILIES: readonly Family[] = [
+const FAMILIES: readonly Family[] = [
   { forms: ['commit', 'committing'], grants: ['commit'] },
   { forms: ['push', 'pushing'], grants: ['push'] },
   { forms: ['ship', 'shipping'], grants: ['commit', 'push', 'pr'] },
@@ -125,6 +125,9 @@ export const FAMILIES: readonly Family[] = [
   reply(['reply', 'replying']),
   reply(['respond', 'responding']),
 ];
+
+// Every verb form, request and offer, as a copy the table never reads.
+export const VERB_FORMS: readonly string[] = FAMILIES.flatMap((f) => f.forms);
 
 const REQUESTED: Readonly<Record<string, Family>> = Object.fromEntries(
   FAMILIES.map((f) => [f.forms[0], f]),

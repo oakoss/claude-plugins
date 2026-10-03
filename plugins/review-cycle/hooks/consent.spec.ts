@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { FAMILIES, grantOf, holdsOf, liftsHold, NO_GRANT } from './consent';
+import { grantOf, holdsOf, liftsHold, NO_GRANT, VERB_FORMS } from './consent';
 
 const NONE = NO_GRANT;
 const COMMIT = { ...NONE, commit: true };
@@ -139,13 +139,13 @@ describe('merges, approvals, releases and review replies', () => {
     ['addressing the review', REPLY],
     ['replying to the review', REPLY],
     ['responding to the review', REPLY],
+    ['releasing the crate', RELEASE],
   ])('a yes to going ahead with %s grants it', (offer, grant) => {
     expect(grantOf('yes', `Shall I go ahead with ${offer}?`)).toEqual(grant);
   });
   test('each verb form belongs to one family and is a word the grammar reads', () => {
-    const forms = FAMILIES.flatMap((f) => f.forms);
-    expect(new Set(forms).size).toBe(forms.length);
-    for (const form of forms) expect(form).toMatch(/^[a-z0-9'-]+$/);
+    expect(new Set(VERB_FORMS).size).toBe(VERB_FORMS.length);
+    for (const form of VERB_FORMS) expect(form).toMatch(/^[a-z0-9'-]+$/);
   });
   test('an approval or a reply does not lift a hold; a merge does', () => {
     expect(liftsHold(grantOf('approve it'))).toBe(false);
