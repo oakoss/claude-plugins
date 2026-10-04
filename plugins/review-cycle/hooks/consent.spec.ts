@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, holdOf, holdsOf, liftsHold, NO_GRANT, VERB_FORMS } from './consent';
+import {
+  grantOf,
+  holdOf,
+  holdsOf,
+  liftsHold,
+  NAMED_ELSEWHERE,
+  NO_GRANT,
+  VERB_FORMS,
+} from './consent';
 
 const NONE = NO_GRANT;
 const COMMIT = { ...NONE, commit: true };
@@ -15,6 +23,8 @@ const COMMIT_PR = { ...COMMIT, pr: true };
 const SHIP = { ...BOTH, pr: true };
 
 const MERGE = { ...NONE, merge: true };
+// A merge request that names its pull requests: "merge 116".
+const merging = (...named: string[]) => ({ ...MERGE, mergeNamed: named });
 const AUTO = { ...NONE, autoMerge: true };
 const APPROVE = { ...NONE, approve: true };
 const RELEASE = { ...NONE, release: true };
@@ -24,7 +34,7 @@ describe('merges, approvals, releases and review replies', () => {
   const cases: [string, object][] = [
     ['merge it', MERGE],
     ['Ok, merge the PR', MERGE],
-    ['Can we merge 73?', MERGE],
+    ['Can we merge 73?', merging('73')],
     // A condition auto-merge waits on grants only `gh pr merge --auto`.
     ['lets merge it when its ready', AUTO],
     ["Let's merge it when it's ready.", AUTO],
@@ -93,7 +103,7 @@ describe('merges, approvals, releases and review replies', () => {
     // A local `git merge`, which the push checks judge when it is pushed.
     ['merge main into it', NONE],
     ['merge origin/main into the branch', NONE],
-    ['merge 116 into main', MERGE],
+    ['merge 116 into main', merging('116')],
     ['merge the PR into main', MERGE],
     ['merge it into the main branch', MERGE],
     // A merge into anything but the base names a local merge.
@@ -154,7 +164,7 @@ describe('merges, approvals, releases and review replies', () => {
     expect(grantOf(prompt)).toEqual(grant);
   });
   test('a yes to an offered merge or release grants it', () => {
-    expect(grantOf('yes', 'Merge #116 now?')).toEqual(MERGE);
+    expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));
     expect(grantOf('yes', 'Should I cut the release?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Publish `review-cycle@0.25.0` to npm?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I mark #119 ready for review?')).toEqual(PR);
@@ -171,12 +181,12 @@ describe('merges, approvals, releases and review replies', () => {
   });
   // The questions the gate's refusals give the agent to ask (register.ts GH_ASK).
   test.each([
-    ['Merge #116?', MERGE],
+    ['Merge #116?', merging('116')],
     ['Approve #116?', APPROVE],
     // A bare version's dots end sentences; backticked, it names what is released.
     ['Release `v0.25.0`?', RELEASE],
     ['Reply to the review on #116?', REPLY],
-    ['Merge and release #62?', { ...MERGE, release: true }],
+    ['Merge and release #62?', { ...merging('62'), release: true }],
   ])('a yes to the refusal\'s "%s" grants it', (question, grant) => {
     expect(grantOf('yes', question)).toEqual(grant);
     expect(holdsOf('not yet', question)).toBe(true);
@@ -196,7 +206,7 @@ describe('merges, approvals, releases and review replies', () => {
   test.each([
     ['pushing', PUSH],
     ['opening a PR', PR],
-    ['merging #116', MERGE],
+    ['merging #116', merging('116')],
     ['approving #116', APPROVE],
     ['cutting a release', RELEASE],
     ['publishing to npm', RELEASE],
@@ -253,7 +263,7 @@ describe('merges, approvals, releases and review replies', () => {
     expect(holdsOf('not yet', 'Should I merge #132 when its checks pass?')).toBe(true);
     expect(holdsOf('wait', 'Should I merge #132 once CI passes?')).toBe(true);
     expect(grantOf('yes', 'Should I merge #132 when its checks pass?')).toEqual(AUTO);
-    expect(grantOf('yes', 'Merge #116 now?')).toEqual(MERGE);
+    expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));
   });
 });
 
@@ -488,6 +498,38 @@ describe('an affirmative grants what the previous answer asked', () => {
       PR,
     );
   });
+  test('a merge request names the pull requests it names, across its sentences', () => {
+    expect(grantOf('merge 131 and 132')).toEqual(merging('131', '132'));
+    expect(grantOf('merge #131 and then #132')).toEqual(merging('131', '132'));
+    expect(grantOf('merge 131. merge 132 too')).toEqual(merging('131', '132'));
+    expect(grantOf('merge it')).toEqual(MERGE);
+  });
+  // "merge it" covers any pull request, unless the message or the offer it
+  // answers points elsewhere.
+  test.each([
+    ['merge it; do not merge 130', '', merging(NAMED_ELSEWHERE)],
+    ['merge it, only 131', '', merging(NAMED_ELSEWHERE)],
+    ['merge it, but leave the version PR', '', merging(NAMED_ELSEWHERE)],
+    ['merge it', 'Merge #131? #130 is the version PR, which releases.', merging('131')],
+    ['merge it', 'Should I merge #131 or #130?', merging(NAMED_ELSEWHERE)],
+    [
+      'lets merge it',
+      'All checks pass on #130 and #134.\n\nRelease by merging #130?',
+      merging('130'),
+    ],
+    ['merge it', 'CI is green.', MERGE],
+    ['merge it', 'Merge PR 131? #130 is the version PR.', merging('131')],
+    ['merge it', '#131 is green and ready.\n\nWant me to merge it?', merging('131')],
+    ['merge it', '#130 is ready to merge. Say merge it.', merging('130')],
+    ['yes', 'Merge it? Is this #131 or #130?', merging(NAMED_ELSEWHERE)],
+    ['yes', 'Want me to merge it?', MERGE],
+    ['merge it', '#134 merged. Merge the version PR?', MERGE],
+    ['merge it', 'Merged #134.\nThe version PR is green.\nMerge it to release?', MERGE],
+    ['merge it', '#131 is green. The version PR is separate. Merge it?', merging('131')],
+    ['merge it', '#134 is green. Merge it before the release?', merging('134')],
+  ])('"%s" after "%s" names %j', (prompt, offer, grant) => {
+    expect(grantOf(prompt, offer)).toEqual(grant);
+  });
   test('a delete names the branch as what goes, then at most where from', () => {
     expect(grantOf('delete the branch from origin')).toEqual(PUSH);
     expect(grantOf('delete the file')).toEqual(NONE);
@@ -507,7 +549,7 @@ describe('an affirmative grants what the previous answer asked', () => {
     'ok yes, do it please',
     'perfect, lets do it, thanks',
   ])('"%s" answers the offer', (reply) => {
-    expect(grantOf(reply, offer)).toEqual({ ...PUSH, merge: true });
+    expect(grantOf(reply, offer)).toEqual({ ...merging('16'), push: 'push' });
     expect(holdsOf(reply, offer)).toBe(false);
   });
   test.each([

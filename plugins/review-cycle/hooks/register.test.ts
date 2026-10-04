@@ -3042,10 +3042,42 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'gh pr view 116'))).toBe(true);
     expect(w.calls.some((c) => c.argv.join(' ') === 'gh alias list')).toBe(false);
   });
-  test('a merge asked for whose lookup fails asks for a release too', async ($, on) => {
-    fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
+  test('a merge asked for covers the version pull request, looked up or not', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('oakum/version-packages'),
+    });
     await say($, 'merge it');
-    const r = await bash($, 'gh pr merge 62');
+    expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
+    expect(w.calls.some((c) => c.argv.join(' ').startsWith('gh pr view'))).toBe(false);
+  });
+  test('a merge asked for by number releases only the version PR it names', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await say($, 'merge 131');
+    expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
+    await say($, 'merge #130');
+    expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
+  });
+  test('a merge asked for with a release held off does not release', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await say($, "merge #130. don't release yet.");
+    expect(denied(await bash($, 'gh pr merge 130'), 'held off')).toBe(true);
+  });
+  test('"merge it" naming another pull request elsewhere asks before releasing', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await say($, 'merge it; do not merge 130');
+    expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
+    await endTurn($, 'answer', 'Merge #131? #130 is the version PR, which releases.');
+    await say($, 'merge it');
+    expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
+    await endTurn($, 'answer', 'Release by merging #130?');
+    await say($, 'merge it');
+    expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
+  });
+  test('a merge once ready whose lookup fails asks for a release too', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
+    await say($, 'merge it when its ready');
+    const r = await bash($, 'gh pr merge 62 --auto');
     expect(denied(r, 'the merge may be a release, which the user has not allowed')).toBe(true);
     expect(denied(r, '"Merge and release #62?"')).toBe(true);
   });
@@ -3269,9 +3301,11 @@ describe('the stop-before setting', () => {
   });
   test('a GitHub MCP merge without a number asks where a release could follow', async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
-    await say($, 'merge it');
+    await say($, 'fix the parser');
     const r = await mcp($, 'mcp__github__merge_pull_request', { pullNumber: 5 });
     expect(denied(r, 'does not name the pull request by number and repository')).toBe(true);
+    await say($, 'merge it');
+    expect(ran(await mcp($, 'mcp__github__merge_pull_request', { pullNumber: 5 }))).toBe(true);
     expect(w.calls.some((c) => c.argv.join(' ').startsWith('gh pr view'))).toBe(false);
   });
   test('a GitHub MCP call a newer message overtakes does not run', async ($, on) => {
