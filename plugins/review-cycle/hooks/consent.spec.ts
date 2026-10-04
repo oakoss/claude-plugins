@@ -756,9 +756,8 @@ describe('holds', () => {
 });
 
 // One case per cue word, each the only cue in its message, so dropping a word
-// from its list fails here rather than passing behind a neighbour. MOOD's
-// dont, would and condition words and AGREE_WORD's yep have none: no message
-// reaches them.
+// from its list fails here rather than passing behind a neighbour. AGREE_WORD's
+// yep has none: REQUEST_LEAD lacks it, so no message reaches it.
 describe('each cue word counts on its own', () => {
   test.each([
     'no',

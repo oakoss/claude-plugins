@@ -428,8 +428,9 @@ function namesPullRequest(tail: string[]): boolean {
 
 // Opening a part joined by "and" or "then", these carry over to the parts
 // after it: "I didn't ask you to review and commit", "they review then commit".
+// A SUBORDINATE word withholds its clause before any part is read.
 const MOOD =
-  /^(don'?t|dont|not|never|no|didn'?t|won'?t|can'?t|cannot|shouldn'?t|wouldn'?t|doesn'?t|i'll|i'm|i've|we'll|we're|they|he|she|agents?|claude|who|which|would|might|should|if|when|whether|once|unless|until|before|after|without)$/;
+  /^(don'?t|not|never|no|didn'?t|won'?t|can'?t|cannot|shouldn'?t|wouldn'?t|doesn'?t|i'll|i'm|i've|we'll|we're|they|he|she|agents?|claude|who|which|might|should)$/;
 
 // Opening a part, these describe something rather than ask for it: "the flow
 // is review, then commit". Later parts and continuing clauses grant nothing.
