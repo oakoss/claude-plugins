@@ -2,7 +2,7 @@
 // the refusals when they may not. Pure: what it needs from gh or the settings
 // comes through `GhLookups`, which register.ts builds.
 
-import { covers, type Grant } from './consent';
+import { covers, type Grant, type HoldReason, type HoldStep } from './consent';
 import type { GhAction, PushRef } from './github';
 import { asks, type Ladder, type Step } from './ladder';
 import { askingReason, pushOutcome } from './push-verdict';
@@ -67,19 +67,39 @@ export function askThem(naming: string, example: string, shown: string): string 
   return `stop and ask them in your reply, naming ${naming} with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${shown}`;
 }
 
+// Why the steps are held, or null when nothing holds them.
+export type Hold = HoldReason | null;
+
+const STEP_NAME: Record<HoldStep, string> = {
+  push: 'a push',
+  pr: 'a pull request',
+  merge: 'a merge',
+  approve: 'an approval',
+  release: 'a release',
+  comment: 'a reply on GitHub',
+};
+
+// What held the steps, so the agent can tell the user.
+function heldWhy(held: HoldReason): string {
+  const step = STEP_NAME[held.step];
+  return held.how === 'mentioned'
+    ? `their message mentioned ${step} without asking for one`
+    : `they put off ${step} the agent offered`;
+}
+
 // Why the user's latest message does not cover the step, the setting
 // included when its files could not be read.
-export function notAsked(what: string, ladder: InForce, holdable: boolean, held: boolean): string {
+export function notAsked(what: string, ladder: InForce, holdable: boolean, held: Hold): string {
   const why =
-    holdable && held
-      ? `the user held off and hasn't asked for ${what} since`
+    holdable && held !== null
+      ? `the user held off (${heldWhy(held)}) and hasn't asked for ${what} since`
       : `the user's latest message doesn't ask for ${what}`;
   return ladder.unreadable === undefined
     ? why
     : `could not read ${ladder.unreadable}, so the gate stops before every step, and ${why}`;
 }
 
-function prRefusal(shown: string, ladder: InForce, held: boolean): string {
+function prRefusal(shown: string, ladder: InForce, held: Hold): string {
   return `${notAsked('a pull request', ladder, true, held)}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
 }
 
@@ -146,7 +166,7 @@ function ghRefusal(
   kind: keyof typeof GH_ASK,
   ladder: InForce,
   always: string | null,
-  held: boolean,
+  held: Hold,
 ): string {
   const [what, naming, example] = GH_ASK[kind];
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
@@ -163,13 +183,13 @@ export async function judgeGh(
   shown: string,
   actions: readonly GhAction[],
   granted: Grant,
-  held: boolean,
+  held: Hold,
   lookups: GhLookups,
 ): Promise<{ deny: string } | { ran: Unasked[] }> {
   const ran: Unasked[] = [];
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const may = permitted(granted, ladder, held);
+  const may = permitted(granted, ladder, held !== null);
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held),
   });
@@ -229,7 +249,7 @@ export async function judgeGh(
           };
         }
         const asked = { ...granted, merge: granted.merge || (action.auto && granted.autoMerge) };
-        const mayHere = permitted(asked, ladder, held);
+        const mayHere = permitted(asked, ladder, held !== null);
         // Allowed either way, a merge needs no lookup to tell which it is.
         if (mayHere.merge && mayHere.release) {
           if (!asked.merge && !asked.release) ran.push({ step: 'merge', ladder });

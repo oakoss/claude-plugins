@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, holdsOf, liftsHold, NO_GRANT, VERB_FORMS } from './consent';
+import { grantOf, holdOf, holdsOf, liftsHold, NO_GRANT, VERB_FORMS } from './consent';
 
 const NONE = NO_GRANT;
 const COMMIT = { ...NONE, commit: true };
@@ -60,7 +60,32 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge it after I review it', NONE],
     ['merge it when its ready and then start the next one', NONE],
     ["don't merge it when it's ready", NONE],
-    ['when its ready, merge it', NONE],
+    // A readiness condition may lead, as "merge it once it's ready" trails.
+    ['when its ready, merge it', AUTO],
+    ['Ok, once PR 133 is ready lets merge it', AUTO],
+    ['when CI passes, merge it', AUTO],
+    ['When the checks pass, lets merge #132.', AUTO],
+    ['as soon as CI is green, merge it', AUTO],
+    ['once it is ready, then merge it', AUTO],
+    // Any other leading condition withholds the whole prompt.
+    ["once it's ready, push it", NONE],
+    ['once I say so, merge it', NONE],
+    ['if CI fails, merge it', NONE],
+    ["once it's ready, merge it and push", NONE],
+    ["once it's ready, merge it, but hold off", NONE],
+    ["once it's ready, push it. commit it", NONE],
+    // The whole condition counts, and nothing beside the merge is granted.
+    ['when it is ready to merge, merge it', AUTO],
+    ['once its ready to merge merge it', AUTO],
+    ['when it is ready to merge. merge it when I say so', NONE],
+    ["once it's ready, release it, merge it", NONE],
+    ["once it's ready, push it, merge it", NONE],
+    ["once it's ready, do not merge it. Push it.", NONE],
+    ["commit it. once it's ready, do not merge it", NONE],
+    // A condition naming a pull request names the one merged.
+    ['once PR 133 is ready, merge 134', NONE],
+    ['merge 134 once PR 133 is ready', NONE],
+    ['once PR 133 is ready, merge 133', AUTO],
     ['commit it when the tests pass', NONE],
     ['push it once CI is green', NONE],
     ['approve it when its ready', NONE],
@@ -200,6 +225,22 @@ describe('merges, approvals, releases and review replies', () => {
     'no need to approve it',
   ])('%s holds', (prompt) => {
     expect(holdsOf(prompt)).toBe(true);
+  });
+  test.each([
+    ['Anything else before we merge?', '', { step: 'merge', how: 'mentioned' }],
+    ['did the push go through?', '', { step: 'push', how: 'mentioned' }],
+    ['is it ready for review?', '', { step: 'pr', how: 'mentioned' }],
+    ['the release notes look good', '', { step: 'release', how: 'mentioned' }],
+    ['no need to approve it', '', { step: 'approve', how: 'mentioned' }],
+    ['not yet', 'Should I push `fix/x` to `origin`?', { step: 'push', how: 'declined' }],
+    ['hold off', 'Merge #116 now?', { step: 'merge', how: 'declined' }],
+    ['not yet', 'Merge #116 and delete the branch?', { step: 'merge', how: 'declined' }],
+    ['not yet', 'Push and open a PR?', { step: 'pr', how: 'declined' }],
+    ['wait', 'Reply to the review on #116?', { step: 'comment', how: 'declined' }],
+    ['merge it', '', null],
+    ['not yet', 'Should I rename the helper?', null],
+  ])('"%s" after "%s" holds for %j', (prompt, offer, reason) => {
+    expect(holdOf(prompt, offer)).toEqual(reason);
   });
   test('"not yet" to an offered merge holds; a merge request does not', () => {
     expect(holdsOf('not yet', 'Merge #116 now?')).toBe(true);

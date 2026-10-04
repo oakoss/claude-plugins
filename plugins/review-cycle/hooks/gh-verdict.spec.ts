@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
 import { NO_GRANT, type Grant } from './consent';
-import { judgeGh, parsePullRequest, type GhLookups, type InForce, type Lookup } from './gh-verdict';
+import {
+  judgeGh,
+  parsePullRequest,
+  type GhLookups,
+  type Hold,
+  type InForce,
+  type Lookup,
+} from './gh-verdict';
 import type { GhAction } from './github';
 import type { StopBefore } from './ladder';
 
@@ -42,7 +49,7 @@ async function judge(
   actions: GhAction[],
   w: ReturnType<typeof world>,
   granted = grant(),
-  held = false,
+  held: Hold = null,
 ) {
   return judgeGh('the call', actions, granted, held, w.lookups);
 }
@@ -69,10 +76,27 @@ describe('GitHub writes on the ladder', () => {
   test.each<GhAction>([{ kind: 'pr' }, { kind: 'release' }, { kind: 'approve' }])(
     'a hold stops %j at every rung',
     async (action) => {
-      const r = await judge([action], world('never stop'), grant(), true);
-      expect(r).toMatchObject({ deny: expect.stringContaining('the user held off') });
+      const r = await judge([action], world('never stop'), grant(), {
+        step: 'merge',
+        how: 'mentioned',
+      });
+      expect(r).toMatchObject({
+        deny: expect.stringContaining(
+          'the user held off (their message mentioned a merge without asking for one)',
+        ),
+      });
     },
   );
+
+  test('a hold says why it held', async () => {
+    const r = await judge([{ kind: 'pr' }], world('never stop'), grant(), {
+      step: 'push',
+      how: 'declined',
+    });
+    expect(r).toMatchObject({
+      deny: expect.stringContaining('the user held off (they put off a push the agent offered)'),
+    });
+  });
 
   test('an unread write is refused with its remedy, or the default one', async () => {
     const own = await judge(
