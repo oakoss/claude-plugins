@@ -58,6 +58,9 @@ describe('merges, approvals, releases and review replies', () => {
     ["merge 132 when it's ready, but hold off", NONE],
     ["merge 132 when it's ready, if Bob approves", NONE],
     ["merge 132 when it's ready, but don't do it yet", NONE],
+    // "as soon as" withholds what follows like any other condition word.
+    ['merge it as soon as I say so, then release it', NONE],
+    ['commit it as soon as you can, then push it', NONE],
     ["merge it when it's ready, but I'll check first", NONE],
     ['squash and merge it when ready', NONE],
     ['merge it when I say its ready', NONE],

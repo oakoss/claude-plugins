@@ -612,6 +612,9 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
 const READY =
   /^(?:(?:it|it's|its|this|that|(?:the )?pr(?: \d+)?|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
 
+const asSoonAs = (w: readonly string[]): number =>
+  w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
+
 // "merge it when it's ready": one merge request, then a condition only
 // auto-merge waits on. Anything else conditional asks for nothing.
 function isReadyMerge(
@@ -620,7 +623,7 @@ function isReadyMerge(
   lead: Set<string>,
   agreed: boolean,
 ): boolean {
-  const soon = w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
+  const soon = asSoonAs(w);
   const k = soon === -1 ? w.findIndex((x) => SUBORDINATE.has(x)) : soon;
   const after = soon === -1 ? k + 1 : k + 3;
   if (k === -1 || (soon === -1 && !/^(when|once|after|if)$/.test(w[k] ?? ''))) return false;
@@ -697,7 +700,7 @@ function grammarGrant(
     into.autoMerge = true;
     return 'ready';
   }
-  if (w.some((x) => SUBORDINATE.has(x))) return 'mood';
+  if (w.some((x) => SUBORDINATE.has(x)) || asSoonAs(w) !== -1) return 'mood';
   const parts: string[][] = [[]];
   for (const word of w) {
     if (word === 'and' || word === 'then') parts.push([]);
