@@ -11,7 +11,7 @@
     {
       "name": "review-cycle",
       "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push, pull request, merge or release you did not request, unless you let it go further.",
-      "version": "0.25.0",
+      "version": "0.26.0",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
@@ -47,7 +47,7 @@
     {
       "name": "pr-watch",
       "description": "A line above the prompt for each pull request Claude opens: its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it.",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",

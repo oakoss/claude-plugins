@@ -4,6 +4,30 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.26.0 (2026-10-04)
+
+### Added
+
+"Merge it when it's ready" now lets the agent turn on auto-merge. A merge asked for once the pull request is ready, or once CI or its checks pass or are green ("merge 116 once CI passes", "go ahead and merge it as soon as the checks are green"), covers `gh pr merge --auto`, which leaves the waiting to GitHub. Before, any condition made the request grant nothing, so the agent asked again.
+
+- **Merging now is refused.** Under such a request, a merge without `--auto` is refused whatever your stop-before setting, and the refusal tells the agent to add `--auto`.
+- **GitHub waits only on required checks.** A pull request whose failing checks are not required merges at once.
+- **The rest of the sentence waits.** Anything else in the same sentence is not granted, since it may wait on the same condition: "merge it when it's ready, then release it" grants only the merge.
+- **Other conditions still ask.** "merge it when I say so" or "commit when the tests pass" asks for nothing.
+- **The version PR is still a release.** Merging oakum's version pull request needs its own request.
+
+The status tool reports the request as `autoMergeRequested`.
+
+### Fixed
+
+A reply to the agent's offer to delete a remote branch now allows the delete. When the agent named the branch ("Delete `fix/x` from `origin`?", "Should I delete feat/x from origin?"), no reply was read as asking for it, not even "yes", so the gate refused the delete again and again. Now "yes", "lets delete it" and "delete it" answer such an offer, and "delete the branch from origin" asks for one. A named path is still not a branch: "yes" to "Should I delete src/old.ts?" allows nothing. When the gate refuses a remote branch delete, it now suggests a question that a "yes" answers, and mentions that a merge you asked for already covers `gh pr merge --delete-branch`.
+
+A short go-ahead now answers the agent's question the way "yes" does. "Ok, lets do that", "let's do it", "ok, do that", "sounds good, go ahead" and "great, go ahead" were read as no answer, so the gate refused the push or merge the agent had just offered and the agent asked again. The reply has to be only agreement and a go-ahead: "ok, let's do that later" or "lets do that for the other PR" still allows nothing, and "great" or "looks good" on its own is not a yes.
+
+A refusal caused by a hold now says why the steps are held: "the user held off (their message mentioned a merge without asking for one)" or "(they put off a push the agent offered)". Before, it said only that you had held off, and the agent could not tell which step held or what would lift it, since a question that mentions a step ("anything else before we merge?") holds that step too. The status tool reports the same reason as `stopBefore.heldBy`, the step plus `mentioned` or `declined`.
+
+A readiness condition can now come first: "once PR 133 is ready, lets merge it", "when CI passes, merge it" and "as soon as CI is green, merge it" let the agent run `gh pr merge --auto`, as "merge it once it's ready" already did. Before, a sentence opening with a condition granted nothing, so the agent asked again. Any other leading condition still grants nothing for the whole message: "once it's ready, push it", "once I say so, merge it" or "if CI fails, merge it". So does a sentence that asks for more than the merge under the condition ("once it's ready, release it, merge it"), and one waiting on another pull request than the one it merges ("once PR 133 is ready, merge 134", in either order), since `--auto` waits only on the pull request it merges.
+
 ## 0.25.0 (2026-10-03)
 
 ### Added
