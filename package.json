@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "format": "oxfmt 'plugins/**/*.ts' '*.config.ts'",
-    "format:check": "oxfmt --check 'plugins/**/*.ts' '*.config.ts'",
+    "format": "oxfmt 'plugins/**/*.{ts,tsx}' '*.config.ts'",
+    "format:check": "oxfmt --check 'plugins/**/*.{ts,tsx}' '*.config.ts'",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "setup": "bd bootstrap --yes",
     "test": "vitest run",
-    "test:hooks": "claude plugin test plugins/review-cycle",
-    "typecheck": "tsc -p plugins/review-cycle"
+    "test:hooks": "claude plugin test plugins/review-cycle && claude plugin test plugins/pr-watch",
+    "typecheck": "tsc -p plugins/review-cycle && tsc -p plugins/pr-watch"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^21.2.3",

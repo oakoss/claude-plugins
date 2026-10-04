@@ -222,8 +222,8 @@ jobs:
           cache: true
           require-lockfile: true
 
-      # Against types/claude-code/claude-code.d.ts, which `/plugin-types`
-      # writes and which needs a login to regenerate, so it is committed.
+      # Against types/claude-code/claude-code.d.ts (AGENTS.md says where it
+      # comes from).
       - name: Type-check hooks modules
         run: pnpm typecheck
 

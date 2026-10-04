@@ -61,3 +61,13 @@ key = "version"
 path = "/.claude-plugin/marketplace.json"
 format = "json"
 key = "plugins.{name=pr-kit}.version"
+
+[[packages.pr-watch.extra-files]]
+path = ".claude-plugin/plugin.json"
+format = "json"
+key = "version"
+
+[[packages.pr-watch.extra-files]]
+path = "/.claude-plugin/marketplace.json"
+format = "json"
+key = "plugins.{name=pr-watch}.version"

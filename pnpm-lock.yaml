@@ -205,6 +205,8 @@ importers:
 
   plugins/pr-kit: {}
 
+  plugins/pr-watch: {}
+
   plugins/prose: {}
 
   plugins/review-cycle: {}
