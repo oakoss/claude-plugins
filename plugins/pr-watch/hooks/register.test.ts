@@ -362,7 +362,7 @@ function mergedJson(status: string, conclusion: string | null): string {
 }
 
 describe('a merged pull request', () => {
-  test('follows its run on the base branch, says once it settles, and clears on the next message', async ($, on) => {
+  test('follows its run on the base branch, says once it settles, and leaves 5 s later', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const gh: Gh = { pr: mergedJson('IN_PROGRESS', null) };
     const seen = world(on, gh);
@@ -377,20 +377,24 @@ describe('a merged pull request', () => {
     // A late run could still start, so passing is not said yet.
     expect(seen.toasts).toEqual([]);
     // Read on through the 90 s after the merge, then settled: said once,
-    // kept, and read no more.
-    await clock.advance(80_000);
+    // kept a few seconds, and read no more. The read 91 s after the merge,
+    // at T0 + 81 s, is the first past the grace.
+    await clock.advance(72_000);
     expect(seen.toasts).toEqual(['#128 merged: its checks passed']);
     const settled = reads(seen.runs);
+    // A message does not clear it early.
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    await clock.advance(5000);
+    expect(await lineIn(ui)).toBeUndefined();
     await clock.advance(120_000);
     expect(reads(seen.runs)).toBe(settled);
-    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
-    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
-    expect(await lineIn(ui)).toBeUndefined();
   });
 
-  test('a failed run on the base branch stays until the next message, which goes through', async ($, on) => {
+  test('a failed run on the base branch stays past a message until a re-run passes', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
-    world(on, { pr: mergedJson('COMPLETED', 'FAILURE') });
+    const gh: Gh = { pr: mergedJson('COMPLETED', 'FAILURE') };
+    const seen = world(on, gh);
     await start($);
     await create($);
     await clock.advance(90_000);
@@ -402,6 +406,16 @@ describe('a merged pull request', () => {
       wait: false,
     } as any);
     expect(r).toMatchObject({ text: 'next' });
+    await clock.advance(600_000);
+    expect(await lineIn(ui)).toBe('#128 merged · ✗ Release: Publish failed');
+    gh.pr = mergedJson('COMPLETED', 'SUCCESS');
+    // Read within the minute; stop on the read that sees it pass.
+    for (let s = 0; s < 60 && seen.toasts.at(-1) !== '#128 merged: its checks passed'; s++) {
+      await clock.advance(1000);
+    }
+    expect(seen.toasts.at(-1)).toBe('#128 merged: its checks passed');
+    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    await clock.advance(5000);
     expect(await lineIn(ui)).toBeUndefined();
   });
 
@@ -488,17 +502,6 @@ describe('a merged pull request', () => {
     expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m21s');
     await clock.advance(3000);
     expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m24s');
-  });
-
-  test('a prompt that is not the person’s leaves a settled line', async ($, on) => {
-    const clock = mock.clock(on, { now: T0 });
-    world(on, { pr: mergedJson('COMPLETED', 'SUCCESS') });
-    await start($);
-    await create($);
-    await clock.advance(90_000);
-    const nudge = { text: 'review', origin: { kind: 'plugin', name: 'x' }, wait: false };
-    await $.prompt.submit(nudge as any);
-    expect(await lineIn(await band($))).toBe('#128 merged · ✓ main checks passed');
   });
 
   test('waits for the merge commit’s runs to start, then follows them', async ($, on) => {

@@ -9,6 +9,7 @@ import {
   estimateKey,
   lineOf,
   movesPulls,
+  isCleared,
   isSettled,
   shownOf,
   toastOf,
@@ -30,9 +31,9 @@ const busy = new Set<string>();
 const tried = new Map<string, number>();
 // When each unanswered length was last asked for, by estimate key.
 const asked = new Map<string, number>();
-// After Claude pushes or merges, a watch last read before pushedAt is read at
-// once, and every watch every BURST_MS until burstUntil: GitHub starts the new
-// runs a few seconds after the push.
+// After Claude pushes, merges or starts a run, a watch last read before
+// pushedAt is read at once, and every watch every BURST_MS until burstUntil:
+// GitHub starts the new runs a few seconds later.
 const BURST_MS = 5000;
 const BURST_FOR_MS = 60_000;
 let pushedAt = 0;
@@ -146,8 +147,12 @@ async function tick($: $): Promise<void> {
     // after it is not missed.
     const verdict = w.pull ? verdictOf(w.pull, known, w.host, w.checkedAt) : null;
     if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
-    // A merge that started no runs in its grace closes with time alone.
-    if (verdict?.kind === 'closed') {
+    // A merge that started no runs in its grace, or passed, leaves with time alone.
+    const isGone =
+      verdict !== null &&
+      w.pull !== undefined &&
+      (verdict.kind === 'closed' || isCleared(verdict, w.pull, w.checkedAt, now));
+    if (isGone) {
       await stop($, idOf(w));
       continue;
     }
@@ -182,20 +187,6 @@ export const register: Register = (on) => {
     // oxlint-disable-next-line unicorn/no-array-method-this-argument -- a timer, not Array#every
     poller = $.clock.every(TICK_MS, () => void safeTick($));
     return r;
-  });
-
-  // A merge whose runs have settled stays until the person's next message; a
-  // plugin's prompt or a task notification is not one.
-  on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e);
-    const known = await read($, estimates);
-    const isKept = (w: Watch) =>
-      !w.pull || !isSettled(verdictOf(w.pull, known, w.host, w.checkedAt), w.pull, w.checkedAt);
-    const list = await read($, watches);
-    if (!list.every((w) => isKept(w))) {
-      await update($, watches, (all) => all.filter((w) => isKept(w)));
-    }
-    return next(e);
   });
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {

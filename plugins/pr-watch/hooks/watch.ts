@@ -12,7 +12,7 @@ const START = String.raw`(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*`;
 const PR_CREATE = new RegExp(String.raw`${START}gh\s+pr\s+create\b`);
 // git's own options may come before the subcommand: -C dir, -c key=value, --flag.
 const MOVES_PR = new RegExp(
-  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b)`,
+  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b)`,
 );
 
 // Whether a command can start new runs or close a pull request, so the
@@ -153,20 +153,29 @@ export function verdictOf(
   return { kind: 'waiting', reason: 'checking' };
 }
 
-// Whether a merge's line has settled, so it is read no more and the next
-// prompt clears it: every run on the merge commit done, and the grace for a
-// late one to start gone by.
+const PASSED_STAYS_MS = 5000;
+
+// Every run on the merge commit passed, and the grace for a late one is over.
+// A failed merge never settles: it is read until a re-run passes.
 export function isSettled(verdict: Verdict, pull: Pull, now: number): boolean {
-  if (verdict.kind !== 'merged-passed' && verdict.kind !== 'merged-failing') return false;
+  if (verdict.kind !== 'merged-passed') return false;
   const isDone = pull.mergeRuns?.workflows.every((w) => w.status === 'done') ?? true;
   const since = pull.mergedAt ? now - Date.parse(pull.mergedAt) : Infinity;
   return isDone && since >= MERGE_GRACE_MS;
+}
+
+export function isCleared(verdict: Verdict, pull: Pull, checkedAt: number, now: number): boolean {
+  return isSettled(verdict, pull, checkedAt) && now - checkedAt >= PASSED_STAYS_MS;
 }
 
 // Poll fast while something moves, slowly while it waits on a person. A
 // workflow the merge does not wait on still moves the line's marks.
 export function delayOf(verdict: Verdict, pull: Pull, now: number): number | null {
   if (verdict.kind === 'closed' || isSettled(verdict, pull, now)) return null;
+  // A failed merge waits on someone to re-run it.
+  if (verdict.kind === 'merged-failing') {
+    return pull.mergeRuns?.workflows.every((w) => w.status === 'done') === false ? 10_000 : 60_000;
+  }
   if (verdict.kind === 'running' || verdict.kind.startsWith('merged-')) return 10_000;
   if (pull.workflows.some((w) => w.status !== 'done')) return 10_000;
   if (verdict.kind === 'waiting' && verdict.reason !== 'review' && verdict.reason !== 'draft') {
