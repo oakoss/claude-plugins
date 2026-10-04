@@ -606,7 +606,7 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
 // A condition GitHub's auto-merge waits on itself: "when it's ready", "once
 // CI passes", "after the checks are green".
 const READY =
-  /^(?:(?:it|it's|its|this|that|(?:the )?pr|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
+  /^(?:(?:it|it's|its|this|that|(?:the )?pr(?: \d+)?|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
 
 // "merge it when it's ready": one merge request, then a condition only
 // auto-merge waits on. Anything else conditional asks for nothing.
@@ -630,8 +630,47 @@ function isReadyMerge(
   return (
     family?.forms[0] === 'merge' &&
     isLead([...before, ...request.slice(0, at)], lead, agreed) &&
-    namesPullRequest(request.slice(at + 1))
+    namesPullRequest(request.slice(at + 1)) &&
+    samePullRequest(w.slice(after).join(' '), request.join(' '))
   );
+}
+
+// "once it's ready, merge it" read as "merge it once it's ready", the form
+// isReadyMerge knows; null unless a readiness condition leads into a merge.
+function leadingReady(sentence: string): string | null {
+  const lead =
+    /^(\s*(?:(?:ok|okay|yes|yeah|sure|alright|great|cool|perfect)[\s,]+)*)(when|once|after|if|as soon as)\s+(.*?)([.!?;]*)$/is.exec(
+      sentence,
+    );
+  if (lead === null) return null;
+  const [, agreed = '', when = '', rest = '', end = ''] = lead;
+  const tokens = rest.split(/\s+/);
+  // The longest condition: "it is ready to merge, merge it" waits on all of it.
+  for (let i = tokens.length; i >= 1; i--) {
+    const condition = tokens.slice(0, i).join(' ').replace(/,$/, '');
+    if (!READY.test(words(condition).join(' '))) continue;
+    const request = tokens
+      .slice(i)
+      .join(' ')
+      .replace(/^then\s+/i, '');
+    if (!MERGE_WORD.test(request) || !samePullRequest(condition, request)) return null;
+    return `${agreed}${request} ${when} ${condition}${end}`;
+  }
+  return null;
+}
+
+// "merge 134 once PR 133 is ready" waits on #133, which `--auto` on #134
+// never does, so a condition naming a pull request names the one merged.
+function samePullRequest(condition: string, request: string): boolean {
+  const waits = /\bpr\s+#?(\d+)\b/i.exec(condition)?.[1];
+  const merges = /#?\b(\d+)\b/.exec(request)?.[1];
+  return waits === undefined || merges === undefined || waits === merges;
+}
+
+// Only a merge once it is ready: anything else the sentence asks for may wait
+// on the same condition.
+function onlyAutoMerge(g: MutableGrant): boolean {
+  return g.autoMerge && g.push === 'none' && STEPS.every((s) => s === 'autoMerge' || !g[s]);
 }
 
 // What a clause leaves for the clauses after it in the sentence: a mood
@@ -875,7 +914,11 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // What the previous sentence left: "we commit; then push" describes across
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
-  for (const sentence of sentences(prPhrase(unquote(forcePhrase(typed))))) {
+  for (const raw of sentences(prPhrase(unquote(forcePhrase(typed))))) {
+    const flipped = leadingReady(raw);
+    const sentence = flipped ?? raw;
+    // "once it's ready, do not merge it" reads as a question once reordered.
+    if (flipped !== null && (RETRACT.test(sentence) || isQuestion(sentence))) return NO_GRANT;
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
       g = fresh();
@@ -909,6 +952,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (left === 'mood') withheld = true;
       else if (left !== 'none' && carry !== 'ready') carry = left;
     }
+    // Any other condition leading a sentence withholds the whole prompt.
+    if (flipped !== null && (withheld || !onlyAutoMerge(mine))) return NO_GRANT;
     if (!withheld) merged(g, mine);
     // Only a semicolon ties two sentences together, and only around the verbs:
     // "I fixed it. Then push it." asks.
