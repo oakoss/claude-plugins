@@ -18,7 +18,7 @@ A line above the Claude Code prompt for each pull request Claude opens, from the
 - **Failing.** A job failed in a workflow that holds a required check, or in any workflow when nothing on the commit is required. The line names that job rather than a summary job that failed on it, and links to its log.
 - **Blocked.** Conflicts, changes requested, a branch behind its base, or a rule GitHub does not name (`⚠ blocked`).
 - **Waiting.** On a review, on a required check from a GitHub App, on GitHub to start the checks, on GitHub to work out the merge state, or on a draft to be marked ready.
-- **Merged.** The line follows the merge commit's runs on the base branch, every workflow counting, with the same bar and marks. Once they finish it reads `✓ <base> checks passed` or names the job that failed. It keeps reading for 90 seconds after the merge in case a later run starts, then stays until your next message. A merge whose commit starts no runs within 90 seconds leaves the band.
+- **Merged.** The line follows the merge commit's runs on the base branch, every workflow counting, with the same bar and marks. Once they finish it reads `✓ <base> checks passed` or names the job that failed. It keeps reading for 90 seconds after the merge in case a later run starts. A passed merge then leaves the band a few seconds later. A failed one stays, read once a minute, until a re-run passes, and then leaves the same way; the `×` removes it sooner. A merge whose commit starts no runs within 90 seconds leaves the band.
 
 When a workflow has run more than once on the same commit, only its newest run counts.
 

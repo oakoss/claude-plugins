@@ -7,6 +7,7 @@ import {
   createdPull,
   delayOf,
   errorLine,
+  isCleared,
   isSettled,
   lineOf,
   movesPulls,
@@ -421,6 +422,10 @@ describe('after a merge', () => {
     const later = at + 30_000;
     expect(delayOf(v, p, later)).toBeNull();
     expect(isSettled(v, p, later)).toBe(true);
+    // Read settled at `later`, it leaves 5 s on.
+    expect(isCleared(v, p, later, later + 4999)).toBe(false);
+    expect(isCleared(v, p, later, later + 5000)).toBe(true);
+    expect(isCleared(v, p, at, at + 60_000)).toBe(false);
   });
 
   test('a failed run with another still going on the base branch has not settled', () => {
@@ -430,6 +435,15 @@ describe('after a merge', () => {
     expect(v.kind).toBe('merged-failing');
     expect(isSettled(v, p, later)).toBe(false);
     expect(delayOf(v, p, later)).toBe(10_000);
+  });
+
+  test('a failed merge never settles: it stays, read each minute until a re-run passes', () => {
+    const p = merged([release('FAILURE'), codeql('SUCCESS')]);
+    const later = at + 3_600_000;
+    const v = verdictAt(p, {}, 'github.com', later);
+    expect(isSettled(v, p, later)).toBe(false);
+    expect(isCleared(v, p, later, later + 60_000)).toBe(false);
+    expect(delayOf(v, p, later)).toBe(60_000);
   });
 
   test('waits up to 90 s for the merge commit’s runs to start, then leaves', () => {
