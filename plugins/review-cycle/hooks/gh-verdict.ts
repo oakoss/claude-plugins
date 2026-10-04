@@ -113,6 +113,15 @@ const CANNOT: Record<'elsewhere' | 'unnamed', string> = {
     'it does not name the pull request by number and repository, so the gate cannot tell a release from a merge',
 };
 
+// The pull request number a merge names (`116`, or a URL ending in it), or
+// null when it names none.
+function pullNumberOf(lookup: readonly string[] | { cannot: string }): string | null {
+  if ('cannot' in lookup) return null;
+  const selector = lookup[0];
+  if (selector === undefined || selector.startsWith('-')) return null;
+  return /(\d+)\/?$/.exec(selector)?.[1] ?? null;
+}
+
 // Which step a merge is: a release when it merges the version pull request.
 // A lookup that fails says why, and the merge asks.
 async function mergeStep(
@@ -250,6 +259,14 @@ export async function judgeGh(
         }
         const asked = { ...granted, merge: granted.merge || (action.auto && granted.autoMerge) };
         const mayHere = permitted(asked, ladder, held !== null);
+        // A merge the user asked for covers oakum's version pull request too:
+        // merging it is the only way to release, so "merge it" asks for that,
+        // unless the same message held off a release ("merge 131. don't release yet")
+        // or named other pull requests ("merge 131" never merges #130).
+        const named = granted.mergeNamed;
+        const target = pullNumberOf(action.lookup);
+        const covered = named.length === 0 || (target !== null && named.includes(target));
+        if (granted.merge && held?.step !== 'release' && covered) break;
         // Allowed either way, a merge needs no lookup to tell which it is.
         if (mayHere.merge && mayHere.release) {
           if (!asked.merge && !asked.release) ran.push({ step: 'merge', ladder });

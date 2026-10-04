@@ -22,12 +22,14 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // before a tag or default-branch push it would carry. `comment` is a reply on
 // a pull request, asked for by addressing its review. `autoMerge` is a merge
 // asked for once the pull request is ready ("merge it when CI passes"), which
-// only `gh pr merge --auto` leaves to GitHub.
+// only `gh pr merge --auto` leaves to GitHub. `mergeNamed` holds the pull
+// request numbers a merge request named ("merge 131"), empty for "merge it".
 export type Grant = Readonly<{
   commit: boolean;
   push: PushLevel;
   pr: boolean;
   merge: boolean;
+  mergeNamed: readonly string[];
   autoMerge: boolean;
   approve: boolean;
   release: boolean;
@@ -39,6 +41,7 @@ export const NO_GRANT: Grant = Object.freeze({
   push: 'none',
   pr: false,
   merge: false,
+  mergeNamed: [],
   autoMerge: false,
   approve: false,
   release: false,
@@ -700,7 +703,14 @@ function grammarGrant(
     else parts.at(-1)?.push(word);
   }
   let described = false;
+  let merging = false;
   for (const part of parts) {
+    // "merge 131 and 130": a list of numbers after a merge names them too.
+    if (merging && part.every((x) => /^\d+$/.test(x) || x === 'pr')) {
+      into.mergeNamed = [...into.mergeNamed, ...part.filter((x) => /^\d+$/.test(x))];
+      continue;
+    }
+    merging = false;
     const at = part.findIndex((x) => Object.hasOwn(verbs, x));
     const family = verbs[part[at] ?? ''];
     const tail = part.slice(at + 1);
@@ -717,7 +727,11 @@ function grammarGrant(
       if (granted.includes('push')) raise(into, 'push');
       if (granted.includes('force')) raise(into, 'lease');
       if (granted.includes('pr')) into.pr = true;
-      if (granted.includes('merge')) into.merge = true;
+      if (granted.includes('merge')) {
+        into.merge = true;
+        into.mergeNamed = [...into.mergeNamed, ...tail.filter((x) => /^\d+$/.test(x))];
+        merging = true;
+      }
       if (granted.includes('approve')) into.approve = true;
       if (granted.includes('release')) into.release = true;
       if (granted.includes('comment')) into.comment = true;
@@ -775,6 +789,7 @@ const STEPS = ['commit', 'pr', 'merge', 'autoMerge', 'approve', 'release', 'comm
 
 function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
+  into.mergeNamed = [...into.mergeNamed, ...from.mergeNamed];
   raise(into, from.push);
 }
 
@@ -899,7 +914,11 @@ export function liftsHold(grant: Grant): boolean {
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // "No problem" and "no worries" agree; they retract nothing.
   const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
-  if (AFFIRMATIVE.test(text)) return asked(previousAnswer);
+  if (AFFIRMATIVE.test(text)) {
+    const offer = asked(previousAnswer);
+    if (!offer.merge || offer.mergeNamed.length > 0) return offer;
+    return settled({ ...offer, mergeNamed: unnamedMerge('', previousAnswer) });
+  }
   // "delete it", answering an offer to delete a branch, names that branch;
   // only as the whole reply, since "delete it, meaning the TODO" names another.
   const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
@@ -961,5 +980,44 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       sentence.trim().endsWith(';') && words(sentence).some((x) => Object.hasOwn(REQUESTED, x));
     prev = tied ? (withheld ? 'mood' : carry) : 'none';
   }
+  if (g.merge && g.mergeNamed.length === 0) g.mergeNamed = unnamedMerge(typed, previousAnswer);
   return settled(g);
+}
+
+// Never a pull request number: a merge naming it covers no pull request by name.
+export const NAMED_ELSEWHERE = '?';
+
+// The pull request numbers a text names: #131, PR 131, /pull/131.
+function numbers(text: string): Set<string> {
+  return new Set(
+    [...text.matchAll(/(?:#|\b(?:pr|pull request)\s+#?|\/pull\/)(\d+)\b/gi)].map((m) => m[1] ?? ''),
+  );
+}
+
+// What "merge it" names: the pull requests the end of the previous answer
+// names (#131, PR 131, /pull/131), none meaning any. Several, or a message
+// naming numbers or the version PR itself ("merge it; do not merge 130"),
+// name none by name, so the version PR is looked up and asks.
+function unnamedMerge(typed: string, previousAnswer: string): readonly string[] {
+  const text = unquote(typed);
+  if (/#?\b\d+\b/.test(text) || /\b(version|release)\s+(pr|pull\s+request)\b/i.test(text)) {
+    return [NAMED_ELSEWHERE];
+  }
+  const closing = previousAnswer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  // The question it answers decides first: "Release by merging #130?" after a
+  // summary that names #134 too.
+  const questions = sentences(closing)
+    .filter((q) => q.trim().endsWith('?'))
+    .join(' ');
+  const asked = numbers(questions);
+  // "#134 merged. Merge the version PR?" offers the version PR, not #134.
+  if (
+    asked.size === 0 &&
+    /\b(version|release)\s+(pr|pull\s+request)\b|\bmerge\s+it\s+to\s+release\b/i.test(questions)
+  ) {
+    return [];
+  }
+  const offered = asked.size > 0 ? asked : numbers(closing);
+  if (offered.size > 1) return [NAMED_ELSEWHERE];
+  return [...offered];
 }

@@ -261,6 +261,36 @@ describe('a merge', () => {
     expect(w.calls).toEqual(['ladder', 'mergeHead 62 --repo o/r']);
   });
 
+  test("asked for, covers oakum's version pull request without a lookup", async () => {
+    const w = world('release', { mergeHead: { out: 'oakum/version-packages' } });
+    const r = await judge([merge(false)], w, grant({ merge: true }));
+    expect(r).toEqual({ ran: [] });
+    expect(w.calls).toEqual(['ladder']);
+  });
+
+  test('asked for by number, covers only the version pull request it names', async () => {
+    const version = { mergeHead: { out: 'oakum/version-packages' } } as const;
+    const other = await judge(
+      [merge(false)],
+      world('release', version),
+      grant({ merge: true, mergeNamed: ['131'] }),
+    );
+    expect(other).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
+    const named = await judge(
+      [merge(false)],
+      world('release', version),
+      grant({ merge: true, mergeNamed: ['1'] }),
+    );
+    expect(named).toEqual({ ran: [] });
+    // Another pull request it did not name still merges as an ordinary merge.
+    const ordinary = await judge(
+      [merge(false)],
+      world('release'),
+      grant({ merge: true, mergeNamed: ['131'] }),
+    );
+    expect(ordinary).toEqual({ ran: [] });
+  });
+
   test('that may be a release asks when the lookup fails', async () => {
     const w = world('release', {
       mergeHead: { asks: 'looking up the pull request it merges failed (x)' },
