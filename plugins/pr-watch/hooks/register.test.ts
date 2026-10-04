@@ -23,6 +23,9 @@ type Gh = {
   fails?: boolean;
   estimateFails?: number;
   partial?: boolean;
+  // Holds the first PR read until the test calls `release`.
+  holdFirst?: boolean;
+  release?: () => void;
 };
 
 function prJson(over: Record<string, unknown> = {}, suites: unknown[] = []): string {
@@ -82,7 +85,13 @@ const CI_RUN = JSON.stringify({
 });
 
 // A session where Bash prints `stdout` and gh answers from `gh`.
-function world(on: any, gh: Gh, stdout = `${URL}\n`, isError = false) {
+// `fails` names the Bash commands that end in an error.
+function world(
+  on: any,
+  gh: Gh,
+  stdout = `${URL}\n`,
+  fails: boolean | ((command: string) => boolean) = false,
+) {
   const seen = { toasts: [] as string[], runs: [] as string[] };
   on('session.start', () => ({ cwd: '/repo' }));
   // What another plugin, or the engine, draws in the band beneath pr-watch.
@@ -107,10 +116,18 @@ function world(on: any, gh: Gh, stdout = `${URL}\n`, isError = false) {
       return failed;
     }
     const out = argv.includes('graphql') ? gh.pr : (gh.estimate ?? '{"workflow_runs":[]}');
-    return { value: { exitCode: 0, stdout: out, stderr: '' } };
+    const answer = { value: { exitCode: 0, stdout: out, stderr: '' } };
+    if (gh.holdFirst && argv.includes('graphql')) {
+      gh.holdFirst = false;
+      return new Promise((resolve) => {
+        gh.release = () => resolve(answer);
+      });
+    }
+    return answer;
   });
-  on('tool.call', { tool: 'Bash' }, () => {
+  on('tool.call', { tool: 'Bash' }, ($: unknown, e: { command: string }) => {
     const result = { stdout, stderr: '', interrupted: false };
+    const isError = typeof fails === 'function' ? fails(e.command) : fails;
     return isError ? { result, isError: true } : { result };
   });
   return seen;
@@ -309,6 +326,78 @@ describe('a pull request Claude opens', () => {
     await create($);
     await clock.advance(1000);
     expect(await lineIn(await band($, 'terminal', { ...PROPS, hasSurvey: true }))).toBeUndefined();
+  });
+});
+
+function isPushLine(command: string): boolean {
+  return command.startsWith('git push');
+}
+
+function reads(runs: string[]): number {
+  return runs.filter((r) => r.includes('graphql')).length;
+}
+
+describe('a push Claude makes', () => {
+  test('reads every watch at once, then every 5 s for a minute', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson() });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    // A ready PR otherwise waits 60 s for its next read.
+    await clock.advance(10_000);
+    const before = reads(seen.runs);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(reads(seen.runs)).toBe(before + 1);
+    await clock.advance(30_000);
+    expect(reads(seen.runs)).toBe(before + 7);
+    // Once the minute is over, a ready PR is back to one read a minute.
+    await clock.advance(30_000);
+    const after = reads(seen.runs);
+    await clock.advance(30_000);
+    expect(reads(seen.runs)).toBe(after);
+  });
+
+  test('reads at once even right after a read', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson() });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const before = reads(seen.runs);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(reads(seen.runs)).toBe(before + 1);
+  });
+
+  // The exit status is the whole shell line's: `git push; false` pushed.
+  test('a push in a line that exited with an error still reads at once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson() }, `${URL}\n`, isPushLine);
+    await start($);
+    await create($);
+    await clock.advance(11_000);
+    const before = reads(seen.runs);
+    await create($, 'git push; false');
+    await clock.advance(1000);
+    expect(reads(seen.runs)).toBe(before + 1);
+  });
+
+  test('a read already running at the push is read again once it ends', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), holdFirst: true };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    // The first read starts at 1 s and is still out when Claude pushes.
+    await clock.advance(1000);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(reads(seen.runs)).toBe(1);
+    gh.release?.();
+    await clock.advance(1000);
+    expect(reads(seen.runs)).toBe(2);
   });
 });
 

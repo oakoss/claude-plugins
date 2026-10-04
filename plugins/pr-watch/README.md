@@ -28,7 +28,7 @@ pr-watch draws above whatever other plugins draw in the same band, rather than r
 ## How it works
 
 - It watches the pull request in the output of a `gh pr create` that Claude runs through its Bash tool. Pull requests opened from your own terminal or a GitHub tool are not seen.
-- It reads each pull request with one `gh api graphql` call: every 10 seconds while any workflow runs or GitHub is still settling, every 60 seconds while it waits on a person. Each workflow's length comes from one `gh api` call the first time pr-watch sees it, asked again a minute later if that call fails.
+- It reads each pull request with one `gh api graphql` call: every 10 seconds while any workflow runs or GitHub is still settling, every 60 seconds while it waits on a person. When Claude runs `git push` or `gh pr merge`, it reads every watched pull request at once and every 5 seconds for the next minute, while GitHub starts the new runs. Each workflow's length comes from one `gh api` call the first time pr-watch sees it, asked again a minute later if that call fails.
 - It needs [`gh`](https://cli.github.com), logged in to the pull request's host. GitHub Enterprise hosts are passed to `gh` as `--hostname`.
 - Watched pull requests last for the session; a new session starts with none.
 

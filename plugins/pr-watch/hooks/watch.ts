@@ -6,7 +6,20 @@ const PR_URL = new RegExp(
   `^https://(${LABEL}(?:\\.${LABEL})*)/([\\w-][\\w.-]*/[\\w-][\\w.-]*)/pull/([1-9]\\d{0,9})\\s*$`,
   'gm',
 );
-const PR_CREATE = /(?:^|[;&|(\n]\s*)gh\s+pr\s+create\b/;
+// The start of a command: the line's, or after a shell separator, with any
+// leading VAR=value assignments.
+const START = String.raw`(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*`;
+const PR_CREATE = new RegExp(String.raw`${START}gh\s+pr\s+create\b`);
+// git's own options may come before the subcommand: -C dir, -c key=value, --flag.
+const MOVES_PR = new RegExp(
+  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b)`,
+);
+
+// Whether a command can start new runs or close a pull request, so the
+// band should look again soon rather than at its next slow poll.
+export function movesPulls(command: string): boolean {
+  return MOVES_PR.test(command);
+}
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
 const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
