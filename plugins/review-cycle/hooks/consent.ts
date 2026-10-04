@@ -20,12 +20,15 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // What the user's message asked for. `push` is only what they asked to push:
 // the push a pull request needs is judged by the gate, which still asks
 // before a tag or default-branch push it would carry. `comment` is a reply on
-// a pull request, asked for by addressing its review.
+// a pull request, asked for by addressing its review. `autoMerge` is a merge
+// asked for once the pull request is ready ("merge it when CI passes"), which
+// only `gh pr merge --auto` leaves to GitHub.
 export type Grant = Readonly<{
   commit: boolean;
   push: PushLevel;
   pr: boolean;
   merge: boolean;
+  autoMerge: boolean;
   approve: boolean;
   release: boolean;
   comment: boolean;
@@ -36,6 +39,7 @@ export const NO_GRANT: Grant = Object.freeze({
   push: 'none',
   pr: false,
   merge: false,
+  autoMerge: false,
   approve: false,
   release: false,
   comment: false,
@@ -576,10 +580,41 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
   return true;
 }
 
+// A condition GitHub's auto-merge waits on itself: "when it's ready", "once
+// CI passes", "after the checks are green".
+const READY =
+  /^(?:(?:it|it's|its|this|that|(?:the )?pr|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
+
+// "merge it when it's ready": one merge request, then a condition only
+// auto-merge waits on. Anything else conditional asks for nothing.
+function isReadyMerge(
+  w: string[],
+  verbs: Readonly<Record<string, Family>>,
+  lead: Set<string>,
+  agreed: boolean,
+): boolean {
+  const soon = w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
+  const k = soon === -1 ? w.findIndex((x) => SUBORDINATE.has(x)) : soon;
+  const after = soon === -1 ? k + 1 : k + 3;
+  if (k === -1 || (soon === -1 && !/^(when|once|after|if)$/.test(w[k] ?? ''))) return false;
+  if (!READY.test(w.slice(after).join(' '))) return false;
+  // "go ahead and merge it": only request words before the last "and".
+  const joined = w.slice(0, k).findLastIndex((x) => x === 'and' || x === 'then');
+  const before = w.slice(0, joined + 1).filter((x) => x !== 'and' && x !== 'then');
+  const request = w.slice(joined + 1, k);
+  const at = request.findIndex((x) => Object.hasOwn(verbs, x));
+  const family = verbs[request[at] ?? ''];
+  return (
+    family?.forms[0] === 'merge' &&
+    isLead([...before, ...request.slice(0, at)], lead, agreed) &&
+    namesPullRequest(request.slice(at + 1))
+  );
+}
+
 // What a clause leaves for the clauses after it in the sentence: a mood
 // withholds all of them, a description those that continue it with "and" or
-// "then".
-type Carry = 'none' | 'mood' | 'described';
+// "then". `ready` withholds the rest, which may wait on its condition too.
+type Carry = 'none' | 'mood' | 'described' | 'ready';
 
 // The verbs a clause asks for, reading each part joined by "and" or "then" as
 // its own request: "fix the parser and commit it".
@@ -591,6 +626,10 @@ function grammarGrant(
   agreed = false,
 ): Carry {
   const w = words(clause);
+  if (isReadyMerge(w, verbs, lead, agreed)) {
+    into.autoMerge = true;
+    return 'ready';
+  }
   if (w.some((x) => SUBORDINATE.has(x))) return 'mood';
   const parts: string[][] = [[]];
   for (const word of w) {
@@ -668,7 +707,7 @@ function settled(g: MutableGrant): Grant {
 }
 
 // Each step a grant can name besides the push level.
-const STEPS = ['commit', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
+const STEPS = ['commit', 'pr', 'merge', 'autoMerge', 'approve', 'release', 'comment'] as const;
 
 function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
@@ -677,7 +716,7 @@ function merged(into: MutableGrant, from: MutableGrant): void {
 
 // Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
-  return g.pr || g.merge || g.approve || g.release || g.comment;
+  return g.pr || g.merge || g.autoMerge || g.approve || g.release || g.comment;
 }
 
 // The verbs the previous answer's closing questions offered to do.
@@ -730,7 +769,7 @@ export function holdsOf(prompt: string, previousAnswer = ''): boolean {
   const text = prPhrase(unquote(forcePhrase(prompt)));
   if (PUSH_WORD.test(text) && !covers(grant, 'push')) return true;
   if (PR_WORD.test(text) && !grant.pr) return true;
-  if (MERGE_WORD.test(text) && !grant.merge) return true;
+  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge) return true;
   if (APPROVE_WORD.test(text) && !grant.approve) return true;
   if (RELEASE_WORD.test(text) && !grant.release) return true;
   const offered = asked(previousAnswer);
@@ -745,7 +784,7 @@ export function holdsOf(prompt: string, previousAnswer = ''): boolean {
 // Whether a message asks for a step on the way out: a push, a pull request, a
 // merge or a release. An approval or a reply asks for none of them.
 export function liftsHold(grant: Grant): boolean {
-  return covers(grant, 'push') || grant.pr || grant.merge || grant.release;
+  return covers(grant, 'push') || grant.pr || grant.merge || grant.autoMerge || grant.release;
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
@@ -790,10 +829,12 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (HOLD.test(c)) withheld = true;
       if (withheld) break;
       if (carry === 'described' && continues(c)) continue;
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, mine, agreed);
+      // After a ready-merge a clause can still withhold, but grants nothing.
+      const into = carry === 'ready' ? fresh() : mine;
+      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed);
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
-      else if (left !== 'none') carry = left;
+      else if (left !== 'none' && carry !== 'ready') carry = left;
     }
     if (!withheld) merged(g, mine);
     // Only a semicolon ties two sentences together, and only around the verbs:

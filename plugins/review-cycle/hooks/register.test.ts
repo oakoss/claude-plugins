@@ -2913,6 +2913,13 @@ describe('the stop-before setting', () => {
     await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 116 --squash --delete-branch'))).toBe(true);
   });
+  test('a merge asked for once it is ready runs only with --auto', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'Lets merge it when its ready');
+    expect(denied(await bash($, 'gh pr merge 116 --squash'), '--auto`, naming')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 116 --body --auto'), '--auto`, naming')).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 116 --auto --squash'))).toBe(true);
+  });
   test('a merge below the rung runs, noted', async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
     await say($, 'fix the parser');

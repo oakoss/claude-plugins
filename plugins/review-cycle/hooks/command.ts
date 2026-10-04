@@ -1071,11 +1071,22 @@ function lookupOf(
   return [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
 }
 
+// Whether `--auto` is set as a flag, not taken as an option's value: in
+// `--body --auto` it is the body, and gh merges at once.
+function autoSet(rest: Word[]): boolean {
+  const flags = rest.filter((_, i) => {
+    const before = rest[i - 1]?.text ?? '';
+    return !MERGE_VALUE.has(before) && before !== '-R' && before !== '--repo';
+  });
+  return flagSet(flags, 'auto', null, '');
+}
+
 function mergeOf(words: Word[], from: number, repo: Word | null, context: GhContext): GhAction {
   const rest = words.slice(from);
   return {
     kind: 'merge',
     admin: flagSet(rest, 'admin', null, ''),
+    auto: autoSet(rest),
     lookup: lookupOf(rest, repo, context),
   };
 }

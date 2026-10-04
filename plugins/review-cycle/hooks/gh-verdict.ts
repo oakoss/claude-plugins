@@ -221,9 +221,18 @@ export async function judgeGh(
             deny: `--admin merges past branch protection, which the gate never lets an agent do, so nothing ran. Give the user the command to run themselves, and say why it needs --admin. The command: ${shown}`,
           };
         }
+        // A merge asked for once the pull request is ready is what `--auto`
+        // does; a merge now goes against that request, whatever the setting.
+        if (granted.autoMerge && !granted.merge && !action.auto) {
+          return {
+            deny: `the user asked to merge only once the pull request is ready, which \`gh pr merge --auto\` leaves to GitHub, so nothing ran. Run \`gh pr merge <number> --auto\`, naming the pull request by number, or ${askThem('the pull request', '"Merge #116 now?"', shown)}`,
+          };
+        }
+        const asked = { ...granted, merge: granted.merge || (action.auto && granted.autoMerge) };
+        const mayHere = permitted(asked, ladder, held);
         // Allowed either way, a merge needs no lookup to tell which it is.
-        if (may.merge && may.release) {
-          if (!granted.merge && !granted.release) ran.push({ step: 'merge', ladder });
+        if (mayHere.merge && mayHere.release) {
+          if (!asked.merge && !asked.release) ran.push({ step: 'merge', ladder });
           break;
         }
         const { lookup } = action;
@@ -234,15 +243,15 @@ export async function judgeGh(
             deny: `other steps in the same command can change which pull request the merge reaches, so the gate cannot tell a release from a merge, and nothing ran. Run the merge as its own command. The command: ${shown}`,
           };
         } else which = { asks: CANNOT[lookup.cannot] };
-        if ('asks' in which && may.merge) {
+        if ('asks' in which && mayHere.merge) {
           return {
             deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('the pull request', '"Merge and release #62?"', shown)}`,
           };
         }
         if ('asks' in which) return refuse('merge', which.asks);
         const step = which.step;
-        if (!may[step]) return refuse(step, null);
-        if (!granted[step]) ran.push({ step, ladder });
+        if (!mayHere[step]) return refuse(step, null);
+        if (!asked[step]) ran.push({ step, ladder });
         break;
       }
       default: {

@@ -22,7 +22,8 @@ export type Unlookable = { cannot: Exclude<GhContext, 'fixed'> | 'unnamed' };
 
 export type GhAction =
   | { kind: 'pr' }
-  | { kind: 'merge'; admin: boolean; lookup: readonly string[] | Unlookable }
+  // `auto` waits for what GitHub requires to merge: `gh pr merge --auto`.
+  | { kind: 'merge'; admin: boolean; auto: boolean; lookup: readonly string[] | Unlookable }
   | { kind: 'approve' }
   | { kind: 'comment' }
   | { kind: 'release' }
@@ -193,7 +194,7 @@ function restAction(
         : /^\d+$/.test(number)
           ? [number, ...(repo === null ? [] : ['--repo', repo])]
           : { cannot: 'unnamed' };
-    return { kind: 'merge', admin: false, lookup };
+    return { kind: 'merge', admin: false, auto: false, lookup };
   }
   if (pull?.[2] === 'update-branch') {
     const number = pull[1] ?? '';
@@ -254,6 +255,7 @@ function restAction(
 const BY_ID = {
   kind: 'merge',
   admin: false,
+  auto: false,
   lookup: { cannot: 'unnamed' },
 } as const satisfies GhAction;
 const MUTATIONS: Record<string, GhAction | 'review' | 'ref' | 'update'> = {
@@ -261,7 +263,7 @@ const MUTATIONS: Record<string, GhAction | 'review' | 'ref' | 'update'> = {
   markPullRequestReadyForReview: { kind: 'pr' },
   revertPullRequest: { kind: 'pr' },
   mergePullRequest: BY_ID,
-  enablePullRequestAutoMerge: BY_ID,
+  enablePullRequestAutoMerge: { ...BY_ID, auto: true },
   enqueuePullRequest: BY_ID,
   addPullRequestReview: 'review',
   submitPullRequestReview: 'review',
@@ -509,7 +511,7 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
       number !== null && /^\d+$/.test(number) && repo !== null
         ? [number, '--repo', repo]
         : { cannot: 'unnamed' as const };
-    return { kind: 'merge', admin: false, lookup };
+    return { kind: 'merge', admin: false, auto: false, lookup };
   }
   if (name === 'pull_request_review_write') {
     return { kind: text(input.event)?.toUpperCase() === 'APPROVE' ? 'approve' : 'comment' };

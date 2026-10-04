@@ -15,6 +15,7 @@ const COMMIT_PR = { ...COMMIT, pr: true };
 const SHIP = { ...BOTH, pr: true };
 
 const MERGE = { ...NONE, merge: true };
+const AUTO = { ...NONE, autoMerge: true };
 const APPROVE = { ...NONE, approve: true };
 const RELEASE = { ...NONE, release: true };
 const REPLY = { ...NONE, comment: true };
@@ -24,7 +25,46 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge it', MERGE],
     ['Ok, merge the PR', MERGE],
     ['Can we merge 73?', MERGE],
-    ['lets merge it when its ready', NONE],
+    // A condition auto-merge waits on grants only `gh pr merge --auto`.
+    ['lets merge it when its ready', AUTO],
+    ["Let's merge it when it's ready.", AUTO],
+    ['merge 132 once CI passes', AUTO],
+    ['merge it when the checks pass', AUTO],
+    ['merge the PR once it is green', AUTO],
+    ['merge it after CI is green', AUTO],
+    ['merge it as soon as checks pass', AUTO],
+    ['merge when ready', AUTO],
+    ['ok, merge it if CI passes, thanks', AUTO],
+    ['go ahead and merge it when its ready', AUTO],
+    ['merge it when the PR is ready to merge please', AUTO],
+    ['merge it once the tests go green', AUTO],
+    // The rest of the sentence may wait on the same condition.
+    ['merge it when its ready, then release it', AUTO],
+    ['merge it when its ready, and delete the branch', AUTO],
+    ['merge it once CI passes, push the docs', AUTO],
+    ['merge it once CI passes; then push', AUTO],
+    ['push it, then merge it when its ready', { ...PUSH, autoMerge: true }],
+    // A later hold or condition still withholds the whole sentence.
+    ["merge 132 when it's ready, but hold off", NONE],
+    ["merge 132 when it's ready, if Bob approves", NONE],
+    ["merge 132 when it's ready, but don't do it yet", NONE],
+    ["merge it when it's ready, but I'll check first", NONE],
+    ['squash and merge it when ready', NONE],
+    ['merge it when I say its ready', NONE],
+    ['merge it once Bob says the PR is ready', NONE],
+    ['merge it unless CI passes', NONE],
+    ['merge it until CI passes', NONE],
+    ['merge it before the checks pass', NONE],
+    // Any other condition is one the gate cannot see come true.
+    ['merge it when I say so', NONE],
+    ['merge it after I review it', NONE],
+    ['merge it when its ready and then start the next one', NONE],
+    ["don't merge it when it's ready", NONE],
+    ['when its ready, merge it', NONE],
+    ['commit it when the tests pass', NONE],
+    ['push it once CI is green', NONE],
+    ['approve it when its ready', NONE],
+    ['merge main into it when its ready', NONE],
     // A local `git merge`, which the push checks judge when it is pushed.
     ['merge main into it', NONE],
     ['merge origin/main into the branch', NONE],
@@ -164,6 +204,15 @@ describe('merges, approvals, releases and review replies', () => {
   test('"not yet" to an offered merge holds; a merge request does not', () => {
     expect(holdsOf('not yet', 'Merge #116 now?')).toBe(true);
     expect(holdsOf('merge it')).toBe(false);
+  });
+  test('a merge once it is ready lifts a hold, and an offer of one grants it on a yes', () => {
+    expect(holdsOf('lets merge it when its ready')).toBe(false);
+    expect(liftsHold(grantOf('lets merge it when its ready'))).toBe(true);
+    expect(holdsOf('merge it when I say so')).toBe(true);
+    expect(holdsOf('not yet', 'Should I merge #132 when its checks pass?')).toBe(true);
+    expect(holdsOf('wait', 'Should I merge #132 once CI passes?')).toBe(true);
+    expect(grantOf('yes', 'Should I merge #132 when its checks pass?')).toEqual(AUTO);
+    expect(grantOf('yes', 'Merge #116 now?')).toEqual(MERGE);
   });
 });
 

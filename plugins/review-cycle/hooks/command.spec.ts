@@ -1449,18 +1449,23 @@ describe('gh steps', () => {
   });
   test('a merge names its pull request and repository for the lookup', () => {
     expect(ghActions('gh pr merge 116 --squash -b "x y"')).toEqual([
-      { kind: 'merge', admin: false, lookup: ['116'] },
+      { kind: 'merge', admin: false, auto: false, lookup: ['116'] },
     ]);
     expect(ghActions('gh -R oakoss/x pr merge')).toEqual([
-      { kind: 'merge', admin: false, lookup: ['--repo', 'oakoss/x'] },
+      { kind: 'merge', admin: false, auto: false, lookup: ['--repo', 'oakoss/x'] },
     ]);
     expect(ghActions('gh pr merge https://github.com/o/r/pull/5 --repo=o/r --admin')).toEqual([
-      { kind: 'merge', admin: true, lookup: ['https://github.com/o/r/pull/5', '--repo', 'o/r'] },
+      {
+        kind: 'merge',
+        admin: true,
+        auto: false,
+        lookup: ['https://github.com/o/r/pull/5', '--repo', 'o/r'],
+      },
     ]);
     // A value built at run time is read; a selector or flag built at run time
     // could approve, use --admin or point elsewhere, so it is not.
     expect(ghActions('gh pr merge --subject "$S" 116')).toEqual([
-      { kind: 'merge', admin: false, lookup: ['116'] },
+      { kind: 'merge', admin: false, auto: false, lookup: ['116'] },
     ]);
     expect(kinds('gh pr merge "$PR"')).toEqual(['unread']);
     expect(kinds('gh pr merge 116 $(echo --admin)')).toEqual(['unread']);
@@ -1514,18 +1519,34 @@ describe('gh steps', () => {
     expect(kinds('gh pr review 1 -a=false -c')).toEqual(['comment']);
     expect(kinds('gh pr review 1 -ba')).toEqual(['comment']);
     expect(ghActions('gh pr merge 1 --admin=0')).toEqual([
-      { kind: 'merge', admin: false, lookup: ['1'] },
+      { kind: 'merge', admin: false, auto: false, lookup: ['1'] },
     ]);
     expect(ghActions('gh pr merge 1 --admin=true')).toEqual([
-      { kind: 'merge', admin: true, lookup: ['1'] },
+      { kind: 'merge', admin: true, auto: false, lookup: ['1'] },
     ]);
     expect(ghActions('gh pr merge 1 -Ro/r')).toEqual([
-      { kind: 'merge', admin: false, lookup: ['1', '--repo', 'o/r'] },
+      { kind: 'merge', admin: false, auto: false, lookup: ['1', '--repo', 'o/r'] },
     ]);
+    expect(ghActions('gh pr merge 1 --auto --squash')).toEqual([
+      { kind: 'merge', admin: false, auto: true, lookup: ['1'] },
+    ]);
+    expect(ghActions('gh pr merge 1 --auto=false')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['1'] },
+    ]);
+    expect(ghActions('gh pr merge 1 --disable-auto')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['1'] },
+    ]);
+    // An option's value is not a flag: gh takes `--auto` as the body.
+    for (const option of ['--body', '-t', '-A', '--match-head-commit', '-R']) {
+      expect(ghActions(`gh pr merge 1 ${option} --auto`)).toMatchObject([{ auto: false }]);
+    }
+    expect(ghActions('gh pr merge 1 -b x --auto')).toMatchObject([{ auto: true }]);
   });
   test('a pull request something else may pick cannot be looked up', () => {
-    const elsewhere = [{ kind: 'merge', admin: false, lookup: { cannot: 'elsewhere' } }];
-    const beside = [{ kind: 'merge', admin: false, lookup: { cannot: 'beside' } }];
+    const elsewhere = [
+      { kind: 'merge', admin: false, auto: false, lookup: { cannot: 'elsewhere' } },
+    ];
+    const beside = [{ kind: 'merge', admin: false, auto: false, lookup: { cannot: 'beside' } }];
     expect(ghActions('GH_REPO=o/r gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('env -C ../other gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('env --chdir=/tmp gh pr merge 62')).toEqual(elsewhere);
@@ -1539,7 +1560,7 @@ describe('gh steps', () => {
     expect(ghActions('gh pr merge 116 && echo merged')).toEqual(beside);
     // gh's settings that pick no pull request leave the lookup in place.
     expect(ghActions('GH_PROMPT_DISABLED=1 gh pr merge 62')).toEqual([
-      { kind: 'merge', admin: false, lookup: ['62'] },
+      { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
     ]);
   });
   test('a word on Object.prototype is no command', () => {

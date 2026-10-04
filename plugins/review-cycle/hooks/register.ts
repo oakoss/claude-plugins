@@ -1408,6 +1408,7 @@ async function onStatus(
   status.mayMerge = may.merge;
   status.mayRelease = may.release;
   status.commentRequested = state.message.grant.comment;
+  status.autoMergeRequested = state.message.grant.autoMerge;
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
