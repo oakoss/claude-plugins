@@ -105,8 +105,20 @@ const FAMILIES: readonly Family[] = [
   { forms: ['commit', 'committing'], grants: ['commit'] },
   { forms: ['push', 'pushing'], grants: ['push'] },
   { forms: ['ship', 'shipping'], grants: ['commit', 'push', 'pr'] },
-  // Deleting a remote branch is a push; only with "branch" last.
-  { forms: ['delete', 'deleting'], grants: ['push'], object: (tail) => tail.at(-1) === 'branch' },
+  // Deleting a remote branch is a push: the branch is what goes, so "delete it
+  // from the branch" (a commit) and "delete the branch comments" ask for none.
+  {
+    forms: ['delete', 'deleting'],
+    grants: ['push'],
+    object: (tail) => {
+      const at = tail.lastIndexOf('branch');
+      if (at === -1 || tail.slice(0, at).some((x) => TOWARD.has(x))) return false;
+      const rest = tail.slice(at + 1).filter((x) => !COURTESY.has(x));
+      const [toward, ...where] = rest;
+      return toward === undefined || (TOWARD.has(toward) && where.every((x) => REMOTE.has(x)));
+    },
+    from: true,
+  },
   // "force push" and "force-push", read as one word by `forcePhrase`.
   { forms: ['forcepush', 'forcepushing'], grants: ['push', 'force'] },
   // "open a PR", read as one word by `prPhrase`.
@@ -354,6 +366,9 @@ const PUBLISH_TAIL = new Set([
 
 // After these, only a destination: "push to main", not "commit to this approach".
 const TOWARD = new Set(['to', 'into', 'against', 'from']);
+const COURTESY = new Set(['now', 'please', 'thanks', 'too', 'again']);
+// Where a deleted branch goes from.
+const REMOTE = new Set(['origin', 'upstream', 'remote', 'github', 'the']);
 const DESTINATION = new Set([
   'main',
   'master',
@@ -632,6 +647,7 @@ function grammarGrant(
   lead: Set<string>,
   into: MutableGrant,
   agreed = false,
+  heard?: Set<Family>,
 ): Carry {
   const w = words(clause);
   if (isReadyMerge(w, verbs, lead, agreed)) {
@@ -656,6 +672,7 @@ function grammarGrant(
       isTail(tail, family) &&
       (family.object?.(tail) ?? true);
     if (asks) {
+      heard?.add(family);
       const granted = family.grants;
       if (granted.includes('commit')) into.commit = true;
       if (granted.includes('push')) raise(into, 'push');
@@ -728,16 +745,30 @@ function asksBeyondPush(g: Grant): boolean {
 }
 
 // The verbs the previous answer's closing questions offered to do.
-function asked(answer: string): Grant {
+function asked(answer: string, heard?: Set<Family>): Grant {
   const g = fresh();
   // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
-  // object or destination a push may take, but not the branch a delete needs.
+  // object or destination a push may take; after "delete" it is the branch.
   // Only here, in the agent's offer: a user's "push it to `later`" defers. A
   // ref ends on a word character, so a sentence's closing period stays, and
   // one joining hand-back words ("rather/prefer") stays words.
   const named = forcePhrase(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n'))
+    // A path is deleted too, so a backticked or slashed name is a branch only
+    // beside "branch" or a remote; a plain word is never read as one.
+    .replaceAll(
+      /\b(delete|deleting)\s+(?:the\s+)?(?:remote\s+)?(?:branch\s+(?:`[\w./-]+`|[\w.-]+\/[\w./-]*[\w-])|(?:`[\w./-]+`|[\w.-]+\/[\w./-]*[\w-])(?=\s+from\s+(?:`[\w-]+`|(?:origin|upstream|remote|github)\b)))/gi,
+      '$1 branch',
+    )
+    // A backticked remote a delete names: `fork` is one, `main` or a file is not.
+    .replaceAll(
+      /(\bdelet(?:e|ing)\b[^?.!\n]*?\bfrom\s+)`([\w./-]+)`/gi,
+      (_m: string, lead: string, name: string) =>
+        /^[\w-]+$/.test(name) && !/^(main|master)$/i.test(name)
+          ? `${lead}remote`
+          : `${lead}\`${name}\``,
+    )
     // A backticked hand-back stays a word: "or would you `rather` do it?".
     .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>
       words(name).some((x) => HANDBACK.has(x)) ? name.replaceAll('/', ' ') : 'it',
@@ -754,12 +785,23 @@ function asked(answer: string): Grant {
     for (const part of clauses(q)) {
       const c = part.replace(CONTRAST, '');
       if (carry !== 'none' && continues(c)) continue;
-      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g);
+      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g, false, heard);
       // "Should I fix it, then push?" offers the push; only a commit or push clause carries.
       if (left !== 'none' && words(c).some((x) => Object.hasOwn(OFFERED, x))) carry = left;
     }
   }
   return settled(g);
+}
+
+const DELETE_IT = new RegExp(
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:(?:let['’]?s|let us|please|go ahead and)\s+)?delete (?:it|that|them)(?:\s+from\s+\x60?[\w.-]+\x60?)?(?:\s+(?:now|please|too))?\b[\s.!,]*(?:please|thanks|thank you)?[\s.!]*$`,
+  'i',
+);
+
+function offersDelete(answer: string): boolean {
+  const heard = new Set<Family>();
+  asked(answer, heard);
+  return [...heard].some((f) => f.forms[0] === 'delete');
 }
 
 const PUSH_WORD =
@@ -799,8 +841,11 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // "No problem" and "no worries" agree; they retract nothing.
   const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
   if (AFFIRMATIVE.test(text)) return asked(previousAnswer);
+  // "delete it", answering an offer to delete a branch, names that branch;
+  // only as the whole reply, since "delete it, meaning the TODO" names another.
+  const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
   // Pasted shell sessions and quoted output are not requests.
-  const typed = text
+  const typed = (answering ? text.replace(/\b(delete\s+(?:it|that|them))\b/i, '$1 branch') : text)
     .split('\n')
     .filter((line) => !/^\s*([$>+#]|PS\s|\w+@[\w.-]+[:$])/.test(line))
     // A list item or an emphasised label names a step; it does not ask for it.

@@ -1081,12 +1081,14 @@ const DRY_RUN = [
   '--recurse-submodules=no',
 ];
 
+const DELETES = 'it deletes a remote branch';
+
 // Why a push asks whatever the setting, or null. Off the ladder: a push that
 // changes a remote's default branch, pushes a tag, deletes or force-updates a
 // ref, and one the gate cannot see the targets of. Git itself names the refs
 // a push updates, with its own push config applied, through a dry run.
 async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | null> {
-  if (spec.deletes) return 'it deletes a remote branch';
+  if (spec.deletes) return DELETES;
   if (spec.every) return 'it pushes every branch';
   if (spec.tags) return 'it pushes tags';
   if (spec.argv === null) return 'its remote or branch is built at run time';
@@ -1230,6 +1232,9 @@ function pushRefusal(
     }
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
+      if (always === DELETES) {
+        return `${notAsked('a push', ladder, true, state.held)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
+      }
       return `${notAsked('a push', ladder, true, state.held)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {

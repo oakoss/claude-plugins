@@ -389,6 +389,70 @@ describe('an affirmative grants what the previous answer asked', () => {
   test('go ahead to commit-and-push', () => {
     expect(grantOf('go ahead', 'Shall I commit and push?')).toEqual(BOTH);
   });
+  // Seen in another session: an offer to delete a branch by name granted
+  // nothing, whatever the reply.
+  test.each([
+    'Should I delete feat/reference-components from origin?',
+    'Should I delete `feat/reference-components` from `origin`?',
+    'Delete `fix/x` from `origin`?',
+    'Should I delete the remote branch?',
+  ])('a reply to "%s" grants the delete', (offer) => {
+    for (const reply of [
+      'yes',
+      'Lets delete it',
+      'Delete it',
+      'ok, delete that',
+      'delete them',
+      'delete it from origin',
+    ]) {
+      expect(grantOf(reply, offer)).toEqual(PUSH);
+    }
+  });
+  test.each([
+    'Delete `fix/x` from `origin` too?',
+    'Want me to delete `fix/x` from `fork`?',
+    'Should I delete the branch now?',
+    'Should I delete branch `old` from origin?',
+    'Should I delete the remote branch feat/x?',
+    'Should I go ahead with deleting feat/x from origin?',
+  ])('yes to "%s" grants the delete', (offer) => {
+    expect(grantOf('yes', offer)).toEqual(PUSH);
+  });
+  test.each([
+    ['Push `fix/x` to `origin`?', 'delete it'],
+    ['Should I commit the fix?', 'delete it'],
+    ['Should I delete the TODO comment?', 'delete it'],
+    ['Should I delete the TODO comment?', 'yes'],
+    ['Should I delete src/old.ts from main?', 'yes'],
+    ['Should I delete the file from the branch?', 'yes'],
+    ['Should I delete the branch locally?', 'yes'],
+    ['Should I delete the branch later?', 'yes'],
+    ['Should I delete the branch protection?', 'yes'],
+    // A plain word is never read as a branch name.
+    ['Should I delete branch later from origin?', 'yes'],
+    ['Should I delete branch tonight from origin?', 'yes'],
+    ['Should I delete branch old from origin?', 'yes'],
+    ['Should I delete the branch from `main`?', 'yes'],
+    ['Should I delete the branch from `CHANGELOG.md`?', 'yes'],
+    ['Should I delete the branch from docs/notes.md?', 'yes'],
+    ['Should I delete the branch from the review comments?', 'yes'],
+    ['Should I delete the branch locally?', 'delete it'],
+    ['Delete `fix/x` from `origin`?', 'delete it, meaning the TODO comment'],
+    ['', 'delete it'],
+  ])('to "%s", "%s" deletes no branch', (offer, reply) => {
+    expect(grantOf(reply, offer)).toEqual(NONE);
+  });
+  test('a delete beside another offer leaves that offer as it reads', () => {
+    expect(grantOf('yes', 'Should I delete the stale test and open a PR from `fix/x`?')).toEqual(
+      PR,
+    );
+  });
+  test('a delete names the branch as what goes, then at most where from', () => {
+    expect(grantOf('delete the branch from origin')).toEqual(PUSH);
+    expect(grantOf('delete the file')).toEqual(NONE);
+    expect(grantOf('delete it from the branch')).toEqual(NONE);
+    expect(grantOf('delete the branch comments')).toEqual(NONE);
+  });
   // Seen in another session: "Ok, lets do that" granted nothing.
   const offer = 'Should I update the PR body, then merge #16 and delete the branch?';
   test.each([

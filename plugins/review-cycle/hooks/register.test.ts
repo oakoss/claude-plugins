@@ -2693,6 +2693,16 @@ describe('the stop-before setting', () => {
       expect(ran(await bash($, command))).toBe(true);
     });
   }
+  test('a remote branch delete asks a question its reply grants', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push origin --delete old');
+    expect(denied(r, '"Delete `fix/x` from `origin`?"')).toBe(true);
+    expect(denied(r, '`gh pr merge --delete-branch`')).toBe(true);
+    await endTurn($, 'answer', 'Delete `old` from `origin`?');
+    await say($, 'Lets delete it');
+    expect(ran(await bash($, 'git push origin --delete old'))).toBe(true);
+  });
   test("a pull request's push runs unnoted, but still asks before main", async ($, on) => {
     const w = fakeWorld(
       on,
