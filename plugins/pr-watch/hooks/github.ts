@@ -2,19 +2,22 @@
 // register.tsx runs the commands.
 import type { Job, Pull, RunStatus, Workflow } from '../types';
 
-const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
-  repository(owner: $o, name: $r) { pullRequest(number: $n) {
-    number title url state isDraft mergeStateStatus reviewDecision
-    commits(last: 1) { nodes { commit { checkSuites(first: 100) {
+// Whether a check is required is asked only of the head commit: the base
+// branch's runs after a merge gate nothing.
+const suites = (required: string) => `checkSuites(first: 100) {
       pageInfo { hasNextPage }
       nodes {
         status conclusion
         workflowRun { runAttempt createdAt url workflow { databaseId name } }
-        checkRuns(first: 100) { nodes {
-          name status conclusion detailsUrl isRequired(pullRequestNumber: $n)
-        } }
+        checkRuns(first: 100) { nodes { name status conclusion detailsUrl ${required} } }
       }
-    } } } }
+    }`;
+
+const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
+  repository(owner: $o, name: $r) { pullRequest(number: $n) {
+    number title url state isDraft mergeStateStatus reviewDecision baseRefName mergedAt
+    commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }
+    mergeCommit { ${suites('')} }
   } }
 }`;
 
@@ -146,6 +149,11 @@ function checksOf(suites: any): Checks {
   };
 }
 
+// Nothing on the base branch is required, so a merge keeps only its runs.
+function runsOf({ workflows, isTruncated }: Checks): Pull['mergeRuns'] {
+  return { workflows, isTruncated };
+}
+
 export function parsePull(stdout: string): Pull {
   const body: any = parse(stdout);
   const pr = body?.data?.repository?.pullRequest;
@@ -163,7 +171,10 @@ export function parsePull(stdout: string): Pull {
     isDraft: pr.isDraft === true,
     merge: str(pr.mergeStateStatus) ?? 'UNKNOWN',
     review: str(pr.reviewDecision),
+    base: str(pr.baseRefName) ?? 'base',
+    mergedAt: isTime(pr.mergedAt) ? pr.mergedAt : null,
     ...checksOf(pr.commits?.nodes?.[0]?.commit?.checkSuites),
+    mergeRuns: pr.mergeCommit ? runsOf(checksOf(pr.mergeCommit.checkSuites)) : null,
   };
 }
 

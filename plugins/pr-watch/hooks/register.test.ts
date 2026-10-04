@@ -99,6 +99,7 @@ function world(
     const { Text } = $.ui.resolve(e);
     return h(Text, { key: 'beneath' }, 'beneath');
   });
+  on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }));
   on('ui.toast', ($: unknown, e: { text: string }) => {
     seen.toasts.push(e.text);
     return { value: undefined };
@@ -269,7 +270,9 @@ describe('a pull request Claude opens', () => {
     const seen = world(on, { pr: prJson() });
     // A watches save after the first read is rejected: the store refuses undefined.
     on('state.set', ($: unknown, e: any, next: any) =>
-      e.key === 'watches' && Array.isArray(e.value) && e.value.some((w: any) => w.checkedAt > 0)
+      e.key === 'watches' &&
+      Array.isArray(e.value) &&
+      e.value.some((w: any) => w.pull !== undefined || w.error !== undefined)
         ? next({ ...e, value: undefined })
         : next(e),
     );
@@ -281,9 +284,9 @@ describe('a pull request Claude opens', () => {
     expect(seen.toasts[0]).toMatch(/^pr-watch could not save #128: /);
   });
 
-  test('leaves the band when it merges', async ($, on) => {
+  test('leaves the band when it closes without merging', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
-    const seen = world(on, { pr: prJson({ state: 'MERGED' }) });
+    const seen = world(on, { pr: prJson({ state: 'CLOSED' }) });
     await start($);
     await create($);
     const ui = await band($);
@@ -336,6 +339,199 @@ function isPushLine(command: string): boolean {
 function reads(runs: string[]): number {
   return runs.filter((r) => r.includes('graphql')).length;
 }
+
+// Merged at 22:01:00, 10 s before T0, with Release running or done on main.
+function mergedJson(status: string, conclusion: string | null): string {
+  const release = {
+    status,
+    conclusion,
+    workflowRun: {
+      runAttempt: 1,
+      createdAt: '2026-10-03T22:01:00Z',
+      url: 'https://github.com/o/r/actions/runs/9',
+      workflow: { databaseId: 9, name: 'Release' },
+    },
+    checkRuns: { nodes: [{ name: 'Publish', status, conclusion, detailsUrl: '' }] },
+  };
+  return prJson({
+    state: 'MERGED',
+    baseRefName: 'main',
+    mergedAt: '2026-10-03T22:01:00Z',
+    mergeCommit: { checkSuites: { pageInfo: { hasNextPage: false }, nodes: [release] } },
+  });
+}
+
+describe('a merged pull request', () => {
+  test('follows its run on the base branch, says once it settles, and clears on the next message', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m11s');
+    gh.pr = mergedJson('COMPLETED', 'SUCCESS');
+    await clock.advance(10_000);
+    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    // A late run could still start, so passing is not said yet.
+    expect(seen.toasts).toEqual([]);
+    // Read on through the 90 s after the merge, then settled: said once,
+    // kept, and read no more.
+    await clock.advance(80_000);
+    expect(seen.toasts).toEqual(['#128 merged: its checks passed']);
+    const settled = reads(seen.runs);
+    await clock.advance(120_000);
+    expect(reads(seen.runs)).toBe(settled);
+    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(await lineIn(ui)).toBeUndefined();
+  });
+
+  test('a failed run on the base branch stays until the next message, which goes through', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: mergedJson('COMPLETED', 'FAILURE') });
+    await start($);
+    await create($);
+    await clock.advance(90_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged · ✗ Release: Publish failed');
+    const r = await $.prompt.submit({
+      text: 'next',
+      origin: { kind: 'composer' },
+      wait: false,
+    } as any);
+    expect(r).toMatchObject({ text: 'next' });
+    expect(await lineIn(ui)).toBeUndefined();
+  });
+
+  test('a merge whose commit starts no runs leaves once the 90 s are up', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merge = { baseRefName: 'main', mergedAt: '2026-10-03T22:01:00Z', mergeCommit: null };
+    world(on, { pr: prJson({ state: 'MERGED', ...merge }) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks");
+    const r = await $.prompt.submit({
+      text: 'hi',
+      origin: { kind: 'composer' },
+      wait: false,
+    } as any);
+    expect(r).toMatchObject({ text: 'hi' });
+    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks");
+    await clock.advance(80_000);
+    expect(await lineIn(ui)).toBeUndefined();
+  });
+
+  test('a run that starts in the last seconds of the 90 is still followed', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('COMPLETED', 'SUCCESS') };
+    world(on, gh);
+    await start($);
+    await create($);
+    // Merged at T0 - 10 s; reads at 11 s, 21 s, … 81 s after the merge.
+    await clock.advance(75_000);
+    gh.pr = mergedJson('IN_PROGRESS', null);
+    await clock.advance(20_000);
+    expect(await lineIn(await band($))).toBe('#128 merged · ● Release 1m45s');
+  });
+
+  test('reads that fail past the 90 s neither settle nor drop it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('COMPLETED', 'SUCCESS') };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.fails = true;
+    await clock.advance(100_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed · gh failed: HTTP 502');
+    const before = reads(seen.runs);
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(await lineIn(ui)).toMatch(/gh failed/);
+    await clock.advance(20_000);
+    expect(reads(seen.runs)).toBeGreaterThan(before);
+    expect(seen.toasts).toEqual([]);
+  });
+
+  test('a merge with no runs yet, then failing reads, still follows the run once gh recovers', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merge = { baseRefName: 'main', mergedAt: '2026-10-03T22:01:00Z', mergeCommit: null };
+    const gh: Gh = { pr: prJson({ state: 'MERGED', ...merge }) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.fails = true;
+    await clock.advance(120_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks · gh failed: HTTP 502");
+    gh.fails = false;
+    gh.pr = mergedJson('IN_PROGRESS', null);
+    await clock.advance(10_000);
+    expect(await lineIn(ui)).toMatch(/^#128 merged · ● Release /);
+  });
+
+  test('the clock keeps moving for a run on the base branch', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = mergedJson('IN_PROGRESS', null);
+    await clock.advance(10_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m21s');
+    await clock.advance(3000);
+    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m24s');
+  });
+
+  test('a prompt that is not the person’s leaves a settled line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: mergedJson('COMPLETED', 'SUCCESS') });
+    await start($);
+    await create($);
+    await clock.advance(90_000);
+    const nudge = { text: 'review', origin: { kind: 'plugin', name: 'x' }, wait: false };
+    await $.prompt.submit(nudge as any);
+    expect(await lineIn(await band($))).toBe('#128 merged · ✓ main checks passed');
+  });
+
+  test('waits for the merge commit’s runs to start, then follows them', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({
+        state: 'MERGED',
+        baseRefName: 'main',
+        mergedAt: '2026-10-03T22:01:00Z',
+        mergeCommit: null,
+      }),
+    };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks");
+    gh.pr = mergedJson('IN_PROGRESS', null);
+    await clock.advance(10_000);
+    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m21s');
+  });
+
+  test('a message while its run is still going leaves the line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: mergedJson('IN_PROGRESS', null) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(await lineIn(await band($))).toBe('#128 merged · ● Release 0m11s');
+  });
+});
 
 describe('a push Claude makes', () => {
   test('reads every watch at once, then every 5 s for a minute', async ($, on) => {

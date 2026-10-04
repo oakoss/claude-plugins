@@ -246,6 +246,13 @@ describe('the gh calls', () => {
     expect(query).toContain('isRequired(pullRequestNumber: $n)');
   });
 
+  test('ask for the base branch, when it merged, and the merge commit’s runs', () => {
+    const query = pullArgs('github.com', 'a/b', 1).find((a) => a.startsWith('query=')) ?? '';
+    for (const field of ['baseRefName', 'mergedAt', 'mergeCommit { checkSuites']) {
+      expect(query).toContain(field);
+    }
+  });
+
   test('pass a GitHub Enterprise host', () => {
     expect(pullArgs('ghe.example.com', 'a/b', 1)).toContain('ghe.example.com');
     expect(estimateArgs('ghe.example.com', 'a/b', 9)).toEqual([
