@@ -754,3 +754,167 @@ describe('holds', () => {
     expect(holdsOf('not yet', 'Should I rename the helper?')).toBe(false);
   });
 });
+
+// One case per cue word, each the only cue in its message, so dropping a word
+// from its list fails here rather than passing behind a neighbour. MOOD's
+// dont, would and condition words and AGREE_WORD's yep have none: no message
+// reaches them.
+describe('each cue word counts on its own', () => {
+  test.each([
+    'no',
+    'nope',
+    'wait',
+    'never mind',
+    'nevermind',
+    'scratch that',
+    'hold on',
+    'actually no',
+    "actually, don't",
+  ])('push it. %s: retracts the push', (cue) => {
+    expect(grantOf(`push it. ${cue}`)).toEqual(NONE);
+  });
+  test.each(['not yet', 'not now', 'hold off', 'hold on', 'wait', "don't yet"])(
+    '%s: holds an offered push',
+    (cue) => {
+      expect(holdsOf(cue, 'Should I commit and push?')).toBe(true);
+    },
+  );
+  test.each(['if', 'when', 'once', 'after', 'unless', 'until', 'as soon as'])(
+    'commit it. push it, %s CI is green: grants nothing',
+    (cue) => {
+      expect(grantOf(`commit it. push it, ${cue} CI is green`)).toEqual(NONE);
+    },
+  );
+  test.each([
+    'ok',
+    'okay',
+    'alright',
+    'yes',
+    'yeah',
+    'yep',
+    'sure',
+    'great',
+    'cool',
+    'perfect',
+    'lgtm',
+    'sounds good',
+    'looks good',
+  ])('%s, we can push it: answers', (cue) => {
+    expect(grantOf(`${cue}, we can push it`)).toEqual(PUSH);
+  });
+  test.each(['ok', 'okay', 'alright', 'yes', 'yeah', 'sure', 'great', 'cool', 'perfect', 'lgtm'])(
+    '%s we can push it: answers',
+    (cue) => {
+      expect(grantOf(`${cue} we can push it`)).toEqual(PUSH);
+    },
+  );
+  test.each([
+    'the',
+    'a',
+    'an',
+    'this',
+    'that',
+    'these',
+    'those',
+    'our',
+    'my',
+    'their',
+    'its',
+    "it's",
+    'it',
+    'there',
+    'here',
+  ])('%s tests pass and push it: describes', (cue) => {
+    expect(grantOf(`${cue} tests pass and push it`)).toEqual(NONE);
+  });
+  test.each([
+    'is',
+    'are',
+    'was',
+    'were',
+    'i',
+    'we',
+    'they',
+    'he',
+    'she',
+    'agents',
+    'agent',
+    'claude',
+    'usually',
+    'normally',
+    'typically',
+    'always',
+    'often',
+    'sometimes',
+    'generally',
+  ])('CI %s slow, then push it: describes', (cue) => {
+    expect(grantOf(`CI ${cue} slow, then push it`)).toEqual(NONE);
+  });
+  // These also withhold their sentence; only a question lets a following
+  // "; and" sentence grant.
+  test.each(['when', 'which', 'who', 'should', 'whether'])(
+    '%s did you push it; and push it: asks, then grants',
+    (cue) => {
+      expect(grantOf(`${cue} did you push it; and push it`)).toEqual(PUSH);
+    },
+  );
+  test.each([
+    'why',
+    'how',
+    'what',
+    'where',
+    'is',
+    'are',
+    'was',
+    'does',
+    'do',
+    'did',
+    'has',
+    'have',
+    'explain',
+  ])('%s that, push it: asks', (cue) => {
+    expect(grantOf(`${cue} that, push it`)).toEqual(NONE);
+  });
+  test.each([
+    "don't",
+    'not',
+    'never',
+    'no',
+    "didn't",
+    "won't",
+    "can't",
+    'cannot',
+    "shouldn't",
+    "wouldn't",
+    "doesn't",
+    "i'll",
+    "i'm",
+    "i've",
+    "we'll",
+    "we're",
+    'they',
+    'he',
+    'she',
+    'agent',
+    'agents',
+    'claude',
+    'who',
+    'which',
+    'might',
+    'should',
+  ])('push it, %s review: withholds the sentence', (cue) => {
+    expect(grantOf(`push it, ${cue} review`)).toEqual(NONE);
+  });
+  test.each(['whether', 'if', 'unless', 'when', 'once', 'until', 'before', 'after', 'without'])(
+    'CI green %s ready and push it: conditional',
+    (cue) => {
+      expect(grantOf(`CI green ${cue} ready and push it`)).toEqual(NONE);
+    },
+  );
+  test.each(['yourself', "you'd", 'rather', 'skip', 'leave', 'instead', 'terminal'])(
+    'yes after an offer naming %s: hands back',
+    (cue) => {
+      expect(grantOf('yes', `Should I push it, or ${cue}?`)).toEqual(NONE);
+    },
+  );
+});
