@@ -389,6 +389,34 @@ describe('an affirmative grants what the previous answer asked', () => {
   test('go ahead to commit-and-push', () => {
     expect(grantOf('go ahead', 'Shall I commit and push?')).toEqual(BOTH);
   });
+  // Seen in another session: "Ok, lets do that" granted nothing.
+  const offer = 'Should I update the PR body, then merge #16 and delete the branch?';
+  test.each([
+    'Ok, lets do that',
+    "Let's do it.",
+    'let’s do this',
+    'ok, do that',
+    'sounds good, go ahead',
+    'great, go ahead',
+    'yes, lets go',
+    'ok yes, do it please',
+    'perfect, lets do it, thanks',
+  ])('"%s" answers the offer', (reply) => {
+    expect(grantOf(reply, offer)).toEqual({ ...PUSH, merge: true });
+    expect(holdsOf(reply, offer)).toBe(false);
+  });
+  test.each([
+    'great',
+    'looks good',
+    'ok great',
+    'yes, looks good',
+    "ok, let's do that later",
+    "don't do that",
+    'lets do that for the other PR',
+    'ok, lets do that after lunch',
+  ])('"%s" does not', (reply) => {
+    expect(grantOf(reply, offer)).toEqual(NONE);
+  });
   // pr-kit's fix-ci asks this question verbatim, and its anchor pins the wording.
   test("yes to fix-ci's question grants the push", () => {
     expect(grantOf('yes', 'Should I commit and push the fixes?')).toEqual(BOTH);

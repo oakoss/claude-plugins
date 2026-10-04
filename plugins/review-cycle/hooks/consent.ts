@@ -515,8 +515,16 @@ const QUESTION = new Set([
 // Questions that hand the action back to the user, or offer to skip it.
 const HANDBACK = new Set(['yourself', "you'd", 'rather', 'skip', 'leave', 'instead', 'terminal']);
 
-const AFFIRMATIVE =
-  /^(yes|yep|yeah|yup|y|ok|okay|sure|go ahead|go for it|do it|please do|sounds good|lgtm)\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$/i;
+// "yes", "Ok, lets do that", "great, go ahead": a yes, a go-ahead, or both,
+// and nothing more, since a longer reply may say something else. "great" or
+// "looks good" alone may praise the work, so it answers only with a go-ahead.
+const YES = String.raw`(?:yes|yep|yeah|yup|y|ok|okay|sure|sounds good|lgtm)`;
+const AGREEMENT = String.raw`(?:${YES}|alright|great|cool|perfect|looks good)`;
+const GO_AHEAD = String.raw`(?:(?:let['’]?s|let us)\s+(?:do (?:it|that|this)|go(?: ahead| for it)?)|do (?:it|that|this)|go ahead|go for it|please do)`;
+const AFFIRMATIVE = new RegExp(
+  String.raw`^(?:${YES}|(?:${AGREEMENT}[\s,.!]+)+${GO_AHEAD}|${GO_AHEAD})\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$`,
+  'i',
+);
 
 // Quoted text is a commit message or a name, never part of the request, even
 // when it runs over several lines.
