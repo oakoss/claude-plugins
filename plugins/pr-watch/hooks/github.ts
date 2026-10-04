@@ -2,19 +2,22 @@
 // register.tsx runs the commands.
 import type { Job, Pull, RunStatus, Workflow } from '../types';
 
-const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
-  repository(owner: $o, name: $r) { pullRequest(number: $n) {
-    number title url state isDraft mergeStateStatus reviewDecision
-    commits(last: 1) { nodes { commit { checkSuites(first: 100) {
+// Whether a check is required is asked only of the head commit: the base
+// branch's runs after a merge gate nothing.
+const suites = (required: string) => `checkSuites(first: 100) {
       pageInfo { hasNextPage }
       nodes {
         status conclusion
         workflowRun { runAttempt createdAt url workflow { databaseId name } }
-        checkRuns(first: 100) { nodes {
-          name status conclusion detailsUrl isRequired(pullRequestNumber: $n)
-        } }
+        checkRuns(first: 100) { nodes { name status conclusion detailsUrl ${required} } }
       }
-    } } } }
+    }`;
+
+const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
+  repository(owner: $o, name: $r) { pullRequest(number: $n) {
+    number title url state isDraft mergeStateStatus reviewDecision baseRefName mergedAt
+    commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }
+    mergeCommit { ${suites('')} }
   } }
 }`;
 
@@ -117,18 +120,11 @@ function workflowOf(s: any): Workflow | null {
   };
 }
 
-// Check suites with no workflow run come from GitHub Apps, not Actions, and
-// can sit queued forever; they are left out.
-export function parsePull(stdout: string): Pull {
-  const body: any = parse(stdout);
-  const pr = body?.data?.repository?.pullRequest;
-  if (!pr) {
-    const problem = str(body?.errors?.[0]?.message);
-    throw new Error(problem ?? 'pull request not found');
-  }
-  const number = id(pr.number);
-  if (number === null) throw new Error('pull request has no number');
-  const suites = pr.commits?.nodes?.[0]?.commit?.checkSuites;
+export type Checks = Pick<Pull, 'workflows' | 'isGated' | 'isRequiredPending' | 'isTruncated'>;
+
+// A commit's check suites. Those with no workflow run come from GitHub Apps,
+// not Actions, and can sit queued forever; they count only as required checks.
+function checksOf(suites: any): Checks {
   // A commit keeps a suite for every run of a workflow; the newest stands for it.
   const newest = new Map<number, Workflow>();
   let isGated = false;
@@ -145,7 +141,28 @@ export function parsePull(stdout: string): Pull {
     const seen = newest.get(w.id);
     if (!seen || Date.parse(w.startedAt) >= Date.parse(seen.startedAt)) newest.set(w.id, w);
   }
-  const workflows = [...newest.values()];
+  return {
+    workflows: [...newest.values()],
+    isGated,
+    isRequiredPending,
+    isTruncated: suites?.pageInfo?.hasNextPage === true,
+  };
+}
+
+// Nothing on the base branch is required, so a merge keeps only its runs.
+function runsOf({ workflows, isTruncated }: Checks): Pull['mergeRuns'] {
+  return { workflows, isTruncated };
+}
+
+export function parsePull(stdout: string): Pull {
+  const body: any = parse(stdout);
+  const pr = body?.data?.repository?.pullRequest;
+  if (!pr) {
+    const problem = str(body?.errors?.[0]?.message);
+    throw new Error(problem ?? 'pull request not found');
+  }
+  const number = id(pr.number);
+  if (number === null) throw new Error('pull request has no number');
   return {
     number,
     title: str(pr.title) ?? '',
@@ -154,10 +171,10 @@ export function parsePull(stdout: string): Pull {
     isDraft: pr.isDraft === true,
     merge: str(pr.mergeStateStatus) ?? 'UNKNOWN',
     review: str(pr.reviewDecision),
-    workflows,
-    isGated,
-    isRequiredPending,
-    isTruncated: suites?.pageInfo?.hasNextPage === true,
+    base: str(pr.baseRefName) ?? 'base',
+    mergedAt: isTime(pr.mergedAt) ? pr.mergedAt : null,
+    ...checksOf(pr.commits?.nodes?.[0]?.commit?.checkSuites),
+    mergeRuns: pr.mergeCommit ? runsOf(checksOf(pr.mergeCommit.checkSuites)) : null,
   };
 }
 

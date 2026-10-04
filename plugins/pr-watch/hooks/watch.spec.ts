@@ -7,12 +7,19 @@ import {
   createdPull,
   delayOf,
   errorLine,
+  isSettled,
   lineOf,
   movesPulls,
   shownOf,
   toastOf,
   verdictOf,
 } from './watch';
+
+const AT = Date.parse('2026-10-03T22:01:10Z');
+
+function verdictAt(p: Pull, estimates: Record<string, number> = {}, host = 'github.com', now = AT) {
+  return verdictOf(p, estimates, host, now);
+}
 
 function job(name: string, conclusion: string | null, isRequired = false): Job {
   return {
@@ -52,6 +59,9 @@ function pull(workflows: Workflow[], over: Partial<Pull> = {}): Pull {
     isGated: workflows.some((w) => w.jobs.some((j) => j.isRequired)),
     isRequiredPending: false,
     isTruncated: false,
+    base: 'main',
+    mergedAt: null,
+    mergeRuns: null,
     ...over,
   };
 }
@@ -151,7 +161,7 @@ describe('errorLine', () => {
 describe('verdictOf', () => {
   test('a failed job in a workflow holding a required check fails the PR', () => {
     const p = pull([ci([job('Typecheck', 'FAILURE'), job('CI Summary', null, true)])]);
-    expect(verdictOf(p, {})).toEqual({
+    expect(verdictAt(p, {})).toEqual({
       kind: 'failing',
       workflowId: 1,
       workflow: 'CI',
@@ -162,63 +172,63 @@ describe('verdictOf', () => {
 
   test('names the failed job, not the required summary that failed on it', () => {
     const p = pull([ci([job('CI Summary', 'FAILURE', true), job('Typecheck', 'FAILURE')])]);
-    expect(verdictOf(p, {})).toMatchObject({ kind: 'failing', job: 'Typecheck' });
+    expect(verdictAt(p, {})).toMatchObject({ kind: 'failing', job: 'Typecheck' });
   });
 
   test('falls back to the run’s URL when the job has none', () => {
     const p = pull([ci([{ ...job('Lint', 'FAILURE'), url: '' }, job('S', null, true)])]);
-    expect(verdictOf(p, {})).toMatchObject({ url: 'https://x/run/1' });
+    expect(verdictAt(p, {})).toMatchObject({ url: 'https://x/run/1' });
   });
 
   test.each(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED'])(
     'a job that ended %s fails the PR',
     (conclusion) => {
       const p = pull([ci([job('Build', conclusion), job('CI Summary', null, true)])]);
-      expect(verdictOf(p, {}).kind).toBe('failing');
+      expect(verdictAt(p, {}).kind).toBe('failing');
     },
   );
 
   test('a failure outside the required workflows does not fail the PR', () => {
-    expect(verdictOf(pull([green(), codeql('FAILURE')]), {}).kind).toBe('ready');
+    expect(verdictAt(pull([green(), codeql('FAILURE')]), {}).kind).toBe('ready');
   });
 
   test('with no required checks, any failure fails the PR', () => {
-    expect(verdictOf(pull([codeql('FAILURE')]), {}).kind).toBe('failing');
+    expect(verdictAt(pull([codeql('FAILURE')]), {}).kind).toBe('failing');
   });
 
   test('a running required workflow is the gate', () => {
     const p = pull([codeql(null), ci([job('CI Summary', null, true)])]);
-    const v = verdictOf(p, { 'github.com/2': 999_999 });
+    const v = verdictAt(p, { 'github.com/2': 999_999 });
     expect(v.kind === 'running' && v.gate.name).toBe('CI');
   });
 
   test('of several running required workflows, the longest is the gate', () => {
     const lint = flow(3, 'Lint', [job('Lint', null, true)]);
     const p = pull([ci([job('CI Summary', null, true)]), lint]);
-    const v = verdictOf(p, { 'github.com/1': 250_000, 'github.com/3': 520_000 });
+    const v = verdictAt(p, { 'github.com/1': 250_000, 'github.com/3': 520_000 });
     expect(v.kind === 'running' && v.gate.name).toBe('Lint');
   });
 
   test('a required check from a GitHub App leaves every workflow optional', () => {
-    expect(verdictOf(pull([codeql(null)], { isGated: true }), {}).kind).toBe('ready');
-    expect(verdictOf(pull([codeql('FAILURE')], { isGated: true }), {}).kind).toBe('ready');
+    expect(verdictAt(pull([codeql(null)], { isGated: true }), {}).kind).toBe('ready');
+    expect(verdictAt(pull([codeql('FAILURE')], { isGated: true }), {}).kind).toBe('ready');
   });
 
   test('a queued workflow counts as running', () => {
     const p = pull([flow(1, 'CI', [job('CI Summary', null, true)], 'queued')]);
-    expect(verdictOf(p, {}).kind).toBe('running');
+    expect(verdictAt(p, {}).kind).toBe('running');
   });
 
   test('without a required one, the longest running workflow on this host is the gate', () => {
     const p = pull([ci([job('Lint', null)]), codeql(null)]);
-    const v = verdictOf(p, { 'github.com/1': 60_000, 'github.com/2': 120_000 });
+    const v = verdictAt(p, { 'github.com/1': 60_000, 'github.com/2': 120_000 });
     expect(v.kind === 'running' && v.gate.name).toBe('CodeQL');
-    const elsewhere = verdictOf(p, { 'ghe.example.com/2': 120_000 });
+    const elsewhere = verdictAt(p, { 'ghe.example.com/2': 120_000 });
     expect(elsewhere.kind === 'running' && elsewhere.gate.name).toBe('CI');
   });
 
   test('an optional workflow still running does not hold back a mergeable PR', () => {
-    expect(verdictOf(pull([green(), codeql(null)]), {}).kind).toBe('ready');
+    expect(verdictAt(pull([green(), codeql(null)]), {}).kind).toBe('ready');
   });
 
   test.each([
@@ -240,7 +250,7 @@ describe('verdictOf', () => {
     [{ state: 'MERGED' as const }, { kind: 'closed' }],
     [{ state: 'CLOSED' as const }, { kind: 'closed' }],
   ])('settled checks with %o read as %o', (over, verdict) => {
-    expect(verdictOf(pull([green()], over), {})).toEqual(verdict);
+    expect(verdictAt(pull([green()], over), {})).toEqual(verdict);
   });
 
   test('a blocked PR waits on a required App check that has not finished', () => {
@@ -249,12 +259,12 @@ describe('verdictOf', () => {
       isGated: true,
       isRequiredPending: true,
     });
-    expect(verdictOf(p, {})).toEqual({ kind: 'waiting', reason: 'checks' });
-    expect(delayOf(verdictOf(p, {}), p)).toBe(10_000);
+    expect(verdictAt(p, {})).toEqual({ kind: 'waiting', reason: 'checks' });
+    expect(delayOf(verdictAt(p, {}), p, AT)).toBe(10_000);
   });
 
   test('a blocked PR whose checks have not started waits on them', () => {
-    expect(verdictOf(pull([], { merge: 'BLOCKED' }), {})).toEqual({
+    expect(verdictAt(pull([], { merge: 'BLOCKED' }), {})).toEqual({
       kind: 'waiting',
       reason: 'checks to start',
     });
@@ -263,18 +273,19 @@ describe('verdictOf', () => {
 
 describe('delayOf', () => {
   test('polls fast while running or settling, slowly while waiting on a person', () => {
-    expect(delayOf({ kind: 'running', gate: codeql(null) })).toBe(10_000);
-    expect(delayOf({ kind: 'waiting', reason: 'checking' })).toBe(10_000);
-    expect(delayOf({ kind: 'waiting', reason: 'review' })).toBe(60_000);
-    expect(delayOf({ kind: 'waiting', reason: 'draft' })).toBe(60_000);
-    expect(delayOf({ kind: 'ready' })).toBe(60_000);
-    expect(delayOf({ kind: 'closed' })).toBeNull();
+    const p = pull([]);
+    expect(delayOf({ kind: 'running', gate: codeql(null) }, p, AT)).toBe(10_000);
+    expect(delayOf({ kind: 'waiting', reason: 'checking' }, p, AT)).toBe(10_000);
+    expect(delayOf({ kind: 'waiting', reason: 'review' }, p, AT)).toBe(60_000);
+    expect(delayOf({ kind: 'waiting', reason: 'draft' }, p, AT)).toBe(60_000);
+    expect(delayOf({ kind: 'ready' }, p, AT)).toBe(60_000);
+    expect(delayOf({ kind: 'closed' }, p, AT)).toBeNull();
   });
 
   test('polls fast while any workflow on the line still runs', () => {
     const p = pull([green(), codeql(null)]);
-    expect(delayOf({ kind: 'ready' }, p)).toBe(10_000);
-    expect(delayOf({ kind: 'ready' }, pull([green()]))).toBe(60_000);
+    expect(delayOf({ kind: 'ready' }, p, AT)).toBe(10_000);
+    expect(delayOf({ kind: 'ready' }, pull([green()]), AT)).toBe(60_000);
   });
 });
 
@@ -359,6 +370,81 @@ function cells(columns: number): number {
   const segs = lineOf(watched(pull([runningCi()])), at, KNOWN, columns);
   return (segs[2]?.text.length ?? 0) + (segs[3]?.text.length ?? 0);
 }
+
+// Merged at 22:00:00, 70 s before `at`, with these runs on the merge commit.
+function merged(runs: Workflow[] | null): Pull {
+  const mergeRuns = runs && { workflows: runs, isGated: false, isRequiredPending: false };
+  return pull([green()], {
+    state: 'MERGED',
+    mergedAt: '2026-10-03T22:00:00Z',
+    mergeRuns: mergeRuns && { ...mergeRuns, isTruncated: false },
+  });
+}
+
+const release = (conclusion: string | null) => flow(5, 'Release', [job('Publish', conclusion)]);
+
+describe('after a merge', () => {
+  test('follows the merge commit’s runs, the longest as the gate', () => {
+    const v = verdictAt(
+      merged([release(null), codeql(null)]),
+      { 'github.com/5': 90_000 },
+      'github.com',
+      at,
+    );
+    expect(v.kind === 'merged-running' && v.gate.name).toBe('Release');
+    expect(textOf(watched(merged([release(null), codeql('SUCCESS')])))).toBe(
+      '#128 merged · ● Release 1m10s · CodeQL ✓',
+    );
+  });
+
+  test('names a failed job on the base branch, any workflow counting', () => {
+    const p = merged([release('FAILURE'), codeql('SUCCESS')]);
+    expect(verdictAt(p, {}, 'github.com', at)).toMatchObject({
+      kind: 'merged-failing',
+      job: 'Publish',
+    });
+    expect(textOf(watched(p))).toBe('#128 merged · ✗ Release: Publish failed');
+    expect(toastOf('#128', verdictAt(p, {}, 'github.com', at), 'merged-running')).toBe(
+      '#128 merged: Release: Publish failed',
+    );
+  });
+
+  test('settles once every run passed and the grace is over: said once, then read no more', () => {
+    const p = merged([release('SUCCESS')]);
+    const v = verdictAt(p, {}, 'github.com', at);
+    expect(v).toEqual({ kind: 'merged-passed' });
+    expect(textOf(watched(p))).toBe('#128 merged · ✓ main checks passed');
+    expect(toastOf('#128', v, 'merged-running')).toBe('#128 merged: its checks passed');
+    // 70 s after the merge a late run may still start, so it keeps reading.
+    expect(delayOf(v, p, at)).toBe(10_000);
+    expect(isSettled(v, p, at)).toBe(false);
+    const later = at + 30_000;
+    expect(delayOf(v, p, later)).toBeNull();
+    expect(isSettled(v, p, later)).toBe(true);
+  });
+
+  test('a failed run with another still going on the base branch has not settled', () => {
+    const p = merged([release('FAILURE'), codeql(null)]);
+    const later = at + 30_000;
+    const v = verdictAt(p, {}, 'github.com', later);
+    expect(v.kind).toBe('merged-failing');
+    expect(isSettled(v, p, later)).toBe(false);
+    expect(delayOf(v, p, later)).toBe(10_000);
+  });
+
+  test('waits up to 90 s for the merge commit’s runs to start, then leaves', () => {
+    expect(verdictAt(merged(null), {}, 'github.com', at)).toEqual({ kind: 'merged-waiting' });
+    expect(textOf(watched(merged([])))).toBe("#128 merged · ○ waiting on main's checks");
+    const later = at + 30_000;
+    expect(verdictAt(merged([]), {}, 'github.com', later)).toEqual({ kind: 'closed' });
+  });
+
+  test('a pull request closed without merging leaves at once', () => {
+    expect(verdictAt(pull([green()], { state: 'CLOSED' }), {}, 'github.com', at)).toEqual({
+      kind: 'closed',
+    });
+  });
+});
 
 describe('lineOf', () => {
   test('a running gate with a known length draws a bar and both times', () => {

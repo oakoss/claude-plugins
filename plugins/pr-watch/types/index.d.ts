@@ -35,6 +35,10 @@ export type Pull = {
   isRequiredPending: boolean;
   // The head commit has more check suites than one read returns.
   isTruncated: boolean;
+  // The branch merged into, and once merged, when and the merge commit's runs.
+  base: string;
+  mergedAt: string | null;
+  mergeRuns: { workflows: Workflow[]; isTruncated: boolean } | null;
 };
 
 // A pull request the band follows, as the last poll left it.

@@ -1,12 +1,14 @@
 # pr-watch
 
-A line above the Claude Code prompt for each pull request Claude opens, from the moment `gh pr create` prints its URL until the pull request merges or closes.
+A line above the Claude Code prompt for each pull request Claude opens, from the moment `gh pr create` prints its URL until the pull request closes, or until its merge has run its checks on the base branch.
 
 ```text
 #128 ● CI ████████████▏░░░░░░░░░░░ 1m11s / ~2m20s · CodeQL ✓ · Dependency Review ●
 #128 ✓ ready to merge
 #128 ✗ CI: Typecheck failed
 #128 ⚠ conflicts
+#128 merged · ● Release ████▏░░░░░░░░░░░░░░░░░░░ 0m21s / ~1m40s · CI ●
+#128 merged · ✓ main checks passed
 ```
 
 ## What it shows
@@ -16,12 +18,13 @@ A line above the Claude Code prompt for each pull request Claude opens, from the
 - **Failing.** A job failed in a workflow that holds a required check, or in any workflow when nothing on the commit is required. The line names that job rather than a summary job that failed on it, and links to its log.
 - **Blocked.** Conflicts, changes requested, a branch behind its base, or a rule GitHub does not name (`⚠ blocked`).
 - **Waiting.** On a review, on a required check from a GitHub App, on GitHub to start the checks, on GitHub to work out the merge state, or on a draft to be marked ready.
+- **Merged.** The line follows the merge commit's runs on the base branch, every workflow counting, with the same bar and marks. Once they finish it reads `✓ <base> checks passed` or names the job that failed. It keeps reading for 90 seconds after the merge in case a later run starts, then stays until your next message. A merge whose commit starts no runs within 90 seconds leaves the band.
 
 When a workflow has run more than once on the same commit, only its newest run counts.
 
 Once nothing the merge waits on is running, a workflow it does not wait on still shows as a mark while it runs or after it fails.
 
-A toast says when a pull request turns ready to merge or a job fails in a workflow the merge waits on, once per change. A line says why when `gh` fails, and `· more checks not shown` when the head commit has more check suites than one read returns (100). Hover a line and press `×` to stop watching it. A pull request that merges or closes leaves the band.
+A toast says when a pull request turns ready to merge, a job fails in a workflow the merge waits on, or a merge's runs on the base branch pass or fail, once per change. A line says why when `gh` fails, and `· more checks not shown` when a commit has more check suites than one read returns (100). Hover a line and press `×` to stop watching it. A pull request closed without merging leaves the band.
 
 pr-watch draws above whatever other plugins draw in the same band, rather than replacing it.
 

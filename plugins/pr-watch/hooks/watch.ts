@@ -45,21 +45,30 @@ export type Verdict =
   | { kind: 'ready' }
   | { kind: 'blocked'; reason: string }
   | { kind: 'waiting'; reason: string }
+  | { kind: 'merged-running'; gate: Workflow }
+  | { kind: 'merged-failing'; workflowId: number; workflow: string; job: string; url: string }
+  | { kind: 'merged-passed' }
+  | { kind: 'merged-waiting' }
   | { kind: 'closed' };
+
+// How long a merged pull request waits for its merge commit's runs to start.
+const MERGE_GRACE_MS = 90_000;
 
 const gates = (w: Workflow) => w.jobs.some((j) => j.isRequired);
 const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
 
-// Whether the PR's merge waits on this workflow: one holding a required
-// check, or any when nothing on the commit is required.
-function counts(pull: Pull): (w: Workflow) => boolean {
-  return (w) => !pull.isGated || gates(w);
+type Runs = Pick<Pull, 'workflows' | 'isGated'>;
+
+// Whether the merge waits on this workflow: one holding a required check, or
+// any when nothing on the commit is required.
+function counts(runs: Runs): (w: Workflow) => boolean {
+  return (w) => !runs.isGated || gates(w);
 }
 
 // The job that failed, not the summary job that failed on it.
-function failure(pull: Pull): Verdict | null {
-  const isCounted = counts(pull);
-  for (const w of pull.workflows) {
+function failure(runs: Runs): Verdict | null {
+  const isCounted = counts(runs);
+  for (const w of runs.workflows) {
     if (!isCounted(w)) continue;
     const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
     const job = bad.find((j) => !j.isRequired) ?? bad[0];
@@ -88,17 +97,45 @@ export function estimateKey(host: string, workflowId: number): string {
   return `${host}/${workflowId}`;
 }
 
+// Null once every counted workflow has passed.
+function runsVerdict(runs: Runs, estimates: Record<string, number>, host: string): Verdict | null {
+  const fail = failure(runs);
+  if (fail) return fail;
+  const isCounted = counts(runs);
+  const running = runs.workflows.filter((w) => w.status !== 'done' && isCounted(w));
+  if (running.length > 0) return { kind: 'running', gate: gateOf(running, estimates, host) };
+  return null;
+}
+
+// A merged pull request follows its merge commit's runs on the base branch,
+// where nothing is required, so every workflow counts.
+function mergedVerdict(
+  pull: Pull,
+  estimates: Record<string, number>,
+  host: string,
+  now: number,
+): Verdict {
+  const merged = pull.mergeRuns;
+  if (!merged || merged.workflows.length === 0) {
+    const since = pull.mergedAt ? now - Date.parse(pull.mergedAt) : Infinity;
+    return since < MERGE_GRACE_MS ? { kind: 'merged-waiting' } : { kind: 'closed' };
+  }
+  const runs = runsVerdict({ workflows: merged.workflows, isGated: false }, estimates, host);
+  if (runs?.kind === 'failing') return { ...runs, kind: 'merged-failing' };
+  if (runs?.kind === 'running') return { ...runs, kind: 'merged-running' };
+  return { kind: 'merged-passed' };
+}
+
 export function verdictOf(
   pull: Pull,
   estimates: Record<string, number>,
-  host = 'github.com',
+  host: string,
+  now: number,
 ): Verdict {
+  if (pull.state === 'MERGED') return mergedVerdict(pull, estimates, host, now);
   if (pull.state !== 'OPEN') return { kind: 'closed' };
-  const fail = failure(pull);
-  if (fail) return fail;
-  const isCounted = counts(pull);
-  const running = pull.workflows.filter((w) => w.status !== 'done' && isCounted(w));
-  if (running.length > 0) return { kind: 'running', gate: gateOf(running, estimates, host) };
+  const runs = runsVerdict(pull, estimates, host);
+  if (runs) return runs;
   if (pull.isDraft) return { kind: 'waiting', reason: 'draft' };
   if (pull.merge === 'DIRTY') return { kind: 'blocked', reason: 'conflicts' };
   if (pull.review === 'CHANGES_REQUESTED') return { kind: 'blocked', reason: 'changes requested' };
@@ -116,12 +153,22 @@ export function verdictOf(
   return { kind: 'waiting', reason: 'checking' };
 }
 
+// Whether a merge's line has settled, so it is read no more and the next
+// prompt clears it: every run on the merge commit done, and the grace for a
+// late one to start gone by.
+export function isSettled(verdict: Verdict, pull: Pull, now: number): boolean {
+  if (verdict.kind !== 'merged-passed' && verdict.kind !== 'merged-failing') return false;
+  const isDone = pull.mergeRuns?.workflows.every((w) => w.status === 'done') ?? true;
+  const since = pull.mergedAt ? now - Date.parse(pull.mergedAt) : Infinity;
+  return isDone && since >= MERGE_GRACE_MS;
+}
+
 // Poll fast while something moves, slowly while it waits on a person. A
 // workflow the merge does not wait on still moves the line's marks.
-export function delayOf(verdict: Verdict, pull?: Pull): number | null {
-  if (verdict.kind === 'closed') return null;
-  if (verdict.kind === 'running') return 10_000;
-  if (pull?.workflows.some((w) => w.status !== 'done')) return 10_000;
+export function delayOf(verdict: Verdict, pull: Pull, now: number): number | null {
+  if (verdict.kind === 'closed' || isSettled(verdict, pull, now)) return null;
+  if (verdict.kind === 'running' || verdict.kind.startsWith('merged-')) return 10_000;
+  if (pull.workflows.some((w) => w.status !== 'done')) return 10_000;
   if (verdict.kind === 'waiting' && verdict.reason !== 'review' && verdict.reason !== 'draft') {
     return 10_000;
   }
@@ -130,8 +177,9 @@ export function delayOf(verdict: Verdict, pull?: Pull): number | null {
 
 // What the line says, as a key: a new failure differs from an old one.
 export function shownOf(verdict: Verdict): string {
-  if (verdict.kind === 'failing')
-    return `failing:${JSON.stringify([verdict.workflow, verdict.job])}`;
+  if (verdict.kind === 'failing' || verdict.kind === 'merged-failing') {
+    return `${verdict.kind}:${JSON.stringify([verdict.workflow, verdict.job])}`;
+  }
   return verdict.kind;
 }
 
@@ -139,6 +187,10 @@ export function toastOf(label: string, verdict: Verdict, shown?: string): string
   if (shownOf(verdict) === shown) return null;
   if (verdict.kind === 'ready') return `${label} is ready to merge`;
   if (verdict.kind === 'failing') return `${label} ${verdict.workflow}: ${verdict.job} failed`;
+  if (verdict.kind === 'merged-passed') return `${label} merged: its checks passed`;
+  if (verdict.kind === 'merged-failing') {
+    return `${label} merged: ${verdict.workflow}: ${verdict.job} failed`;
+  }
   return null;
 }
 
@@ -196,41 +248,55 @@ export function lineOf(
       },
     ];
   }
-  const v = verdictOf(pull, estimates, watch.host);
-  const tail: Segment[] = [];
-  if (pull.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
-  if (watch.error !== undefined) tail.push({ text: ` · ${watch.error}`, color: 'red' });
+  // The state is the last good read's; `now` only times the running clock.
+  const v = verdictOf(pull, estimates, watch.host, watch.checkedAt);
   if (v.kind === 'closed') return [label, { text: ` ${pull.state.toLowerCase()}`, isDim: true }];
+  // After a merge the line follows the merge commit's runs on the base branch.
+  const isMerged = v.kind.startsWith('merged-');
+  const none = { workflows: [], isTruncated: false };
+  const runs = isMerged ? (pull.mergeRuns ?? none) : pull;
+  const lead: Segment[] = isMerged ? [label, { text: ' merged ·', isDim: true }] : [label];
+  const tail: Segment[] = [];
+  if (runs.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
+  if (watch.error !== undefined) tail.push({ text: ` · ${watch.error}`, color: 'red' });
+  const isRunning = v.kind === 'running' || v.kind === 'merged-running';
   // Other workflows, while they run or once they failed; on a running line,
   // every other workflow.
   const others = (skip: number | null) =>
-    pull.workflows
-      .filter((w) => w.id !== skip && (v.kind === 'running' || markOf(w) !== '✓'))
+    runs.workflows
+      .filter((w) => w.id !== skip && (isRunning || markOf(w) !== '✓'))
       .map((w) => markSegment(w));
   if (v.kind === 'ready') {
-    return [label, { text: ' ✓ ready to merge', color: 'green' }, ...others(null), ...tail];
+    return [...lead, { text: ' ✓ ready to merge', color: 'green' }, ...others(null), ...tail];
   }
-  if (v.kind === 'failing') {
+  if (v.kind === 'merged-passed') {
+    return [...lead, { text: ` ✓ ${pull.base} checks passed`, color: 'green' }, ...tail];
+  }
+  if (v.kind === 'merged-waiting') {
+    return [...lead, { text: ` ○ waiting on ${pull.base}'s checks`, isDim: true }, ...tail];
+  }
+  if (v.kind === 'failing' || v.kind === 'merged-failing') {
     const text = ` ✗ ${v.workflow}: ${v.job} failed`;
     const reason = { text, color: 'red', url: v.url || undefined };
-    return [label, reason, ...others(v.workflowId), ...tail];
+    return [...lead, reason, ...others(v.workflowId), ...tail];
   }
   if (v.kind === 'blocked') {
-    return [label, { text: ` ⚠ ${v.reason}`, color: 'yellow' }, ...others(null), ...tail];
+    return [...lead, { text: ` ⚠ ${v.reason}`, color: 'yellow' }, ...others(null), ...tail];
   }
   if (v.kind === 'waiting') {
-    return [label, { text: ` ○ waiting on ${v.reason}`, isDim: true }, ...others(null), ...tail];
+    return [...lead, { text: ` ○ waiting on ${v.reason}`, isDim: true }, ...others(null), ...tail];
   }
   const gate = v.gate;
   const elapsed = now - Date.parse(gate.startedAt);
   const estimate = estimates[estimateKey(watch.host, gate.id)] ?? 0;
-  const head = [label, { text: ` ● ${gate.name} `, color: 'yellow', url: gate.url || undefined }];
+  const name = { text: ` ● ${gate.name} `, color: 'yellow', url: gate.url || undefined };
+  const head = [...lead, name];
   if (gate.isRerun) return [...head, { text: 're-run', isDim: true }, ...others(gate.id), ...tail];
   if (estimate <= 0) {
     return [...head, { text: clockText(elapsed), isDim: true }, ...others(gate.id), ...tail];
   }
   const times = ` ${clockText(elapsed)} / ~${clockText(estimate)}`;
-  const used = `#${watch.number} ● ${gate.name} `.length + times.length;
+  const used = head.reduce((n, s) => n + s.text.length, 0) + times.length;
   const width = Math.max(BAR_MIN, Math.min(BAR_MAX, columns - used - 2));
   const bar = barOf(Math.min(elapsed / estimate, 0.97), width);
   return [

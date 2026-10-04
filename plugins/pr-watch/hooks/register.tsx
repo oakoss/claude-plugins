@@ -9,6 +9,7 @@ import {
   estimateKey,
   lineOf,
   movesPulls,
+  isSettled,
   shownOf,
   toastOf,
   verdictOf,
@@ -55,7 +56,7 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
   } catch {
     return;
   }
-  for (const flow of w.pull?.workflows ?? []) {
+  for (const flow of [...(w.pull?.workflows ?? []), ...(w.pull?.mergeRuns?.workflows ?? [])]) {
     const key = estimateKey(w.host, flow.id);
     if (known[key] !== undefined || now - (asked.get(key) ?? -Infinity) < ESTIMATE_RETRY_MS) {
       continue;
@@ -93,15 +94,23 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
     try {
       next = { ...target, pull: await readPull($, target), error: undefined, checkedAt: now };
     } catch (error) {
-      next = { ...target, error: `gh failed: ${errorText(error)}`, checkedAt: now };
+      // checkedAt stays the last good read's: settling is judged by it, and
+      // `tried` already spaces the retries.
+      next = { ...target, error: `gh failed: ${errorText(error)}` };
     }
     let toast: string | null = null;
+    let isClosed = false;
     if (next.pull && next.error === undefined) {
-      const verdict = verdictOf(next.pull, await read($, estimates), next.host);
-      toast = toastOf(`#${next.number}`, verdict, target.shown);
-      next.shown = shownOf(verdict);
+      const verdict = verdictOf(next.pull, await read($, estimates), next.host, now);
+      // A passed merge is said only once no later run can start: until then
+      // it is not yet what the line has said.
+      const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, next.pull, now);
+      if (!isEarly) {
+        toast = toastOf(`#${next.number}`, verdict, target.shown);
+        next.shown = shownOf(verdict);
+      }
+      isClosed = verdict.kind === 'closed';
     }
-    const isClosed = next.pull !== undefined && next.pull.state !== 'OPEN';
     await update($, watches, (all) =>
       isClosed ? all.filter((w) => idOf(w) !== id) : all.map((w) => (idOf(w) === id ? next : w)),
     );
@@ -115,9 +124,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
     const why = errorText(error);
     try {
       await update($, watches, (all) =>
-        all.map((w) =>
-          idOf(w) === id ? { ...w, error: `pr-watch failed: ${why}`, checkedAt: now } : w,
-        ),
+        all.map((w) => (idOf(w) === id ? { ...w, error: `pr-watch failed: ${why}` } : w)),
       );
     } catch {
       if (!isSaveFailing) $.ui.toast(`pr-watch could not save #${target.number}: ${why}`);
@@ -135,9 +142,16 @@ async function tick($: $): Promise<void> {
   const known = await read($, estimates);
   let isMoving = false;
   for (const w of list) {
-    const verdict = w.pull ? verdictOf(w.pull, known, w.host) : null;
-    if (verdict?.kind === 'running') isMoving = true;
-    const usual = verdict ? delayOf(verdict, w.pull) : 10_000;
+    // Settling and closing are judged at the last read, so a run that started
+    // after it is not missed.
+    const verdict = w.pull ? verdictOf(w.pull, known, w.host, w.checkedAt) : null;
+    if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
+    // A merge that started no runs in its grace closes with time alone.
+    if (verdict?.kind === 'closed') {
+      await stop($, idOf(w));
+      continue;
+    }
+    const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt) : 10_000;
     const delay = usual !== null && now < burstUntil ? Math.min(usual, BURST_MS) : usual;
     if (delay === null || busy.has(idOf(w))) continue;
     const last = Math.max(w.checkedAt, tried.get(idOf(w)) ?? 0);
@@ -168,6 +182,20 @@ export const register: Register = (on) => {
     // oxlint-disable-next-line unicorn/no-array-method-this-argument -- a timer, not Array#every
     poller = $.clock.every(TICK_MS, () => void safeTick($));
     return r;
+  });
+
+  // A merge whose runs have settled stays until the person's next message; a
+  // plugin's prompt or a task notification is not one.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e);
+    const known = await read($, estimates);
+    const isKept = (w: Watch) =>
+      !w.pull || !isSettled(verdictOf(w.pull, known, w.host, w.checkedAt), w.pull, w.checkedAt);
+    const list = await read($, watches);
+    if (!list.every((w) => isKept(w))) {
+      await update($, watches, (all) => all.filter((w) => isKept(w)));
+    }
+    return next(e);
   });
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
