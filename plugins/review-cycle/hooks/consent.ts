@@ -428,8 +428,9 @@ function namesPullRequest(tail: string[]): boolean {
 
 // Opening a part joined by "and" or "then", these carry over to the parts
 // after it: "I didn't ask you to review and commit", "they review then commit".
+// A SUBORDINATE word withholds its clause before any part is read.
 const MOOD =
-  /^(don'?t|dont|not|never|no|didn'?t|won'?t|can'?t|cannot|shouldn'?t|wouldn'?t|doesn'?t|i'll|i'm|i've|we'll|we're|they|he|she|agents?|claude|who|which|would|might|should|if|when|whether|once|unless|until|before|after|without)$/;
+  /^(don'?t|not|never|no|didn'?t|won'?t|can'?t|cannot|shouldn'?t|wouldn'?t|doesn'?t|i'll|i'm|i've|we'll|we're|they|he|she|agents?|claude|who|which|might|should)$/;
 
 // Opening a part, these describe something rather than ask for it: "the flow
 // is review, then commit". Later parts and continuing clauses grant nothing.
@@ -611,6 +612,9 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
 const READY =
   /^(?:(?:it|it's|its|this|that|(?:the )?pr(?: \d+)?|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
 
+const asSoonAs = (w: readonly string[]): number =>
+  w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
+
 // "merge it when it's ready": one merge request, then a condition only
 // auto-merge waits on. Anything else conditional asks for nothing.
 function isReadyMerge(
@@ -619,7 +623,7 @@ function isReadyMerge(
   lead: Set<string>,
   agreed: boolean,
 ): boolean {
-  const soon = w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
+  const soon = asSoonAs(w);
   const k = soon === -1 ? w.findIndex((x) => SUBORDINATE.has(x)) : soon;
   const after = soon === -1 ? k + 1 : k + 3;
   if (k === -1 || (soon === -1 && !/^(when|once|after|if)$/.test(w[k] ?? ''))) return false;
@@ -696,7 +700,7 @@ function grammarGrant(
     into.autoMerge = true;
     return 'ready';
   }
-  if (w.some((x) => SUBORDINATE.has(x))) return 'mood';
+  if (w.some((x) => SUBORDINATE.has(x)) || asSoonAs(w) !== -1) return 'mood';
   const parts: string[][] = [[]];
   for (const word of w) {
     if (word === 'and' || word === 'then') parts.push([]);

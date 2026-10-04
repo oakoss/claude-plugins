@@ -62,6 +62,12 @@ const LEADS = [
   'please ',
   'once its ready, ',
   'when CI passes, then ',
+  // Where a regex read and a word read part: hyphens, brackets, curly quotes.
+  'when-ready, ',
+  'no-op, ',
+  '(not yet) ',
+  'don’t ',
+  'ok :), ',
 ];
 const VERBS = [
   'merge it',
