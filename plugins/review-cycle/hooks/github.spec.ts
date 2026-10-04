@@ -53,13 +53,23 @@ describe('gh api', () => {
     expect(one('gh api -X PUT repos/{owner}/{repo}/pulls/116/merge')).toEqual({
       kind: 'merge',
       admin: false,
+      auto: false,
       lookup: ['116'],
     });
     expect(one('gh api -X PUT /repos/o/r/pulls/116/merge?x=1')).toEqual({
       kind: 'merge',
       admin: false,
+      auto: false,
       lookup: ['116', '--repo', 'o/r'],
     });
+  });
+  test.each([
+    ['enablePullRequestAutoMerge', true],
+    ['mergePullRequest', false],
+    ['enqueuePullRequest', false],
+  ])('%s merges with auto %s', (name, auto) => {
+    const query = `mutation { ${name}(input: {pullRequestId: "x"}) { clientMutationId } }`;
+    expect(one(`gh api graphql -f query='${query}'`)).toMatchObject({ kind: 'merge', auto });
   });
   test.each([
     ['GH_REPO=o/r gh api -X PUT repos/{owner}/{repo}/pulls/1/merge', 'elsewhere'],
@@ -334,7 +344,7 @@ describe('gh api graphql', () => {
   });
 });
 
-const merge = (lookup: unknown) => ({ kind: 'merge', admin: false, lookup });
+const merge = (lookup: unknown) => ({ kind: 'merge', admin: false, auto: false, lookup });
 
 describe('GitHub MCP tools', () => {
   test.each([

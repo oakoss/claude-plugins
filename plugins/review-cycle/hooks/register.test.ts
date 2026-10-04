@@ -2693,6 +2693,16 @@ describe('the stop-before setting', () => {
       expect(ran(await bash($, command))).toBe(true);
     });
   }
+  test('a remote branch delete asks a question its reply grants', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push origin --delete old');
+    expect(denied(r, '"Delete `fix/x` from `origin`?"')).toBe(true);
+    expect(denied(r, '`gh pr merge --delete-branch`')).toBe(true);
+    await endTurn($, 'answer', 'Delete `old` from `origin`?');
+    await say($, 'Lets delete it');
+    expect(ran(await bash($, 'git push origin --delete old'))).toBe(true);
+  });
   test("a pull request's push runs unnoted, but still asks before main", async ($, on) => {
     const w = fakeWorld(
       on,
@@ -2912,6 +2922,13 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh pr merge 116 --squash'), "doesn't ask for a merge")).toBe(true);
     await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 116 --squash --delete-branch'))).toBe(true);
+  });
+  test('a merge asked for once it is ready runs only with --auto', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'Lets merge it when its ready');
+    expect(denied(await bash($, 'gh pr merge 116 --squash'), '--auto`, naming')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 116 --body --auto'), '--auto`, naming')).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 116 --auto --squash'))).toBe(true);
   });
   test('a merge below the rung runs, noted', async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });

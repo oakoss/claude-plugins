@@ -20,12 +20,15 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // What the user's message asked for. `push` is only what they asked to push:
 // the push a pull request needs is judged by the gate, which still asks
 // before a tag or default-branch push it would carry. `comment` is a reply on
-// a pull request, asked for by addressing its review.
+// a pull request, asked for by addressing its review. `autoMerge` is a merge
+// asked for once the pull request is ready ("merge it when CI passes"), which
+// only `gh pr merge --auto` leaves to GitHub.
 export type Grant = Readonly<{
   commit: boolean;
   push: PushLevel;
   pr: boolean;
   merge: boolean;
+  autoMerge: boolean;
   approve: boolean;
   release: boolean;
   comment: boolean;
@@ -36,6 +39,7 @@ export const NO_GRANT: Grant = Object.freeze({
   push: 'none',
   pr: false,
   merge: false,
+  autoMerge: false,
   approve: false,
   release: false,
   comment: false,
@@ -101,8 +105,20 @@ const FAMILIES: readonly Family[] = [
   { forms: ['commit', 'committing'], grants: ['commit'] },
   { forms: ['push', 'pushing'], grants: ['push'] },
   { forms: ['ship', 'shipping'], grants: ['commit', 'push', 'pr'] },
-  // Deleting a remote branch is a push; only with "branch" last.
-  { forms: ['delete', 'deleting'], grants: ['push'], object: (tail) => tail.at(-1) === 'branch' },
+  // Deleting a remote branch is a push: the branch is what goes, so "delete it
+  // from the branch" (a commit) and "delete the branch comments" ask for none.
+  {
+    forms: ['delete', 'deleting'],
+    grants: ['push'],
+    object: (tail) => {
+      const at = tail.lastIndexOf('branch');
+      if (at === -1 || tail.slice(0, at).some((x) => TOWARD.has(x))) return false;
+      const rest = tail.slice(at + 1).filter((x) => !COURTESY.has(x));
+      const [toward, ...where] = rest;
+      return toward === undefined || (TOWARD.has(toward) && where.every((x) => REMOTE.has(x)));
+    },
+    from: true,
+  },
   // "force push" and "force-push", read as one word by `forcePhrase`.
   { forms: ['forcepush', 'forcepushing'], grants: ['push', 'force'] },
   // "open a PR", read as one word by `prPhrase`.
@@ -350,6 +366,9 @@ const PUBLISH_TAIL = new Set([
 
 // After these, only a destination: "push to main", not "commit to this approach".
 const TOWARD = new Set(['to', 'into', 'against', 'from']);
+const COURTESY = new Set(['now', 'please', 'thanks', 'too', 'again']);
+// Where a deleted branch goes from.
+const REMOTE = new Set(['origin', 'upstream', 'remote', 'github', 'the']);
 const DESTINATION = new Set([
   'main',
   'master',
@@ -511,8 +530,16 @@ const QUESTION = new Set([
 // Questions that hand the action back to the user, or offer to skip it.
 const HANDBACK = new Set(['yourself', "you'd", 'rather', 'skip', 'leave', 'instead', 'terminal']);
 
-const AFFIRMATIVE =
-  /^(yes|yep|yeah|yup|y|ok|okay|sure|go ahead|go for it|do it|please do|sounds good|lgtm)\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$/i;
+// "yes", "Ok, lets do that", "great, go ahead": a yes, a go-ahead, or both,
+// and nothing more, since a longer reply may say something else. "great" or
+// "looks good" alone may praise the work, so it answers only with a go-ahead.
+const YES = String.raw`(?:yes|yep|yeah|yup|y|ok|okay|sure|sounds good|lgtm)`;
+const AGREEMENT = String.raw`(?:${YES}|alright|great|cool|perfect|looks good)`;
+const GO_AHEAD = String.raw`(?:(?:let['’]?s|let us)\s+(?:do (?:it|that|this)|go(?: ahead| for it)?)|do (?:it|that|this)|go ahead|go for it|please do)`;
+const AFFIRMATIVE = new RegExp(
+  String.raw`^(?:${YES}|(?:${AGREEMENT}[\s,.!]+)+${GO_AHEAD}|${GO_AHEAD})\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$`,
+  'i',
+);
 
 // Quoted text is a commit message or a name, never part of the request, even
 // when it runs over several lines.
@@ -576,10 +603,41 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
   return true;
 }
 
+// A condition GitHub's auto-merge waits on itself: "when it's ready", "once
+// CI passes", "after the checks are green".
+const READY =
+  /^(?:(?:it|it's|its|this|that|(?:the )?pr|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
+
+// "merge it when it's ready": one merge request, then a condition only
+// auto-merge waits on. Anything else conditional asks for nothing.
+function isReadyMerge(
+  w: string[],
+  verbs: Readonly<Record<string, Family>>,
+  lead: Set<string>,
+  agreed: boolean,
+): boolean {
+  const soon = w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
+  const k = soon === -1 ? w.findIndex((x) => SUBORDINATE.has(x)) : soon;
+  const after = soon === -1 ? k + 1 : k + 3;
+  if (k === -1 || (soon === -1 && !/^(when|once|after|if)$/.test(w[k] ?? ''))) return false;
+  if (!READY.test(w.slice(after).join(' '))) return false;
+  // "go ahead and merge it": only request words before the last "and".
+  const joined = w.slice(0, k).findLastIndex((x) => x === 'and' || x === 'then');
+  const before = w.slice(0, joined + 1).filter((x) => x !== 'and' && x !== 'then');
+  const request = w.slice(joined + 1, k);
+  const at = request.findIndex((x) => Object.hasOwn(verbs, x));
+  const family = verbs[request[at] ?? ''];
+  return (
+    family?.forms[0] === 'merge' &&
+    isLead([...before, ...request.slice(0, at)], lead, agreed) &&
+    namesPullRequest(request.slice(at + 1))
+  );
+}
+
 // What a clause leaves for the clauses after it in the sentence: a mood
 // withholds all of them, a description those that continue it with "and" or
-// "then".
-type Carry = 'none' | 'mood' | 'described';
+// "then". `ready` withholds the rest, which may wait on its condition too.
+type Carry = 'none' | 'mood' | 'described' | 'ready';
 
 // The verbs a clause asks for, reading each part joined by "and" or "then" as
 // its own request: "fix the parser and commit it".
@@ -589,8 +647,13 @@ function grammarGrant(
   lead: Set<string>,
   into: MutableGrant,
   agreed = false,
+  heard?: Set<Family>,
 ): Carry {
   const w = words(clause);
+  if (isReadyMerge(w, verbs, lead, agreed)) {
+    into.autoMerge = true;
+    return 'ready';
+  }
   if (w.some((x) => SUBORDINATE.has(x))) return 'mood';
   const parts: string[][] = [[]];
   for (const word of w) {
@@ -609,6 +672,7 @@ function grammarGrant(
       isTail(tail, family) &&
       (family.object?.(tail) ?? true);
     if (asks) {
+      heard?.add(family);
       const granted = family.grants;
       if (granted.includes('commit')) into.commit = true;
       if (granted.includes('push')) raise(into, 'push');
@@ -668,7 +732,7 @@ function settled(g: MutableGrant): Grant {
 }
 
 // Each step a grant can name besides the push level.
-const STEPS = ['commit', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
+const STEPS = ['commit', 'pr', 'merge', 'autoMerge', 'approve', 'release', 'comment'] as const;
 
 function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
@@ -677,20 +741,34 @@ function merged(into: MutableGrant, from: MutableGrant): void {
 
 // Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
-  return g.pr || g.merge || g.approve || g.release || g.comment;
+  return g.pr || g.merge || g.autoMerge || g.approve || g.release || g.comment;
 }
 
 // The verbs the previous answer's closing questions offered to do.
-function asked(answer: string): Grant {
+function asked(answer: string, heard?: Set<Family>): Grant {
   const g = fresh();
   // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
-  // object or destination a push may take, but not the branch a delete needs.
+  // object or destination a push may take; after "delete" it is the branch.
   // Only here, in the agent's offer: a user's "push it to `later`" defers. A
   // ref ends on a word character, so a sentence's closing period stays, and
   // one joining hand-back words ("rather/prefer") stays words.
   const named = forcePhrase(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n'))
+    // A path is deleted too, so a backticked or slashed name is a branch only
+    // beside "branch" or a remote; a plain word is never read as one.
+    .replaceAll(
+      /\b(delete|deleting)\s+(?:the\s+)?(?:remote\s+)?(?:branch\s+(?:`[\w./-]+`|[\w.-]+\/[\w./-]*[\w-])|(?:`[\w./-]+`|[\w.-]+\/[\w./-]*[\w-])(?=\s+from\s+(?:`[\w-]+`|(?:origin|upstream|remote|github)\b)))/gi,
+      '$1 branch',
+    )
+    // A backticked remote a delete names: `fork` is one, `main` or a file is not.
+    .replaceAll(
+      /(\bdelet(?:e|ing)\b[^?.!\n]*?\bfrom\s+)`([\w./-]+)`/gi,
+      (_m: string, lead: string, name: string) =>
+        /^[\w-]+$/.test(name) && !/^(main|master)$/i.test(name)
+          ? `${lead}remote`
+          : `${lead}\`${name}\``,
+    )
     // A backticked hand-back stays a word: "or would you `rather` do it?".
     .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>
       words(name).some((x) => HANDBACK.has(x)) ? name.replaceAll('/', ' ') : 'it',
@@ -707,12 +785,23 @@ function asked(answer: string): Grant {
     for (const part of clauses(q)) {
       const c = part.replace(CONTRAST, '');
       if (carry !== 'none' && continues(c)) continue;
-      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g);
+      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g, false, heard);
       // "Should I fix it, then push?" offers the push; only a commit or push clause carries.
       if (left !== 'none' && words(c).some((x) => Object.hasOwn(OFFERED, x))) carry = left;
     }
   }
   return settled(g);
+}
+
+const DELETE_IT = new RegExp(
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:(?:let['’]?s|let us|please|go ahead and)\s+)?delete (?:it|that|them)(?:\s+from\s+\x60?[\w.-]+\x60?)?(?:\s+(?:now|please|too))?\b[\s.!,]*(?:please|thanks|thank you)?[\s.!]*$`,
+  'i',
+);
+
+function offersDelete(answer: string): boolean {
+  const heard = new Set<Family>();
+  asked(answer, heard);
+  return [...heard].some((f) => f.forms[0] === 'delete');
 }
 
 const PUSH_WORD =
@@ -730,7 +819,7 @@ export function holdsOf(prompt: string, previousAnswer = ''): boolean {
   const text = prPhrase(unquote(forcePhrase(prompt)));
   if (PUSH_WORD.test(text) && !covers(grant, 'push')) return true;
   if (PR_WORD.test(text) && !grant.pr) return true;
-  if (MERGE_WORD.test(text) && !grant.merge) return true;
+  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge) return true;
   if (APPROVE_WORD.test(text) && !grant.approve) return true;
   if (RELEASE_WORD.test(text) && !grant.release) return true;
   const offered = asked(previousAnswer);
@@ -745,15 +834,18 @@ export function holdsOf(prompt: string, previousAnswer = ''): boolean {
 // Whether a message asks for a step on the way out: a push, a pull request, a
 // merge or a release. An approval or a reply asks for none of them.
 export function liftsHold(grant: Grant): boolean {
-  return covers(grant, 'push') || grant.pr || grant.merge || grant.release;
+  return covers(grant, 'push') || grant.pr || grant.merge || grant.autoMerge || grant.release;
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // "No problem" and "no worries" agree; they retract nothing.
   const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
   if (AFFIRMATIVE.test(text)) return asked(previousAnswer);
+  // "delete it", answering an offer to delete a branch, names that branch;
+  // only as the whole reply, since "delete it, meaning the TODO" names another.
+  const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
   // Pasted shell sessions and quoted output are not requests.
-  const typed = text
+  const typed = (answering ? text.replace(/\b(delete\s+(?:it|that|them))\b/i, '$1 branch') : text)
     .split('\n')
     .filter((line) => !/^\s*([$>+#]|PS\s|\w+@[\w.-]+[:$])/.test(line))
     // A list item or an emphasised label names a step; it does not ask for it.
@@ -790,10 +882,12 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (HOLD.test(c)) withheld = true;
       if (withheld) break;
       if (carry === 'described' && continues(c)) continue;
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, mine, agreed);
+      // After a ready-merge a clause can still withhold, but grants nothing.
+      const into = carry === 'ready' ? fresh() : mine;
+      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed);
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
-      else if (left !== 'none') carry = left;
+      else if (left !== 'none' && carry !== 'ready') carry = left;
     }
     if (!withheld) merged(g, mine);
     // Only a semicolon ties two sentences together, and only around the verbs:

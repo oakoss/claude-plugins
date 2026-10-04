@@ -36,6 +36,7 @@ function world(
 
 const grant = (g: Partial<Grant> = {}): Grant => ({ ...NO_GRANT, ...g });
 const push = (ref: Extract<GhAction, { kind: 'push' }>['ref']): GhAction => ({ kind: 'push', ref });
+const merge = (auto: boolean): GhAction => ({ kind: 'merge', admin: false, auto, lookup: ['1'] });
 
 async function judge(
   actions: GhAction[],
@@ -132,7 +133,9 @@ describe('a push through GitHub', () => {
       deny: expect.stringContaining('it pushes to `main`, the default branch'),
     });
     const release = world('release', { mergeHead: { out: 'oakum/version-packages\n' } });
-    expect(await judge([{ kind: 'merge', admin: false, lookup: ['62'] }], release)).toMatchObject({
+    expect(
+      await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], release),
+    ).toMatchObject({
       deny: expect.stringContaining('"Release `v0.25.0`?"'),
     });
   });
@@ -219,14 +222,17 @@ describe('a push through GitHub', () => {
 describe('a merge', () => {
   test('allowed either way, looks nothing up', async () => {
     const w = world('never stop');
-    const r = await judge([{ kind: 'merge', admin: false, lookup: ['1'] }], w);
+    const r = await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['1'] }], w);
     expect(r).toMatchObject({ ran: [{ step: 'merge' }] });
     expect(w.calls).toEqual(['ladder']);
   });
 
   test("of oakum's version pull request is a release", async () => {
     const w = world('release', { mergeHead: { out: 'oakum/version-packages' } });
-    const r = await judge([{ kind: 'merge', admin: false, lookup: ['62', '--repo', 'o/r'] }], w);
+    const r = await judge(
+      [{ kind: 'merge', admin: false, auto: false, lookup: ['62', '--repo', 'o/r'] }],
+      w,
+    );
     expect(r).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
     expect(w.calls).toEqual(['ladder', 'mergeHead 62 --repo o/r']);
   });
@@ -235,21 +241,25 @@ describe('a merge', () => {
     const w = world('release', {
       mergeHead: { asks: 'looking up the pull request it merges failed (x)' },
     });
-    const r = await judge([{ kind: 'merge', admin: false, lookup: ['62'] }], w);
+    const r = await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], w);
     expect(r).toMatchObject({ deny: expect.stringContaining('"Merge and release #62?"') });
   });
 
   test('not allowed, names why the lookup could not tell', async () => {
     const failed = world('merge', { mergeHead: { asks: 'looking up it failed (x)' } });
-    expect(await judge([{ kind: 'merge', admin: false, lookup: ['62'] }], failed)).toMatchObject({
+    expect(
+      await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], failed),
+    ).toMatchObject({
       deny: expect.stringContaining('This asks whatever the setting: looking up it failed (x).'),
     });
     const blank = world('release', { mergeHead: { out: ' ' } });
-    expect(await judge([{ kind: 'merge', admin: false, lookup: ['62'] }], blank)).toMatchObject({
+    expect(
+      await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], blank),
+    ).toMatchObject({
       deny: expect.stringContaining('looking up the pull request it merges printed nothing'),
     });
     const unnamed = await judge(
-      [{ kind: 'merge', admin: false, lookup: { cannot: 'unnamed' } }],
+      [{ kind: 'merge', admin: false, auto: false, lookup: { cannot: 'unnamed' } }],
       world('release'),
     );
     expect(unnamed).toMatchObject({
@@ -259,21 +269,60 @@ describe('a merge', () => {
 
   test('beside other steps, or picked elsewhere, cannot be looked up', async () => {
     const beside = await judge(
-      [{ kind: 'merge', admin: false, lookup: { cannot: 'beside' } }],
+      [{ kind: 'merge', admin: false, auto: false, lookup: { cannot: 'beside' } }],
       world('release'),
     );
     expect(beside).toMatchObject({
       deny: expect.stringContaining('Run the merge as its own command'),
     });
     const elsewhere = await judge(
-      [{ kind: 'merge', admin: false, lookup: { cannot: 'elsewhere' } }],
+      [{ kind: 'merge', admin: false, auto: false, lookup: { cannot: 'elsewhere' } }],
       world('release'),
     );
     expect(elsewhere).toMatchObject({ deny: expect.stringContaining('`GH_REPO=`') });
   });
 
+  describe('asked for once the pull request is ready', () => {
+    const ready = grant({ autoMerge: true });
+
+    test('runs with --auto, unnoted', async () => {
+      expect(await judge([merge(true)], world('merge'), ready)).toEqual({ ran: [] });
+    });
+
+    test.each(['merge', 'release', 'never stop'] as const)(
+      'refuses a merge now at %s, naming --auto',
+      async (stopBefore) => {
+        const r = await judge([merge(false)], world(stopBefore), ready);
+        expect(r).toMatchObject({ deny: expect.stringContaining('`gh pr merge <number> --auto`') });
+        expect(r).toMatchObject({ deny: expect.stringContaining('"Merge #116 now?"') });
+      },
+    );
+
+    test('with a merge asked for too, a merge now runs', async () => {
+      expect(
+        await judge([merge(false)], world('merge'), grant({ merge: true, autoMerge: true })),
+      ).toEqual({
+        ran: [],
+      });
+    });
+
+    test("is no release: oakum's version pull request still asks", async () => {
+      const w = world('merge', { mergeHead: { out: 'oakum/version-packages' } });
+      const r = await judge([merge(true)], w, ready);
+      expect(r).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
+    });
+
+    test('an --auto merge without one asks as any merge does', async () => {
+      const r = await judge([merge(true)], world('merge'));
+      expect(r).toMatchObject({ deny: expect.stringContaining('"Merge #116?"') });
+    });
+  });
+
   test('--admin is never let through', async () => {
-    const r = await judge([{ kind: 'merge', admin: true, lookup: ['1'] }], world('never stop'));
+    const r = await judge(
+      [{ kind: 'merge', admin: true, auto: false, lookup: ['1'] }],
+      world('never stop'),
+    );
     expect(r).toMatchObject({ deny: expect.stringContaining('past branch protection') });
   });
 });
