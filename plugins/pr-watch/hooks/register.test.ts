@@ -133,7 +133,7 @@ async function band($: any, surface: 'terminal' | 'desktop' = 'terminal', props 
 async function lineIn(ui: any): Promise<string | undefined> {
   expect(await ui.find({ type: 'Text', text: 'beneath' })).toBeDefined();
   const row = await ui.find({ key: `row-${ID}` });
-  return row?.text.replace(/×$/, '');
+  return row?.text.replace(/ ×$/, '');
 }
 
 const ESTIMATE_CALL = 'actions/workflows/7/runs';
@@ -284,6 +284,9 @@ describe('a pull request Claude opens', () => {
     await clock.advance(1000);
     const ui = await band($);
     expect(await lineIn(ui)).toBe('#128 ✓ ready to merge');
+    // The terminal draws a plain Button without its brackets.
+    const close = await ui.find({ key: `stop-${ID}` });
+    expect(close?.props.plain).toBe(true);
     await ui.press({ key: `stop-${ID}` });
     expect(await lineIn(ui)).toBeUndefined();
   });

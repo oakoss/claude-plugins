@@ -184,7 +184,7 @@ export const register: Register = (on) => {
     const beneath = await next(e);
     // A segment with a URL is a link; the text between links truncates.
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" marginTop={1}>
         {list.map((w) => (
           <Box key={`row-${idOf(w)}`} flexDirection="row">
             {lineOf(w, now, known, e.props.bodyColumns).map((s: Segment, i) =>
@@ -201,7 +201,8 @@ export const register: Register = (on) => {
               ),
             )}
             <Box display="none" hover={{ display: 'flex' }} flexShrink={0}>
-              <Button key={`stop-${idOf(w)}`} label="×" onPress={() => stop($, idOf(w))} />
+              <Text> </Text>
+              <Button key={`stop-${idOf(w)}`} label="×" plain onPress={() => stop($, idOf(w))} />
             </Box>
           </Box>
         ))}
