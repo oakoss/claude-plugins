@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "format": "oxfmt 'plugins/**/*.{ts,tsx}' '*.config.ts'",
-    "format:check": "oxfmt --check 'plugins/**/*.{ts,tsx}' '*.config.ts'",
+    "consent:diff": "node scripts/consent-diff.ts",
+    "format": "oxfmt 'plugins/**/*.{ts,tsx}' 'scripts/**/*.ts' '*.config.ts'",
+    "format:check": "oxfmt --check 'plugins/**/*.{ts,tsx}' 'scripts/**/*.ts' '*.config.ts'",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "setup": "bd bootstrap --yes",

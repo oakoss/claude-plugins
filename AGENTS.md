@@ -137,4 +137,6 @@ pnpm test:hooks    # claude plugin test: the modules' hooks
 pnpm typecheck && pnpm lint && pnpm format:check
 ```
 
+A change to review-cycle's consent grammar (`hooks/consent.ts`) moves verdicts the specs never name. `pnpm consent:diff [ref]` reads every quoted string in the consent spec and hook tests, plus generated requests, against several agent offers, at `ref` (default `main`) and in the working tree, and prints how many verdicts changed, grouped by what changed, with up to three examples each. Run it before review, and hand its output to reviewers rather than having each build a differential.
+
 Prose anchors (`plugins/<name>/tests/*.spec.ts`) pin wording that skills and agents load as instructions, where nothing else would notice it going missing. Write each against a mutation: remove the phrase it anchors and confirm the test fails.
