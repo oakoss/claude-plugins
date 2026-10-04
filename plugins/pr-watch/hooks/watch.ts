@@ -12,7 +12,7 @@ const START = String.raw`(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*`;
 const PR_CREATE = new RegExp(String.raw`${START}gh\s+pr\s+create\b`);
 // git's own options may come before the subcommand: -C dir, -c key=value, --flag.
 const MOVES_PR = new RegExp(
-  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b)`,
+  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b)`,
 );
 
 // Whether a command can start new runs or close a pull request, so the

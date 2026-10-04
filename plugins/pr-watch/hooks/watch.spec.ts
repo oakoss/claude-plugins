@@ -135,13 +135,22 @@ describe('movesPulls', () => {
       'git -c core.x=y push',
       'git --no-pager push',
       'gh pr merge 129 --squash',
+      'gh run rerun 37238665430 --failed',
+      'gh workflow run ci.yml --ref feat/x',
     ]) {
       expect(movesPulls(command)).toBe(true);
     }
   });
 
   test('not a command that only names one', () => {
-    for (const command of ['git status', 'echo git push', 'gh pr view 129', 'git pushd']) {
+    for (const command of [
+      'git status',
+      'echo git push',
+      'gh pr view 129',
+      'git pushd',
+      'gh run view 37238665430',
+      'gh workflow list',
+    ]) {
       expect(movesPulls(command)).toBe(false);
     }
   });

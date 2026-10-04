@@ -31,9 +31,9 @@ const busy = new Set<string>();
 const tried = new Map<string, number>();
 // When each unanswered length was last asked for, by estimate key.
 const asked = new Map<string, number>();
-// After Claude pushes or merges, a watch last read before pushedAt is read at
-// once, and every watch every BURST_MS until burstUntil: GitHub starts the new
-// runs a few seconds after the push.
+// After Claude pushes, merges or starts a run, a watch last read before
+// pushedAt is read at once, and every watch every BURST_MS until burstUntil:
+// GitHub starts the new runs a few seconds later.
 const BURST_MS = 5000;
 const BURST_FOR_MS = 60_000;
 let pushedAt = 0;
