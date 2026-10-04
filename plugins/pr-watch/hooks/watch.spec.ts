@@ -8,6 +8,7 @@ import {
   delayOf,
   errorLine,
   lineOf,
+  movesPulls,
   shownOf,
   toastOf,
   verdictOf,
@@ -103,6 +104,34 @@ describe('createdPull', () => {
       'https://github.com/o/r/pull/1 and more',
     ]) {
       expect(createdPull('gh pr create', url)).toBeNull();
+    }
+  });
+});
+
+describe('movesPulls', () => {
+  test('a push or a merge, after any shell separator', () => {
+    for (const command of [
+      'git push',
+      'git push -u origin feat/x',
+      'git -C repo push',
+      'cd repo && git push',
+      'pnpm test\ngit push',
+      'git commit -m x; git push',
+      'cat m | git push',
+      '(git push)',
+      '  git push',
+      'GIT_TRACE=1 git push',
+      'git -c core.x=y push',
+      'git --no-pager push',
+      'gh pr merge 129 --squash',
+    ]) {
+      expect(movesPulls(command)).toBe(true);
+    }
+  });
+
+  test('not a command that only names one', () => {
+    for (const command of ['git status', 'echo git push', 'gh pr view 129', 'git pushd']) {
+      expect(movesPulls(command)).toBe(false);
     }
   });
 });

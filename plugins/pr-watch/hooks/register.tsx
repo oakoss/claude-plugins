@@ -8,6 +8,7 @@ import {
   errorLine,
   estimateKey,
   lineOf,
+  movesPulls,
   shownOf,
   toastOf,
   verdictOf,
@@ -28,6 +29,13 @@ const busy = new Set<string>();
 const tried = new Map<string, number>();
 // When each unanswered length was last asked for, by estimate key.
 const asked = new Map<string, number>();
+// After Claude pushes or merges, a watch last read before pushedAt is read at
+// once, and every watch every BURST_MS until burstUntil: GitHub starts the new
+// runs a few seconds after the push.
+const BURST_MS = 5000;
+const BURST_FOR_MS = 60_000;
+let pushedAt = 0;
+let burstUntil = 0;
 let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
@@ -129,10 +137,11 @@ async function tick($: $): Promise<void> {
   for (const w of list) {
     const verdict = w.pull ? verdictOf(w.pull, known, w.host) : null;
     if (verdict?.kind === 'running') isMoving = true;
-    const delay = verdict ? delayOf(verdict, w.pull) : 10_000;
+    const usual = verdict ? delayOf(verdict, w.pull) : 10_000;
+    const delay = usual !== null && now < burstUntil ? Math.min(usual, BURST_MS) : usual;
     if (delay === null || busy.has(idOf(w))) continue;
     const last = Math.max(w.checkedAt, tried.get(idOf(w)) ?? 0);
-    if (now - last >= delay) void refresh($, w, now);
+    if (last <= pushedAt || now - last >= delay) void refresh($, w, now);
   }
   if (isMoving) await update($, clock, () => now);
 }
@@ -163,7 +172,14 @@ export const register: Register = (on) => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const r = await next(e);
-    if ('deny' in r || r.isError) return r;
+    if ('deny' in r) return r;
+    // A failed push still bursts: the exit status is the whole shell line's, so
+    // `git push; false` pushed and failed, and `git push || true` the reverse.
+    if (movesPulls(e.command)) {
+      pushedAt = await $.clock.now();
+      burstUntil = pushedAt + BURST_FOR_MS;
+    }
+    if (r.isError) return r;
     const stdout = (r.result as { stdout?: unknown } | undefined)?.stdout;
     const target = createdPull(e.command, typeof stdout === 'string' ? stdout : '');
     if (target) {
