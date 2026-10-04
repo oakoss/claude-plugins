@@ -202,7 +202,7 @@ export default defineConfig({
   },
   overrides: [
     {
-      files: ['**/*.ts'],
+      files: ['**/*.ts', '**/*.tsx'],
       plugins: ['typescript'],
       rules: {
         'no-shadow': 'off',
@@ -284,6 +284,14 @@ export default defineConfig({
         'typescript/return-await': 'error',
         'typescript/unbound-method': 'error',
         'typescript/unified-signatures': 'error',
+      },
+    },
+    {
+      // A mod's state contract, types/index.d.ts, must be self-contained, so
+      // its hooks import their state's types from there.
+      files: ['plugins/pr-watch/hooks/**'],
+      rules: {
+        'import/no-relative-parent-imports': 'off',
       },
     },
     {

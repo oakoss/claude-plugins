@@ -1,0 +1,15 @@
+{
+  "name": "pr-watch",
+  "description": "A line above the prompt for each pull request Claude opens: its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it.",
+  "version": "0.0.0",
+  "author": {
+    "name": "Oak OSS",
+    "email": "hello@oakoss.dev",
+    "url": "https://github.com/oakoss"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/oakoss/claude-plugins",
+  "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/pr-watch",
+  "keywords": ["pull-request", "github", "ci", "github-actions", "mod", "status"],
+  "types": "./types/index.d.ts"
+}
