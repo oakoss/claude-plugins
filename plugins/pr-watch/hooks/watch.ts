@@ -50,16 +50,18 @@ export type Verdict =
 const gates = (w: Workflow) => w.jobs.some((j) => j.isRequired);
 const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
 
-// Whether the PR's merge waits on this workflow: one holding a required
-// check, or any when nothing on the commit is required.
-function counts(pull: Pull): (w: Workflow) => boolean {
-  return (w) => !pull.isGated || gates(w);
+type Runs = Pick<Pull, 'workflows' | 'isGated'>;
+
+// Whether the merge waits on this workflow: one holding a required check, or
+// any when nothing on the commit is required.
+function counts(runs: Runs): (w: Workflow) => boolean {
+  return (w) => !runs.isGated || gates(w);
 }
 
 // The job that failed, not the summary job that failed on it.
-function failure(pull: Pull): Verdict | null {
-  const isCounted = counts(pull);
-  for (const w of pull.workflows) {
+function failure(runs: Runs): Verdict | null {
+  const isCounted = counts(runs);
+  for (const w of runs.workflows) {
     if (!isCounted(w)) continue;
     const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
     const job = bad.find((j) => !j.isRequired) ?? bad[0];
@@ -88,17 +90,24 @@ export function estimateKey(host: string, workflowId: number): string {
   return `${host}/${workflowId}`;
 }
 
+// Null once every counted workflow has passed.
+function runsVerdict(runs: Runs, estimates: Record<string, number>, host: string): Verdict | null {
+  const fail = failure(runs);
+  if (fail) return fail;
+  const isCounted = counts(runs);
+  const running = runs.workflows.filter((w) => w.status !== 'done' && isCounted(w));
+  if (running.length > 0) return { kind: 'running', gate: gateOf(running, estimates, host) };
+  return null;
+}
+
 export function verdictOf(
   pull: Pull,
   estimates: Record<string, number>,
   host = 'github.com',
 ): Verdict {
   if (pull.state !== 'OPEN') return { kind: 'closed' };
-  const fail = failure(pull);
-  if (fail) return fail;
-  const isCounted = counts(pull);
-  const running = pull.workflows.filter((w) => w.status !== 'done' && isCounted(w));
-  if (running.length > 0) return { kind: 'running', gate: gateOf(running, estimates, host) };
+  const runs = runsVerdict(pull, estimates, host);
+  if (runs) return runs;
   if (pull.isDraft) return { kind: 'waiting', reason: 'draft' };
   if (pull.merge === 'DIRTY') return { kind: 'blocked', reason: 'conflicts' };
   if (pull.review === 'CHANGES_REQUESTED') return { kind: 'blocked', reason: 'changes requested' };
