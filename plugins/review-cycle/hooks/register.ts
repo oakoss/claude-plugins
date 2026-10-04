@@ -19,7 +19,7 @@ import {
   shownCommand,
   type Classification,
 } from './command';
-import { covers, grantOf, holdsOf, liftsHold, NO_GRANT, type Grant } from './consent';
+import { covers, grantOf, holdOf, liftsHold, NO_GRANT, type Grant } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -31,6 +31,7 @@ import {
   PR_FIELDS,
   PR_JQ,
   type GhLookups,
+  type Hold,
   type InForce,
   type Lookup,
   type Unasked as GhUnasked,
@@ -189,7 +190,7 @@ type GateState = {
   // The user's /config value for the end-of-turn review nudge.
   nudge: boolean;
   // "don't push yet" makes every step ask until a message asks for one.
-  held: boolean;
+  held: Hold;
 };
 
 const state: GateState = {
@@ -214,7 +215,7 @@ const state: GateState = {
   gateOn: true,
   stopBefore: null,
   nudge: true,
-  held: false,
+  held: null,
 };
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -373,8 +374,9 @@ async function onPromptSubmit(
     state.messages++;
     // What a held message asks for still runs: "push it; don't open a PR yet".
     const grant = grantOf(e.text, state.lastAnswer);
-    if (holdsOf(e.text, state.lastAnswer)) state.held = true;
-    else if (liftsHold(grant)) state.held = false;
+    const hold = holdOf(e.text, state.lastAnswer);
+    if (hold !== null) state.held = hold;
+    else if (liftsHold(grant)) state.held = null;
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
@@ -984,7 +986,7 @@ async function judgeBash(
 
   if (cls.commit && !cls.commit.dryRun && !granted.commit) {
     const ladder = await ladderOf($);
-    if (!permitted(granted, ladder, state.held).commit) {
+    if (!permitted(granted, ladder, state.held !== null).commit) {
       return deny(commitRefusal(e.command, ladder));
     }
   }
@@ -1128,8 +1130,8 @@ async function judgePush(
   const missing = unasked(spec, granted);
   if (missing === null) return { ran: null };
   const ladder = await ladderOf($);
-  const forPr = granted.pr && !state.held;
-  const letsThrough = forPr || permitted(granted, ladder, state.held).push;
+  const forPr = granted.pr && state.held === null;
+  const letsThrough = forPr || permitted(granted, ladder, state.held !== null).push;
   const outcome = await pushOutcome(missing, letsThrough, () => alwaysAsks($, top, spec));
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
@@ -1308,7 +1310,7 @@ async function watch(
       if (pushed.length > 0 && !covers(granted, 'push') && !judged) {
         const ladder = await ladderOf($);
         notes.push(
-          permitted(granted, ladder, state.held).push
+          permitted(granted, ladder, state.held !== null).push
             ? ranUnasked($, { step: 'push', ladder })
             : `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -1404,9 +1406,9 @@ async function onStatus(
     worktreeTree: null,
   };
   const ladder = await ladderOf($);
-  const may = permitted(state.message.grant, ladder, state.held);
+  const may = permitted(state.message.grant, ladder, state.held !== null);
   const from = ladder.unreadable === undefined ? where(ladder.source) : 'unreadable settings';
-  status.stopBefore = { ...ladder, from, held: state.held };
+  status.stopBefore = { ...ladder, from, held: state.held !== null, heldBy: state.held };
   status.mayCommit = may.commit;
   status.mayPush = may.push;
   status.mayOpenPr = may.pr;

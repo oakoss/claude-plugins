@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, holdsOf, liftsHold, NO_GRANT, VERB_FORMS } from './consent';
+import { grantOf, holdOf, holdsOf, liftsHold, NO_GRANT, VERB_FORMS } from './consent';
 
 const NONE = NO_GRANT;
 const COMMIT = { ...NONE, commit: true };
@@ -200,6 +200,22 @@ describe('merges, approvals, releases and review replies', () => {
     'no need to approve it',
   ])('%s holds', (prompt) => {
     expect(holdsOf(prompt)).toBe(true);
+  });
+  test.each([
+    ['Anything else before we merge?', '', { step: 'merge', how: 'mentioned' }],
+    ['did the push go through?', '', { step: 'push', how: 'mentioned' }],
+    ['is it ready for review?', '', { step: 'pr', how: 'mentioned' }],
+    ['the release notes look good', '', { step: 'release', how: 'mentioned' }],
+    ['no need to approve it', '', { step: 'approve', how: 'mentioned' }],
+    ['not yet', 'Should I push `fix/x` to `origin`?', { step: 'push', how: 'declined' }],
+    ['hold off', 'Merge #116 now?', { step: 'merge', how: 'declined' }],
+    ['not yet', 'Merge #116 and delete the branch?', { step: 'merge', how: 'declined' }],
+    ['not yet', 'Push and open a PR?', { step: 'pr', how: 'declined' }],
+    ['wait', 'Reply to the review on #116?', { step: 'comment', how: 'declined' }],
+    ['merge it', '', null],
+    ['not yet', 'Should I rename the helper?', null],
+  ])('"%s" after "%s" holds for %j', (prompt, offer, reason) => {
+    expect(holdOf(prompt, offer)).toEqual(reason);
   });
   test('"not yet" to an offered merge holds; a merge request does not', () => {
     expect(holdsOf('not yet', 'Merge #116 now?')).toBe(true);

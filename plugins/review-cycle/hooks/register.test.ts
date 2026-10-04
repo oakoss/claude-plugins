@@ -2295,7 +2295,7 @@ describe('a push the user did not ask for', () => {
       reason: 'answer',
     });
     await say($, 'not yet, rename the helper first');
-    expect(denied(await bash($, 'git push origin fix/x'), 'held off and')).toBe(true);
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
   });
   test('a reviewed commit with it is refused whole, naming the commit on its own', async ($, on) => {
     fakeWorld(on);
@@ -2720,7 +2720,7 @@ describe('the stop-before setting', () => {
   test('a held pull request request lets no push through', async ($, on) => {
     fakeWorld(on, pushing({}));
     await say($, 'open a PR. do not push.');
-    expect(denied(await bash($, 'git push -u origin HEAD'), 'held off and')).toBe(true);
+    expect(denied(await bash($, 'git push -u origin HEAD'), 'held off (')).toBe(true);
   });
   test("a script's push under a pull request request is still reported", async ($, on) => {
     fakeWorld(on, pushing({}));
@@ -3053,7 +3053,10 @@ describe('the stop-before setting', () => {
     fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
     await say($, "don't merge yet");
     expect(
-      denied(await bash($, 'gh pr merge 116'), "held off and hasn't asked for a merge since"),
+      denied(
+        await bash($, 'gh pr merge 116'),
+        "held off (their message mentioned a merge without asking for one) and hasn't asked for a merge since",
+      ),
     ).toBe(true);
     await review($);
     await say($, 'commit it and merge it');
@@ -3337,7 +3340,7 @@ describe('the stop-before setting', () => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "push it; don't open a PR yet");
     expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(denied(await bash($, 'gh pr create'), 'held off and')).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
     expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
   });
@@ -3367,9 +3370,9 @@ describe('the stop-before setting', () => {
   test('a hold makes every step ask until a message asks for one', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "don't push yet");
-    expect(denied(await bash($, 'git push'), 'held off and')).toBe(true);
+    expect(denied(await bash($, 'git push'), 'held off (')).toBe(true);
     await say($, 'rename the helper');
-    expect(denied(await bash($, 'gh pr create'), 'held off and')).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
     await say($, 'push it');
     expect(ran(await bash($, 'git push'))).toBe(true);
     await say($, 'rename it back');
@@ -3390,6 +3393,13 @@ describe('the stop-before setting', () => {
       source: 'local',
       from: '.claude/settings.local.json',
       held: false,
+      heldBy: null,
+    });
+    await say($, 'anything else before we merge?');
+    const held = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(held.stopBefore).toMatchObject({
+      held: true,
+      heldBy: { step: 'merge', how: 'mentioned' },
     });
     expect([status.mayCommit, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
   });

@@ -812,23 +812,43 @@ const APPROVE_WORD = /\b(approve|approves|approving|approved)\b/i;
 const RELEASE_WORD =
   /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
+// A step mentioned without being asked for, or an offer of one held off ("not yet").
+export type HoldStep = 'push' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
+
 // A step mentioned without being asked for holds every step but a commit, read
 // by mention rather than grammar since a hold only makes the agent ask.
-export function holdsOf(prompt: string, previousAnswer = ''): boolean {
+export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   const grant = grantOf(prompt, previousAnswer);
   const text = prPhrase(unquote(forcePhrase(prompt)));
-  if (PUSH_WORD.test(text) && !covers(grant, 'push')) return true;
-  if (PR_WORD.test(text) && !grant.pr) return true;
-  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge) return true;
-  if (APPROVE_WORD.test(text) && !grant.approve) return true;
-  if (RELEASE_WORD.test(text) && !grant.release) return true;
+  const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
+  if (PUSH_WORD.test(text) && !covers(grant, 'push')) return mentioned('push');
+  if (PR_WORD.test(text) && !grant.pr) return mentioned('pr');
+  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge) return mentioned('merge');
+  if (APPROVE_WORD.test(text) && !grant.approve) return mentioned('approve');
+  if (RELEASE_WORD.test(text) && !grant.release) return mentioned('release');
+  if (!HOLD.test(text) || covers(grant, 'push') || asksBeyondPush(grant)) return null;
+  // The furthest step offered: "merge #116 and delete the branch?" offers a
+  // merge, though deleting the branch is a push too.
   const offered = asked(previousAnswer);
-  return (
-    HOLD.test(text) &&
-    !covers(grant, 'push') &&
-    !asksBeyondPush(grant) &&
-    (covers(offered, 'push') || asksBeyondPush(offered))
-  );
+  const step: HoldStep | null = offered.release
+    ? 'release'
+    : offered.merge || offered.autoMerge
+      ? 'merge'
+      : offered.approve
+        ? 'approve'
+        : offered.pr
+          ? 'pr'
+          : covers(offered, 'push')
+            ? 'push'
+            : offered.comment
+              ? 'comment'
+              : null;
+  return step === null ? null : { step, how: 'declined' };
+}
+
+export function holdsOf(prompt: string, previousAnswer = ''): boolean {
+  return holdOf(prompt, previousAnswer) !== null;
 }
 
 // Whether a message asks for a step on the way out: a push, a pull request, a
