@@ -351,9 +351,9 @@ export function lineOf(
   const isMerged = v.kind.startsWith('merged-');
   const none = { workflows: [], isTruncated: false };
   const runs = isMerged ? (pull.mergeRuns ?? none) : pull;
-  const after = { text: isPush ? ' ·' : ' merged ·', isDim: true };
+  // The branch is named up front, so a running line is not read as the PR's own CI.
+  const after = { text: isPush ? ' ·' : ` merged into ${pull.base} ·`, isDim: true };
   const lead: Segment[] = isMerged ? [label, after] : [label];
-  const branchOf = isPush ? '' : `${pull.base} `;
   const tail: Segment[] = [];
   if (runs.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
   if (watch.error !== undefined) tail.push({ text: ` · ${watch.error}`, color: 'red' });
@@ -368,11 +368,10 @@ export function lineOf(
     return [...lead, { text: ' ✓ ready to merge', color: 'green' }, ...others(null), ...tail];
   }
   if (v.kind === 'merged-passed') {
-    return [...lead, { text: ` ✓ ${branchOf}checks passed`, color: 'green' }, ...tail];
+    return [...lead, { text: ' ✓ checks passed', color: 'green' }, ...tail];
   }
   if (v.kind === 'merged-waiting') {
-    const whose = isPush ? 'checks' : `${pull.base}'s checks`;
-    return [...lead, { text: ` ○ waiting on ${whose}`, isDim: true }, ...tail];
+    return [...lead, { text: ' ○ waiting on checks', isDim: true }, ...tail];
   }
   if (v.kind === 'failing' || v.kind === 'merged-failing') {
     const text = ` ✗ ${v.workflow}: ${v.job} failed`;

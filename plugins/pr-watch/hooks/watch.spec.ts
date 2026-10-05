@@ -512,7 +512,7 @@ describe('after a merge', () => {
     );
     expect(v.kind === 'merged-running' && v.gate.name).toBe('Release');
     expect(textOf(watched(merged([release(null), codeql('SUCCESS')])))).toBe(
-      '#128 merged · ● Release 1m10s · CodeQL ✓',
+      '#128 merged into main · ● Release 1m10s · CodeQL ✓',
     );
   });
 
@@ -522,7 +522,7 @@ describe('after a merge', () => {
       kind: 'merged-failing',
       job: 'Publish',
     });
-    expect(textOf(watched(p))).toBe('#128 merged · ✗ Release: Publish failed');
+    expect(textOf(watched(p))).toBe('#128 merged into main · ✗ Release: Publish failed');
     expect(toastOf('#128', verdictAt(p, {}, 'github.com', at), 'merged-running')).toBe(
       '#128 merged: Release: Publish failed',
     );
@@ -532,7 +532,7 @@ describe('after a merge', () => {
     const p = merged([release('SUCCESS')]);
     const v = verdictAt(p, {}, 'github.com', at);
     expect(v).toEqual({ kind: 'merged-passed' });
-    expect(textOf(watched(p))).toBe('#128 merged · ✓ main checks passed');
+    expect(textOf(watched(p))).toBe('#128 merged into main · ✓ checks passed');
     expect(toastOf('#128', v, 'merged-running')).toBe('#128 merged: its checks passed');
     // 70 s after the merge a late run may still start, so it keeps reading.
     expect(delayOf(v, p, at)).toBe(10_000);
@@ -566,7 +566,7 @@ describe('after a merge', () => {
 
   test('waits up to 90 s for the merge commit’s runs to start, then leaves', () => {
     expect(verdictAt(merged(null), {}, 'github.com', at)).toEqual({ kind: 'merged-waiting' });
-    expect(textOf(watched(merged([])))).toBe("#128 merged · ○ waiting on main's checks");
+    expect(textOf(watched(merged([])))).toBe('#128 merged into main · ○ waiting on checks');
     const later = at + 30_000;
     expect(verdictAt(merged([]), {}, 'github.com', later)).toEqual({ kind: 'closed' });
   });

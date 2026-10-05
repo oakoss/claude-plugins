@@ -7,8 +7,8 @@ A line above the Claude Code prompt for each pull request Claude opens, from the
 #128 ✓ ready to merge
 #128 ✗ CI: Typecheck failed
 #128 ⚠ conflicts
-#128 merged · ● Release ████▏░░░░░░░░░░░░░░░░░░░ 0m21s / ~1m40s · CI ●
-#128 merged · ✓ main checks passed
+#128 merged into main · ● Release ████▏░░░░░░░░░░░░░░ 0m21s / ~1m40s · CI ●
+#128 merged into main · ✓ checks passed
 ⟳ push feat/x · ● CI ███████▏░░░░░░░░░░░░░░░░░ 0m40s / ~2m20s
 ```
 
@@ -19,7 +19,7 @@ A line above the Claude Code prompt for each pull request Claude opens, from the
 - **Failing.** A job failed in a workflow that holds a required check, or in any workflow when nothing on the commit is required. The line names that job rather than a summary job that failed on it, and links to its log.
 - **Blocked.** Conflicts, changes requested, a branch behind its base, or a rule GitHub does not name (`⚠ blocked`).
 - **Waiting.** On a review, on a required check from a GitHub App, on GitHub to start the checks, on GitHub to work out the merge state, or on a draft to be marked ready.
-- **Merged.** The line follows the merge commit's runs on the base branch, every workflow counting, with the same bar and marks. Once they finish it reads `✓ <base> checks passed` or names the job that failed. It keeps reading for 90 seconds after the merge in case a later run starts. A passed merge then leaves the band a few seconds later. A failed one stays, read once a minute, until a re-run passes, and then leaves the same way; the `×` removes it sooner. A merge whose commit starts no runs within 90 seconds leaves the band.
+- **Merged.** The line names the base branch, `#128 merged into main`, and follows the merge commit's runs there, every workflow counting, with the same bar and marks. Once they finish it reads `✓ checks passed` or names the job that failed. It keeps reading for 90 seconds after the merge in case a later run starts. A passed merge then leaves the band a few seconds later. A failed one stays, read once a minute, until a re-run passes, and then leaves the same way; the `×` removes it sooner. A merge whose commit starts no runs within 90 seconds leaves the band.
 - **Pushed.** A branch Claude pushes with `git push` gets a line, `⟳ push <branch>`, that follows the runs on the branch's newest commit the way a merged line does: it reads `✓ checks passed` or names the job that failed, and leaves the same way. A branch that is the head of an open pull request hands its line to that pull request instead, upstream when the branch is on a fork. A push that moved no branch, such as a delete, a tag or `Everything up-to-date`, adds none, and neither does a `git push -q`, which prints nothing to read. A `--dry-run` prints what a push would, so it gets a line: a new branch leaves at its first read, and an existing one shows its current checks. A branch gone by the time it is read leaves at once, and one that cannot be read at all, such as on a host `gh` does not know, leaves once 90 seconds have passed.
 
 When a workflow has run more than once on the same commit, only its newest run counts.
