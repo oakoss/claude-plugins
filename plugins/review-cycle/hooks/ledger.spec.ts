@@ -5,12 +5,15 @@ import {
   entryId,
   EXPIRY_DAYS,
   isStale,
+  keyOf,
+  MAX_KEY,
   MAX_LEDGER_BYTES,
   MAX_PATH,
   MAX_REPOS,
   MAX_TEXT,
   merge,
   parseRecord,
+  PREFIX,
   select,
   staleKeys,
   storedOf,
@@ -399,5 +402,33 @@ describe('entryId', () => {
     expect(entryId('a.ts', 'x')).toBe(entryId('a.ts', 'x'));
     expect(entryId('a.ts', 'x')).toMatch(/^[0-9a-f]{8}$/);
     expect(entryId('a.ts', 'bx')).not.toBe(entryId('a.tsb', 'x'));
+  });
+
+  test('keeps the ids earlier versions recorded', () => {
+    expect(entryId('a.ts', 'x')).toBe('39bc6b0f');
+    expect(entryId('src/é.ts', '😀 finding')).toBe('686fbe05');
+  });
+});
+
+describe('keyOf', () => {
+  // 256 is the store's limit, measured on Claude Code 2.1.289.
+  const fits = `/${'a'.repeat(248)}`;
+
+  test('keys a path that fits the store by the path itself', () => {
+    expect(MAX_KEY).toBe(256);
+    expect(keyOf('/r/.git')).toBe('ledger:/r/.git');
+    expect(keyOf(fits)).toBe(`${PREFIX}${fits}`);
+    expect(keyOf(fits)).toHaveLength(256);
+  });
+
+  test('keys a longer path by its hash, one per path', () => {
+    const key = keyOf(`${fits}b`);
+    expect(key).toMatch(/^ledger:#[0-9a-f]{16}$/);
+    expect(keyOf(`${fits}b`)).toBe(key);
+    expect(keyOf(`${fits}c`)).not.toBe(key);
+  });
+
+  test('keeps a hashed key stable, since a ledger is stored under it', () => {
+    expect(keyOf(`/${'a'.repeat(300)}`)).toBe('ledger:#e759f9f285186444');
   });
 });
