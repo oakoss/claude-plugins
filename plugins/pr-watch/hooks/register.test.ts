@@ -19,6 +19,8 @@ const PROPS = {
 // when GraphQL reports an error beside the data.
 type Gh = {
   pr: string;
+  // The pushed-branch query's answer.
+  push?: string;
   estimate?: string;
   fails?: boolean;
   estimateFails?: number;
@@ -116,7 +118,8 @@ function world(
       gh.estimateFails = (gh.estimateFails ?? 0) - 1;
       return failed;
     }
-    const out = argv.includes('graphql') ? gh.pr : (gh.estimate ?? '{"workflow_runs":[]}');
+    const query = argv.includes('refs/heads/') ? (gh.push ?? gh.pr) : gh.pr;
+    const out = argv.includes('graphql') ? query : (gh.estimate ?? '{"workflow_runs":[]}');
     const answer = { value: { exitCode: 0, stdout: out, stderr: '' } };
     if (gh.holdFirst && argv.includes('graphql')) {
       gh.holdFirst = false;
@@ -597,6 +600,239 @@ describe('a push Claude makes', () => {
     gh.release?.();
     await clock.advance(1000);
     expect(reads(seen.runs)).toBe(2);
+  });
+});
+
+// What `git push` printed, stderr merged in, as the hook receives it.
+const PUSH_OUT = [
+  'remote: ',
+  "remote: Create a pull request for 'feat/x' on GitHub by visiting:        ",
+  'remote:      https://github.com/o/r/pull/new/feat/x        ',
+  'remote: ',
+  'To github.com:o/r.git',
+  ' * [new branch]      feat/x -> feat/x',
+  "branch 'feat/x' set up to track 'origin/feat/x'.",
+].join('\n');
+const PUSH_ID = 'github.com/o/r@feat/x';
+
+// The pushed branch's tip, with Release running or done, or the open pull
+// requests it heads; `self` and `parent` name the pushed repository.
+function pushJson(
+  status: string | null,
+  conclusion: string | null = null,
+  prs: object[] = [],
+  self = 'o/r',
+  parent: string | null = null,
+): string {
+  const release = status && {
+    status,
+    conclusion,
+    workflowRun: {
+      runAttempt: 1,
+      createdAt: '2026-10-03T22:01:00Z',
+      url: 'https://github.com/o/r/actions/runs/9',
+      workflow: { databaseId: 9, name: 'Release' },
+    },
+    checkRuns: { nodes: [{ name: 'Publish', status, conclusion, detailsUrl: '' }] },
+  };
+  const suites = { pageInfo: { hasNextPage: false }, nodes: release ? [release] : [] };
+  return JSON.stringify({
+    data: {
+      repository: {
+        nameWithOwner: self,
+        parent: parent && { nameWithOwner: parent },
+        ref: {
+          target: { checkSuites: suites },
+          associatedPullRequests: { nodes: prs },
+        },
+      },
+    },
+  });
+}
+
+const OWN_PR = { number: 128, url: URL, repository: { nameWithOwner: 'o/r' } };
+
+async function pushLineIn(ui: any): Promise<string | undefined> {
+  const row = await ui.find({ key: `row-${PUSH_ID}` });
+  return row?.text.replace(/ ×$/, '');
+}
+
+describe('a push to a branch with no pull request', () => {
+  test('follows the branch’s runs, says once they pass, and leaves 5 s later', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS') };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ● Release 0m11s');
+    gh.push = pushJson('COMPLETED', 'SUCCESS');
+    await clock.advance(10_000);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ✓ checks passed');
+    expect(seen.toasts).toEqual([]);
+    // The first read past the 90 s grace settles it; the push's burst moves
+    // that read to 96 s.
+    await clock.advance(84_000);
+    expect(seen.toasts).toEqual([]);
+    await clock.advance(1000);
+    expect(seen.toasts).toEqual(['push feat/x: its checks passed']);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ✓ checks passed');
+    await clock.advance(5000);
+    expect(await pushLineIn(ui)).toBeUndefined();
+  });
+
+  test('a failed run stays, toasted once, until a re-run passes', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE') };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(600_000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ✗ Release: Publish failed');
+    expect(seen.toasts).toEqual(['push feat/x: Release: Publish failed']);
+    gh.push = pushJson('COMPLETED', 'SUCCESS');
+    await clock.advance(66_000);
+    expect(await pushLineIn(ui)).toBeUndefined();
+  });
+
+  test('a branch with no runs within 90 s leaves', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), push: pushJson(null) }, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ○ waiting on checks');
+    await clock.advance(95_000);
+    expect(await pushLineIn(ui)).toBeUndefined();
+  });
+
+  test('a branch heading an open pull request hands the line to it, once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = { ...OWN_PR, headRepository: { nameWithOwner: 'o/r' } };
+    world(on, { pr: prJson(), push: pushJson('IN_PROGRESS', null, [pr]) }, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBeUndefined();
+    await clock.advance(1000);
+    expect(await lineIn(ui)).toBe('#128 ✓ ready to merge');
+    // Pushing again while the PR is watched adds no second line.
+    await create($, 'git push');
+    await clock.advance(2000);
+    expect(await pushLineIn(ui)).toBeUndefined();
+    const rows = await ui.findAll({ key: `row-${ID}` });
+    expect(rows.length).toBe(1);
+  });
+
+  test('a fork’s branch hands its line to the pull request upstream', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = { ...OWN_PR, headRepository: { nameWithOwner: 'me/r' } };
+    const fork = PUSH_OUT.replace('To github.com:o/r.git', 'To github.com:me/r.git');
+    world(on, { pr: prJson(), push: pushJson('IN_PROGRESS', null, [pr], 'me/r', 'o/r') }, fork);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(2000);
+    expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
+  });
+
+  test('a pull request a stranger’s fork opened from the branch is not its own', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    // A fork syncing from this branch: head here, base in the fork.
+    const stranger = {
+      number: 24,
+      url: 'https://github.com/someone/r/pull/24',
+      repository: { nameWithOwner: 'someone/r' },
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    world(on, { pr: prJson(), push: pushJson('IN_PROGRESS', null, [stranger]) }, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(await pushLineIn(await band($))).toBe('⟳ push feat/x · ● Release 0m11s');
+  });
+
+  test('pushing the branch again starts its line over', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE') };
+    world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(120_000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ✗ Release: Publish failed');
+    gh.push = pushJson(null);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ○ waiting on checks');
+  });
+
+  test('a read still running when the branch is pushed again does not overwrite it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE'), holdFirst: true };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    gh.push = pushJson(null);
+    await create($, 'git push');
+    gh.release?.();
+    await clock.advance(2000);
+    expect(seen.toasts).toEqual([]);
+    expect(await pushLineIn(await band($))).toBe('⟳ push feat/x · ○ waiting on checks');
+  });
+
+  test('says why its read failed, then leaves once the grace is over', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const error = JSON.stringify({
+      data: { repository: { ref: null } },
+      errors: [{ message: 'Could not resolve to a Ref' }],
+    });
+    world(on, { pr: prJson(), push: error }, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x gh failed: Could not resolve to a Ref');
+    await clock.advance(90_000);
+    expect(await pushLineIn(ui)).toBeUndefined();
+  });
+
+  test('a branch that is gone leaves at once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gone = JSON.stringify({ data: { repository: { ref: null } } });
+    world(on, { pr: prJson(), push: gone }, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(2000);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+  });
+
+  test('a push that moved a branch is followed though another was rejected', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS') };
+    world(on, gh, PUSH_OUT, (command) => command.startsWith('git push'));
+    await start($);
+    await create($, 'git push --all');
+    await clock.advance(1000);
+    expect(await pushLineIn(await band($))).toBe('⟳ push feat/x · ● Release 0m11s');
+  });
+
+  test('a push that moved no branch adds no line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(
+      on,
+      { pr: prJson(), push: pushJson('IN_PROGRESS') },
+      'Everything up-to-date\n',
+    );
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(reads(seen.runs)).toBe(0);
+    expect(await pushLineIn(await band($))).toBeUndefined();
   });
 });
 

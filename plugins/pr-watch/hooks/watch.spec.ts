@@ -11,6 +11,8 @@ import {
   isSettled,
   lineOf,
   movesPulls,
+  pushedBranches,
+  pushedPull,
   shownOf,
   toastOf,
   verdictOf,
@@ -153,6 +155,86 @@ describe('movesPulls', () => {
     ]) {
       expect(movesPulls(command)).toBe(false);
     }
+  });
+});
+
+// What `git push` printed: its remote line, then one ref line.
+const pushOut = (to: string, ref: string) => `remote: \n${to}\n${ref}\n`;
+const branch = (host: string, repo: string, name: string) => ({
+  host,
+  repo,
+  url: `https://${host}/${repo}/tree/${name}`,
+  branch: name,
+});
+
+describe('pushedBranches', () => {
+  test('reads the remote and each branch the push moved', () => {
+    expect(
+      pushedBranches(
+        'git push -u origin feat/x',
+        pushOut('To github.com:o/r.git', ' * [new branch]      feat/x -> feat/x'),
+      ),
+    ).toEqual([branch('github.com', 'o/r', 'feat/x')]);
+    expect(
+      pushedBranches(
+        'git push',
+        pushOut('To https://github.com/o/r.git', '   1a1f1ba..93cfbf4  main -> main'),
+      ),
+    ).toEqual([branch('github.com', 'o/r', 'main')]);
+    expect(
+      pushedBranches(
+        'git push --force-with-lease',
+        pushOut(
+          'To ssh://git@GHE.example.com:22/o/r',
+          ' + 1a1f1ba...93cfbf4 feat -> feat (forced update)',
+        ),
+      ),
+    ).toEqual([branch('ghe.example.com', 'o/r', 'feat')]);
+  });
+
+  test('a delete, a rejection, a tag or nothing to push moves no branch', () => {
+    for (const ref of [
+      ' - [deleted]         feat/x',
+      ' ! [rejected]        main -> main (fetch first)',
+      ' * [new tag]         v1.0.0 -> v1.0.0',
+      'Everything up-to-date',
+    ]) {
+      expect(pushedBranches('git push', pushOut('To github.com:o/r.git', ref))).toEqual([]);
+    }
+  });
+
+  test('reads --porcelain output, its refs named in full', () => {
+    const out = [
+      'To github.com:o/r.git',
+      '*\trefs/heads/feat:refs/heads/porc\t[new branch]',
+      ' \trefs/heads/feat:refs/heads/feat\t6146ffb..1cf72bb',
+      '!\trefs/heads/main:refs/heads/main\t[rejected] (fetch first)',
+      'Done',
+    ].join('\n');
+    expect(pushedBranches('git push --porcelain', out)).toEqual([
+      branch('github.com', 'o/r', 'porc'),
+      branch('github.com', 'o/r', 'feat'),
+    ]);
+  });
+
+  test('a ref outside refs/heads or a remote on no host moves no branch', () => {
+    const moved = pushOut('To github.com:o/r.git', ' * [new branch]      feat -> feat');
+    const feat = [branch('github.com', 'o/r', 'feat')];
+    expect(pushedBranches('git push origin feat 2>&1 | tail -n 20', moved)).toEqual(feat);
+    for (const ref of [
+      '   72aa440..b87bb85  refs/notes/commits -> refs/notes/commits',
+      ' + 72aa440...b87bb85 feat -> refs/pull/1/head (forced update)',
+    ]) {
+      expect(pushedBranches('git push', pushOut('To github.com:o/r.git', ref))).toEqual([]);
+    }
+    const local = `${moved}To /srv/backup.git\n * [new branch]      scratch -> scratch\n`;
+    expect(pushedBranches('git push', local)).toEqual([branch('github.com', 'o/r', 'feat')]);
+  });
+
+  test('only for a git push, and only after its remote', () => {
+    const moved = pushOut('To github.com:o/r.git', '   1a1f1ba..93cfbf4  main -> main');
+    expect(pushedBranches('git log', moved)).toEqual([]);
+    expect(pushedBranches('git push', '   1a1f1ba..93cfbf4  main -> main\n')).toEqual([]);
   });
 });
 
@@ -392,6 +474,33 @@ function merged(runs: Workflow[] | null): Pull {
 }
 
 const release = (conclusion: string | null) => flow(5, 'Release', [job('Publish', conclusion)]);
+
+// Pushed 70 s before `at`, with these runs on the branch's tip.
+const pushed = (runs: Workflow[] | null) =>
+  watched(pushedPull('feat/x', at - 70_000, runs && { workflows: runs, isTruncated: false }), {
+    number: 0,
+    push: { branch: 'feat/x', pushedAt: at - 70_000 },
+    url: 'https://github.com/o/r/tree/feat/x',
+    checkedAt: at,
+  });
+
+describe('after a push', () => {
+  test('names the push, then follows the branch’s runs as a merge’s', () => {
+    expect(textOf(pushed([]))).toBe('⟳ push feat/x · ○ waiting on checks');
+    expect(textOf(pushed([release(null)]))).toBe('⟳ push feat/x · ● Release 1m10s');
+    expect(textOf(pushed([release('SUCCESS')]))).toBe('⟳ push feat/x · ✓ checks passed');
+    expect(textOf(pushed([release('FAILURE')]))).toBe('⟳ push feat/x · ✗ Release: Publish failed');
+  });
+
+  test('says the push, not a merge, in its toasts', () => {
+    const p = pushed([release('FAILURE')]).pull!;
+    const v = verdictAt(p, {}, 'github.com', at);
+    expect(toastOf('push feat/x', v, undefined, '')).toBe('push feat/x: Release: Publish failed');
+    expect(toastOf('push feat/x', { kind: 'merged-passed' }, undefined, '')).toBe(
+      'push feat/x: its checks passed',
+    );
+  });
+});
 
 describe('after a merge', () => {
   test('follows the merge commit’s runs, the longest as the gate', () => {
