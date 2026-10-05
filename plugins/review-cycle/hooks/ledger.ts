@@ -55,18 +55,30 @@ const ENTRY_KEYS = [
 const BLOB = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-export function keyOf(common: string): string {
-  return `${PREFIX}${common}`;
-}
+// The store refuses a key over 256 characters.
+export const MAX_KEY = 256;
 
-// FNV-1a: the same finding at the same path gets the same id in every cycle.
-export function entryId(path: string, finding: string): string {
-  let h = 0x81_1c_9d_c5;
-  for (const ch of `${path}\0${finding}`) {
+// FNV-1a from `basis`, as 8 hex digits.
+function fnv(text: string, basis: number): string {
+  let h = basis;
+  for (const ch of text) {
     h ^= ch.codePointAt(0) ?? 0;
     h = Math.imul(h, 0x01_00_01_93) >>> 0;
   }
   return h.toString(16).padStart(8, '0');
+}
+
+// A path too long for the store is keyed by its hash. `common` is absolute, so
+// a hashed key (`#`) never equals a path's own.
+export function keyOf(common: string): string {
+  const key = `${PREFIX}${common}`;
+  if (key.length <= MAX_KEY) return key;
+  return `${PREFIX}#${fnv(common, 0x81_1c_9d_c5)}${fnv(common, 0x05_0c_5d_1f)}`;
+}
+
+// The same finding at the same path gets the same id in every cycle.
+export function entryId(path: string, finding: string): string {
+  return fnv(`${path}\0${finding}`, 0x81_1c_9d_c5);
 }
 
 // Never cuts a surrogate pair in half.

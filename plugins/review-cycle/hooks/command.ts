@@ -1091,6 +1091,21 @@ function mergeOf(words: Word[], from: number, repo: Word | null, context: GhCont
   };
 }
 
+// gh prints help and stops, unless an option takes the word as its value:
+// `-b --help` merges. After any option it counts as a value, so `--admin
+// --help` still asks, and `--help=false` or xargs input can turn it off.
+function asksHelp(words: Word[], fed: boolean): boolean {
+  if (fed) return false;
+  const end = words.findIndex((w) => w.text === '--');
+  const args = end === -1 ? words : words.slice(0, end);
+  if (args.some((w) => w.text.startsWith('--help='))) return false;
+  return args.some((w, i) => {
+    if (w.text !== '-h' && w.text !== '--help') return false;
+    const before = args[i - 1];
+    return before === undefined || (!before.dynamic && !before.text.startsWith('-'));
+  });
+}
+
 // The gh command at `at`. An alias or extension is not read, so the agent
 // writes gh's own words; `fed` is xargs or parallel supplying the rest.
 function ghAt(
@@ -1111,6 +1126,7 @@ function ghAt(
       why: `\`gh ${group}\` is a gh alias or extension, which the gate does not read`,
     };
   }
+  if (asksHelp(words.slice(at + 1), fed)) return null;
   if (group === 'api') {
     // `gh --hostname h api …` sends it to another host.
     const host = words.slice(at + 1, sub).some((w) => /^--hostname(=|$)/.test(w.text));
