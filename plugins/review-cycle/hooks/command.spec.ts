@@ -1447,6 +1447,42 @@ describe('gh steps', () => {
   ])('%s', (command, expected) => {
     expect(kinds(command)).toEqual(expected);
   });
+  // Measured on gh 2.102.0 outside a repository. A help word after a flag
+  // (`--admin --help`) prints help too, but still asks.
+  test.each([
+    'gh pr merge --help',
+    'gh pr merge -h',
+    'gh pr merge 5 -h',
+    'gh pr --help merge',
+    'gh --help pr merge 5',
+    'gh -R o/r pr merge --help',
+    'gh pr review -a -b x --help',
+    'gh release create --help',
+    'gh api -XPUT repos/o/r/pulls/116/merge --help',
+    'gh pr create --help',
+    // gh fails with `unknown command "merge"`, merging nothing.
+    'gh -h pr merge 5',
+  ])('%s asks for help, which writes nothing', (command) => {
+    expect(kinds(command)).toEqual([]);
+  });
+  test.each([
+    ['gh pr merge -b --help', ['merge']],
+    ['gh pr merge --body --help', ['merge']],
+    ['gh pr merge -t -h 5', ['merge']],
+    ['gh pr merge -- --help', ['merge']],
+    ['gh pr merge -- 5 --help', ['merge']],
+    ['gh pr merge --help --help=false', ['merge']],
+    ['gh pr merge 5 --help --help=0', ['merge']],
+    ['gh pr merge 5 --admin --help', ['merge']],
+    ['gh pr merge "$F" --help', ['unread']],
+    ['gh release create v1 -n --help', ['release']],
+    ['echo 5 | xargs gh pr merge --help', ['unread']],
+  ])('%s is not read as help', (command, expected) => {
+    expect(kinds(command)).toEqual(expected);
+  });
+  test('an alias or extension given --help is still not read', () => {
+    expect(kinds('gh co --help', [['co', 'pr checkout']])).toEqual(['unread']);
+  });
   test('a merge names its pull request and repository for the lookup', () => {
     expect(ghActions('gh pr merge 116 --squash -b "x y"')).toEqual([
       { kind: 'merge', admin: false, auto: false, lookup: ['116'] },
