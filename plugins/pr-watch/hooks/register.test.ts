@@ -373,10 +373,10 @@ describe('a merged pull request', () => {
     await create($);
     await clock.advance(1000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m11s');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ● Release 0m11s');
     gh.pr = mergedJson('COMPLETED', 'SUCCESS');
     await clock.advance(10_000);
-    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed');
     // A late run could still start, so passing is not said yet.
     expect(seen.toasts).toEqual([]);
     // Read on through the 90 s after the merge, then settled: said once,
@@ -387,7 +387,7 @@ describe('a merged pull request', () => {
     const settled = reads(seen.runs);
     // A message does not clear it early.
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
-    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed');
     await clock.advance(5000);
     expect(await lineIn(ui)).toBeUndefined();
     await clock.advance(120_000);
@@ -402,7 +402,7 @@ describe('a merged pull request', () => {
     await create($);
     await clock.advance(90_000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe('#128 merged · ✗ Release: Publish failed');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
     const r = await $.prompt.submit({
       text: 'next',
       origin: { kind: 'composer' },
@@ -410,14 +410,14 @@ describe('a merged pull request', () => {
     } as any);
     expect(r).toMatchObject({ text: 'next' });
     await clock.advance(600_000);
-    expect(await lineIn(ui)).toBe('#128 merged · ✗ Release: Publish failed');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
     gh.pr = mergedJson('COMPLETED', 'SUCCESS');
     // Read within the minute; stop on the read that sees it pass.
     for (let s = 0; s < 60 && seen.toasts.at(-1) !== '#128 merged: its checks passed'; s++) {
       await clock.advance(1000);
     }
     expect(seen.toasts.at(-1)).toBe('#128 merged: its checks passed');
-    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed');
     await clock.advance(5000);
     expect(await lineIn(ui)).toBeUndefined();
   });
@@ -430,14 +430,14 @@ describe('a merged pull request', () => {
     await create($);
     await clock.advance(1000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks");
+    expect(await lineIn(ui)).toBe('#128 merged into main · ○ waiting on checks');
     const r = await $.prompt.submit({
       text: 'hi',
       origin: { kind: 'composer' },
       wait: false,
     } as any);
     expect(r).toMatchObject({ text: 'hi' });
-    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks");
+    expect(await lineIn(ui)).toBe('#128 merged into main · ○ waiting on checks');
     await clock.advance(80_000);
     expect(await lineIn(ui)).toBeUndefined();
   });
@@ -452,7 +452,7 @@ describe('a merged pull request', () => {
     await clock.advance(75_000);
     gh.pr = mergedJson('IN_PROGRESS', null);
     await clock.advance(20_000);
-    expect(await lineIn(await band($))).toBe('#128 merged · ● Release 1m45s');
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 1m45s');
   });
 
   test('reads that fail past the 90 s neither settle nor drop it', async ($, on) => {
@@ -465,7 +465,7 @@ describe('a merged pull request', () => {
     gh.fails = true;
     await clock.advance(100_000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe('#128 merged · ✓ main checks passed · gh failed: HTTP 502');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed · gh failed: HTTP 502');
     const before = reads(seen.runs);
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
     expect(await lineIn(ui)).toMatch(/gh failed/);
@@ -485,11 +485,13 @@ describe('a merged pull request', () => {
     gh.fails = true;
     await clock.advance(120_000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks · gh failed: HTTP 502");
+    expect(await lineIn(ui)).toBe(
+      '#128 merged into main · ○ waiting on checks · gh failed: HTTP 502',
+    );
     gh.fails = false;
     gh.pr = mergedJson('IN_PROGRESS', null);
     await clock.advance(10_000);
-    expect(await lineIn(ui)).toMatch(/^#128 merged · ● Release /);
+    expect(await lineIn(ui)).toMatch(/^#128 merged into main · ● Release /);
   });
 
   test('the clock keeps moving for a run on the base branch', async ($, on) => {
@@ -502,9 +504,9 @@ describe('a merged pull request', () => {
     gh.pr = mergedJson('IN_PROGRESS', null);
     await clock.advance(10_000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m21s');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ● Release 0m21s');
     await clock.advance(3000);
-    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m24s');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ● Release 0m24s');
   });
 
   test('waits for the merge commit’s runs to start, then follows them', async ($, on) => {
@@ -522,10 +524,10 @@ describe('a merged pull request', () => {
     await create($);
     await clock.advance(1000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe("#128 merged · ○ waiting on main's checks");
+    expect(await lineIn(ui)).toBe('#128 merged into main · ○ waiting on checks');
     gh.pr = mergedJson('IN_PROGRESS', null);
     await clock.advance(10_000);
-    expect(await lineIn(ui)).toBe('#128 merged · ● Release 0m21s');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ● Release 0m21s');
   });
 
   test('a message while its run is still going leaves the line', async ($, on) => {
@@ -535,7 +537,7 @@ describe('a merged pull request', () => {
     await create($);
     await clock.advance(1000);
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
-    expect(await lineIn(await band($))).toBe('#128 merged · ● Release 0m11s');
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m11s');
   });
 });
 
