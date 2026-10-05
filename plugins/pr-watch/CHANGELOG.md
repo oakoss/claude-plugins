@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.2.0 (2026-10-05)
+
+### Added
+
+A merged pull request whose checks passed now leaves the band on its own: every run on the merge commit has to be done and 90 seconds past the merge, and the line goes 5 seconds after the band's next read sees both. Before, the `✓ main checks passed` line stayed until your next message.
+
+A merge whose checks failed now stays until they pass. The band reads it once a minute, every 10 seconds while a re-run is going, and clears it the same way once a re-run passes. Your next message no longer clears it; the `×` still does. When Claude runs `gh run rerun` or `gh workflow run`, the band reads every watched pull request at once, as it does after `git push` or `gh pr merge`, so the re-run shows within seconds rather than at the next minute's read.
+
+A branch Claude pushes now gets a line in the band: `⟳ push feat/x · ● CI` with the same progress bar and marks, then `✓ checks passed` or the job that failed, with a toast. It follows the runs on the branch's newest commit and clears the way a merge does: a few seconds after its checks pass and 90 seconds have gone by since the push, or, when they fail, once a re-run passes. Pushing the branch again starts its line over. Before, a push to a branch with no pull request showed nothing.
+
+A push to a branch that heads an open pull request shows that pull request's line instead, the upstream one when the branch is on a fork, adding it if the band was not already watching it. A branch is read from the push's output, `--porcelain` included, and counts when the push moved it, even if the same push had another branch rejected. A push that moved no branch (a delete, a tag, `Everything up-to-date`) adds no line, and `git push -q` prints nothing to read. A `--dry-run` prints what a push would, so it gets a line: a new branch leaves at its first read, and an existing one shows its current checks. A branch gone by the time it is read leaves at once, and one that cannot be read at all, such as on a host `gh` does not know, leaves after 90 seconds rather than staying as an error.
+
+### Fixed
+
+A merged pull request's line now names the branch it merged into, `#140 merged into main · ● CI`, while that branch's checks run, pass or fail. Before, it read `#140 merged · ● CI`, which looked like the pull request's own checks still running; only the passed and waiting lines named the branch, and they now read `✓ checks passed` and `○ waiting on checks` after the same lead.
+
 ## 0.1.0 (2026-10-04)
 
 ### Added
