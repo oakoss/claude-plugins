@@ -5,7 +5,7 @@ import {
   entryId,
   EXPIRY_DAYS,
   isStale,
-  MAX_ENTRIES,
+  MAX_LEDGER_BYTES,
   MAX_PATH,
   MAX_REPOS,
   MAX_TEXT,
@@ -15,6 +15,7 @@ import {
   staleKeys,
   storedOf,
   updatedOf,
+  utf8Bytes,
   type Entry,
   type NewEntry,
 } from './ledger';
@@ -33,6 +34,9 @@ function finding(over: Partial<NewEntry> = {}): NewEntry {
     ...over,
   };
 }
+
+// Findings of one fixed length, so their entries are the same size.
+const numbered = (i: number) => finding({ finding: `f${String(i).padStart(6, '0')}` });
 
 function recorded(n: NewEntry, blob = BLOB): Entry {
   return { id: entryId(n.path, n.finding), ...n, blob, date: DATE };
@@ -189,16 +193,44 @@ describe('merge', () => {
     expect(m.entries).toEqual([{ ...recorded(again), date: 'later' }]);
     expect(m).toMatchObject({ resolved: 1, added: 1 });
   });
-  test('evicts the oldest entries past the cap', () => {
-    const existing = Array.from({ length: MAX_ENTRIES }, (_, i) =>
-      recorded(finding({ finding: `f${i}` })),
+  test('keeps several hundred entries of a typical size', () => {
+    const existing = Array.from({ length: 500 }, (_, i) =>
+      recorded(finding({ finding: `f${i} ${'x'.repeat(200)}`, reason: 'y'.repeat(150) })),
     );
+    const m = merge(existing, { add: [], resolve: [], keep: [] }, blobs('a.ts'), DATE);
+    expect(m.evicted).toBe(0);
+  });
+  test('evicts the oldest entries past the byte budget, counting UTF-8 bytes', () => {
+    // Each entry is about 1.4 KiB of JSON, 3 bytes for each ✓.
+    const big = (i: number) => finding({ finding: `f${i} ${'✓'.repeat(MAX_TEXT - 6)}` });
+    const existing = Array.from({ length: 300 }, (_, i) => recorded(big(i)));
     const add = [finding({ finding: 'new' })];
     const m = merge(existing, { add, resolve: [], keep: [] }, blobs('a.ts'), DATE);
-    expect(m.entries).toHaveLength(MAX_ENTRIES);
-    expect(m.evicted).toBe(1);
-    expect(m.entries[0]?.finding).toBe('f1');
+    expect(m.evicted).toBeGreaterThan(0);
+    expect(m.entries[0]?.finding.startsWith(`f${m.evicted} `)).toBe(true);
     expect(m.entries.at(-1)?.finding).toBe('new');
+    const bytes = m.entries.reduce((n, e) => n + utf8Bytes(JSON.stringify(e)) + 1, 0);
+    expect(bytes).toBeLessThanOrEqual(MAX_LEDGER_BYTES);
+    const withOneMore = bytes + utf8Bytes(JSON.stringify(existing[m.evicted - 1])) + 1;
+    expect(withOneMore).toBeGreaterThan(MAX_LEDGER_BYTES);
+  });
+  test('counts the comma between entries', () => {
+    // Equal entries small enough that counting it keeps fewer of them.
+    const size = utf8Bytes(JSON.stringify(recorded(numbered(0))));
+    const existing = Array.from({ length: Math.ceil(MAX_LEDGER_BYTES / size) + 5 }, (_, i) =>
+      recorded(numbered(i)),
+    );
+    const m = merge(existing, { add: [], resolve: [], keep: [] }, blobs('a.ts'), DATE);
+    expect(m.entries).toHaveLength(Math.floor(MAX_LEDGER_BYTES / (size + 1)));
+  });
+  test('the store holds MAX_REPOS full ledgers, each several hundred typical entries', () => {
+    expect(MAX_LEDGER_BYTES * MAX_REPOS).toBeLessThan(4 * 1024 * 1024);
+    expect(MAX_LEDGER_BYTES).toBeGreaterThanOrEqual(800 * 471);
+  });
+  test('counts UTF-8 bytes of every width', () => {
+    for (const s of ['', 'a', 'é', '✓', '😀', 'aé✓😀']) {
+      expect(utf8Bytes(s)).toBe(new TextEncoder().encode(s).length);
+    }
   });
 });
 

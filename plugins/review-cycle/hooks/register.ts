@@ -69,7 +69,14 @@ import {
   type Step,
   type StopBefore,
 } from './ladder';
-import { KINDS, parseRecord, type Recording } from './ledger';
+import {
+  KINDS,
+  MAX_LEDGER_BYTES,
+  MAX_REPOS,
+  MAX_TEXT,
+  parseRecord,
+  type Recording,
+} from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
 import {
@@ -1535,8 +1542,7 @@ async function registerLedger($: $): Promise<void> {
     });
     await $.tool.register({
       name: 'ledger_record',
-      description:
-        "Records what a review cycle settled without fixing into this repository's findings ledger. `entries` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at 400 characters, and the same finding at the same path replaces its entry. `keep` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. `resolve` removes entries by id. The ledger keeps the newest 100 entries, and ledgers for the 10 most recently recorded repositories.",
+      description: `Records what a review cycle settled without fixing into this repository's findings ledger. \`entries\` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at ${MAX_TEXT} characters, and the same finding at the same path replaces its entry. \`keep\` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. \`resolve\` removes entries by id. The ledger keeps the newest entries that fit in ${MAX_LEDGER_BYTES / 1024} KiB per repository, and ledgers for the ${MAX_REPOS} most recently recorded repositories.`,
       inputSchema: {
         type: 'object',
         properties: {

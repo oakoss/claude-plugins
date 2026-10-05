@@ -32,10 +32,9 @@ export type NewEntry = Omit<Entry, 'id' | 'blob' | 'date'>;
 // record drops them and says how many.
 export type Stored = { entries: Entry[]; unreadable: number; updated: number };
 
-// The store holds every repository's ledger in 4 MiB of JSON. A full ledger of
-// plain text measured about 137 KiB, and about twice that when JSON escapes
-// much of it, so 10 repositories stay under the limit.
-export const MAX_ENTRIES = 100;
+// The store holds MAX_REPOS ledgers in 4 MiB of JSON. A byte budget, not an
+// entry count: entries run near 470 bytes but can reach about 10 KB.
+export const MAX_LEDGER_BYTES = 384 * 1024;
 export const MAX_TEXT = 400;
 export const MAX_PATH = 1024;
 export const MAX_REPOS = 10;
@@ -230,7 +229,7 @@ export type Merged = {
   updated: number;
   resolved: number;
   kept: number;
-  // Kept entries whose file is no longer in the working tree, so dropped.
+  // Kept entries whose file is gone from the working tree, and so dropped.
   gone: number;
   // Ids in `resolve` or `keep` that named no entry.
   unknown: string[];
@@ -283,8 +282,20 @@ export function merge(
     byId.set(id, { id, ...n, blob, date });
   }
   const all = [...byId.values()];
-  const evicted = Math.max(0, all.length - MAX_ENTRIES);
+  const sizes = all.map((e) => utf8Bytes(JSON.stringify(e)) + 1);
+  let size = sizes.reduce((n, s) => n + s, 0);
+  let evicted = 0;
+  while (evicted < all.length && size > MAX_LEDGER_BYTES) size -= sizes[evicted++] ?? 0;
   return { entries: all.slice(evicted), added, updated, resolved, kept, gone, unknown, evicted };
+}
+
+export function utf8Bytes(s: string): number {
+  let n = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0;
+    n += c < 0x80 ? 1 : c < 0x8_00 ? 2 : c < 0x1_00_00 ? 3 : 4;
+  }
+  return n;
 }
 
 export function isStale(date: string, now: number): boolean {
