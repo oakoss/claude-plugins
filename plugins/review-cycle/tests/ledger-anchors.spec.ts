@@ -10,7 +10,10 @@ test('every brief carries the ledger, and changed code reopens an entry', () => 
   const text = skillText('review');
   expect(text).toContain('**Every brief carries what earlier cycles settled.**');
   expect(text).toContain('call the `mcp__review-cycle__ledger` tool with the changed-file list');
-  expect(text).toContain('a `settled in earlier cycles` block');
+  expect(text).toContain('a `settled in earlier cycles` block to every leg');
+  expect(text).toContain('the test, type and spec legs as much as code-reviewer and Codex');
+  expect(text).toContain('each entry by its substance');
+  expect(text).toContain('never by id alone, since a leg cannot look an id up');
   expect(text).toContain('each listed as reopened so the legs judge it afresh');
   expect(text).toContain(
     'a `changed` entry whose `git diff <blob> <current>` touches the code it cites',
