@@ -4,6 +4,30 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.27.0 (2026-10-05)
+
+### Added
+
+A request to merge now covers merging oakum's version pull request, since merging it is the only way to release. "merge it" or "merge #130" lets the agent merge the version pull request. Before, the gate classed that merge as a release and refused it, so the agent asked "Release `x`?" after you had already said to merge.
+
+These still need you to ask for a release:
+
+- a merge request that names other pull requests: "merge 131", "merge it; do not merge 130", or "merge it" answering "Merge #131?" do not merge #130 ("merge 131 and 130" does);
+- a merge asked for once the pull request is ready (`--auto`);
+- a merge request in a message that also holds off a release ("merge 131. don't release yet");
+- a stop-before setting that lets merges through;
+- the other release steps (`gh release create`, `npm publish`, `oakum release`).
+
+### Fixed
+
+"As soon as" now withholds a request the way "when", "once" and "if" do. Before, "merge it as soon as I say so, then release it" granted the release, and "commit it as soon as you can, then push it" granted the push, so the agent could release or push without waiting for the condition. Both now ask first, and a step asked for in the same sentence waits too: "commit and push as soon as checks pass" no longer grants the commit. "Merge it as soon as checks pass" still grants an auto-merge.
+
+The consent spec also checks each cue word on its own, and `pnpm consent:diff` generates openers with hyphens, brackets and curly quotes, the inputs where reading raw text and reading words disagree.
+
+The findings ledger now keeps the newest entries that fit in 384 KiB per repository rather than the newest 100. Real entries measured about 470 bytes each, so a busy repository keeps several hundred settled decisions instead of evicting them once it passes 100, which this repository's did after a week; later cycles then re-raised what the evicted entries had settled. Ten repositories' ledgers still fit the plugin store's 4 MiB.
+
+`/review-cycle:review` now gives every reviewer the findings earlier cycles settled, the test, type and spec reviewers as well as the code reviewer and Codex, with each entry's path, finding and reason rather than its id. Measured over 55 review cycles, about one settled entry in five reached a reviewer's brief in a form it could use, and the narrower reviewers rarely got them at all.
+
 ## 0.26.0 (2026-10-04)
 
 ### Added
