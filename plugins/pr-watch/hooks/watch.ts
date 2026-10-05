@@ -15,6 +15,86 @@ const MOVES_PR = new RegExp(
   String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b)`,
 );
 
+const GIT_PUSH = new RegExp(String.raw`${START}git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b`);
+// git's "To <remote>" line: scp, https:// or ssh:// form.
+const PUSH_TO =
+  /^To\s+(?:\w+:\/\/)?(?:[^@\s/]+@)?([A-Za-z0-9.-]+)(?::\d+)?[:/]([\w-][\w.-]*\/[\w-][\w.-]*?)(?:\.git)?\/?\s*$/;
+// A ref the push moved: "a..b  src -> dst", "+ a...b src -> dst (forced
+// update)", "* [new branch]  src -> dst". Deleted, rejected, up-to-date and
+// new-tag lines name none.
+const PUSH_REF =
+  /^\s*[+*]?\s*(?:[0-9a-f]{4,}\.{2,3}[0-9a-f]{4,}|\[new branch\])\s+\S+\s+->\s+(\S+)/;
+// The same with --porcelain: "<flag>\t<src>:<dst>\t<summary>".
+const PORCELAIN_REF = /^[ +*]\t\S*:(\S+)\t/;
+
+export type PushTarget = Pick<Target, 'host' | 'repo' | 'url'> & { branch: string };
+
+// The branches a `git push` moved, read from its output, which reaches the
+// hook in stdout with stderr merged in. A forced tag reads like a branch
+// here, and a --dry-run like a push; the read drops a branch that is not
+// there, and an existing one shows its tip's runs.
+export function pushedBranches(command: string, stdout: string): PushTarget[] {
+  if (!GIT_PUSH.test(command)) return [];
+  const found: PushTarget[] = [];
+  let to: { host: string; repo: string } | null = null;
+  for (const line of stdout.split('\n')) {
+    if (/^To\s/.test(line)) {
+      // A remote that is not on a host, such as a local path, names no repo.
+      const remote = PUSH_TO.exec(line);
+      to = remote ? { host: remote[1]!.toLowerCase(), repo: remote[2]! } : null;
+      continue;
+    }
+    const dst = (PUSH_REF.exec(line) ?? PORCELAIN_REF.exec(line))?.[1];
+    if (!dst || !to || (dst.startsWith('refs/') && !dst.startsWith('refs/heads/'))) continue;
+    const branch = dst.replace(/^refs\/heads\//, '');
+    const url = `https://${to.host}/${to.repo}/tree/${branch}`;
+    if (!found.some((p) => p.host === to!.host && p.repo === to!.repo && p.branch === branch)) {
+      found.push({ ...to, url, branch });
+    }
+  }
+  return found;
+}
+
+// How toasts and errors name a watch.
+export function labelOf(w: Pick<Watch, 'number' | 'push'>): string {
+  return w.push ? `push ${w.push.branch}` : `#${w.number}`;
+}
+
+// A push whose branch could not be read once in the grace, such as one on a
+// host gh does not know, leaves rather than staying an error.
+export function isUnreadable(w: Watch, now: number): boolean {
+  return w.push !== undefined && w.pull === undefined && now - w.push.pushedAt >= MERGE_GRACE_MS;
+}
+
+// Whether a line leaves with time alone: a merge or push that started no runs
+// in its grace, a passed one past its stay, or a push never read.
+export function isGone(w: Watch, estimates: Record<string, number>, now: number): boolean {
+  if (isUnreadable(w, now)) return true;
+  if (!w.pull) return false;
+  const verdict = verdictOf(w.pull, estimates, w.host, w.checkedAt);
+  return verdict.kind === 'closed' || isCleared(verdict, w.pull, w.checkedAt, now);
+}
+
+// A push follows its branch's runs as a merge follows its merge commit's.
+export function pushedPull(branch: string, pushedAt: number, runs: Pull['mergeRuns']): Pull {
+  return {
+    number: 0,
+    title: '',
+    url: '',
+    state: 'MERGED',
+    isDraft: false,
+    merge: 'UNKNOWN',
+    review: null,
+    workflows: [],
+    isGated: false,
+    isRequiredPending: false,
+    isTruncated: false,
+    base: branch,
+    mergedAt: new Date(pushedAt).toISOString(),
+    mergeRuns: runs,
+  };
+}
+
 // Whether a command can start new runs or close a pull request, so the
 // band should look again soon rather than at its next slow poll.
 export function movesPulls(command: string): boolean {
@@ -192,13 +272,18 @@ export function shownOf(verdict: Verdict): string {
   return verdict.kind;
 }
 
-export function toastOf(label: string, verdict: Verdict, shown?: string): string | null {
+export function toastOf(
+  label: string,
+  verdict: Verdict,
+  shown?: string,
+  after = ' merged',
+): string | null {
   if (shownOf(verdict) === shown) return null;
   if (verdict.kind === 'ready') return `${label} is ready to merge`;
   if (verdict.kind === 'failing') return `${label} ${verdict.workflow}: ${verdict.job} failed`;
-  if (verdict.kind === 'merged-passed') return `${label} merged: its checks passed`;
+  if (verdict.kind === 'merged-passed') return `${label}${after}: its checks passed`;
   if (verdict.kind === 'merged-failing') {
-    return `${label} merged: ${verdict.workflow}: ${verdict.job} failed`;
+    return `${label}${after}: ${verdict.workflow}: ${verdict.job} failed`;
   }
   return null;
 }
@@ -244,7 +329,9 @@ export function lineOf(
   estimates: Record<string, number>,
   columns: number,
 ): Segment[] {
-  const label = { text: `#${watch.number}`, color: 'cyan', url: watch.url };
+  const isPush = watch.push !== undefined;
+  const title = isPush ? `⟳ ${labelOf(watch)}` : labelOf(watch);
+  const label = { text: title, color: 'cyan', url: watch.url };
   const pull = watch.pull;
   if (!pull) {
     const why = watch.error ?? 'loading…';
@@ -264,7 +351,9 @@ export function lineOf(
   const isMerged = v.kind.startsWith('merged-');
   const none = { workflows: [], isTruncated: false };
   const runs = isMerged ? (pull.mergeRuns ?? none) : pull;
-  const lead: Segment[] = isMerged ? [label, { text: ' merged ·', isDim: true }] : [label];
+  const after = { text: isPush ? ' ·' : ' merged ·', isDim: true };
+  const lead: Segment[] = isMerged ? [label, after] : [label];
+  const branchOf = isPush ? '' : `${pull.base} `;
   const tail: Segment[] = [];
   if (runs.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
   if (watch.error !== undefined) tail.push({ text: ` · ${watch.error}`, color: 'red' });
@@ -279,10 +368,11 @@ export function lineOf(
     return [...lead, { text: ' ✓ ready to merge', color: 'green' }, ...others(null), ...tail];
   }
   if (v.kind === 'merged-passed') {
-    return [...lead, { text: ` ✓ ${pull.base} checks passed`, color: 'green' }, ...tail];
+    return [...lead, { text: ` ✓ ${branchOf}checks passed`, color: 'green' }, ...tail];
   }
   if (v.kind === 'merged-waiting') {
-    return [...lead, { text: ` ○ waiting on ${pull.base}'s checks`, isDim: true }, ...tail];
+    const whose = isPush ? 'checks' : `${pull.base}'s checks`;
+    return [...lead, { text: ` ○ waiting on ${whose}`, isDim: true }, ...tail];
   }
   if (v.kind === 'failing' || v.kind === 'merged-failing') {
     const text = ` ✗ ${v.workflow}: ${v.job} failed`;

@@ -1,16 +1,19 @@
 import { atom, read, update, type EngineInterface, type Register, type Timer } from 'claude-code';
 
-import type { Watch } from '../types';
-import { estimateArgs, parseEstimate, parsePull, pullArgs } from './github';
+import type { Pull, Watch } from '../types';
+import { estimateArgs, parseEstimate, parsePull, parsePush, pullArgs, pushArgs } from './github';
 import {
   createdPull,
+  pushedBranches,
+  pushedPull,
   delayOf,
   errorLine,
   estimateKey,
   lineOf,
   movesPulls,
-  isCleared,
+  isGone,
   isSettled,
+  labelOf,
   shownOf,
   toastOf,
   verdictOf,
@@ -42,7 +45,11 @@ let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
 
-const idOf = (w: Pick<Watch, 'host' | 'repo' | 'number'>) => `${w.host}/${w.repo}#${w.number}`;
+const idOf = (w: Pick<Watch, 'host' | 'repo' | 'number' | 'push'>) =>
+  `${w.host}/${w.repo}${w.push ? `@${w.push.branch}` : `#${w.number}`}`;
+
+// The same watch, not a later push of the same branch that replaced it.
+const isSame = (a: Watch, b: Watch) => idOf(a) === idOf(b) && a.push?.pushedAt === b.push?.pushedAt;
 
 function errorText(error: unknown): string {
   return errorLine(error instanceof Error ? error.message : String(error));
@@ -76,14 +83,32 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
 }
 
 // gh exits non-zero when GraphQL reports any error, even beside usable data.
-async function readPull($: $, w: Watch) {
-  const r = await $.process.run(pullArgs(w.host, w.repo, w.number));
+async function readGh<T>($: $, argv: string[], parse: (stdout: string) => T): Promise<T> {
+  const r = await $.process.run(argv);
   try {
-    return parsePull(r.stdout);
+    return parse(r.stdout);
   } catch (error) {
     if (r.exitCode === 0) throw error;
     throw new Error(r.stderr.trim() || `gh exited ${r.exitCode}`, { cause: error });
   }
+}
+
+type Read = { kind: 'pull'; pull: Pull } | { kind: 'handoff'; to: Watch } | { kind: 'gone' };
+
+// A push whose branch heads an open pull request hands its line to that PR.
+async function readWatch($: $, w: Watch): Promise<Read> {
+  if (!w.push) {
+    return { kind: 'pull', pull: await readGh($, pullArgs(w.host, w.repo, w.number), parsePull) };
+  }
+  const { branch, pushedAt } = w.push;
+  const pushed = await readGh($, pushArgs(w.host, w.repo, branch), parsePush);
+  if (pushed.kind === 'gone') return pushed;
+  if (pushed.kind === 'pr') {
+    const { repo, number } = pushed;
+    const url = pushed.url ?? `https://${w.host}/${repo}/pull/${number}`;
+    return { kind: 'handoff', to: { host: w.host, repo, number, url, checkedAt: 0 } };
+  }
+  return { kind: 'pull', pull: pushedPull(branch, pushedAt, pushed.runs) };
 }
 
 async function refresh($: $, target: Watch, now: number): Promise<void> {
@@ -93,7 +118,21 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
   try {
     let next: Watch;
     try {
-      next = { ...target, pull: await readPull($, target), error: undefined, checkedAt: now };
+      const read = await readWatch($, target);
+      if (read.kind === 'gone') {
+        await update($, watches, (all) => all.filter((w) => !isSame(w, target)));
+        return;
+      }
+      if (read.kind === 'handoff') {
+        const to = read.to;
+        await update($, watches, (all) => {
+          if (!all.some((w) => isSame(w, target))) return all;
+          const rest = all.filter((w) => !isSame(w, target));
+          return rest.some((w) => idOf(w) === idOf(to)) ? rest : [...rest, to];
+        });
+        return;
+      }
+      next = { ...target, pull: read.pull, error: undefined, checkedAt: now };
     } catch (error) {
       // checkedAt stays the last good read's: settling is judged by it, and
       // `tried` already spaces the retries.
@@ -107,17 +146,21 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
       // it is not yet what the line has said.
       const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, next.pull, now);
       if (!isEarly) {
-        toast = toastOf(`#${next.number}`, verdict, target.shown);
+        toast = toastOf(labelOf(next), verdict, target.shown, next.push ? '' : ' merged');
         next.shown = shownOf(verdict);
       }
       isClosed = verdict.kind === 'closed';
     }
-    await update($, watches, (all) =>
-      isClosed ? all.filter((w) => idOf(w) !== id) : all.map((w) => (idOf(w) === id ? next : w)),
-    );
+    let isSaved = false;
+    await update($, watches, (all) => {
+      isSaved = all.some((w) => isSame(w, target));
+      return isClosed
+        ? all.filter((w) => !isSame(w, target))
+        : all.map((w) => (isSame(w, target) ? next : w));
+    });
     isSaveFailing = false;
     // Only once the line says it, so a lost save does not toast again.
-    if (toast) $.ui.toast(toast);
+    if (toast && isSaved) $.ui.toast(toast);
     if (!isClosed && next.error === undefined) await learnEstimates($, next, now);
   } catch (error) {
     // Kept on the line so the band says why; said once when even that fails.
@@ -125,10 +168,10 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
     const why = errorText(error);
     try {
       await update($, watches, (all) =>
-        all.map((w) => (idOf(w) === id ? { ...w, error: `pr-watch failed: ${why}` } : w)),
+        all.map((w) => (isSame(w, target) ? { ...w, error: `pr-watch failed: ${why}` } : w)),
       );
     } catch {
-      if (!isSaveFailing) $.ui.toast(`pr-watch could not save #${target.number}: ${why}`);
+      if (!isSaveFailing) $.ui.toast(`pr-watch could not save ${labelOf(target)}: ${why}`);
       isSaveFailing = true;
     }
   } finally {
@@ -137,25 +180,22 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
 }
 
 async function tick($: $): Promise<void> {
-  const list = await read($, watches);
-  if (list.length === 0) return;
+  const saved = await read($, watches);
+  if (saved.length === 0) return;
   const now = await $.clock.now();
   const known = await read($, estimates);
+  // Judged on the list as saved, so a push that replaced a watch since stays.
+  let list: Watch[] = [];
+  await update($, watches, (all) => {
+    list = all.filter((w) => !isGone(w, known, now));
+    return list.length === all.length ? all : list;
+  });
   let isMoving = false;
   for (const w of list) {
     // Settling and closing are judged at the last read, so a run that started
     // after it is not missed.
     const verdict = w.pull ? verdictOf(w.pull, known, w.host, w.checkedAt) : null;
     if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
-    // A merge that started no runs in its grace, or passed, leaves with time alone.
-    const isGone =
-      verdict !== null &&
-      w.pull !== undefined &&
-      (verdict.kind === 'closed' || isCleared(verdict, w.pull, w.checkedAt, now));
-    if (isGone) {
-      await stop($, idOf(w));
-      continue;
-    }
     const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt) : 10_000;
     const delay = usual !== null && now < burstUntil ? Math.min(usual, BURST_MS) : usual;
     if (delay === null || busy.has(idOf(w))) continue;
@@ -198,9 +238,25 @@ export const register: Register = (on) => {
       pushedAt = await $.clock.now();
       burstUntil = pushedAt + BURST_FOR_MS;
     }
+    const raw = (r.result as { stdout?: unknown } | undefined)?.stdout;
+    const stdout = typeof raw === 'string' ? raw : '';
+    // Read even when the line failed: a push that moved one branch and had
+    // another rejected exits non-zero.
+    const pushes = pushedBranches(e.command, stdout);
+    if (pushes.length > 0) {
+      // Pushing a branch again starts its line over.
+      const now = await $.clock.now();
+      const fresh: Watch[] = pushes.map(({ branch, ...p }) => ({
+        ...p,
+        number: 0,
+        push: { branch, pushedAt: now },
+        checkedAt: 0,
+      }));
+      const ids = new Set(fresh.map((p) => idOf(p)));
+      await update($, watches, (all) => [...all.filter((w) => !ids.has(idOf(w))), ...fresh]);
+    }
     if (r.isError) return r;
-    const stdout = (r.result as { stdout?: unknown } | undefined)?.stdout;
-    const target = createdPull(e.command, typeof stdout === 'string' ? stdout : '');
+    const target = createdPull(e.command, stdout);
     if (target) {
       const id = idOf(target);
       await update($, watches, (all) =>

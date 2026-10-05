@@ -41,12 +41,15 @@ export type Pull = {
   mergeRuns: { workflows: Workflow[]; isTruncated: boolean } | null;
 };
 
-// A pull request the band follows, as the last poll left it.
+// A pull request the band follows, as the last poll left it. A push Claude
+// made to a branch with no open pull request has `push` and number 0, and its
+// `pull` reads as a merge into that branch at the push.
 export type Watch = {
   host: string;
   repo: string;
   number: number;
   url: string;
+  push?: { branch: string; pushedAt: number };
   pull?: Pull;
   error?: string;
   checkedAt: number;

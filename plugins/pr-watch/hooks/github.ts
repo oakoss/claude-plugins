@@ -21,6 +21,15 @@ const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
   } }
 }`;
 
+const PUSH_QUERY = `query($o: String!, $r: String!, $b: String!) {
+  repository(owner: $o, name: $r) { nameWithOwner parent { nameWithOwner } ref(qualifiedName: $b) {
+    target { ... on Commit { ${suites('')} } }
+    associatedPullRequests(states: OPEN, first: 100) {
+      nodes { number url repository { nameWithOwner } headRepository { nameWithOwner } }
+    }
+  } }
+}`;
+
 function onHost(host: string): string[] {
   return host === 'github.com' ? [] : ['--hostname', host];
 }
@@ -40,6 +49,24 @@ export function pullArgs(host: string, repo: string, number: number): string[] {
     `r=${name}`,
     '-F',
     `n=${number}`,
+  ];
+}
+
+export function pushArgs(host: string, repo: string, branch: string): string[] {
+  const [owner = '', name = ''] = repo.split('/');
+  return [
+    'gh',
+    'api',
+    'graphql',
+    ...onHost(host),
+    '-f',
+    `query=${PUSH_QUERY}`,
+    '-f',
+    `o=${owner}`,
+    '-f',
+    `r=${name}`,
+    '-f',
+    `b=refs/heads/${branch}`,
   ];
 }
 
@@ -176,6 +203,37 @@ export function parsePull(stdout: string): Pull {
     ...checksOf(pr.commits?.nodes?.[0]?.commit?.checkSuites),
     mergeRuns: pr.mergeCommit ? runsOf(checksOf(pr.mergeCommit.checkSuites)) : null,
   };
+}
+
+export type Pushed =
+  | { kind: 'runs'; runs: Pull['mergeRuns'] }
+  // The PR's own repository: a fork's branch heads a PR upstream.
+  | { kind: 'pr'; repo: string; number: number; url: string | null }
+  // No such branch: deleted since, or a forced tag read as one.
+  | { kind: 'gone' };
+
+// A pushed branch's tip runs, or the open pull request it heads.
+export function parsePush(stdout: string): Pushed {
+  const body: any = parse(stdout);
+  const problem = str(body?.errors?.[0]?.message);
+  if (problem) throw new Error(problem);
+  const repository = body?.data?.repository;
+  if (!repository) throw new Error('repository not found');
+  const ref = repository.ref;
+  if (!ref) return { kind: 'gone' };
+  // Strangers' forks open PRs from a popular branch too; only one from this
+  // repository into itself or its parent is this push's.
+  const self = str(repository.nameWithOwner)?.toLowerCase();
+  const parent = str(repository.parent?.nameWithOwner)?.toLowerCase();
+  const open = list(ref.associatedPullRequests?.nodes).find((n) => {
+    const base = str(n?.repository?.nameWithOwner)?.toLowerCase();
+    const head = str(n?.headRepository?.nameWithOwner)?.toLowerCase();
+    return self !== undefined && head === self && (base === self || base === parent);
+  });
+  const number = id(open?.number);
+  const repo = str(open?.repository?.nameWithOwner);
+  if (number !== null && repo !== null) return { kind: 'pr', repo, number, url: str(open.url) };
+  return { kind: 'runs', runs: runsOf(checksOf(ref.target?.checkSuites)) };
 }
 
 // The last successful run's length; 0 when the workflow has none, null when
