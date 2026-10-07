@@ -941,7 +941,7 @@ Security and robustness fixes for issues found by running `/review-cycle:review`
   - `type-design-analyzer.md`
   - `pr-test-analyzer.md`
 
-  Invoked under the plugin namespace as `review-cycle:<agent-name>`. Copied verbatim from `anthropics/claude-plugins-public`; license preserved at `LICENSE-pr-review-toolkit`; attribution in `NOTICE`. The `code-simplifier` and `comment-analyzer` agents are intentionally not migrated (see NOTICE for reasoning).
+  Invoked under the plugin namespace as `review-cycle:<agent-name>`. Copied verbatim from `anthropics/claude-plugins-public`; license preserved at `LICENSE-pr-review-toolkit`; attribution in `README.md`. The `code-simplifier` and `comment-analyzer` agents are intentionally not migrated (see `README.md` for reasoning).
 
 - New `cleanup` subagent at `agents/cleanup.md`. Preloads the bundled de-slopify skill via the `skills` frontmatter and applies both the comment policy and de-slopify methodology in a single pass. Edits files directly; returns a structured summary.
 
