@@ -1568,13 +1568,16 @@ describe('shell aliases', () => {
       },
       files: { '/Users/tester/.zshrc': '' },
     });
+    const ownReads = () => w.calls.filter((c) => c.argv[1] === '-c' && c.argv[2] === '-l');
     await $.session.start({ cwd: '/repo', surface: null, isInteractive: false });
-    for (let i = 0; i < 50; i++) await Promise.resolve();
-    const reads = w.calls.filter((c) => c.argv[1] === '-c' && c.argv[2] === '-l');
+    // Bounded rather than fixed: how many microtasks the kit spends before the read varies by release.
+    for (let i = 0; i < 10_000 && ownReads().length === 0; i++) await Promise.resolve();
+    const reads = ownReads();
+    expect(reads.map((c) => c.argv.slice(0, 3))).toEqual([['/bin/zsh', '-c', '-l']]);
     await say($, 'fix the parser');
     const r = (await bash($, 'gp')) as { deny?: string; context?: string[] };
     expect(denied(r, "doesn't ask for a push")).toBe(true);
-    expect(reads.map((c) => c.argv.slice(0, 3))).toEqual([['/bin/zsh', '-c', '-l']]);
+    expect(ownReads()).toHaveLength(1);
     expect(reads[0]?.argv[3]).toContain("source '/Users/tester/.zshrc' < /dev/null");
     expect(reads[0]?.init).toEqual({
       stdin: '',
