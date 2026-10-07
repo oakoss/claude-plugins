@@ -82,12 +82,14 @@ Bundled de-slopify skill — methodology for removing AI writing artifacts from 
 
 ## Subagents (bundled)
 
-Migrated verbatim from Anthropic's pr-review-toolkit (Apache 2.0; see `LICENSE-pr-review-toolkit` and `NOTICE`):
+Derived from Anthropic's pr-review-toolkit and modified by Oak OSS (Apache 2.0; see `LICENSE-pr-review-toolkit`):
 
 - `review-cycle:code-reviewer` — general quality + CLAUDE.md compliance
 - `review-cycle:silent-failure-hunter` — error handling, swallowed errors
 - `review-cycle:type-design-analyzer` — type invariants, encapsulation
 - `review-cycle:pr-test-analyzer` — test coverage gaps
+
+`CHANGELOG.md` records the changes. The toolkit's `code-simplifier` is left out because it competes with the cycle's own fix application, and `cleanup` replaces its `comment-analyzer`.
 
 New (this plugin):
 
