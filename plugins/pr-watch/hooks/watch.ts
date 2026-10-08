@@ -111,9 +111,117 @@ export type Target = Pick<Watch, 'host' | 'repo' | 'number' | 'url'>;
 // The pull request a `gh pr create` printed: the URL on its last line of its own.
 export function createdPull(command: string, stdout: string): Target | null {
   if (!PR_CREATE.test(command)) return null;
-  const m = [...stdout.matchAll(PR_URL)].at(-1);
+  return pullAt(stdout);
+}
+
+// The pull request `gh pr view --json url,…` names, with the rest of its answer.
+export function viewedPull(stdout: string): { target: Target; body: any } | null {
+  let body: any;
+  try {
+    body = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const target = typeof body?.url === 'string' ? pullAt(body.url) : null;
+  return target === null ? null : { target, body };
+}
+
+// How far GitHub's clock may run behind this machine's.
+const MERGE_SKEW_MS = 2 * 60_000;
+
+// 'stale' unless open (an --auto merge waits) or merged after the command
+// started: a merge from before is not the one it ran, but a mention of it.
+export function mergedPullOf(stdout: string, startedAt: number): Target | 'stale' | null {
+  const viewed = viewedPull(stdout);
+  if (viewed === null) return null;
+  const { target, body } = viewed;
+  if (body.state === 'OPEN') return target;
+  const at = typeof body.mergedAt === 'string' ? Date.parse(body.mergedAt) : Number.NaN;
+  return body.state === 'MERGED' && at >= startedAt - MERGE_SKEW_MS ? target : 'stale';
+}
+
+// The pull request a URL names: one line holding only the URL.
+export function pullAt(text: string): Target | null {
+  const m = [...text.matchAll(PR_URL)].at(-1);
   if (!m) return null;
   return { host: m[1]!.toLowerCase(), repo: m[2]!, number: Number(m[3]), url: m[0].trim() };
+}
+
+// gh pr merge's options that take a value, long and short.
+const MERGE_VALUED = new Set([
+  '--body',
+  '--body-file',
+  '--subject',
+  '--author-email',
+  '--match-head-commit',
+  '--repo',
+]);
+const MERGE_VALUED_SHORT = new Set(['b', 'F', 't', 'A', 'R']);
+// A command before the merge that moves it to another repository, where gh
+// resolves the pull request it names; a checkout does not change that.
+const MOVES_REPO = new RegExp(String.raw`${START}(?:cd|pushd|popd)\b`);
+
+// The words of the command `text` starts, quotes removed, up to the first
+// separator or comment outside them: enough for gh's arguments, not a shell
+// parser.
+function wordsOf(text: string): string[] {
+  const words: string[] = [];
+  const unbroken = text.replaceAll('\\\n', ' ');
+  for (const m of unbroken.matchAll(/'([^']*)'|"((?:[^"\\]|\\.)*)"|([;&|\n#])|([^\s;&|'"]+)/g)) {
+    if (m[3] !== undefined) break;
+    words.push(m[1] ?? m[2]?.replaceAll(/\\(.)/g, '$1') ?? m[4]!);
+  }
+  return words;
+}
+
+export type Merging = { pull: string; repo: string | null };
+
+// Null for a bare merge: after --delete-branch, or on a fork's branch, nothing
+// names its pull request. Null too where pr-watch cannot follow the merge:
+// after a cd in the same line, or on another GH_HOST.
+export function mergingPull(command: string): Merging | null {
+  const at = new RegExp(String.raw`${START}gh\s+pr\s+merge\b`).exec(command);
+  if (!at || MOVES_REPO.test(command.slice(0, at.index)) || /\bGH_HOST=/.test(at[0])) {
+    return null;
+  }
+  const env = /\bGH_REPO=(\S+)/.exec(at[0])?.[1];
+  let repo = env === undefined ? null : (wordsOf(env)[0] ?? null);
+  let pull: string | null = null;
+  const words = wordsOf(command.slice(at.index + at[0].length));
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i]!;
+    if (word === '--help' || word === '--disable-auto') return null;
+    // A redirection, with its target when that is the next word.
+    if (/^\d*(?:>>?|<)/.test(word)) {
+      if (/^\d*(?:>>?|<)$/.test(word)) i += 1;
+      continue;
+    }
+    let flag: string | null = null;
+    let value: string | undefined;
+    if (word.startsWith('--')) {
+      const [name, inline] = word.split(/=(.*)/s, 2);
+      if (MERGE_VALUED.has(name!)) [flag, value] = [name!, inline];
+    } else if (/^-[A-Za-z]/.test(word)) {
+      // Short options group, and a valued one takes the rest of the word:
+      // -dR o/r, -Ro/r, -R=o/r.
+      for (let j = 1; j < word.length; j += 1) {
+        const letter = word[j]!;
+        if (letter === 'h') return null;
+        if (MERGE_VALUED_SHORT.has(letter)) {
+          flag = `-${letter}`;
+          value = word.slice(j + 1).replace(/^=/, '') || undefined;
+          break;
+        }
+      }
+    }
+    if (flag !== null) {
+      value ??= words[(i += 1)];
+      if (flag === '-R' || flag === '--repo') repo = value ?? null;
+      continue;
+    }
+    if (!word.startsWith('-') && pull === null) pull = word;
+  }
+  return pull === null ? null : { pull, repo };
 }
 
 export function errorLine(text: string): string {

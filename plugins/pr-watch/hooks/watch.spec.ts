@@ -10,6 +10,8 @@ import {
   isCleared,
   isSettled,
   lineOf,
+  mergedPullOf,
+  mergingPull,
   movesPulls,
   pushedBranches,
   pushedPull,
@@ -130,6 +132,118 @@ describe('createdPull', () => {
     ]) {
       expect(createdPull('gh pr create', url)).toBeNull();
     }
+  });
+});
+
+describe('mergingPull', () => {
+  test('names the pull request a merge names, and none for a bare merge', () => {
+    expect(mergingPull('gh pr merge 144 --squash --delete-branch')).toEqual({
+      pull: '144',
+      repo: null,
+    });
+    expect(mergingPull('gh pr merge https://github.com/o/r/pull/7')).toEqual({
+      pull: 'https://github.com/o/r/pull/7',
+      repo: null,
+    });
+    expect(mergingPull('gh pr merge --squash --delete-branch')).toBeNull();
+    expect(mergingPull('git push && GH_PAGER= gh pr merge feat/a --auto')).toEqual({
+      pull: 'feat/a',
+      repo: null,
+    });
+  });
+
+  test('skips option values, the repository among them', () => {
+    const cases: [string, string, string | null][] = [
+      ['gh pr merge -t "Ship 12" -b \'a b\' -R o/r 9', '9', 'o/r'],
+      ['gh pr merge --repo=o/r --subject=x --squash 4', '4', 'o/r'],
+      ['gh pr merge --repo=o/r 9', '9', 'o/r'],
+      ['gh pr merge --subject "Ship it" 9', '9', null],
+      ['gh pr merge --body-file m.txt -A a@b.c 9', '9', null],
+      ['gh pr merge --match-head-commit abc123 5', '5', null],
+      // Short options group, and a valued one takes the rest of its word.
+      ['gh pr merge 5 -Ro/r', '5', 'o/r'],
+      ['gh pr merge 5 -R=o/r', '5', 'o/r'],
+      ['gh pr merge -dR o/r 5', '5', 'o/r'],
+      ['gh pr merge -sb "body" 5', '5', null],
+      ['GH_REPO=o/r gh pr merge 12', '12', 'o/r'],
+    ];
+    for (const [command, pull, repo] of cases) {
+      expect(mergingPull(command)).toEqual({ pull, repo });
+    }
+  });
+
+  test('reads only its own command: quotes, redirections, comments and continued lines', () => {
+    expect(mergingPull('gh pr merge 3 && gh pr view 4')?.pull).toBe('3');
+    expect(mergingPull('gh pr merge -t "a; b" 3')?.pull).toBe('3');
+    expect(mergingPull('gh pr merge --squash && gh pr checks -R x/y 4')).toBeNull();
+    expect(mergingPull('gh pr merge --squash\ngh pr view 4')).toBeNull();
+    expect(mergingPull('gh pr merge --squash # 4 is the current one')).toBeNull();
+    expect(mergingPull('gh pr merge --squash >/tmp/merge.log 2>&1')).toBeNull();
+    expect(mergingPull('gh pr merge > log 7')?.pull).toBe('7');
+    expect(mergingPull('gh pr merge \\\n  --squash 8')?.pull).toBe('8');
+  });
+
+  test('merges nothing for help, turning auto-merge off, or another command', () => {
+    for (const command of [
+      'gh pr merge --help',
+      'gh pr merge 5 -h',
+      'gh pr merge 5 --disable-auto',
+      'gh pr view 5',
+      'echo gh pr merge 5',
+      'git merge main',
+    ]) {
+      expect(mergingPull(command)).toBeNull();
+    }
+  });
+
+  test('follows no merge run from another directory or host', () => {
+    for (const command of [
+      'cd ../other && gh pr merge 12',
+      'pushd x; gh pr merge 12',
+      '(cd x && gh pr merge 12)',
+      'GH_HOST=ghe.example.com gh pr merge 12',
+    ]) {
+      expect(mergingPull(command)).toBeNull();
+    }
+    expect(mergingPull("GH_REPO='o/r' gh pr merge 12")?.repo).toBe('o/r');
+  });
+
+  test('follows a named merge after a checkout: gh resolves it the same way', () => {
+    for (const command of [
+      'git push && gh pr merge 12',
+      'git switch main && gh pr merge 12',
+      'git -p checkout other && gh pr merge 12',
+      'gh pr checkout 12 && gh pr merge 12',
+      'echo cd; gh pr merge 12',
+    ]) {
+      expect(mergingPull(command)?.pull).toBe('12');
+    }
+  });
+});
+
+describe('mergedPullOf', () => {
+  const url = 'https://github.com/o/r/pull/7';
+  const at = Date.parse('2026-10-08T16:00:00Z');
+  const view = (state: string, mergedAt: string | null) => JSON.stringify({ url, state, mergedAt });
+
+  test('is the pull request when open, or merged after the command started', () => {
+    const target = { host: 'github.com', repo: 'o/r', number: 7, url };
+    expect(mergedPullOf(view('OPEN', null), at)).toEqual(target);
+    // However long the command ran after its merge.
+    expect(mergedPullOf(view('MERGED', '2026-10-08T16:25:00Z'), at)).toEqual(target);
+    // GitHub's clock up to two minutes behind.
+    expect(mergedPullOf(view('MERGED', '2026-10-08T15:58:00Z'), at)).toEqual(target);
+  });
+
+  test('is stale when merged before or closed: a mention, not Claude’s merge', () => {
+    expect(mergedPullOf(view('MERGED', '2026-10-08T15:57:59Z'), at)).toBe('stale');
+    expect(mergedPullOf(view('MERGED', null), at)).toBe('stale');
+    expect(mergedPullOf(view('CLOSED', null), at)).toBe('stale');
+  });
+
+  test('is null when the answer names no pull request', () => {
+    expect(mergedPullOf('not json', at)).toBeNull();
+    expect(mergedPullOf(JSON.stringify({ url: 'https://example.com' }), at)).toBeNull();
   });
 });
 

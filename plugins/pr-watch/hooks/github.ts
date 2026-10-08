@@ -56,6 +56,20 @@ export function pullArgs(host: string, repo: string, number: number): string[] {
   ];
 }
 
+// A pull request's URL, state and merge time, as gh resolves a number, URL or
+// branch.
+export function viewArgs(pull: string, repo: string | null): string[] {
+  return [
+    'gh',
+    'pr',
+    'view',
+    pull,
+    ...(repo === null ? [] : ['--repo', repo]),
+    '--json',
+    'url,state,mergedAt',
+  ];
+}
+
 export function pushArgs(host: string, repo: string, branch: string): string[] {
   const [owner = '', name = ''] = repo.split('/');
   return [
