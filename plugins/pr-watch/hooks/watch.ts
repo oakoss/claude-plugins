@@ -305,8 +305,9 @@ const keyOf = (watch: Who, what: string) =>
   ]);
 
 // A ready or passed state, conflicts and requested changes whatever the checks
-// say, and every failed job on the runs the line follows, gating or not, each
-// as soon as it fails. A failure's key is its run's and job's own.
+// say, and every failing run the line follows, gating or not, as soon as a job
+// in it fails. A run is told once, by its first failed jobs: later ones, a
+// summary job among them, are news Claude finds in the run it was sent to.
 function conditionsOf(
   watch: Who,
   pull: Pull,
@@ -336,12 +337,13 @@ function conditionsOf(
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
   const where = isMerged && !watch.push ? ' on the merge commit' : '';
   for (const w of workflows) {
-    for (const j of w.jobs) {
-      if (j.status !== 'done' || !failed(j.conclusion)) continue;
-      const url = j.url || w.url;
-      const text = `${w.name}: ${j.name} failed${where} for ${name}: ${url}`;
-      found.push({ key: JSON.stringify([w.id, w.url, j.name, url]), text });
-    }
+    const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
+    if (bad.length === 0) continue;
+    const jobs = bad.map((j) => j.name).join(', ');
+    const log = bad[0]!.url || w.url;
+    const run = w.url && w.url !== log ? `; the run: ${w.url}` : '';
+    const text = `${w.name}: ${jobs} failed${where} for ${name}: ${log}${run}`;
+    found.push({ key: JSON.stringify([w.id, w.url, w.attempt]), text });
   }
   return found;
 }

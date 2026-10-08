@@ -52,6 +52,7 @@ function flow(id: number, name: string, jobs: Job[], status?: RunStatus): Workfl
     conclusion: isDone ? (bad?.conclusion ?? 'SUCCESS') : null,
     startedAt: '2026-10-03T22:00:00Z',
     isRerun: false,
+    attempt: 1,
     url: `https://x/run/${id}`,
     jobs,
   };
@@ -524,16 +525,29 @@ describe('wakeOf', () => {
     expect(after(pull([green()], { merge: 'DIRTY' }), checking).text).toBeNull();
   });
 
-  test('tells every failed job once, in workflows that gate the merge or not', () => {
+  test('tells each failing run once, in workflows that gate the merge or not', () => {
     const p = pull([
       ci([job('Test', 'FAILURE', true), job('Lint', 'FAILURE'), job('Build', null)]),
       flow(2, 'Docs', [job('Links', 'FAILURE')]),
     ]);
     const first = after(p);
-    expect(first.text).toContain('CI: Test failed');
-    expect(first.text).toContain('CI: Lint failed');
+    expect(first.text).toContain(
+      'CI: Test, Lint failed for o/r#128: https://x/Test; the run: https://x/run/1',
+    );
     expect(first.text).toContain('Docs: Links failed');
     expect(after(p, first).text).toBeNull();
+  });
+
+  test('does not tell a later job failing in a run already told, a summary job among them', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE'), job('CI Summary', null, true)])]));
+    const summary = pull([ci([job('Lint', 'FAILURE'), job('CI Summary', 'FAILURE', true)])]);
+    expect(after(summary, first).text).toBeNull();
+  });
+
+  test('tells a re-run attempt of a run failing again', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE')])]));
+    const rerun = { ...ci([job('Lint', 'FAILURE')]), attempt: 2 };
+    expect(after(pull([rerun]), first).text).toContain('CI: Lint failed');
   });
 
   test('keeps a pull request’s conditions its own when told is shared across watches', () => {
@@ -546,8 +560,11 @@ describe('wakeOf', () => {
 
   test('tells the same job failing on a new run', () => {
     const first = after(pull([ci([job('Lint', 'FAILURE')])]));
-    const again = { ...job('Lint', 'FAILURE'), url: 'https://x/run/2/Lint' };
-    expect(after(pull([ci([again])]), first).text).toContain('https://x/run/2/Lint');
+    const again = {
+      ...ci([{ ...job('Lint', 'FAILURE'), url: 'https://x/run/2/Lint' }]),
+      url: 'https://x/run/2',
+    };
+    expect(after(pull([again]), first).text).toContain('https://x/run/2/Lint');
   });
 
   test('tells a failure on the merge commit apart from the same job on the pull request', () => {

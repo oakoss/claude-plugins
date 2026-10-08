@@ -16,6 +16,8 @@ export type Workflow = {
   // The run's creation, which a re-run keeps from its first attempt.
   startedAt: string;
   isRerun: boolean;
+  // The run's attempt, 1 for the first: a re-run keeps the run's URL.
+  attempt: number;
   url: string;
   jobs: Job[];
 };

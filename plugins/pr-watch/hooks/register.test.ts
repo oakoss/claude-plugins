@@ -381,7 +381,7 @@ describe('telling Claude', () => {
     expect(seen.wakes).toHaveLength(1);
   });
 
-  test('wakes it for each job as it fails, once each, and again on a new run', async ($, on) => {
+  test('wakes it once per failing run, and again for a new run', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [FAILING_CI]) };
     const seen = world(on, gh);
@@ -397,16 +397,15 @@ describe('telling Claude', () => {
     gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [
       ciSuite(running, [typecheck, failedJob('Lint')]),
     ]);
+    // A second job failing in the same run is not news.
     await clock.advance(20_000);
-    expect(seen.wakes).toHaveLength(2);
-    expect(seen.wakes[1]).toContain('CI: Lint failed');
-    expect(seen.wakes[1]).not.toContain('Typecheck');
+    expect(seen.wakes).toHaveLength(1);
+    const run2 = ciSuite(running, [failedJob('Lint', 2, 20)]);
+    run2.workflowRun = { ...run2.workflowRun, url: 'https://github.com/o/r/actions/runs/2' };
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [run2]);
     await clock.advance(60_000);
     expect(seen.wakes).toHaveLength(2);
-    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [ciSuite(running, [failedJob('Lint', 2, 20)])]);
-    await clock.advance(60_000);
-    expect(seen.wakes).toHaveLength(3);
-    expect(seen.wakes[2]).toContain('runs/2/job/20');
+    expect(seen.wakes[1]).toContain('runs/2/job/20');
   });
 
   test('wakes it once for conflicts, though its checks are failing', async ($, on) => {

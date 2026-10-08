@@ -146,6 +146,7 @@ function workflowOf(s: any): Workflow | null {
     startedAt: run.createdAt,
     // A re-run keeps the first attempt's creation time, so its clock is unknown.
     isRerun: typeof run.runAttempt === 'number' && run.runAttempt > 1,
+    attempt: typeof run.runAttempt === 'number' ? run.runAttempt : 1,
     url: str(run.url) ?? '',
     jobs,
   };
