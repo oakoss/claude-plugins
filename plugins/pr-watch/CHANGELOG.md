@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.4.0 (2026-10-08)
+
+### Added
+
+A pull request Claude merges with `gh pr merge <number, URL or branch>` now gets a line even when pr-watch was not watching it, such as a version PR a workflow opened: the line follows the merge commit's runs on the base branch, and Claude is told when they pass or fail, as for a pull request it opened. With `--auto`, the line follows the open pull request until it merges. A bare `gh pr merge` of the current branch is not followed, since after `--delete-branch` or on a fork's branch nothing names its pull request; neither is a merge run after a `cd` in the same command or with a `GH_HOST=` prefix, nor a pull request merged more than two minutes before the command started, so a command that only mentions an old merge adds nothing.
+
+Claude can now watch a pull request it did not open, such as a teammate's or one you point it at, with pr-watch's `watch` tool, instead of polling `gh pr checks` or sleeping. The tool answers with what the pull request shows now, and pr-watch then tells Claude when that changes, as for one it opened. `unwatch` stops watching a pull request or a pushed branch, and `watches` lists what pr-watch is watching and what each line shows.
+
 ## 0.3.0 (2026-10-08)
 
 ### Added

@@ -4,6 +4,16 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.28.0 (2026-10-08)
+
+### Added
+
+`/review-cycle:misses` lists the gate's refusals of a push, pull request, merge or release that your latest message, or the offer it replied to, named by its verb, and drafts each as a candidate row for the consent grammar's spec. A refusal you did not expect is how a consent-grammar miss is found; until now that took pasting the session's transcript. A refusal counts only when the step refused is the one named, and an offer only when your message is a yes or a go-ahead and nothing more. The gate keeps up to 20 in memory until Claude Code restarts, served by the read-only `mcp__review-cycle__misses` tool, and nothing leaves your machine.
+
+### Fixed
+
+"Merge the release", "merge the version PR" and "merge the release PR" now ask for a release, as "release it" does, so the gate lets the agent merge the version pull request. Before, they asked for nothing: the gate read "merge" as naming a pull request, found "release" instead, and held the merge as merely mentioned. Only a request that ends with the noun asks: "merge the release fixes", "merge the release into main" or "merge the release branch" names other work and still asks first, and "don't merge the release yet" still holds the release.
+
 ## 0.27.1 (2026-10-08)
 
 ### Fixed
