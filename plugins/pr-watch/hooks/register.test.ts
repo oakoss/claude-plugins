@@ -554,6 +554,26 @@ describe('telling Claude', () => {
     expect(seen.wakes).toHaveLength(1);
   });
 
+  test('stops waking it for comments after ten in a row', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: commentedJson([]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const comments = [];
+    for (let i = 1; i <= 12; i++) {
+      const at = new Date(T0 + i * 1000).toISOString().replace('.000', '');
+      comments.push({ author: { login: `u${i}` }, createdAt: at, url: `c/${i}` });
+      gh.pr = commentedJson(comments);
+      // A read with the comment, then one with nothing new.
+      await clock.advance(20_000);
+    }
+    expect(seen.wakes).toHaveLength(10);
+    expect(seen.wakes[9]).toContain('c/10');
+    expect(seen.wakes[9]).toContain('no more comments or reviews');
+  });
+
   test('wakes the session for a pull request a subagent opened', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const seen = world(on, { pr: prJson() });

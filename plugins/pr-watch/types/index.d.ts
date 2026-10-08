@@ -74,7 +74,8 @@ export type Watch = {
   told?: string[];
   // The comments and reviews heard, and the newest time at the first read,
   // which hears without telling: older ones are history.
-  heard?: { since: string | null; keys: string[] };
+  // `streak` counts the reads in a row whose only news was comments and reviews.
+  heard?: { since: string | null; keys: string[]; streak?: number };
 };
 
 declare module 'claude-code' {

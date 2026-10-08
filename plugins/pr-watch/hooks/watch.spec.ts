@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import type { Job, Pull, RunStatus, Watch, Workflow } from '../types';
+import type { Activity, Job, Pull, RunStatus, Watch, Workflow } from '../types';
 import {
   barOf,
   clockText,
@@ -16,6 +16,7 @@ import {
   shownOf,
   toastOf,
   verdictOf,
+  QUIET_CAP,
   settingsOf,
   tellsOf,
   toldAfter,
@@ -638,6 +639,51 @@ describe('wakeOf', () => {
     expect(wakeOf(pr, p, verdictAt(p), first, { tells }).text).toContain(
       '@oakum[bot] commented on o/r#128',
     );
+  });
+
+  test('stops comment-only wakes after QUIET_CAP in a row, saying so on the last', () => {
+    let last: Memory = after(pull([]));
+    const items: Activity[] = [];
+    const texts: (string | null)[] = [];
+    for (let i = 1; i <= QUIET_CAP + 2; i++) {
+      items.push(said(`u${i}`, minute(i)));
+      const woke = after(pull([], { activity: [...items] }), last);
+      texts.push(woke.text);
+      // Reads with nothing new, and one that cannot tell whose comments are
+      // whose, hold the count.
+      const quiet = after(pull([], { activity: [...items] }), woke);
+      expect(quiet.text).toBeNull();
+      const unknown = after(pull([], { activity: null }), quiet);
+      expect(unknown.text).toBeNull();
+      last = unknown;
+    }
+    expect(texts.slice(0, QUIET_CAP).every((t) => t !== null)).toBe(true);
+    expect(texts[QUIET_CAP - 2]).not.toContain('no more comments');
+    expect(texts[QUIET_CAP - 1]).toContain(`https://x/u${QUIET_CAP}`);
+    expect(texts[QUIET_CAP - 1]).toContain(
+      'pr-watch will tell you of no more comments or reviews on o/r#128',
+    );
+    expect(texts.slice(QUIET_CAP)).toEqual([null, null]);
+    // Other news after the cap tells no comment held back by it.
+    const failing = pull([ci([job('Lint', 'FAILURE')])], { activity: [...items] });
+    const reset = after(failing, last);
+    expect(reset.text).toContain('CI: Lint failed');
+    expect(reset.text).not.toContain(`u${QUIET_CAP + 1}`);
+  });
+
+  test('other news resets the cap and carries the comments that came with it', () => {
+    let last: Memory = { heard: { since: null, keys: [], streak: QUIET_CAP + 3 } };
+    const comment = said('alice', minute(1));
+    const failing = pull([ci([job('Lint', 'FAILURE')])], { activity: [comment] });
+    const woke = after(failing, last);
+    expect(woke.text).toContain('CI: Lint failed');
+    expect(woke.text).toContain('@alice commented on');
+    expect(woke.heard?.streak).toBeUndefined();
+    last = woke;
+    const next = pull([ci([job('Lint', 'FAILURE')])], {
+      activity: [comment, said('bob', minute(2))],
+    });
+    expect(after(next, last).heard?.streak).toBe(1);
   });
 
   test('takes the floor from the viewer’s own newer comments too', () => {

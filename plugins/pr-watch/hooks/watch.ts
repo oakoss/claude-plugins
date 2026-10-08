@@ -365,6 +365,10 @@ const heardKey = (a: Activity) => a.url || JSON.stringify([a.author, a.at, a.did
 // Enough to outlast an item leaving the 10-item window and coming back.
 const HEARD_KEPT = 100;
 
+// t3code stops a watch after 10 comment-only wakes in a row; this stops the
+// comments alone.
+export const QUIET_CAP = 10;
+
 // The comments and reviews not heard before, and what is heard after them. The
 // first read hears what is there without telling it; a read that cannot tell
 // whose they are hears nothing.
@@ -443,8 +447,18 @@ export function wakeOf(
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }
   }
-  const { heard, lines } = hearOf(pull, last.heard, name, tells);
-  news.push(...lines);
+  const { heard: next, lines } = hearOf(pull, last.heard, name, tells);
+  // So a chatty bot or thread cannot keep waking Claude, comments and reviews
+  // stop after QUIET_CAP wakes in a row of nothing else, until other news comes.
+  const before = last.heard?.streak ?? 0;
+  const streak = news.length > 0 ? 0 : lines.length > 0 ? before + 1 : before;
+  if (streak <= QUIET_CAP) news.push(...lines);
+  if (lines.length > 0 && streak === QUIET_CAP) {
+    news.push(
+      `pr-watch will tell you of no more comments or reviews on ${name} until other news comes.`,
+    );
+  }
+  const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
   if (news.length === 0) return { text: null, told: kept, heard };
   const text = [
     `pr-watch: ${news.join(' ')}`,
