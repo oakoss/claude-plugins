@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { estimateArgs, parseEstimate, parsePull, pullArgs } from './github';
+import { estimateArgs, parseEstimate, parsePull, parseQuota, pullArgs, pushArgs } from './github';
+
+const queryOf = (args: string[]) => args.find((a) => a.startsWith('query=')) ?? '';
 
 // Shaped like `gh api graphql` output for oakoss/claude-plugins#128.
 function prOutput(suites: unknown[], pr: Record<string, unknown> = {}, more = false): string {
@@ -352,6 +354,28 @@ const took = (s: number, attempt = 1) => ({
 });
 const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
 
+describe('parseQuota', () => {
+  test('reads the quota a query reported', () => {
+    const rateLimit = { cost: 1, remaining: 4912, limit: 5000, resetAt: '2026-10-08T21:00:00Z' };
+    expect(parseQuota(JSON.stringify({ data: { rateLimit } }))).toEqual({
+      remaining: 4912,
+      limit: 5000,
+      resetAt: '2026-10-08T21:00:00Z',
+    });
+  });
+
+  test('is null when the answer does not say', () => {
+    expect(parseQuota('<html>502</html>')).toBeNull();
+    expect(parseQuota(JSON.stringify({ data: {} }))).toBeNull();
+    // The reset time tells one window from the next.
+    const noReset = { remaining: 5, limit: 5000, resetAt: 'soon' };
+    expect(parseQuota(JSON.stringify({ data: { rateLimit: noReset } }))).toBeNull();
+    expect(
+      parseQuota(JSON.stringify({ data: { rateLimit: { remaining: 5, limit: 0 } } })),
+    ).toBeNull();
+  });
+});
+
 describe('parseEstimate', () => {
   test('is the last successful run’s length when it is the only one', () => {
     const out = JSON.stringify({
@@ -410,9 +434,26 @@ describe('the gh calls', () => {
   });
 
   test('ask for the base branch, when it merged, and the merge commit’s runs', () => {
-    const query = pullArgs('github.com', 'a/b', 1).find((a) => a.startsWith('query=')) ?? '';
+    const query = queryOf(pullArgs('github.com', 'a/b', 1, true));
     for (const field of ['baseRefName', 'mergedAt', 'mergeCommit { checkSuites']) {
       expect(query).toContain(field);
+    }
+    expect(query).not.toContain('commits(last: 1)');
+  });
+
+  test('ask an open pull request for its head commit’s runs alone', () => {
+    const query = queryOf(pullArgs('github.com', 'a/b', 1));
+    expect(query).toContain('commits(last: 1)');
+    expect(query).not.toContain('mergeCommit');
+  });
+
+  test('ask every query for the quota it leaves', () => {
+    for (const args of [
+      pullArgs('github.com', 'a/b', 1),
+      pullArgs('github.com', 'a/b', 1, true),
+      pushArgs('github.com', 'a/b', 'main'),
+    ]) {
+      expect(queryOf(args)).toContain('rateLimit { cost remaining limit resetAt }');
     }
   });
 

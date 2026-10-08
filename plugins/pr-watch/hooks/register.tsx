@@ -6,9 +6,11 @@ import {
   parseEstimate,
   parsePull,
   parsePush,
+  parseQuota,
   pullArgs,
   pushArgs,
   viewArgs,
+  type Quota,
 } from './github';
 import {
   createdPull,
@@ -24,6 +26,9 @@ import {
   movesPulls,
   isGone,
   isChecking,
+  isMergeFresh,
+  isQuotaLow,
+  LOW_QUOTA_MS,
   isSettled,
   labelOf,
   shownOf,
@@ -55,6 +60,8 @@ const busy = new Set<string>();
 const tried = new Map<string, number>();
 // When each unanswered length was last asked for, by estimate key.
 const asked = new Map<string, number>();
+// The GraphQL quota each host's latest read reported.
+const quota = new Map<string, Quota>();
 // Finished runs a length was learned after, so each one re-learns it once.
 const learnedAfter = new Set<string>();
 // After Claude pushes, merges or starts a run, a watch last read before
@@ -128,8 +135,18 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
 }
 
 // gh exits non-zero when GraphQL reports any error, even beside usable data.
-async function readGh<T>($: $, argv: string[], parse: (stdout: string) => T): Promise<T> {
+async function readGh<T>(
+  $: $,
+  host: string,
+  argv: string[],
+  parse: (stdout: string) => T,
+): Promise<T> {
   const r = await $.process.run(argv);
+  const left = parseQuota(r.stdout);
+  const was = quota.get(host);
+  // Reads finish out of order: within one reset window, the lowest count is the latest.
+  const isStale = was?.resetAt === left?.resetAt && (was?.remaining ?? 0) < (left?.remaining ?? 0);
+  if (left && !isStale) quota.set(host, left);
   try {
     return parse(r.stdout);
   } catch (error) {
@@ -143,10 +160,24 @@ type Read = { kind: 'pull'; pull: Pull } | { kind: 'handoff'; to: Watch } | { ki
 // A push whose branch heads an open pull request hands its line to that PR.
 async function readWatch($: $, w: Watch): Promise<Read> {
   if (!w.push) {
-    return { kind: 'pull', pull: await readGh($, pullArgs(w.host, w.repo, w.number), parsePull) };
+    const read = (isMerged: boolean) =>
+      readGh($, w.host, pullArgs(w.host, w.repo, w.number, isMerged), parsePull);
+    // Until a read says it merged, read the open variant; on the read that
+    // first finds it merged, read again for the merge commit's runs.
+    const wasMerged = w.pull?.state === 'MERGED';
+    const pull = await read(wasMerged);
+    if (wasMerged || pull.state !== 'MERGED') return { kind: 'pull', pull };
+    try {
+      return { kind: 'pull', pull: await read(true) };
+    } catch (error) {
+      // Just merged, it shows as waiting on checks while the next read asks for
+      // them. Older, it would read as closed and leave, so the failure is said.
+      if (!isMergeFresh(pull, await $.clock.now())) throw error;
+      return { kind: 'pull', pull: { ...pull, workflows: [], mergeRuns: null } };
+    }
   }
   const { branch, pushedAt } = w.push;
-  const pushed = await readGh($, pushArgs(w.host, w.repo, branch), parsePush);
+  const pushed = await readGh($, w.host, pushArgs(w.host, w.repo, branch), parsePush);
   if (pushed.kind === 'gone') return pushed;
   if (pushed.kind === 'pr') {
     const { repo, number } = pushed;
@@ -276,10 +307,19 @@ async function tick($: $): Promise<void> {
     const verdict = w.pull ? verdictOf(w.pull, known, w.host, w.checkedAt) : null;
     if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
     const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt) : 10_000;
-    const delay = usual !== null && now < burstUntil ? Math.min(usual, BURST_MS) : usual;
+    const isLow = isQuotaLow(quota.get(w.host));
+    // Low on quota, every watch on the host waits its slow delay, bursts and all.
+    const delay =
+      usual === null
+        ? null
+        : isLow
+          ? Math.max(usual, LOW_QUOTA_MS)
+          : now < burstUntil
+            ? Math.min(usual, BURST_MS)
+            : usual;
     if (delay === null || busy.has(idOf(w))) continue;
     const last = Math.max(w.checkedAt, tried.get(idOf(w)) ?? 0);
-    if (last <= pushedAt || now - last >= delay) void refresh($, w, now);
+    if ((last <= pushedAt && !isLow) || now - last >= delay) void refresh($, w, now);
   }
   if (isMoving) await update($, clock, () => now);
 }

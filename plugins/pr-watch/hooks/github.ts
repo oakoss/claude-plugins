@@ -13,19 +13,29 @@ const suites = (required: string) => `checkSuites(first: 100) {
       }
     }`;
 
-// The latest comments and reviews, and who reads them: someone else's are news.
-const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
+// The quota every query reports, shared with every other gh call the user makes.
+const RATE = 'rateLimit { cost remaining limit resetAt }';
+
+// An open pull request reads its head commit's runs, a merged one its merge
+// commit's: each costs 1 point, both together 2. The latest comments and
+// reviews, and who reads them: someone else's are news.
+const pullQuery = (isMerged: boolean) => `query($o: String!, $r: String!, $n: Int!) {
+  ${RATE}
   viewer { login }
   repository(owner: $o, name: $r) { pullRequest(number: $n) {
     number title url state isDraft mergeStateStatus reviewDecision baseRefName mergedAt
-    commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }
-    mergeCommit { ${suites('')} }
+    ${
+      isMerged
+        ? `mergeCommit { ${suites('')} }`
+        : `commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }`
+    }
     comments(last: 10) { nodes { author { login __typename } createdAt url } }
     reviews(last: 10) { nodes { author { login __typename } submittedAt state url } }
   } }
 }`;
 
 const PUSH_QUERY = `query($o: String!, $r: String!, $b: String!) {
+  ${RATE}
   repository(owner: $o, name: $r) { nameWithOwner parent { nameWithOwner } ref(qualifiedName: $b) {
     target { ... on Commit { ${suites('')} } }
     associatedPullRequests(states: OPEN, first: 100) {
@@ -38,7 +48,7 @@ function onHost(host: string): string[] {
   return host === 'github.com' ? [] : ['--hostname', host];
 }
 
-export function pullArgs(host: string, repo: string, number: number): string[] {
+export function pullArgs(host: string, repo: string, number: number, isMerged = false): string[] {
   const [owner = '', name = ''] = repo.split('/');
   return [
     'gh',
@@ -46,7 +56,7 @@ export function pullArgs(host: string, repo: string, number: number): string[] {
     'graphql',
     ...onHost(host),
     '-f',
-    `query=${PULL_QUERY}`,
+    `query=${pullQuery(isMerged)}`,
     '-f',
     `o=${owner}`,
     '-f',
@@ -275,6 +285,23 @@ export function parsePull(stdout: string): Pull {
     activity: activityOf(pr, str(body?.data?.viewer?.login)),
     activityAt: windowNewest(pr),
   };
+}
+
+export type Quota = { remaining: number; limit: number; resetAt: string };
+
+// The GraphQL quota a query reported; null when its answer does not say.
+export function parseQuota(stdout: string): Quota | null {
+  let body: any;
+  try {
+    body = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const rate = body?.data?.rateLimit;
+  const { remaining, limit, resetAt } = rate ?? {};
+  // The reset time tells one window from the next, so an answer without one is no use.
+  if (typeof remaining !== 'number' || typeof limit !== 'number' || limit <= 0) return null;
+  return isTime(resetAt) ? { remaining, limit, resetAt } : null;
 }
 
 export type Pushed =

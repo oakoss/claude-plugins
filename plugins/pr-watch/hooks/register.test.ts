@@ -26,6 +26,8 @@ type Gh = {
   view?: string;
   // The tool whose registration the host refuses.
   registerFails?: string;
+  // That many merged-variant reads fail first.
+  mergedFails?: number;
   fails?: boolean;
   estimateFails?: number;
   partial?: boolean;
@@ -147,6 +149,10 @@ function world(
       seen.order.push(argv);
       if (gh.view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
       return { value: { exitCode: 0, stdout: gh.view, stderr: '' } };
+    }
+    if (argv.includes('mergeCommit {') && (gh.mergedFails ?? 0) > 0) {
+      gh.mergedFails = (gh.mergedFails ?? 0) - 1;
+      return failed;
     }
     if (gh.partial && argv.includes('graphql')) {
       return { value: { exitCode: 1, stdout: gh.pr, stderr: 'gh: Resource not accessible' } };
@@ -727,6 +733,93 @@ function mergedJson(status: string, conclusion: string | null): string {
     mergeCommit: { checkSuites: { pageInfo: { hasNextPage: false }, nodes: [release] } },
   });
 }
+
+// The same answer, with the quota the query left.
+function withQuota(json: string, remaining: number, resetAt = '2026-10-03T23:00:00Z'): string {
+  const body = JSON.parse(json);
+  body.data.rateLimit = { cost: 1, remaining, limit: 5000, resetAt };
+  return JSON.stringify(body);
+}
+
+const isMergedRead = (run: string) => run.includes('graphql') && run.includes('mergeCommit {');
+
+describe('the query', () => {
+  test('a pull request found merged is read again for its merge commit, and so on after', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: mergedJson('IN_PROGRESS', null) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    // The first read cannot know; it finds the merge and reads its runs at once.
+    expect(reads(seen.runs)).toBe(2);
+    expect(seen.runs.filter(isMergedRead)).toHaveLength(1);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m11s');
+    await clock.advance(10_000);
+    expect(reads(seen.runs)).toBe(3);
+    expect(seen.runs.filter(isMergedRead)).toHaveLength(2);
+  });
+
+  test('a pull request found merged whose runs cannot be read yet shows as merged', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), mergedFails: 1 };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ○ waiting on checks');
+  });
+
+  test('one merged long ago whose runs cannot be read says so, and stays', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 + 200_000 });
+    world(on, { pr: mergedJson('COMPLETED', 'FAILURE'), mergedFails: 1 });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toMatch(/^#128 gh failed: /);
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ✗ Release: Publish failed');
+  });
+
+  test('an open pull request is read without its merge commit', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) });
+    await start($);
+    await create($);
+    await clock.advance(11_000);
+    expect(reads(seen.runs)).toBe(2);
+    expect(seen.runs.filter(isMergedRead)).toEqual([]);
+  });
+
+  test('low on quota, every watch is read once a minute, a push included', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: withQuota(prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), 400) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    await create($, 'gh pr merge 128 --auto');
+    await clock.advance(50_000);
+    expect(reads(seen.runs)).toBe(1);
+    await clock.advance(10_000);
+    expect(reads(seen.runs)).toBe(2);
+    // A higher count in the same window is an older answer, and changes nothing.
+    gh.pr = withQuota(prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), 4000);
+    await clock.advance(60_000);
+    const stale = reads(seen.runs);
+    await clock.advance(10_000);
+    expect(reads(seen.runs)).toBe(stale);
+    // Once the quota resets, the running workflow is read every 10 s again.
+    gh.pr = withQuota(
+      prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      4999,
+      '2026-10-04T00:00:00Z',
+    );
+    await clock.advance(60_000);
+    const back = reads(seen.runs);
+    await clock.advance(10_000);
+    expect(reads(seen.runs)).toBe(back + 1);
+  });
+});
 
 describe('a merged pull request', () => {
   test('follows its run on the base branch, says once it settles, and leaves 5 s later', async ($, on) => {
