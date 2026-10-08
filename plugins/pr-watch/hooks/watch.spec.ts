@@ -16,6 +16,7 @@ import {
   shownOf,
   toastOf,
   verdictOf,
+  wakeOf,
 } from './watch';
 
 const AT = Date.parse('2026-10-03T22:01:10Z');
@@ -401,6 +402,96 @@ describe('toastOf', () => {
     const a = { ...lint, workflow: 'a/b', job: 'c' };
     const b = { ...lint, workflow: 'a', job: 'b/c' };
     expect(shownOf(a)).not.toBe(shownOf(b));
+  });
+});
+
+describe('wakeOf', () => {
+  const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+  const push = { ...pr, number: 0, push: { branch: 'feat/x', pushedAt: AT } };
+  // What the next read tells, given what the last one left.
+  const after = (p: Pull, last?: { shown?: string; told?: string[] }, w: typeof pr = pr) =>
+    wakeOf(w, p, verdictAt(p), last?.shown, last?.told);
+
+  test('says a pull request is ready once, as news rather than a request to merge', () => {
+    const p = pull([green()]);
+    const first = after(p, { shown: 'running' });
+    expect(first.text).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(first.text).toContain('not a request to merge. https://github.com/o/r/pull/128');
+    expect(first.text).not.toContain('checks passed');
+    expect(after(p, { shown: 'ready' }).text).toBeNull();
+  });
+
+  test('says nothing of running checks, a wait on review, or a branch behind its base', () => {
+    expect(after(pull([ci([job('Test', null)])])).text).toBeNull();
+    expect(after(pull([green()], { merge: 'BLOCKED', review: 'REVIEW_REQUIRED' })).text).toBeNull();
+    expect(after(pull([green()], { merge: 'BEHIND' })).text).toBeNull();
+  });
+
+  test('says conflicts and requested changes once each, whatever the checks say', () => {
+    const p = pull([ci([job('Lint', 'FAILURE'), job('Test', null)])], {
+      merge: 'DIRTY',
+      review: 'CHANGES_REQUESTED',
+    });
+    const first = after(p);
+    expect(first.text).toContain('o/r#128 has merge conflicts with main.');
+    expect(first.text).toContain('A reviewer requested changes on o/r#128.');
+    expect(first.text).toContain('CI: Lint failed for o/r#128: https://x/Lint');
+    expect(after(p, first).text).toBeNull();
+  });
+
+  test('keeps conflicts told while GitHub recomputes the merge state', () => {
+    const told = after(pull([green()], { merge: 'DIRTY' })).told;
+    const checking = after(pull([green()], { merge: 'UNKNOWN' }), { told });
+    expect(after(pull([green()], { merge: 'DIRTY' }), checking).text).toBeNull();
+  });
+
+  test('tells every failed job once, in workflows that gate the merge or not', () => {
+    const p = pull([
+      ci([job('Test', 'FAILURE', true), job('Lint', 'FAILURE'), job('Build', null)]),
+      flow(2, 'Docs', [job('Links', 'FAILURE')]),
+    ]);
+    const first = after(p);
+    expect(first.text).toContain('CI: Test failed');
+    expect(first.text).toContain('CI: Lint failed');
+    expect(first.text).toContain('Docs: Links failed');
+    expect(after(p, first).text).toBeNull();
+  });
+
+  test('keeps a pull request’s conditions its own when told is shared across watches', () => {
+    const dirty = pull([green()], { merge: 'DIRTY' });
+    const other = { ...pr, number: 7 };
+    expect(after(dirty, after(dirty, undefined, other)).text).toContain(
+      'o/r#128 has merge conflicts',
+    );
+  });
+
+  test('tells the same job failing on a new run', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE')])]));
+    const again = { ...job('Lint', 'FAILURE'), url: 'https://x/run/2/Lint' };
+    expect(after(pull([ci([again])]), first).text).toContain('https://x/run/2/Lint');
+  });
+
+  test('tells a failure on the merge commit apart from the same job on the pull request', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE')])]));
+    const onMerge = { ...flow(1, 'CI', [job('Lint', 'FAILURE')]), url: 'https://x/run/9' };
+    const told = after(merged([onMerge]), first);
+    expect(told.text).toContain('CI: Lint failed on the merge commit for o/r#128');
+    expect(after(merged([codeql('FAILURE')]), first, push).text).toContain(
+      'CodeQL: Analyze failed for the push to feat/x on o/r',
+    );
+  });
+
+  test('says a merge’s and a push’s checks passed, unless the grace has not ended', () => {
+    const passed = merged([green()]);
+    expect(after(passed, { shown: 'merged-running' }).text).toContain(
+      "o/r#128 merged into main, and the merge commit's checks passed.",
+    );
+    expect(after(passed, { shown: 'merged-passed' }).text).toBeNull();
+    expect(after(passed, { shown: 'merged-running' }, push).text).toContain(
+      'The checks on the push to feat/x on o/r passed.',
+    );
+    const early = wakeOf(pr, passed, verdictAt(passed), 'merged-running', ['k'], true);
+    expect(early).toEqual({ text: null, told: [] });
   });
 });
 

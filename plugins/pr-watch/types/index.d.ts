@@ -55,6 +55,9 @@ export type Watch = {
   checkedAt: number;
   // What the line last said, so a toast fires once per change.
   shown?: string;
+  // Keys of the conditions Claude has been told of (failed jobs, conflicts,
+  // requested changes), so each is told once.
+  told?: string[];
 };
 
 declare module 'claude-code' {

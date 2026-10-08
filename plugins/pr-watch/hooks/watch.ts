@@ -288,6 +288,88 @@ export function toastOf(
   return null;
 }
 
+// Something Claude is told of once, for as long as it lasts.
+type Condition = { key: string; text: string };
+
+// Conflicts and requested changes whatever the checks say, and every failed job
+// on the runs the line follows, gating or not, each as soon as it fails. A
+// failure's key is its run's and job's own, so watches on the host can share
+// what they told; a pull request's own conditions carry its number.
+function conditionsOf(
+  watch: Pick<Watch, 'repo' | 'number' | 'push'>,
+  pull: Pull,
+  verdict: Verdict,
+  name: string,
+): Condition[] {
+  const found: Condition[] = [];
+  const self = `${watch.repo}#${watch.number}`;
+  if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
+    const text = `${name} has merge conflicts with ${pull.base}.`;
+    found.push({ key: conflictsKey(watch), text });
+  }
+  if (pull.state === 'OPEN' && pull.review === 'CHANGES_REQUESTED') {
+    const text = `A reviewer requested changes on ${name}.`;
+    found.push({ key: JSON.stringify([self, 'changes requested']), text });
+  }
+  const isMerged = verdict.kind.startsWith('merged-');
+  const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
+  const where = isMerged && !watch.push ? ' on the merge commit' : '';
+  for (const w of workflows) {
+    for (const j of w.jobs) {
+      if (j.status !== 'done' || !failed(j.conclusion)) continue;
+      const url = j.url || w.url;
+      const text = `${w.name}: ${j.name} failed${where} for ${name}: ${url}`;
+      found.push({ key: JSON.stringify([w.id, w.url, j.name, url]), text });
+    }
+  }
+  return found;
+}
+
+const conflictsKey = (watch: Pick<Watch, 'repo' | 'number'>) =>
+  JSON.stringify([`${watch.repo}#${watch.number}`, 'conflicts']);
+
+export type Wake = { text: string | null; told: string[] };
+
+// What Claude is told unasked: a new ready or passed state, and each condition
+// it has not been told of while it lasts. `told` is what it then knows of.
+// `isEarly` holds back a passed merge whose grace has not ended.
+export function wakeOf(
+  watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
+  pull: Pull,
+  verdict: Verdict,
+  shown: string | undefined,
+  told: readonly string[] = [],
+  isEarly = false,
+): Wake {
+  const name = watch.push
+    ? `the push to ${watch.push.branch} on ${watch.repo}`
+    : `${watch.repo}#${watch.number}`;
+  const news: string[] = [];
+  const isNew = !isEarly && shownOf(verdict) !== shown;
+  if (isNew && verdict.kind === 'ready') news.push(`GitHub reports ${name} ready to merge.`);
+  if (isNew && verdict.kind === 'merged-passed') {
+    news.push(
+      watch.push
+        ? `The checks on ${name} passed.`
+        : `${name} merged into ${pull.base}, and the merge commit's checks passed.`,
+    );
+  }
+  const kept: string[] = [];
+  for (const c of conditionsOf(watch, pull, verdict, name)) {
+    if (!told.includes(c.key)) news.push(c.text);
+    kept.push(c.key);
+  }
+  // GitHub reports UNKNOWN while it recomputes the merge state, conflicts included.
+  const conflicts = conflictsKey(watch);
+  if (pull.merge === 'UNKNOWN' && told.includes(conflicts)) kept.push(conflicts);
+  if (news.length === 0) return { text: null, told: kept };
+  const text = [
+    `pr-watch: ${news.join(' ')}`,
+    `This is news from pr-watch, not a request to merge. ${watch.url}`,
+  ].join('\n');
+  return { text, told: kept };
+}
+
 export function clockText(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
