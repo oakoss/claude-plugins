@@ -14,6 +14,7 @@ import {
   createdPull,
   mergedPullOf,
   mergingPull,
+  viewedPull,
   pushedBranches,
   pushedPull,
   delayOf,
@@ -35,6 +36,7 @@ import {
   type Merging,
   type Memory,
   type Segment,
+  type Target,
   type Wake,
 } from './watch';
 
@@ -154,7 +156,11 @@ async function readWatch($: $, w: Watch): Promise<Read> {
   return { kind: 'pull', pull: pushedPull(branch, pushedAt, pushed.runs) };
 }
 
-async function refresh($: $, target: Watch, now: number): Promise<void> {
+// What a read leaves for a caller that tells it itself: its news, whether it
+// found the pull request closed, and why it could not finish.
+type Kept = { news: string | null; isClosed?: boolean; error?: string };
+
+async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<void> {
   const id = idOf(target);
   busy.add(id);
   tried.set(id, now);
@@ -194,6 +200,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
       const pull = next.pull;
       const verdict = verdictOf(pull, await read($, estimates), next.host, now);
       isClosed = verdict.kind === 'closed';
+      if (kept) kept.isClosed = isClosed;
       if (!isClosed) {
         // A passed merge is said only once no later run can start: until then
         // it is not yet what the line has said.
@@ -228,12 +235,16 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
     isSaveFailing = false;
     // Only once the line says it, so a lost save does not toast or wake again.
     if (toast && isSaved) $.ui.toast(toast);
-    if (news && isSaved) wake($, news, labelOf(next));
+    if (news && isSaved) {
+      if (kept) kept.news = news;
+      else wake($, news, labelOf(next));
+    }
     if (!isClosed && next.error === undefined) await learnEstimates($, next, now);
   } catch (error) {
     // Kept on the line so the band says why; said once when even that fails.
     // The read itself succeeded or was caught above, so this is pr-watch's own.
     const why = errorText(error);
+    if (kept) kept.error = why;
     try {
       await update($, watches, (all) =>
         all.map((w) => (isSame(w, target) ? { ...w, error: `pr-watch failed: ${why}` } : w)),
@@ -309,10 +320,198 @@ async function stop($: $, id: string): Promise<void> {
   await update($, watches, (all) => all.filter((w) => idOf(w) !== id));
 }
 
+const TOOL_COLUMNS = 80;
+
+// A watch's line as text, for a tool's answer.
+function textOf(w: Watch, now: number, known: Record<string, number>): string {
+  return lineOf(w, now, known, TOOL_COLUMNS)
+    .map((s) => s.text)
+    .join('');
+}
+
+const nameOf = (w: Pick<Watch, 'repo' | 'number' | 'push'>) =>
+  w.push ? `the push to ${w.push.branch} on ${w.repo}` : `${w.repo}#${w.number}`;
+
+type ToolInput = { pull: string; repo: string | null };
+
+function toolInputOf(e: unknown): ToolInput | string {
+  const { pull, repo } = e as { pull?: unknown; repo?: unknown };
+  if (typeof pull !== 'string' || pull.trim() === '') {
+    return 'pr-watch: `pull` names a pull request: its number, URL or head branch.';
+  }
+  if (repo !== undefined && repo !== null && typeof repo !== 'string') {
+    return 'pr-watch: `repo` is the repository as owner/name.';
+  }
+  return { pull: pull.trim(), repo: typeof repo === 'string' && repo !== '' ? repo : null };
+}
+
+// The pull request gh resolves a tool's input to, or why it cannot.
+async function viewedTarget($: $, input: ToolInput): Promise<Target | string> {
+  const r = await $.process.run(viewArgs(input.pull, input.repo), {
+    timeoutMs: VIEW_TIMEOUT_MS,
+  });
+  if (r.exitCode !== 0) {
+    const why = r.stderr.trim() ? errorText(r.stderr) : `gh exited ${r.exitCode}`;
+    return `pr-watch could not read ${input.pull} with gh pr view: ${why}`;
+  }
+  const printed = r.stdout.trim().slice(0, 80) || '(empty)';
+  return (
+    viewedPull(r.stdout)?.target ??
+    `pr-watch: gh pr view named no pull request for ${input.pull}: ${printed}`
+  );
+}
+
+// Watches a pull request and answers with what it shows now. The news a first
+// read finds goes in the answer: the host refuses a prompt from a tool call's
+// hook, since it would wait on the turn the hook holds.
+async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
+  const input = toolInputOf(e);
+  if (typeof input === 'string') return { result: input };
+  let name = input.pull;
+  let isAdded = false;
+  try {
+    const target = await viewedTarget($, input);
+    if (typeof target === 'string') return { result: target };
+    const id = idOf(target);
+    name = nameOf(target);
+    let isNew = false;
+    await update($, watches, (all) => {
+      if (all.some((w) => idOf(w) === id)) return all;
+      isNew = true;
+      return [...all, { ...target, checkedAt: 0 }];
+    });
+    isAdded = true;
+    const now = await $.clock.now();
+    const kept: Kept = { news: null };
+    const before = await read($, watches);
+    const watch = before.find((w) => idOf(w) === id);
+    // A read already in flight tells its own news; a second would toast it again.
+    if (watch && !busy.has(id)) await refresh($, watch, now, kept);
+    const saved = await read($, watches);
+    const after = saved.find((w) => idOf(w) === id);
+    if (!after) {
+      return kept.isClosed
+        ? { result: `${name} is closed, so pr-watch is not watching it.` }
+        : { result: `${name} is no longer watched: its line was removed while pr-watch read it.` };
+    }
+    const line = textOf(after, now, await read($, estimates));
+    const head = `pr-watch ${isNew ? 'is now watching' : 'was already watching'} ${name}: ${line}`;
+    if (kept.error !== undefined) {
+      return { result: `${head}\npr-watch could not finish its first read: ${kept.error}` };
+    }
+    const closing = config.isAwake
+      ? 'pr-watch tells you in this conversation when that changes, so there is no need to poll gh.'
+      : 'Waking Claude is off in /config: changes show on the line, and the watches tool reads them.';
+    return { result: [head, kept.news, closing].filter(Boolean).join('\n') };
+  } catch (error) {
+    const why = errorText(error);
+    return {
+      result: isAdded
+        ? `pr-watch is watching ${name} but could not read it yet: ${why}`
+        : `pr-watch could not watch ${input.pull}: ${why}`,
+    };
+  }
+}
+
+async function onUnwatchTool($: $, e: unknown): Promise<{ result: string }> {
+  const input = toolInputOf(e);
+  if (typeof input === 'string') return { result: input };
+  try {
+    const list = await read($, watches);
+    const number = /^#?(\d+)$/.exec(input.pull)?.[1];
+    const inRepo = (w: Watch) => input.repo === null || w.repo === input.repo;
+    let found = list.filter(
+      (w) =>
+        w.url === input.pull ||
+        (!w.push && number !== undefined && w.number === Number(number) && inRepo(w)) ||
+        (w.push?.branch === input.pull && inRepo(w)),
+    );
+    // A head branch names its pull request only through gh.
+    if (found.length === 0 && number === undefined && !input.pull.includes('://')) {
+      const target = await viewedTarget($, input);
+      if (typeof target === 'string') {
+        return { result: `pr-watch is not watching a push to ${input.pull}, and ${target}` };
+      }
+      found = list.filter((w) => idOf(w) === idOf(target));
+    }
+    if (found.length === 0) return { result: `pr-watch is not watching ${input.pull}.` };
+    if (found.length > 1) {
+      const names = found.map((w) => w.url).join(', ');
+      return { result: `${input.pull} matches ${names}; name one by its URL or repo.` };
+    }
+    await stop($, idOf(found[0]!));
+    return { result: `pr-watch stopped watching ${nameOf(found[0]!)}.` };
+  } catch (error) {
+    return { result: `pr-watch could not stop watching ${input.pull}: ${errorText(error)}` };
+  }
+}
+
+async function onWatchesTool($: $): Promise<{ result: string }> {
+  try {
+    const list = await read($, watches);
+    if (list.length === 0) return { result: 'pr-watch is watching nothing.' };
+    const now = await $.clock.now();
+    const known = await read($, estimates);
+    return { result: list.map((w) => `${w.url}: ${textOf(w, now, known)}`).join('\n') };
+  } catch (error) {
+    return { result: `pr-watch could not list its watches: ${errorText(error)}` };
+  }
+}
+
+const PULL_INPUT = {
+  type: 'object',
+  properties: {
+    pull: { type: 'string', description: 'The pull request: its number, URL or head branch.' },
+    repo: {
+      type: 'string',
+      description: "owner/name, when it is not the current directory's repository.",
+    },
+  },
+  required: ['pull'],
+};
+
+const TOOLS = [
+  {
+    name: 'watch',
+    description:
+      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when it turns ready to merge, a check fails, it has conflicts or requested changes, someone comments or reviews, or its merge's checks finish. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; use this for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+    inputSchema: PULL_INPUT,
+  },
+  {
+    name: 'unwatch',
+    description:
+      'Stops pr-watch watching a pull request (its number, URL or head branch) or a pushed branch, once you no longer need its news.',
+    inputSchema: PULL_INPUT,
+  },
+  {
+    name: 'watches',
+    description: 'Lists what pr-watch is watching, each with what its line shows now. Read-only.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+];
+
+// Each on its own, so one refused leaves the others; without them Claude falls
+// back to gh, and the band and its news stay.
+async function registerTools($: $): Promise<void> {
+  const failed: string[] = [];
+  for (const tool of TOOLS) {
+    try {
+      await $.tool.register(tool);
+    } catch (error) {
+      failed.push(`${tool.name} (${errorText(error)})`);
+    }
+  }
+  if (failed.length > 0) {
+    $.ui.toast(`pr-watch could not offer Claude its tools: ${failed.join(', ')}`);
+  }
+}
+
 export const register: Register = (on, options) => {
   const { wake, bots } = settingsOf(options);
   config = { isAwake: wake !== 'off', tells: tellsOf(wake, bots) };
   on('session.start', async ($, e, next) => {
+    // Registered before next, so the tools are listed by the first turn.
+    await registerTools($);
     const r = await next(e);
     poller?.cancel();
     // oxlint-disable-next-line unicorn/no-array-method-this-argument -- a timer, not Array#every
@@ -361,6 +560,10 @@ export const register: Register = (on, options) => {
     }
     return r;
   });
+
+  on('tool.call', { tool: 'mcp__pr-watch__watch' }, ($, e) => onWatchTool($, e));
+  on('tool.call', { tool: 'mcp__pr-watch__unwatch' }, ($, e) => onUnwatchTool($, e));
+  on('tool.call', { tool: 'mcp__pr-watch__watches' }, ($) => onWatchesTool($));
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const list = await read($, watches);

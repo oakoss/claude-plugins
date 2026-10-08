@@ -24,6 +24,8 @@ type Gh = {
   estimate?: string;
   // gh pr view's answer; it fails when unset.
   view?: string;
+  // The tool whose registration the host refuses.
+  registerFails?: string;
   fails?: boolean;
   estimateFails?: number;
   partial?: boolean;
@@ -112,6 +114,7 @@ function world(
     runs: [] as string[],
     wakes: [] as string[],
     order: [] as string[],
+    registered: [] as string[],
   };
   on('session.start', () => ({ cwd: '/repo' }));
   // What another plugin, or the engine, draws in the band beneath pr-watch.
@@ -129,6 +132,11 @@ function world(
   on('ui.toast', ($: unknown, e: { text: string }) => {
     seen.toasts.push(e.text);
     return { value: undefined };
+  });
+  on('tool.register', ($: unknown, e: { name: string }) => {
+    if (e.name === gh.registerFails) return { deny: 'registry closed' };
+    seen.registered.push(e.name);
+    return { value: { tool: `mcp__pr-watch__${e.name}` } };
   });
   on('process.run', ($: unknown, e: { argv: string[] }) => {
     const argv = e.argv.join(' ');
@@ -1318,6 +1326,202 @@ describe('a push to a branch with no pull request', () => {
     await clock.advance(1000);
     expect(reads(seen.runs)).toBe(0);
     expect(await pushLineIn(await band($))).toBeUndefined();
+  });
+});
+
+const OPEN_VIEW = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+
+async function tool($: any, name: string, input: object = {}): Promise<string> {
+  const r = await $.tool.call({ tool: `mcp__pr-watch__${name}`, ...input });
+  return (r as { result: string }).result;
+}
+
+describe('the tools', () => {
+  test('are registered when the session starts', async ($, on) => {
+    const seen = world(on, { pr: prJson() });
+    await start($);
+    expect(seen.registered).toEqual(['watch', 'unwatch', 'watches']);
+    expect(seen.toasts).toEqual([]);
+  });
+
+  test('one refused leaves the others, and says so once', async ($, on) => {
+    const seen = world(on, { pr: prJson(), registerFails: 'unwatch' });
+    await start($);
+    expect(seen.registered).toEqual(['watch', 'watches']);
+    expect(seen.toasts).toEqual([
+      'pr-watch could not offer Claude its tools: unwatch (pr-watch: $.tool.register: registry closed)',
+    ]);
+  });
+
+  test('watch reads a pull request at once and answers with its news, told no more', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN_VIEW });
+    await start($);
+    const answer = await tool($, 'watch', { pull: '128' });
+    expect(answer).toContain('pr-watch is now watching o/r#128: #128 ✓ ready to merge');
+    expect(answer).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.order).toContain('gh pr view 128 --json url,state,mergedAt');
+    expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
+    await clock.advance(70_000);
+    // A prompt from a tool call's hook would wait on that turn; the host refuses it.
+    expect(seen.toasts).toEqual(['#128 is ready to merge']);
+    expect(seen.wakes).toEqual([]);
+    // Watching it again keeps what its line has read, and says nothing new.
+    expect(await tool($, 'watch', { pull: URL })).toContain('was already watching o/r#128');
+    await clock.advance(70_000);
+    expect(seen.toasts).toEqual(['#128 is ready to merge']);
+    expect(await tool($, 'watches')).toBe(`${URL}: #128 ✓ ready to merge`);
+  });
+
+  test('watch leaves a read already in flight to tell its own news', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW, holdFirst: true };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await tool($, 'watch', { pull: '128' })).toBe(
+      'pr-watch was already watching o/r#128: #128 loading…\npr-watch tells you in this conversation when that changes, so there is no need to poll gh.',
+    );
+    expect(reads(seen.runs)).toBe(1);
+    gh.release!();
+    await clock.advance(1000);
+    expect(seen.toasts).toEqual(['#128 is ready to merge']);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('watch names the repository to gh, and trims what it is given', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN_VIEW });
+    await start($);
+    await tool($, 'watch', { pull: ' 128 ', repo: 'o/r' });
+    await tool($, 'watch', { pull: '128', repo: '' });
+    expect(seen.order).toEqual([
+      'gh pr view 128 --repo o/r --json url,state,mergedAt',
+      'gh pr view 128 --json url,state,mergedAt',
+    ]);
+  });
+
+  test('watch says why when it cannot', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ state: 'CLOSED' }), view: OPEN_VIEW };
+    world(on, gh);
+    await start($);
+    expect(await tool($, 'watch', { pull: '128' })).toBe(
+      'o/r#128 is closed, so pr-watch is not watching it.',
+    );
+    gh.view = 'not json';
+    expect(await tool($, 'watch', { pull: '128' })).toBe(
+      'pr-watch: gh pr view named no pull request for 128: not json',
+    );
+    gh.view = undefined;
+    expect(await tool($, 'watch', { pull: '9' })).toBe(
+      'pr-watch could not read 9 with gh pr view: no PR',
+    );
+    for (const input of [{}, { pull: '  ' }, { pull: '9', repo: 5 }]) {
+      expect(await tool($, 'watch', input)).toMatch(/^pr-watch: `(pull|repo)`/);
+    }
+    expect(await tool($, 'watches')).toBe('pr-watch is watching nothing.');
+  });
+
+  test(
+    'with waking off, watch says the line is where changes show',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      mock.clock(on, { now: T0 });
+      world(on, { pr: prJson(), view: OPEN_VIEW });
+      await start($);
+      const answer = await tool($, 'watch', { pull: '128' });
+      expect(answer).toContain('Waking Claude is off in /config');
+      expect(answer).not.toContain('no need to poll');
+    },
+  );
+
+  test('watch says a pull request unwatched during its read is not watched', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW, holdFirst: true };
+    world(on, gh);
+    await start($);
+    const answer = tool($, 'watch', { pull: '128' });
+    // Until the first read is held.
+    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await tool($, 'unwatch', { pull: '128' });
+    gh.release!();
+    expect(await answer).toBe(
+      'o/r#128 is no longer watched: its line was removed while pr-watch read it.',
+    );
+  });
+
+  test('watch says when it could not finish its first read', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), view: OPEN_VIEW });
+    // The add saves; every save after it is refused.
+    let saves = 0;
+    on('state.set', ($: unknown, e: { key?: string }, next: any) => {
+      if (e.key === 'watches' && (saves += 1) > 1) return next({ ...e, value: undefined });
+      return next(e);
+    });
+    await start($);
+    const answer = await tool($, 'watch', { pull: '128' });
+    expect(answer).toContain('pr-watch could not finish its first read: ');
+    expect(answer).not.toContain('no need to poll');
+  });
+
+  test('unwatch stops a watch by number, URL, head branch or pushed branch', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128' });
+    expect(await tool($, 'unwatch', { pull: '7' })).toBe('pr-watch is not watching 7.');
+    expect(await tool($, 'unwatch', { pull: '#128', repo: 'x/y' })).toBe(
+      'pr-watch is not watching #128.',
+    );
+    expect(await tool($, 'unwatch', { pull: '#128' })).toBe('pr-watch stopped watching o/r#128.');
+    expect(await lineIn(await band($))).toBeUndefined();
+    await tool($, 'watch', { pull: '128' });
+    expect(await tool($, 'unwatch', { pull: URL })).toBe('pr-watch stopped watching o/r#128.');
+    // A head branch resolves through gh, the way watch found it.
+    await tool($, 'watch', { pull: 'feat/x' });
+    expect(await tool($, 'unwatch', { pull: 'feat/x' })).toBe('pr-watch stopped watching o/r#128.');
+    gh.view = undefined;
+    expect(await tool($, 'unwatch', { pull: 'feat/y' })).toBe(
+      'pr-watch is not watching a push to feat/y, and pr-watch could not read feat/y with gh pr view: no PR',
+    );
+  });
+
+  test('unwatch stops a pushed branch, within its repository', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), push: pushJson('IN_PROGRESS') }, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    expect(await tool($, 'unwatch', { pull: 'feat/x', repo: 'x/y' })).toBe(
+      'pr-watch is not watching a push to feat/x, and pr-watch could not read feat/x with gh pr view: no PR',
+    );
+    expect(await tool($, 'unwatch', { pull: 'feat/x' })).toBe(
+      'pr-watch stopped watching the push to feat/x on o/r.',
+    );
+    expect(await pushLineIn(await band($))).toBeUndefined();
+  });
+
+  test('unwatch refuses a number two repositories share', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const other = 'https://github.com/x/y/pull/128';
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128' });
+    gh.view = JSON.stringify({ url: other, state: 'OPEN', mergedAt: null });
+    await tool($, 'watch', { pull: '128', repo: 'x/y' });
+    expect(await tool($, 'unwatch', { pull: '128' })).toBe(
+      `128 matches ${URL}, ${other}; name one by its URL or repo.`,
+    );
+    expect(await tool($, 'unwatch', { pull: '128', repo: 'x/y' })).toBe(
+      'pr-watch stopped watching x/y#128.',
+    );
+    const listed = await tool($, 'watches');
+    expect(listed.split('\n')).toHaveLength(1);
   });
 });
 

@@ -114,12 +114,8 @@ export function createdPull(command: string, stdout: string): Target | null {
   return pullAt(stdout);
 }
 
-// How far GitHub's clock may run behind this machine's.
-const MERGE_SKEW_MS = 2 * 60_000;
-
-// 'stale' unless open (an --auto merge waits) or merged after the command
-// started: a merge from before is not the one it ran, but a mention of it.
-export function mergedPullOf(stdout: string, startedAt: number): Target | 'stale' | null {
+// The pull request `gh pr view --json url,…` names, with the rest of its answer.
+export function viewedPull(stdout: string): { target: Target; body: any } | null {
   let body: any;
   try {
     body = JSON.parse(stdout);
@@ -127,7 +123,18 @@ export function mergedPullOf(stdout: string, startedAt: number): Target | 'stale
     return null;
   }
   const target = typeof body?.url === 'string' ? pullAt(body.url) : null;
-  if (target === null) return null;
+  return target === null ? null : { target, body };
+}
+
+// How far GitHub's clock may run behind this machine's.
+const MERGE_SKEW_MS = 2 * 60_000;
+
+// 'stale' unless open (an --auto merge waits) or merged after the command
+// started: a merge from before is not the one it ran, but a mention of it.
+export function mergedPullOf(stdout: string, startedAt: number): Target | 'stale' | null {
+  const viewed = viewedPull(stdout);
+  if (viewed === null) return null;
+  const { target, body } = viewed;
   if (body.state === 'OPEN') return target;
   const at = typeof body.mergedAt === 'string' ? Date.parse(body.mergedAt) : Number.NaN;
   return body.state === 'MERGED' && at >= startedAt - MERGE_SKEW_MS ? target : 'stale';
