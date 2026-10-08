@@ -8,6 +8,7 @@ import {
   delayOf,
   errorLine,
   isCleared,
+  isQuotaLow,
   isSettled,
   lineOf,
   mergedPullOf,
@@ -539,6 +540,14 @@ const said = (author: string, at: string, did = 'commented on', isBot = false) =
   did,
   isBot,
   isReview: did !== 'commented on',
+});
+
+describe('isQuotaLow', () => {
+  test('is low under a tenth of the quota, and unknown is not low', () => {
+    expect(isQuotaLow({ remaining: 499, limit: 5000 })).toBe(true);
+    expect(isQuotaLow({ remaining: 500, limit: 5000 })).toBe(false);
+    expect(isQuotaLow(new Map<string, never>().get('github.com'))).toBe(false);
+  });
 });
 
 describe('settingsOf and tellsOf', () => {

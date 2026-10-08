@@ -224,6 +224,15 @@ export function mergingPull(command: string): Merging | null {
   return pull === null ? null : { pull, repo };
 }
 
+// The 5,000 points an hour are shared with every gh call the user and Claude
+// make, so pr-watch backs off before they run out.
+export const LOW_QUOTA_MS = 60_000;
+const LOW_QUOTA_SHARE = 0.1;
+
+export function isQuotaLow(q: { remaining: number; limit: number } | undefined): boolean {
+  return q !== undefined && q.remaining < q.limit * LOW_QUOTA_SHARE;
+}
+
 export function errorLine(text: string): string {
   const line = text.trim().split('\n')[0]?.trim() ?? '';
   return line.replace(/^gh: /, '') || 'no message';
@@ -243,6 +252,11 @@ export type Verdict =
 
 // How long a merged pull request waits for its merge commit's runs to start.
 const MERGE_GRACE_MS = 90_000;
+
+// Merged inside the grace in which its runs may not have started.
+export function isMergeFresh(pull: Pick<Pull, 'mergedAt'>, now: number): boolean {
+  return pull.mergedAt !== null && now - Date.parse(pull.mergedAt) < MERGE_GRACE_MS;
+}
 
 const gates = (w: Workflow) => w.jobs.some((j) => j.isRequired);
 const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
