@@ -1,7 +1,7 @@
 {
   "name": "pr-watch",
   "description": "A line above the prompt for each pull request Claude opens, showing its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it, and telling Claude the same without being asked.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Oak OSS",
     "email": "hello@oakoss.dev",
