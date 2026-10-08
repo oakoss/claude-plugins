@@ -233,6 +233,56 @@ export function isQuotaLow(q: { remaining: number; limit: number } | undefined):
   return q !== undefined && q.remaining < q.limit * LOW_QUOTA_SHARE;
 }
 
+// GitHub's words for a primary or secondary limit, and the status a secondary
+// one may answer with; its docs name no exact wording.
+const LIMITED = /rate limit (?:already )?exceeded|secondary rate limit|\bHTTP 429\b/i;
+
+// gh prints a GraphQL answer's body on stdout and its first message on stderr.
+export function isRateLimited(stdout: string, stderr: string): boolean {
+  if (LIMITED.test(stderr)) return true;
+  try {
+    const errors: unknown = JSON.parse(stdout)?.errors;
+    return (
+      Array.isArray(errors) &&
+      errors.some((e) => e?.type === 'RATE_LIMITED' || LIMITED.test(String(e?.message)))
+    );
+  } catch {
+    return false;
+  }
+}
+
+// GitHub asks for at least a minute's wait on a secondary limit, longer each time.
+const PAUSE_FIRST_MS = 60_000;
+const PAUSE_MAX_MS = 15 * 60_000;
+
+export type Pause = { until: number; backoff: number };
+
+// A spent quota waits for its reset; any other limit, a secondary one, waits
+// longer each time it is hit again.
+export function pauseOf(
+  q: { remaining: number; limit: number; resetAt: string } | undefined,
+  last: Pause | undefined,
+  now: number,
+): Pause {
+  const backoff = last ? Math.min(last.backoff * 2, PAUSE_MAX_MS) : PAUSE_FIRST_MS;
+  const reset = q && q.remaining <= 0 ? Date.parse(q.resetAt) : Number.NaN;
+  return { until: reset > now ? reset : now + backoff, backoff };
+}
+
+export function untilText(at: number): string {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// Reads that fail for any reason but a rate limit are retried less often each
+// time, and after GIVE_UP_AFTER in a row, some 15 minutes, the watch ends.
+export const GIVE_UP_AFTER = 8;
+const RETRY_MAX_MS = 5 * 60_000;
+
+export function retryDelayOf(failures: number): number {
+  return Math.min(10_000 * 2 ** Math.max(failures - 1, 0), RETRY_MAX_MS);
+}
+
 export function errorLine(text: string): string {
   const line = text.trim().split('\n')[0]?.trim() ?? '';
   return line.replace(/^gh: /, '') || 'no message';
@@ -372,20 +422,26 @@ export function isCleared(verdict: Verdict, pull: Pull, checkedAt: number, now: 
   return isSettled(verdict, pull, checkedAt) && now - checkedAt >= PASSED_STAYS_MS;
 }
 
-// Poll fast while something moves, slowly while it waits on a person. A
-// workflow the merge does not wait on still moves the line's marks.
-export function delayOf(verdict: Verdict, pull: Pull, now: number): number | null {
+// A line that has waited on a person this long is read every STILL_MS.
+const STILL_AFTER_MS = 30 * 60_000;
+const STILL_MS = 5 * 60_000;
+
+// Poll fast while something moves, slowly while it waits on a person, and
+// slower once the line has said the same for half an hour. A workflow the
+// merge does not wait on still moves the line's marks.
+export function delayOf(verdict: Verdict, pull: Pull, now: number, shownAt = now): number | null {
   if (verdict.kind === 'closed' || isSettled(verdict, pull, now)) return null;
+  const slow = now - shownAt >= STILL_AFTER_MS ? STILL_MS : 60_000;
   // A failed merge waits on someone to re-run it.
   if (verdict.kind === 'merged-failing') {
-    return pull.mergeRuns?.workflows.every((w) => w.status === 'done') === false ? 10_000 : 60_000;
+    return pull.mergeRuns?.workflows.every((w) => w.status === 'done') === false ? 10_000 : slow;
   }
   if (verdict.kind === 'running' || verdict.kind.startsWith('merged-')) return 10_000;
   if (pull.workflows.some((w) => w.status !== 'done')) return 10_000;
   if (verdict.kind === 'waiting' && verdict.reason !== 'review' && verdict.reason !== 'draft') {
     return 10_000;
   }
-  return 60_000;
+  return slow;
 }
 
 // What the line says, as a key: a new failure differs from an old one.
@@ -636,14 +692,19 @@ export function lineOf(
   const title = isPush ? `⟳ ${labelOf(watch)}` : labelOf(watch);
   const label = { text: title, color: 'cyan', url: watch.url };
   const pull = watch.pull;
+  // A failure and a pause are separate facts, so a line says both.
+  const pause =
+    watch.limitedUntil === undefined
+      ? undefined
+      : `rate limited until ${untilText(watch.limitedUntil)}`;
+  const problem = [watch.error, pause].filter(Boolean).join(' · ') || undefined;
   if (!pull) {
-    const why = watch.error ?? 'loading…';
     return [
       label,
       {
-        text: ` ${why}`,
-        isDim: watch.error === undefined,
-        color: watch.error === undefined ? undefined : 'red',
+        text: ` ${problem ?? 'loading…'}`,
+        isDim: problem === undefined,
+        color: problem === undefined ? undefined : 'red',
       },
     ];
   }
@@ -659,7 +720,7 @@ export function lineOf(
   const lead: Segment[] = isMerged ? [label, after] : [label];
   const tail: Segment[] = [];
   if (runs.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
-  if (watch.error !== undefined) tail.push({ text: ` · ${watch.error}`, color: 'red' });
+  if (problem !== undefined) tail.push({ text: ` · ${problem}`, color: 'red' });
   const isRunning = v.kind === 'running' || v.kind === 'merged-running';
   // Other workflows, while they run or once they failed; on a running line,
   // every other workflow.

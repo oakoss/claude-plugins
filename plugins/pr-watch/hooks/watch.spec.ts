@@ -7,8 +7,13 @@ import {
   createdPull,
   delayOf,
   errorLine,
+  GIVE_UP_AFTER,
   isCleared,
   isQuotaLow,
+  isRateLimited,
+  pauseOf,
+  retryDelayOf,
+  untilText,
   isSettled,
   lineOf,
   mergedPullOf,
@@ -506,6 +511,22 @@ describe('delayOf', () => {
     expect(delayOf({ kind: 'ready' }, p, AT)).toBe(10_000);
     expect(delayOf({ kind: 'ready' }, pull([green()]), AT)).toBe(60_000);
   });
+
+  test('a line the same for half an hour is read every 5 minutes, while waiting on a person', () => {
+    const p = pull([]);
+    const review = { kind: 'waiting' as const, reason: 'review' };
+    expect(delayOf(review, p, AT, AT - 29 * 60_000)).toBe(60_000);
+    expect(delayOf(review, p, AT, AT - 30 * 60_000)).toBe(300_000);
+    expect(delayOf({ kind: 'running', gate: codeql(null) }, p, AT, 0)).toBe(10_000);
+    const failed = {
+      kind: 'merged-failing' as const,
+      workflowId: 1,
+      workflow: 'CI',
+      job: 'x',
+      url: '',
+    };
+    expect(delayOf(failed, p, AT, AT - 30 * 60_000)).toBe(300_000);
+  });
 });
 
 describe('toastOf', () => {
@@ -547,6 +568,69 @@ describe('isQuotaLow', () => {
     expect(isQuotaLow({ remaining: 499, limit: 5000 })).toBe(true);
     expect(isQuotaLow({ remaining: 500, limit: 5000 })).toBe(false);
     expect(isQuotaLow(new Map<string, never>().get('github.com'))).toBe(false);
+  });
+});
+
+const body = (errors: unknown[]) => JSON.stringify({ errors });
+
+describe('isRateLimited', () => {
+  test('reads a limit from gh’s message or the GraphQL errors', () => {
+    expect(isRateLimited('', 'gh: API rate limit exceeded for user ID 1.\n')).toBe(true);
+    expect(isRateLimited('', 'gh: You have exceeded a secondary rate limit. (HTTP 403)')).toBe(
+      true,
+    );
+    expect(isRateLimited(body([{ type: 'RATE_LIMITED', message: 'x' }]), 'gh: x')).toBe(true);
+    expect(isRateLimited(body([{ message: 'API rate limit already exceeded' }]), '')).toBe(true);
+    expect(isRateLimited('', 'gh: HTTP 429: Too Many Requests')).toBe(true);
+  });
+
+  test('is not any other failure, or a rate limit named in the data', () => {
+    expect(isRateLimited('', 'gh: HTTP 502')).toBe(false);
+    expect(isRateLimited(body([{ type: 'NOT_FOUND', message: 'x' }]), 'gh: x')).toBe(false);
+    expect(isRateLimited(JSON.stringify({ data: { title: 'rate limit' } }), '')).toBe(false);
+    expect(isRateLimited('not json', '')).toBe(false);
+    expect(isRateLimited('', 'gh: Rate limiting is not enabled. (HTTP 404)')).toBe(false);
+  });
+});
+
+describe('pauseOf', () => {
+  const reset = '2026-10-03T23:00:00Z';
+
+  test('a spent quota waits for its reset', () => {
+    const q = { remaining: 0, limit: 5000, resetAt: reset };
+    expect(pauseOf(q, undefined, AT)).toEqual({ until: Date.parse(reset), backoff: 60_000 });
+  });
+
+  test('any other limit waits a minute, doubling to 15', () => {
+    const q = { remaining: 4000, limit: 5000, resetAt: reset };
+    const first = pauseOf(q, undefined, AT);
+    expect(first).toEqual({ until: AT + 60_000, backoff: 60_000 });
+    expect(pauseOf(undefined, first, AT).backoff).toBe(120_000);
+    expect(pauseOf(undefined, { until: 0, backoff: 600_000 }, AT).backoff).toBe(900_000);
+    expect(pauseOf(undefined, { until: 0, backoff: 900_000 }, AT).backoff).toBe(900_000);
+  });
+
+  test('a quota low but not spent waits the backoff, as a secondary limit', () => {
+    const q = { remaining: 400, limit: 5000, resetAt: reset };
+    expect(pauseOf(q, undefined, AT).until).toBe(AT + 60_000);
+  });
+
+  test('a reset already past waits the backoff', () => {
+    const q = { remaining: 0, limit: 5000, resetAt: '2026-10-03T22:00:00Z' };
+    expect(pauseOf(q, undefined, AT).until).toBe(AT + 60_000);
+  });
+});
+
+describe('retryDelayOf and untilText', () => {
+  test('failed reads wait 10 s, doubling to 5 minutes, some 15 minutes over 8', () => {
+    const delays = [1, 2, 3, 4, 5, 6, 7].map((n) => retryDelayOf(n));
+    expect(delays).toEqual([10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000]);
+    expect(GIVE_UP_AFTER).toBe(8);
+  });
+
+  test('names a local time as HH:MM', () => {
+    const at = new Date(2026, 9, 3, 7, 5).getTime();
+    expect(untilText(at)).toBe('07:05');
   });
 });
 
@@ -1036,6 +1120,18 @@ describe('lineOf', () => {
     expect(textOf(watched(p), KNOWN)).toMatch(
       /^#128 ● CI [█▏▎▍▌▋▊▉]+░+ 1m10s \/ ~2m20s · CodeQL ✓ · Deps ●$/,
     );
+  });
+
+  test('says a rate limit beside a failure, read or not', () => {
+    const until = new Date(2026, 9, 3, 23, 5).getTime();
+    const over = { error: 'gh failed: HTTP 502', limitedUntil: until };
+    expect(textOf(watched(undefined, over))).toBe(
+      '#128 gh failed: HTTP 502 · rate limited until 23:05',
+    );
+    expect(textOf(watched(pull([green()]), { limitedUntil: until }))).toMatch(
+      / · rate limited until 23:05$/,
+    );
+    expect(textOf(watched(undefined, { error: over.error }))).toBe('#128 gh failed: HTTP 502');
   });
 
   test('marks a failed other workflow red', () => {

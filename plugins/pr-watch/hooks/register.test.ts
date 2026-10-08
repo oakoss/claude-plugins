@@ -29,10 +29,16 @@ type Gh = {
   // That many merged-variant reads fail first.
   mergedFails?: number;
   fails?: boolean;
+  // Every GraphQL read is refused for GitHub's rate limit, or only the merged variant.
+  limited?: boolean;
+  mergedLimited?: boolean;
+  // Every GraphQL read fails, while gh pr view still answers.
+  readsFail?: boolean;
   estimateFails?: number;
   partial?: boolean;
-  // Holds the first PR read until the test calls `release`.
+  // Holds the first PR read, or every pushed-branch read, until the test calls `release`.
   holdFirst?: boolean;
+  holdPush?: boolean;
   // pr-watch's prompts are refused: the hook throws, so the kit finds nothing beneath.
   wakeRejects?: boolean;
   release?: () => void;
@@ -145,6 +151,13 @@ function world(
     seen.runs.push(argv);
     const failed = { value: { exitCode: 1, stdout: '', stderr: 'gh: HTTP 502\nretry later' } };
     if (gh.fails) return failed;
+    const isMerged = argv.includes('mergeCommit {');
+    if (argv.includes('graphql') && (gh.limited || (gh.mergedLimited && isMerged))) {
+      const message = 'API rate limit exceeded for user ID 1.';
+      const stdout = JSON.stringify({ errors: [{ type: 'RATE_LIMITED', message }] });
+      return { value: { exitCode: 1, stdout, stderr: `gh: ${message}\n` } };
+    }
+    if (gh.readsFail && argv.includes('graphql')) return failed;
     if (argv.startsWith('gh pr view')) {
       seen.order.push(argv);
       if (gh.view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
@@ -164,7 +177,8 @@ function world(
     const query = argv.includes('refs/heads/') ? (gh.push ?? gh.pr) : gh.pr;
     const out = argv.includes('graphql') ? query : (gh.estimate ?? '{"workflow_runs":[]}');
     const answer = { value: { exitCode: 0, stdout: out, stderr: '' } };
-    if (gh.holdFirst && argv.includes('graphql')) {
+    const isHeld = gh.holdPush && argv.includes('refs/heads/');
+    if ((gh.holdFirst || isHeld) && argv.includes('graphql')) {
       gh.holdFirst = false;
       return new Promise((resolve) => {
         gh.release = () => resolve(answer);
@@ -1013,7 +1027,8 @@ describe('a merged pull request', () => {
     const before = reads(seen.runs);
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
     expect(await lineIn(ui)).toMatch(/gh failed/);
-    await clock.advance(20_000);
+    // Four failed reads in, the next waits 80 s.
+    await clock.advance(70_000);
     expect(reads(seen.runs)).toBeGreaterThan(before);
     expect(seen.toasts).toEqual([]);
   });
@@ -1034,7 +1049,8 @@ describe('a merged pull request', () => {
     );
     gh.fails = false;
     gh.pr = mergedJson('IN_PROGRESS', null);
-    await clock.advance(10_000);
+    // Four failed reads in, the next waits 80 s.
+    await clock.advance(50_000);
     expect(await lineIn(ui)).toMatch(/^#128 merged into main · ● Release /);
   });
 
@@ -1421,6 +1437,437 @@ describe('a push to a branch with no pull request', () => {
     expect(await pushLineIn(await band($))).toBeUndefined();
   });
 });
+
+function hhmm(at: number): string {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+const MINUTE = 60_000;
+
+describe('reads that fail', () => {
+  test('a spent quota pauses every watch on the host until it resets', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const reset = '2026-10-03T22:30:00Z';
+    const gh: Gh = {
+      pr: withQuota(prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), 0, reset),
+      push: pushJson('IN_PROGRESS'),
+      view: OPEN_VIEW,
+    };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    gh.limited = true;
+    // Only the pull request is read; the push's line says the pause too.
+    await tool($, 'watch', { pull: '128' });
+    const ui = await band($);
+    const said = `rate limited until ${hhmm(Date.parse(reset))}`;
+    expect(await lineIn(ui)).toMatch(said);
+    expect(await pushLineIn(ui)).toMatch(said);
+    const before = reads(seen.runs);
+    await clock.advance(Date.parse(reset) - T0 - 2 * MINUTE);
+    expect(reads(seen.runs)).toBe(before);
+    gh.limited = false;
+    await clock.advance(2 * MINUTE);
+    expect(reads(seen.runs)).toBeGreaterThan(before);
+    expect(await lineIn(ui)).not.toMatch('rate limited');
+  });
+
+  test('another limit waits a minute, longer each time, and never ends the watch', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.limited = true;
+    await clock.advance(10_000);
+    const first = reads(seen.runs);
+    expect(await lineIn(await band($))).toMatch(/rate limited until \d\d:\d\d$/);
+    await clock.advance(59_000);
+    expect(reads(seen.runs)).toBe(first);
+    await clock.advance(2000);
+    expect(reads(seen.runs)).toBe(first + 1);
+    await clock.advance(118_000);
+    expect(reads(seen.runs)).toBe(first + 1);
+    await clock.advance(2000);
+    expect(reads(seen.runs)).toBe(first + 2);
+    // Eleven limited reads later, the watch stays.
+    await clock.advance(150 * MINUTE);
+    expect(reads(seen.runs)).toBeGreaterThan(first + GIVE_UP);
+    expect(await lineIn(await band($))).toMatch(/rate limited until/);
+    expect(seen.toasts.filter((t) => t.includes('stopped watching'))).toEqual([]);
+  });
+
+  test('a read that fails waits longer each time, and after 8 in a row the watch ends', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.fails = true;
+    // Failed reads at 11 s, then 10, 20, 40, 80, 160, 300 and 300 s apart.
+    await clock.advance(15 * MINUTE);
+    expect(reads(seen.runs)).toBe(1 + GIVE_UP - 1);
+    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 502$/);
+    await clock.advance(MINUTE);
+    expect(reads(seen.runs)).toBe(1 + GIVE_UP);
+    expect(await lineIn(await band($))).toBeUndefined();
+    expect(seen.toasts).toContain('pr-watch stopped watching #128: gh failed: HTTP 502');
+    expect(seen.wakes).toEqual([
+      [
+        'pr-watch: 8 reads of o/r#128 in a row failed, so pr-watch stopped watching it. The last: gh failed: HTTP 502',
+        `Watch it again with pr-watch's watch tool once gh can read it. ${URL}`,
+      ].join('\n'),
+    ]);
+  });
+
+  test('a read that succeeds starts the count over', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.fails = true;
+    // The seventh failed read is at 621 s; the next waits 300 s.
+    await clock.advance(11 * MINUTE);
+    gh.fails = false;
+    await clock.advance(5 * MINUTE);
+    gh.fails = true;
+    await clock.advance(10 * MINUTE);
+    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 502$/);
+  });
+
+  test('the watch tool reads nothing while its host is paused, and says why', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.limited = true;
+    await clock.advance(10_000);
+    const before = reads(seen.runs);
+    expect(await tool($, 'watch', { pull: '128' })).toMatch(/rate limited until \d\d:\d\d/);
+    expect(reads(seen.runs)).toBe(before);
+  });
+
+  test('reads limited together pause once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    gh.limited = true;
+    // Both are read at 6 s, in the push's burst, and limited together.
+    await clock.advance(5000);
+    const first = reads(seen.runs);
+    await clock.advance(59_000);
+    expect(reads(seen.runs)).toBe(first);
+    await clock.advance(2000);
+    expect(reads(seen.runs)).toBe(first + 2);
+  });
+
+  test('a read that began before the pause does not end it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), holdFirst: true };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($);
+    // The pull request's read starts at 1 s and is held; the push's is limited.
+    await clock.advance(1000);
+    gh.limited = true;
+    await create($, 'git push');
+    await clock.advance(1000);
+    const before = reads(seen.runs);
+    gh.release?.();
+    await clock.advance(30_000);
+    expect(reads(seen.runs)).toBe(before);
+    // Its own line still says the pause it ended inside.
+    expect(await lineIn(await band($))).toMatch(/ · rate limited until \d\d:\d\d$/);
+  });
+
+  test('a push made while its host is paused waits it out, then is read', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), limited: true };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($);
+    // Limited at 1 s and 61 s; the second pause ends at 181 s.
+    await clock.advance(70_000);
+    await create($, 'git push');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toMatch(/^⟳ push feat\/x rate limited until/);
+    gh.limited = false;
+    await clock.advance(112_000);
+    expect(await pushLineIn(ui)).toMatch(/^⟳ push feat\/x · ● Release/);
+  });
+
+  test('a limited read judges nothing on the last good state', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merge = { baseRefName: 'main', mergedAt: '2026-10-03T22:01:00Z', mergeCommit: null };
+    const gh: Gh = { pr: prJson({ state: 'MERGED', ...merge }) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    // Limited at 11 s, 71 s and 191 s, the last past the merge's 90 s grace.
+    gh.limited = true;
+    await clock.advance(4 * MINUTE);
+    const ui = await band($);
+    expect(await lineIn(ui)).toMatch(/^#128 merged into main · ○ waiting on checks · rate limited/);
+    gh.limited = false;
+    gh.pr = mergedJson('IN_PROGRESS', null);
+    await clock.advance(5 * MINUTE);
+    expect(await lineIn(ui)).toMatch(/^#128 merged into main · ● Release /);
+  });
+
+  test('a failure of its own after a pause says so and backs off', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), limited: true };
+    const seen = world(on, gh);
+    let isRefusing = false;
+    on('state.set', ($: unknown, e: any, next: any) =>
+      isRefusing &&
+      e.key === 'watches' &&
+      Array.isArray(e.value) &&
+      e.value.some((w: any) => w.pull !== undefined)
+        ? next({ ...e, value: undefined })
+        : next(e),
+    );
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    // Paused until 61 s; then reads answer but their saves are refused.
+    gh.limited = false;
+    isRefusing = true;
+    await clock.advance(MINUTE);
+    const before = reads(seen.runs);
+    await clock.advance(10 * MINUTE);
+    expect(await lineIn(await band($))).toMatch(/^#128 pr-watch failed: /);
+    expect(reads(seen.runs) - before).toBeLessThanOrEqual(10);
+  });
+
+  test('a rate limit never ends a watch, whatever failed before it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    const seen = world(on, gh);
+    let isRefusing = true;
+    // Saves of a read are refused, so pr-watch's own failures pass 8.
+    on('state.set', ($: unknown, e: any, next: any) =>
+      isRefusing &&
+      e.key === 'watches' &&
+      Array.isArray(e.value) &&
+      e.value.some((w: any) => w.pull !== undefined)
+        ? next({ ...e, value: undefined })
+        : next(e),
+    );
+    await start($);
+    await create($);
+    await clock.advance(20 * MINUTE);
+    isRefusing = false;
+    gh.limited = true;
+    await clock.advance(6 * MINUTE);
+    expect(await lineIn(await band($))).toMatch(/^#128 pr-watch failed: .* · rate limited until/);
+    expect(seen.toasts.filter((t) => t.includes('stopped watching'))).toEqual([]);
+  });
+
+  test('after a read succeeds, the next limit waits a minute again', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.limited = true;
+    // Limited at 11 s and 71 s, the second pause lasting until 191 s.
+    await clock.advance(61_000);
+    gh.limited = false;
+    await clock.advance(121_000);
+    gh.limited = true;
+    // Up to the next read, which is limited.
+    const read = reads(seen.runs);
+    while (reads(seen.runs) === read) await clock.advance(1000);
+    const limited = reads(seen.runs);
+    await clock.advance(58_000);
+    expect(reads(seen.runs)).toBe(limited);
+    await clock.advance(3000);
+    expect(reads(seen.runs)).toBe(limited + 1);
+  });
+
+  test('a push not yet read stays while its host is rate-limited', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), limited: true };
+    world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(100_000);
+    expect(await pushLineIn(await band($))).toMatch(/^⟳ push feat\/x rate limited until/);
+  });
+
+  test('a push not yet read stays though another read on the host ends the pause first', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), limited: true };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($);
+    await create($, 'git push');
+    // Limited at 1 s and 61 s; the pause ends at 181 s, past the push's 90 s grace.
+    await clock.advance(100_000);
+    gh.limited = false;
+    gh.holdPush = true;
+    await clock.advance(90_000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toMatch(/rate limited until/);
+    gh.release?.();
+    await clock.advance(1000);
+    expect(await pushLineIn(ui)).toMatch(/^⟳ push feat\/x · ● Release/);
+  });
+
+  test('a merge whose second read stays limited waits longer each time', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: mergedJson('IN_PROGRESS', null), mergedLimited: true });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const first = reads(seen.runs);
+    await clock.advance(61_000);
+    expect(reads(seen.runs)).toBe(first + 2);
+    await clock.advance(118_000);
+    expect(reads(seen.runs)).toBe(first + 2);
+    await clock.advance(2000);
+    expect(reads(seen.runs)).toBe(first + 4);
+  });
+
+  test('a line on a slow poll is read as its pause ends', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const review = { mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    const gh: Gh = { pr: prJson(review), view: OPEN_VIEW };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(31 * MINUTE);
+    gh.limited = true;
+    await tool($, 'watch', { pull: '128' });
+    gh.limited = false;
+    await clock.advance(62_000);
+    expect(await lineIn(await band($))).toBe('#128 ○ waiting on review');
+  });
+
+  test('a failing line on a slow poll retries on the failure schedule', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const review = { mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    const gh: Gh = { pr: prJson(review) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(31 * MINUTE);
+    gh.fails = true;
+    await clock.advance(21 * MINUTE);
+    expect(await lineIn(await band($))).toBeUndefined();
+  });
+
+  test('a failure of its own backs a watch off too', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) });
+    // Every save of a read is refused; the save of the failure itself goes through.
+    on('state.set', ($: unknown, e: any, next: any) =>
+      e.key === 'watches' &&
+      Array.isArray(e.value) &&
+      e.value.some((w: any) => w.pull !== undefined)
+        ? next({ ...e, value: undefined })
+        : next(e),
+    );
+    await start($);
+    await create($);
+    await clock.advance(10 * MINUTE);
+    expect(await lineIn(await band($))).toMatch(/^#128 pr-watch failed: /);
+    expect(reads(seen.runs)).toBeLessThanOrEqual(10);
+  });
+
+  test('a fresh merge whose runs are rate-limited says so, not waiting on checks', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: mergedJson('IN_PROGRESS', null), mergedLimited: true });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toMatch(/^#128 rate limited until/);
+  });
+
+  test(
+    'with waking off, a watch that gives up is toasted but Claude is not woken',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.fails = true;
+      await clock.advance(16 * MINUTE);
+      expect(seen.toasts).toContain('pr-watch stopped watching #128: gh failed: HTTP 502');
+      expect(seen.wakes).toEqual([]);
+    },
+  );
+
+  test('the watch tool whose read is the eighth failure answers why it gave up', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.readsFail = true;
+    // The seventh failed read is at 621 s; the next is not due until 921 s.
+    await clock.advance(11 * MINUTE);
+    expect(await tool($, 'watch', { pull: '128' })).toMatch(
+      /^pr-watch: 8 reads of o\/r#128 in a row failed/,
+    );
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('a line whose state changes after half an hour is read every minute again', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' }),
+    };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(31 * MINUTE);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED', reviewDecision: 'CHANGES_REQUESTED' });
+    await clock.advance(5 * MINUTE);
+    const before = reads(seen.runs);
+    await clock.advance(3 * MINUTE);
+    expect(reads(seen.runs) - before).toBe(3);
+  });
+
+  test('a line that waits on review for half an hour is read every 5 minutes', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const review = { mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    const seen = world(on, { pr: prJson(review) });
+    await start($);
+    await create($);
+    await clock.advance(31 * MINUTE);
+    const before = reads(seen.runs);
+    await clock.advance(10 * MINUTE);
+    expect(reads(seen.runs) - before).toBe(2);
+    expect(await lineIn(await band($))).toBe('#128 ○ waiting on review');
+  });
+});
+
+const GIVE_UP = 8;
 
 const OPEN_VIEW = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
 

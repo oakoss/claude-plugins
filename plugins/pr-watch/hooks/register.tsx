@@ -28,7 +28,12 @@ import {
   isChecking,
   isMergeFresh,
   isQuotaLow,
+  isRateLimited,
+  GIVE_UP_AFTER,
   LOW_QUOTA_MS,
+  pauseOf,
+  retryDelayOf,
+  untilText,
   isSettled,
   labelOf,
   shownOf,
@@ -40,6 +45,7 @@ import {
   wakeOf,
   type Merging,
   type Memory,
+  type Pause,
   type Segment,
   type Target,
   type Wake,
@@ -62,6 +68,9 @@ const tried = new Map<string, number>();
 const asked = new Map<string, number>();
 // The GraphQL quota each host's latest read reported.
 const quota = new Map<string, Quota>();
+// Each rate-limited host's pause, kept after it ends until a read succeeds, so
+// a limit hit again waits longer.
+const paused = new Map<string, Pause>();
 // Finished runs a length was learned after, so each one re-learns it once.
 const learnedAfter = new Set<string>();
 // After Claude pushes, merges or starts a run, a watch last read before
@@ -134,6 +143,12 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
   }
 }
 
+class RateLimited extends Error {
+  constructor(readonly until: number) {
+    super(`rate limited until ${untilText(until)}`);
+  }
+}
+
 // gh exits non-zero when GraphQL reports any error, even beside usable data.
 async function readGh<T>(
   $: $,
@@ -141,12 +156,24 @@ async function readGh<T>(
   argv: string[],
   parse: (stdout: string) => T,
 ): Promise<T> {
+  const before = paused.get(host);
+  if (before && (await $.clock.now()) < before.until) {
+    throw new RateLimited(before.until);
+  }
   const r = await $.process.run(argv);
   const left = parseQuota(r.stdout);
   const was = quota.get(host);
   // Reads finish out of order: within one reset window, the lowest count is the latest.
   const isStale = was?.resetAt === left?.resetAt && (was?.remaining ?? 0) < (left?.remaining ?? 0);
   if (left && !isStale) quota.set(host, left);
+  if (r.exitCode !== 0 && isRateLimited(r.stdout, r.stderr)) {
+    const now = await $.clock.now();
+    // Reads limited together pause once, rather than each doubling the wait.
+    const current = paused.get(host);
+    const pause = current && current !== before ? current : pauseOf(quota.get(host), current, now);
+    paused.set(host, pause);
+    throw new RateLimited(pause.until);
+  }
   try {
     return parse(r.stdout);
   } catch (error) {
@@ -172,7 +199,7 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     } catch (error) {
       // Just merged, it shows as waiting on checks while the next read asks for
       // them. Older, it would read as closed and leave, so the failure is said.
-      if (!isMergeFresh(pull, await $.clock.now())) throw error;
+      if (error instanceof RateLimited || !isMergeFresh(pull, await $.clock.now())) throw error;
       return { kind: 'pull', pull: { ...pull, workflows: [], mergeRuns: null } };
     }
   }
@@ -197,8 +224,19 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
   tried.set(id, now);
   try {
     let next: Watch;
+    let isLimited = false;
+    const pause = paused.get(target.host);
+    // A read that began before another read paused the host still waits it out.
+    const pausedUntil = async () => {
+      const until = paused.get(target.host)?.until;
+      return until !== undefined && (await $.clock.now()) < until ? until : undefined;
+    };
     try {
       const read = await readWatch($, target);
+      // Only a whole read that began after the pause was set shows the limit
+      // lifted: a merged pull request's second read may still be refused.
+      if (paused.get(target.host) === pause) paused.delete(target.host);
+      const limitedUntil = await pausedUntil();
       if (read.kind === 'gone') {
         await update($, watches, (all) => all.filter((w) => !isSame(w, target)));
         return;
@@ -217,17 +255,38 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         });
         return;
       }
-      next = { ...target, pull: read.pull, error: undefined, checkedAt: now };
+      next = {
+        ...target,
+        pull: read.pull,
+        error: undefined,
+        failures: undefined,
+        limitedUntil,
+        checkedAt: now,
+      };
     } catch (error) {
       // checkedAt stays the last good read's: settling is judged by it, and
-      // `tried` already spaces the retries.
-      next = { ...target, error: `gh failed: ${errorText(error)}` };
+      // `tried` already spaces the retries. A rate limit is GitHub's to lift,
+      // so it does not count toward giving up.
+      if (error instanceof RateLimited) {
+        isLimited = true;
+        next = { ...target, limitedUntil: error.until };
+      } else {
+        next = {
+          ...target,
+          error: `gh failed: ${errorText(error)}`,
+          failures: (target.failures ?? 0) + 1,
+          limitedUntil: await pausedUntil(),
+        };
+      }
     }
+    const isGivenUp = !isLimited && (next.failures ?? 0) >= GIVE_UP_AFTER;
+    // Only a read that answered is judged; a limited one keeps the last good state.
+    const isFresh = !isLimited && next.error === undefined;
     let toast: string | null = null;
     let news: string | null = null;
     let wakeFor: ((last: Memory) => Wake) | null = null;
     let isClosed = false;
-    if (next.pull && next.error === undefined) {
+    if (next.pull && isFresh) {
       const pull = next.pull;
       const verdict = verdictOf(pull, await read($, estimates), next.host, now);
       isClosed = verdict.kind === 'closed';
@@ -242,13 +301,21 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         if (!isEarly && !isChecking(verdict)) {
           toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
           next.shown = shownOf(verdict);
+          if (next.shown !== shown || next.shownAt === undefined) next.shownAt = now;
         }
       }
     }
     let isSaved = false;
     await update($, watches, (all) => {
       isSaved = all.some((w) => isSame(w, target));
-      if (isClosed) return all.filter((w) => !isSame(w, target));
+      if (isClosed || isGivenUp) return all.filter((w) => !isSame(w, target));
+      // Every watch on the host waits out the pause, so each line says so.
+      if (isLimited) {
+        const { limitedUntil } = next;
+        return all.map((w) =>
+          isSame(w, target) ? next : w.host === next.host ? { ...w, limitedUntil } : w,
+        );
+      }
       if (wakeFor) {
         // Judged against every watch on the host as saved now: a push and its
         // pull request read the same runs, and either may be read first.
@@ -266,19 +333,41 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     isSaveFailing = false;
     // Only once the line says it, so a lost save does not toast or wake again.
     if (toast && isSaved) $.ui.toast(toast);
+    if (isGivenUp && isSaved) {
+      $.ui.toast(`pr-watch stopped watching ${labelOf(next)}: ${next.error}`);
+      news = [
+        `pr-watch: ${GIVE_UP_AFTER} reads of ${nameOf(next)} in a row failed, so pr-watch stopped watching it. The last: ${next.error}`,
+        `Watch it again with pr-watch's watch tool once gh can read it. ${next.url}`,
+      ].join('\n');
+      // A tool's caller is told in its answer, whatever /config says.
+      if (!kept && !config.isAwake) news = null;
+    }
     if (news && isSaved) {
       if (kept) kept.news = news;
       else wake($, news, labelOf(next));
     }
-    if (!isClosed && next.error === undefined) await learnEstimates($, next, now);
+    if (!isClosed && isFresh) await learnEstimates($, next, now);
   } catch (error) {
     // Kept on the line so the band says why; said once when even that fails.
-    // The read itself succeeded or was caught above, so this is pr-watch's own.
+    // The read itself succeeded or was caught above, so this is pr-watch's own,
+    // counted so that one failing every time is retried less often.
     const why = errorText(error);
     if (kept) kept.error = why;
+    // The read ran, so the line says a pause only while its host is still in one.
+    const until = paused.get(target.host)?.until;
+    const limitedUntil = until !== undefined && (await $.clock.now()) < until ? until : undefined;
     try {
       await update($, watches, (all) =>
-        all.map((w) => (isSame(w, target) ? { ...w, error: `pr-watch failed: ${why}` } : w)),
+        all.map((w) =>
+          isSame(w, target)
+            ? {
+                ...w,
+                error: `pr-watch failed: ${why}`,
+                failures: (w.failures ?? 0) + 1,
+                limitedUntil,
+              }
+            : w,
+        ),
       );
     } catch {
       if (!isSaveFailing) $.ui.toast(`pr-watch could not save ${labelOf(target)}: ${why}`);
@@ -297,8 +386,18 @@ async function tick($: $): Promise<void> {
   // Judged on the list as saved, so a push that replaced a watch since stays.
   let list: Watch[] = [];
   await update($, watches, (all) => {
-    list = all.filter((w) => !isGone(w, known, now));
-    return list.length === all.length ? all : list;
+    // A watch added while its host is paused waits it out like the rest, and
+    // says so; a push not yet read stays while it waits.
+    let isChanged = false;
+    list = all.flatMap((w) => {
+      const until = paused.get(w.host)?.until ?? 0;
+      const held = now < until && w.limitedUntil === undefined ? { ...w, limitedUntil: until } : w;
+      if (held !== w) isChanged = true;
+      const isKept = !isGone(held, known, now) || (!held.pull && held.limitedUntil !== undefined);
+      if (!isKept) isChanged = true;
+      return isKept ? [held] : [];
+    });
+    return isChanged ? list : all;
   });
   let isMoving = false;
   for (const w of list) {
@@ -306,20 +405,29 @@ async function tick($: $): Promise<void> {
     // after it is not missed.
     const verdict = w.pull ? verdictOf(w.pull, known, w.host, w.checkedAt) : null;
     if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
-    const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt) : 10_000;
-    const isLow = isQuotaLow(quota.get(w.host));
-    // Low on quota, every watch on the host waits its slow delay, bursts and all.
+    const pauseEnd = paused.get(w.host)?.until ?? 0;
+    if (now < pauseEnd) continue;
+    const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt, w.shownAt) : 10_000;
+    // A failing watch retries on its own schedule; low on quota, a watch waits
+    // its slow delay. Neither bursts.
+    const low = isQuotaLow(quota.get(w.host)) ? LOW_QUOTA_MS : 0;
+    const isSlowed = low > 0 || Boolean(w.failures);
     const delay =
       usual === null
         ? null
-        : isLow
-          ? Math.max(usual, LOW_QUOTA_MS)
-          : now < burstUntil
-            ? Math.min(usual, BURST_MS)
-            : usual;
+        : w.failures
+          ? Math.max(retryDelayOf(w.failures), low)
+          : low > 0
+            ? Math.max(usual, low)
+            : now < burstUntil
+              ? Math.min(usual, BURST_MS)
+              : usual;
     if (delay === null || busy.has(idOf(w))) continue;
     const last = Math.max(w.checkedAt, tried.get(idOf(w)) ?? 0);
-    if ((last <= pushedAt && !isLow) || now - last >= delay) void refresh($, w, now);
+    // A line says the pause until a read of its own, so the end of one reads it at once.
+    const isDue =
+      w.limitedUntil !== undefined || (last <= pushedAt && !isSlowed) || now - last >= delay;
+    if (isDue) void refresh($, w, now);
   }
   if (isMoving) await update($, clock, () => now);
 }
@@ -430,9 +538,11 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
     const saved = await read($, watches);
     const after = saved.find((w) => idOf(w) === id);
     if (!after) {
-      return kept.isClosed
-        ? { result: `${name} is closed, so pr-watch is not watching it.` }
-        : { result: `${name} is no longer watched: its line was removed while pr-watch read it.` };
+      if (kept.isClosed) return { result: `${name} is closed, so pr-watch is not watching it.` };
+      return {
+        result:
+          kept.news ?? `${name} is no longer watched: its line was removed while pr-watch read it.`,
+      };
     }
     const line = textOf(after, now, await read($, estimates));
     const head = `pr-watch ${isNew ? 'is now watching' : 'was already watching'} ${name}: ${line}`;
