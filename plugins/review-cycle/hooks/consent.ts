@@ -159,20 +159,28 @@ const OFFERED: Readonly<Record<string, Family>> = Object.fromEntries(
 // release", "publish the new release"; "mark it ready for review", "ready for
 // review".
 function prPhrase(text: string): string {
-  return text
-    .replaceAll(
-      /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
-      (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
-    )
-    .replaceAll(/\bready for review\b/gi, 'markready')
-    .replaceAll(
-      /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
-      (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
-    )
-    .replaceAll(
-      /\b(?:(cut|create|make|publish|do)|(cutting|creating|making|publishing|doing))\s+(?:(?:a|an|the|new)\s+)*release\b/gi,
-      (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
-    );
+  return (
+    text
+      .replaceAll(
+        /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
+        (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
+      )
+      .replaceAll(/\bready for review\b/gi, 'markready')
+      .replaceAll(
+        /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
+        (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
+      )
+      .replaceAll(
+        /\b(?:(cut|create|make|publish|do)|(cutting|creating|making|publishing|doing))\s+(?:(?:a|an|the|new)\s+)*release\b/gi,
+        (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
+      )
+      // Merging the version pull request is the release, but only where the noun
+      // ends the clause: "merge the release fixes" names other work.
+      .replaceAll(
+        /\b(?:(merge)|(merging))\s+(?:(?:the|this|that|our|new)\s+)*(?:release|version(?:[\s-]packages)?)(?:\s+(?:pr|pull[\s-]request))?(?:\s+#?\d+)?(?=\s*(?:$|[.,;:!?)](?!\d))|\s+(?:now|please|then|and|too|yet|first|next)\b)/gi,
+        (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
+      )
+  );
 }
 
 // A bare --force named apart from a lease ("`--force`", "bare force push",

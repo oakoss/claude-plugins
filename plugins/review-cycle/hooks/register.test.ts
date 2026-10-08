@@ -2962,6 +2962,16 @@ describe('the stop-before setting', () => {
     await say($, 'release it');
     expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
   });
+  test('"merge the release" merges the version pull request, and no other', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('merge') },
+      git: github('oakum/version-packages'),
+    });
+    await say($, 'Ok, lets merge the release');
+    expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
+    w.git = github('feat/x');
+    expect(denied(await bash($, 'gh pr merge 63'), 'merge')).toBe(true);
+  });
   test('a merge whose pull request cannot be looked up asks where a release would', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
     await say($, 'fix the parser');
