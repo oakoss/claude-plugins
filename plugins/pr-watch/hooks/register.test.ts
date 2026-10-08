@@ -351,9 +351,9 @@ function failedJob(name: string, run = 1, job = 10) {
 }
 
 // A running pull request with these comments, read by `me`.
-function commentedJson(comments: unknown[]): string {
-  const activity = { comments: { nodes: comments }, reviews: { nodes: [] } };
-  const body = JSON.parse(prJson(activity, [RUNNING_CI]));
+function commentedJson(comments: unknown[], reviews: unknown[] = [], suites = [RUNNING_CI]) {
+  const activity = { comments: { nodes: comments }, reviews: { nodes: reviews } };
+  const body = JSON.parse(prJson(activity, suites));
   body.data.viewer = { login: 'me' };
   return JSON.stringify(body);
 }
@@ -424,7 +424,7 @@ describe('telling Claude', () => {
 
   test(
     'does not wake it when /config turns waking off, and keeps the line',
-    { options: { wake: false } },
+    { options: { wake: 'off' } },
     async ($, on) => {
       const clock = mock.clock(on, { now: T0 });
       const theirs = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/2' };
@@ -470,12 +470,44 @@ describe('telling Claude', () => {
     expect(seen.wakes[0]).not.toContain('@oakum');
   });
 
-  for (const botComments of [false, true]) {
+  test(
+    'wakes it for checks and not comments when /config says checks',
+    { options: { wake: 'checks' } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const person = { author: { login: 'alice' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
+      const gh: Gh = { pr: commentedJson([]) };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.pr = commentedJson([person], [], []);
+      await clock.advance(20_000);
+      expect(seen.wakes).toHaveLength(1);
+      expect(seen.wakes[0]).toContain('ready to merge');
+      expect(seen.wakes[0]).not.toContain('@alice');
+    },
+  );
+
+  // Who wakes Claude among a person's comment, a bot's comment and a bot's
+  // review, by setting.
+  const settings = [
+    [{}, ['@alice']],
+    [{ botComments: 'reviews' }, ['@alice', '@rabbit']],
+    [{ botComments: 'comments and reviews' }, ['@alice', '@oakum', '@rabbit']],
+    [{ wake: 'checks', botComments: 'comments and reviews' }, []],
+  ] as const;
+  for (const [options, woken] of settings) {
     test(
-      `a bot’s comment wakes it only when /config asks for bots (${botComments})`,
-      { options: { botComments } },
+      `comments wake it as /config says (${JSON.stringify(options)})`,
+      { options },
       async ($, on) => {
         const clock = mock.clock(on, { now: T0 });
+        const person = {
+          author: { login: 'alice' },
+          createdAt: '2026-10-03T22:02:00Z',
+          url: 'c/1',
+        };
         const bot = {
           author: { login: 'oakum', __typename: 'Bot' },
           createdAt: '2026-10-03T22:03:00Z',
@@ -486,9 +518,18 @@ describe('telling Claude', () => {
         await start($);
         await create($);
         await clock.advance(1000);
-        gh.pr = commentedJson([bot]);
+        const review = {
+          author: { login: 'rabbit', __typename: 'Bot' },
+          submittedAt: '2026-10-03T22:04:00Z',
+          state: 'COMMENTED',
+          url: 'r/bot',
+        };
+        gh.pr = commentedJson([person, bot], [review]);
         await clock.advance(20_000);
-        expect(seen.wakes).toHaveLength(botComments ? 1 : 0);
+        const text = seen.wakes.join('\n');
+        for (const who of ['@alice', '@oakum', '@rabbit']) {
+          expect(text.includes(who)).toBe((woken as readonly string[]).includes(who));
+        }
       },
     );
   }

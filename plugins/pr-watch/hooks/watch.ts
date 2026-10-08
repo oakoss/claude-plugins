@@ -372,7 +372,7 @@ function hearOf(
   pull: Pull,
   heard: Watch['heard'],
   name: string,
-  bots: boolean,
+  tells: (a: Activity) => boolean,
 ): { heard: Watch['heard']; lines: string[] } {
   if (pull.activity === null) return { heard, lines: [] };
   const keys = pull.activity.map(heardKey);
@@ -382,24 +382,48 @@ function hearOf(
   const since = heard.since === null ? -Infinity : Date.parse(heard.since);
   const lines: string[] = [];
   for (const a of pull.activity) {
-    if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || (a.isBot && !bots)) {
-      continue;
-    }
+    if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || !tells(a)) continue;
     lines.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
   }
   const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
   return { heard: { since: heard.since, keys: kept }, lines };
 }
 
+const WAKE_SETTINGS = ['off', 'checks', 'checks and comments'] as const;
+const BOT_SETTINGS = ['never', 'reviews', 'comments and reviews'] as const;
+export type WakeSetting = (typeof WAKE_SETTINGS)[number];
+export type BotSetting = (typeof BOT_SETTINGS)[number];
+
+// The two /config settings as plugin.json declares them, each its default when unset.
+export function settingsOf(options: Record<string, unknown>): {
+  wake: WakeSetting;
+  bots: BotSetting;
+} {
+  const wake = WAKE_SETTINGS.find((s) => s === options.wake) ?? 'checks and comments';
+  const bots = BOT_SETTINGS.find((s) => s === options.botComments) ?? 'never';
+  return { wake, bots };
+}
+
+// Which comments and reviews are told, by the two /config settings. Those not
+// told are still heard, so a later change of setting reports no history.
+export function tellsOf(wake: WakeSetting, bots: BotSetting): (a: Activity) => boolean {
+  if (wake !== 'checks and comments') return () => false;
+  if (bots === 'comments and reviews') return () => true;
+  if (bots === 'reviews') return (a) => !a.isBot || a.isReview;
+  return (a) => !a.isBot;
+}
+
+const PEOPLE_ONLY = tellsOf('checks and comments', 'never');
+
 // What Claude is told unasked: each condition it has not been told of while it
-// lasts, and each comment or review it has not heard, a bot's only with `bots`.
+// lasts, and each comment or review it has not heard that `tells` lets through.
 // `isEarly` holds back a passed merge whose grace has not ended.
 export function wakeOf(
   watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
   pull: Pull,
   verdict: Verdict,
   last: Memory,
-  { isEarly = false, bots = false } = {},
+  { isEarly = false, tells = PEOPLE_ONLY } = {},
 ): Wake {
   const name = watch.push
     ? `the push to ${watch.push.branch} on ${watch.repo}`
@@ -419,7 +443,7 @@ export function wakeOf(
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }
   }
-  const { heard, lines } = hearOf(pull, last.heard, name, bots);
+  const { heard, lines } = hearOf(pull, last.heard, name, tells);
   news.push(...lines);
   if (news.length === 0) return { text: null, told: kept, heard };
   const text = [

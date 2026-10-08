@@ -14,16 +14,18 @@
   "types": "./types/index.d.ts",
   "userConfig": {
     "wake": {
-      "type": "boolean",
+      "type": "string",
       "title": "Wake Claude",
-      "description": "Tell Claude when a watched pull request is ready to merge, a job fails, it conflicts or someone asks for changes, a merge's checks finish, or someone else comments or reviews. Off, only you hear it, from the line and its toasts.",
-      "default": true
+      "description": "What a watched pull request tells Claude unasked. Checks: ready to merge, a failed job, conflicts, requested changes, and a merge's checks. Checks and comments: also comments and reviews by people other than you. Off: only you hear it, from the line and its toasts.",
+      "options": ["off", "checks", "checks and comments"],
+      "default": "checks and comments"
     },
     "botComments": {
-      "type": "boolean",
-      "title": "Bot comments wake Claude",
-      "description": "Also tell Claude of comments and reviews whose author GitHub marks as a bot, such as plan comments, coverage reports and review bots. A person's always do.",
-      "default": false
+      "type": "string",
+      "title": "Bots wake Claude",
+      "description": "Which comments and reviews from authors GitHub marks as a bot also tell Claude, when Wake Claude includes comments. Reviews: a review bot's reviews, not plan, coverage or preview comments. Comments and reviews: everything a bot posts.",
+      "options": ["never", "reviews", "comments and reviews"],
+      "default": "never"
     }
   }
 }

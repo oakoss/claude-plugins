@@ -69,6 +69,16 @@ const SUMMARY = {
   isRequired: true,
 };
 
+// A comment or review as parsePull reads it, made at 21:`minute`.
+const read = (author: string, minute: number, url: string, did: string, isBot = false) => ({
+  author,
+  at: `2026-10-03T21:${minute}:00Z`,
+  url,
+  did,
+  isBot,
+  isReview: did !== 'commented on',
+});
+
 describe('parsePull', () => {
   test('reads the pull request and its workflows', () => {
     const pull = parsePull(prOutput([suite({}, [TYPECHECK, SUMMARY])]));
@@ -266,24 +276,12 @@ describe('parsePull', () => {
     );
     body.data.viewer = { login: 'me' };
     expect(parsePull(JSON.stringify(body)).activity).toEqual([
-      { author: 'bob', at: '2026-10-03T21:10:00Z', url: 'r/1', did: 'approved', isBot: false },
-      {
-        author: 'alice',
-        at: '2026-10-03T21:20:00Z',
-        url: 'u/2',
-        did: 'commented on',
-        isBot: false,
-      },
-      { author: 'oakum', at: '2026-10-03T21:22:00Z', url: 'u/4', did: 'commented on', isBot: true },
-      {
-        author: 'dan',
-        at: '2026-10-03T21:30:00Z',
-        url: 'r/3',
-        did: 'requested changes on',
-        isBot: false,
-      },
-      { author: 'erin', at: '2026-10-03T21:32:00Z', url: 'r/5', did: 'reviewed', isBot: true },
-      { author: 'finn', at: '2026-10-03T21:33:00Z', url: 'r/6', did: 'reviewed', isBot: false },
+      read('bob', 10, 'r/1', 'approved'),
+      read('alice', 20, 'u/2', 'commented on'),
+      read('oakum', 22, 'u/4', 'commented on', true),
+      read('dan', 30, 'r/3', 'requested changes on'),
+      read('erin', 32, 'r/5', 'reviewed', true),
+      read('finn', 33, 'r/6', 'reviewed'),
     ]);
   });
 

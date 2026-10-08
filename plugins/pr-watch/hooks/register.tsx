@@ -16,6 +16,8 @@ import {
   isSettled,
   labelOf,
   shownOf,
+  settingsOf,
+  tellsOf,
   toastOf,
   toldAfter,
   verdictOf,
@@ -50,7 +52,7 @@ let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
 // From /config; a change there reloads the module with the new values.
-let config = { wake: true, bots: false };
+let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
 
 const idOf = (w: Pick<Watch, 'host' | 'repo' | 'number' | 'push'>) =>
   `${w.host}/${w.repo}${w.push ? `@${w.push.branch}` : `#${w.number}`}`;
@@ -176,7 +178,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         // it is not yet what the line has said.
         const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
         const shown = target.shown;
-        wakeFor = (last) => wakeOf(next, pull, verdict, last, { isEarly, bots: config.bots });
+        wakeFor = (last) => wakeOf(next, pull, verdict, last, { isEarly, tells: config.tells });
         // A ready pull request read as checking is not ready again afterwards.
         if (!isEarly && !isChecking(verdict)) {
           toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
@@ -196,8 +198,8 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         const woke = wakeFor({ told, heard: target.heard });
         // With waking off, comments are still heard, so turning it on reports no
         // history of them.
-        if (config.wake) news = woke.text;
-        next.told = toldAfter(woke.told, target.told, config.wake);
+        if (config.isAwake) news = woke.text;
+        next.told = toldAfter(woke.told, target.told, config.isAwake);
         next.heard = woke.heard;
       }
       return all.map((w) => (isSame(w, target) ? next : w));
@@ -266,7 +268,8 @@ async function stop($: $, id: string): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
-  config = { wake: options.wake !== false, bots: options.botComments === true };
+  const { wake, bots } = settingsOf(options);
+  config = { isAwake: wake !== 'off', tells: tellsOf(wake, bots) };
   on('session.start', async ($, e, next) => {
     const r = await next(e);
     poller?.cancel();

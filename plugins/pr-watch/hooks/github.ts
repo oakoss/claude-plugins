@@ -205,13 +205,15 @@ function activityOf(pr: any, viewer: string | null): Activity[] | null {
     const author = str(c?.author?.login);
     if (author === null || author === viewer || !isTime(c.createdAt)) continue;
     const url = str(c.url) ?? '';
-    found.push({ author, at: c.createdAt, url, did: 'commented on', isBot: isBot(c.author) });
+    const bot = isBot(c.author);
+    found.push({ author, at: c.createdAt, url, did: 'commented on', isBot: bot, isReview: false });
   }
   for (const r of list(pr.reviews?.nodes)) {
     const author = str(r?.author?.login);
     const did = REVIEWED[str(r?.state) ?? ''];
     if (author === null || author === viewer || !did || !isTime(r.submittedAt)) continue;
-    found.push({ author, at: r.submittedAt, url: str(r.url) ?? '', did, isBot: isBot(r.author) });
+    const url = str(r.url) ?? '';
+    found.push({ author, at: r.submittedAt, url, did, isBot: isBot(r.author), isReview: true });
   }
   return found.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }

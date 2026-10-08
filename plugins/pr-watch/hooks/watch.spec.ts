@@ -16,9 +16,13 @@ import {
   shownOf,
   toastOf,
   verdictOf,
+  settingsOf,
+  tellsOf,
   toldAfter,
   wakeOf,
+  type BotSetting,
   type Memory,
+  type WakeSetting,
 } from './watch';
 
 const AT = Date.parse('2026-10-03T22:01:10Z');
@@ -418,6 +422,40 @@ const said = (author: string, at: string, did = 'commented on', isBot = false) =
   url: `https://x/${author}`,
   did,
   isBot,
+  isReview: did !== 'commented on',
+});
+
+describe('settingsOf and tellsOf', () => {
+  test('read each /config setting, its default when unset or unknown', () => {
+    expect(settingsOf({})).toEqual({ wake: 'checks and comments', bots: 'never' });
+    expect(settingsOf({ wake: 'checks', botComments: 'reviews' })).toEqual({
+      wake: 'checks',
+      bots: 'reviews',
+    });
+    expect(settingsOf({ wake: true, botComments: 'x' })).toEqual({
+      wake: 'checks and comments',
+      bots: 'never',
+    });
+  });
+
+  test('tell a person’s activity, and a bot’s by kind as the settings say', () => {
+    const person = said('alice', minute(1));
+    const botReview = said('coderabbit', minute(2), 'reviewed', true);
+    const botComment = said('oakum', minute(3), 'commented on', true);
+    const told = (wake: WakeSetting, bots: BotSetting) => {
+      const tells = tellsOf(wake, bots);
+      return [person, botReview, botComment].filter((a) => tells(a)).map((a) => a.author);
+    };
+    expect(told('checks and comments', 'never')).toEqual(['alice']);
+    expect(told('checks and comments', 'reviews')).toEqual(['alice', 'coderabbit']);
+    expect(told('checks and comments', 'comments and reviews')).toEqual([
+      'alice',
+      'coderabbit',
+      'oakum',
+    ]);
+    expect(told('checks', 'comments and reviews')).toEqual([]);
+    expect(told('off', 'comments and reviews')).toEqual([]);
+  });
 });
 
 describe('toldAfter', () => {
@@ -596,7 +634,8 @@ describe('wakeOf', () => {
     const quiet = wakeOf(pr, p, verdictAt(p), first);
     expect(quiet.text).toBeNull();
     expect(quiet.heard?.keys).toEqual(['https://x/oakum[bot]']);
-    expect(wakeOf(pr, p, verdictAt(p), first, { bots: true }).text).toContain(
+    const tells = tellsOf('checks and comments', 'comments and reviews');
+    expect(wakeOf(pr, p, verdictAt(p), first, { tells }).text).toContain(
       '@oakum[bot] commented on o/r#128',
     );
   });
