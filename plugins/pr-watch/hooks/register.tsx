@@ -41,6 +41,8 @@ const busy = new Set<string>();
 const tried = new Map<string, number>();
 // When each unanswered length was last asked for, by estimate key.
 const asked = new Map<string, number>();
+// Finished runs a length was learned after, so each one re-learns it once.
+const learnedAfter = new Set<string>();
 // After Claude pushes, merges or starts a run, a watch last read before
 // pushedAt is read at once, and every watch every BURST_MS until burstUntil:
 // GitHub starts the new runs a few seconds later.
@@ -77,8 +79,9 @@ function wake($: $, text: string, label: string): void {
     .catch(() => null);
 }
 
-// A length that cannot be learned or kept is left unknown, asked again after
-// the retry delay; the run then draws no bar.
+// An unknown length that cannot be learned or kept is asked again after the
+// retry delay, the run drawing no bar meanwhile. A known one is asked again
+// once per finished run, and kept when that answer is missing or says none.
 async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
   let known: Record<string, number>;
   try {
@@ -88,16 +91,22 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
   }
   for (const flow of [...(w.pull?.workflows ?? []), ...(w.pull?.mergeRuns?.workflows ?? [])]) {
     const key = estimateKey(w.host, flow.id);
-    if (known[key] !== undefined || now - (asked.get(key) ?? -Infinity) < ESTIMATE_RETRY_MS) {
+    const run = flow.status === 'done' ? JSON.stringify([key, flow.url, flow.attempt]) : null;
+    const isKnown = known[key] !== undefined;
+    if (isKnown) {
+      if (run === null || learnedAfter.has(run)) continue;
+      learnedAfter.add(run);
+    } else if (now - (asked.get(key) ?? -Infinity) < ESTIMATE_RETRY_MS) {
       continue;
     }
     asked.set(key, now);
     try {
       const r = await $.process.run(estimateArgs(w.host, w.repo, flow.id));
       const ms = r.exitCode === 0 ? parseEstimate(r.stdout) : null;
-      if (ms === null) continue;
+      if (ms === null || (ms === 0 && isKnown)) continue;
       await update($, estimates, (all) => ({ ...all, [key]: ms }));
       asked.delete(key);
+      if (run !== null) learnedAfter.add(run);
     } catch {
       continue;
     }

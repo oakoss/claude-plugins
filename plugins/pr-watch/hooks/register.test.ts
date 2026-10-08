@@ -72,6 +72,13 @@ function ciSuite(summary: Record<string, unknown>, jobs: unknown[] = []) {
   };
 }
 
+// CI's run number `n`.
+function runOf(n: number, summary: Record<string, unknown>) {
+  const suite = ciSuite(summary);
+  suite.workflowRun = { ...suite.workflowRun, url: `https://github.com/o/r/actions/runs/${n}` };
+  return suite;
+}
+
 const RUNNING_CI = ciSuite({ status: 'QUEUED', conclusion: null });
 const FAILING_CI = ciSuite({ status: 'QUEUED', conclusion: null }, [
   {
@@ -200,6 +207,53 @@ describe('a pull request Claude opens', () => {
     expect(await lineIn(ui)).toMatch(/ 1m12s \/ ~2m20s$/);
     await clock.advance(30_000);
     expect(seen.runs.filter((r) => r.includes(ESTIMATE_CALL))).toHaveLength(1);
+  });
+
+  test('learns a workflow’s length again once each run of it finishes', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), estimate: CI_RUN };
+    const seen = world(on, gh);
+    const asks = () => seen.runs.filter((r) => r.includes(ESTIMATE_CALL)).length;
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(asks()).toBe(1);
+    gh.pr = prJson({}, [ciSuite({ status: 'COMPLETED', conclusion: 'SUCCESS' })]);
+    await clock.advance(11_000);
+    expect(asks()).toBe(2);
+    await clock.advance(130_000);
+    expect(asks()).toBe(2);
+  });
+
+  test('keeps a known length when learning it again fails or finds none', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), estimate: CI_RUN };
+    const seen = world(on, gh);
+    const asks = () => seen.runs.filter((r) => r.includes(ESTIMATE_CALL)).length;
+    const passed = { status: 'COMPLETED', conclusion: 'SUCCESS' };
+    const running = { status: 'QUEUED', conclusion: null };
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.estimateFails = 1;
+    gh.pr = prJson({}, [runOf(1, passed)]);
+    await clock.advance(11_000);
+    expect(asks()).toBe(2);
+    await clock.advance(130_000);
+    expect(asks()).toBe(2);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [runOf(2, running)]);
+    await clock.advance(61_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toMatch(/ \/ ~2m20s$/);
+    gh.estimate = JSON.stringify({
+      workflow_runs: [{ ...JSON.parse(CI_RUN).workflow_runs[0], run_attempt: 2 }],
+    });
+    gh.pr = prJson({}, [runOf(2, passed)]);
+    await clock.advance(11_000);
+    expect(asks()).toBe(3);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [runOf(3, running)]);
+    await clock.advance(61_000);
+    expect(await lineIn(ui)).toMatch(/ \/ ~2m20s$/);
   });
 
   test('asks again for a workflow’s length a minute after the call fails', async ($, on) => {
