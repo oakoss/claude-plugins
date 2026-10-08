@@ -1475,31 +1475,37 @@ describe('reads that fail', () => {
     expect(await lineIn(ui)).not.toMatch('rate limited');
   });
 
-  test('another limit waits a minute, longer each time, and never ends the watch', async ($, on) => {
-    const clock = mock.clock(on, { now: T0 });
-    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
-    const seen = world(on, gh);
-    await start($);
-    await create($);
-    await clock.advance(1000);
-    gh.limited = true;
-    await clock.advance(10_000);
-    const first = reads(seen.runs);
-    expect(await lineIn(await band($))).toMatch(/rate limited until \d\d:\d\d$/);
-    await clock.advance(59_000);
-    expect(reads(seen.runs)).toBe(first);
-    await clock.advance(2000);
-    expect(reads(seen.runs)).toBe(first + 1);
-    await clock.advance(118_000);
-    expect(reads(seen.runs)).toBe(first + 1);
-    await clock.advance(2000);
-    expect(reads(seen.runs)).toBe(first + 2);
-    // Eleven limited reads later, the watch stays.
-    await clock.advance(150 * MINUTE);
-    expect(reads(seen.runs)).toBeGreaterThan(first + GIVE_UP);
-    expect(await lineIn(await band($))).toMatch(/rate limited until/);
-    expect(seen.toasts.filter((t) => t.includes('stopped watching'))).toEqual([]);
-  });
+  // Over an hour of 1 s ticks, slower than the default 5 s on CI's runners.
+  test(
+    'another limit waits a minute, longer each time, and never ends the watch',
+    { timeoutMs: 20_000 },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.limited = true;
+      await clock.advance(10_000);
+      const first = reads(seen.runs);
+      expect(await lineIn(await band($))).toMatch(/rate limited until \d\d:\d\d$/);
+      await clock.advance(59_000);
+      expect(reads(seen.runs)).toBe(first);
+      await clock.advance(2000);
+      expect(reads(seen.runs)).toBe(first + 1);
+      await clock.advance(118_000);
+      expect(reads(seen.runs)).toBe(first + 1);
+      await clock.advance(2000);
+      expect(reads(seen.runs)).toBe(first + 2);
+      // The ninth limited read is at 4511 s, after pauses of 60, 120, 240, 480
+      // and then 900 s; the watch stays.
+      await clock.advance(73 * MINUTE);
+      expect(reads(seen.runs) - 1).toBe(GIVE_UP + 1);
+      expect(await lineIn(await band($))).toMatch(/rate limited until/);
+      expect(seen.toasts.filter((t) => t.includes('stopped watching'))).toEqual([]);
+    },
+  );
 
   test('a read that fails waits longer each time, and after 8 in a row the watch ends', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
