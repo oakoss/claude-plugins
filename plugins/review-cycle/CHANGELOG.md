@@ -4,6 +4,16 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.27.1 (2026-10-08)
+
+### Fixed
+
+The code-reviewer, pr-test-analyzer, silent-failure-hunter and type-design-analyzer descriptions no longer carry `<example>` blocks. Claude Code puts every agent's description in each session's agent listing, so the examples cost context in every session whether or not a review ran; together the four descriptions drop from 6,370 to 2,644 bytes. The scenarios they described now sit in a "When to invoke" section in each agent's body, as pr-review-toolkit did upstream for three of them. Nothing changes in how the review cycle runs these agents.
+
+A gh command asking for help runs. `gh pr merge --help`, `gh pr merge 5 -h` and `gh -R o/r pr merge --help` print help and write nothing, but the gate refused them as merges, so reviewers checking gh's flags reported them as inferred. `-h` or `--help` counts where gh reads it as help. It does not count after an option, which can take it as a value (`gh pr merge -b --help` merges with that body), after `--`, before a `--help=` value, or with input from `xargs`. Measured on gh 2.102.0. A help word after a flag, as in `gh pr merge --admin --help`, still asks.
+
+The findings ledger works in a repository whose `.git` path is long. Its store key was the path itself, and Claude Code's plugin store refuses a key over 256 characters (measured on 2.1.289), so such a repository could neither read nor record its ledger. A path that does not fit is now keyed by its hash. Every other repository keeps the key it has, so no existing ledger moves.
+
 ## 0.27.0 (2026-10-05)
 
 ### Added
