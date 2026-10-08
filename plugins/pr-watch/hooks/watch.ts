@@ -346,14 +346,41 @@ function conditionsOf(
   return found;
 }
 
-export type Heard = Pick<Watch, 'told' | 'heard'>;
-export type Wake = Heard & { text: string | null; told: string[] };
+export type Memory = Pick<Watch, 'told' | 'heard'>;
+export type Wake = { text: string | null; told: string[]; heard: Watch['heard'] };
+
+// GitHub reports UNKNOWN while it recomputes the merge state.
+export const isChecking = (verdict: Verdict) =>
+  verdict.kind === 'waiting' && verdict.reason === 'checking';
 
 // A comment's or review's identity; its time alone ties at the second.
 const heardKey = (a: Activity) => a.url || JSON.stringify([a.author, a.at, a.did]);
 
 // Enough to outlast an item leaving the 10-item window and coming back.
 const HEARD_KEPT = 100;
+
+// The comments and reviews not heard before, and what is heard after them. The
+// first read hears what is there without telling it; a read that cannot tell
+// whose they are hears nothing.
+function hearOf(
+  pull: Pull,
+  heard: Watch['heard'],
+  name: string,
+): { heard: Watch['heard']; lines: string[] } {
+  if (pull.activity === null) return { heard, lines: [] };
+  const keys = pull.activity.map(heardKey);
+  if (heard === undefined) return { heard: { since: pull.activityAt, keys }, lines: [] };
+  // An unheard item older than the first read's newest slid into the window
+  // when a newer one was deleted.
+  const since = heard.since === null ? -Infinity : Date.parse(heard.since);
+  const lines: string[] = [];
+  for (const a of pull.activity) {
+    if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since) continue;
+    lines.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
+  }
+  const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
+  return { heard: { since: heard.since, keys: kept }, lines };
+}
 
 // What Claude is told unasked: each condition it has not been told of while it
 // lasts, and each comment or review it has not heard. `isEarly` holds back a
@@ -362,7 +389,7 @@ export function wakeOf(
   watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
   pull: Pull,
   verdict: Verdict,
-  last: Heard,
+  last: Memory,
   isEarly = false,
 ): Wake {
   const name = watch.push
@@ -378,34 +405,13 @@ export function wakeOf(
   // GitHub reports UNKNOWN while it recomputes the merge state; ready stands only
   // through a read that is otherwise ready, since a new run ends it.
   if (pull.state === 'OPEN' && pull.merge === 'UNKNOWN') {
-    const isChecking = verdict.kind === 'waiting' && verdict.reason === 'checking';
-    for (const what of isChecking ? ['ready', 'conflicts'] : ['conflicts']) {
+    for (const what of isChecking(verdict) ? ['ready', 'conflicts'] : ['conflicts']) {
       const key = keyOf(watch, what);
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }
   }
-  let heard = last.heard;
-  if (pull.activity !== null) {
-    const keys = pull.activity.map(heardKey);
-    if (heard === undefined) {
-      let since = pull.activityAt;
-      const own = pull.activity.at(-1)?.at;
-      if (own !== undefined && (since === null || Date.parse(own) > Date.parse(since))) since = own;
-      heard = { since, keys };
-    } else {
-      // An unheard item older than the first read's newest slid into the window
-      // when a newer one was deleted.
-      const since = heard.since === null ? -Infinity : Date.parse(heard.since);
-      for (const a of pull.activity) {
-        if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since) continue;
-        news.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
-      }
-      heard = {
-        since: heard.since,
-        keys: [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT),
-      };
-    }
-  }
+  const { heard, lines } = hearOf(pull, last.heard, name);
+  news.push(...lines);
   if (news.length === 0) return { text: null, told: kept, heard };
   const text = [
     `pr-watch: ${news.join(' ')}`,

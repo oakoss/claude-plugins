@@ -292,6 +292,14 @@ describe('parsePull', () => {
     );
     body.data.viewer = { login: 'me' };
     expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T21:50:00Z');
+    const review = {
+      author: { login: 'me' },
+      submittedAt: '2026-10-03T22:00:00Z',
+      state: 'APPROVED',
+      url: 'r/2',
+    };
+    body.data.repository.pullRequest.reviews.nodes.push(review);
+    expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T22:00:00Z');
     expect(parsePull(prOutput([])).activityAt).toBeNull();
   });
 

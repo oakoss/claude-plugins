@@ -17,7 +17,7 @@ import {
   toastOf,
   verdictOf,
   wakeOf,
-  type Heard,
+  type Memory,
 } from './watch';
 
 const AT = Date.parse('2026-10-03T22:01:10Z');
@@ -68,7 +68,8 @@ function pull(workflows: Workflow[], over: Partial<Pull> = {}): Pull {
     mergedAt: null,
     mergeRuns: null,
     activity: [],
-    activityAt: null,
+    // As parsePull reads it: at least as new as anyone else's activity.
+    activityAt: over.activity?.at(-1)?.at ?? null,
     ...over,
   };
 }
@@ -421,7 +422,7 @@ describe('wakeOf', () => {
   const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
   const push = { ...pr, number: 0, push: { branch: 'feat/x', pushedAt: AT } };
   // What the next read tells, given what the last one left.
-  const after = (p: Pull, last: Heard = {}, w: typeof pr = pr) => wakeOf(w, p, verdictAt(p), last);
+  const after = (p: Pull, last: Memory = {}, w: typeof pr = pr) => wakeOf(w, p, verdictAt(p), last);
 
   test('says a pull request is ready once, as news rather than a request to merge', () => {
     const p = pull([green()]);

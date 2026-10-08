@@ -12,13 +12,14 @@ import {
   lineOf,
   movesPulls,
   isGone,
+  isChecking,
   isSettled,
   labelOf,
   shownOf,
   toastOf,
   verdictOf,
   wakeOf,
-  type Heard,
+  type Memory,
   type Segment,
   type Wake,
 } from './watch';
@@ -161,7 +162,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
     }
     let toast: string | null = null;
     let news: string | null = null;
-    let wakeFor: ((last: Heard) => Wake) | null = null;
+    let wakeFor: ((last: Memory) => Wake) | null = null;
     let isClosed = false;
     if (next.pull && next.error === undefined) {
       const pull = next.pull;
@@ -173,10 +174,8 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
         const shown = target.shown;
         wakeFor = (last) => wakeOf(next, pull, verdict, last, isEarly);
-        // GitHub reports UNKNOWN while it recomputes the merge state, so a ready
-        // pull request read as checking is not ready again afterwards.
-        const isChecking = verdict.kind === 'waiting' && verdict.reason === 'checking';
-        if (!isEarly && !isChecking) {
+        // A ready pull request read as checking is not ready again afterwards.
+        if (!isEarly && !isChecking(verdict)) {
           toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
           next.shown = shownOf(verdict);
         }
