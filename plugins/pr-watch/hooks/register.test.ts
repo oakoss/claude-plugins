@@ -27,6 +27,8 @@ type Gh = {
   partial?: boolean;
   // Holds the first PR read until the test calls `release`.
   holdFirst?: boolean;
+  // pr-watch's prompts are refused: the hook throws, so the kit finds nothing beneath.
+  wakeRejects?: boolean;
   release?: () => void;
 };
 
@@ -94,14 +96,21 @@ function world(
   stdout = `${URL}\n`,
   fails: boolean | ((command: string) => boolean) = false,
 ) {
-  const seen = { toasts: [] as string[], runs: [] as string[] };
+  // `wakes`: the prompts pr-watch submitted to the session, to tell Claude.
+  const seen = { toasts: [] as string[], runs: [] as string[], wakes: [] as string[] };
   on('session.start', () => ({ cwd: '/repo' }));
   // What another plugin, or the engine, draws in the band beneath pr-watch.
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: unknown) => {
     const { Text } = $.ui.resolve(e);
     return h(Text, { key: 'beneath' }, 'beneath');
   });
-  on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }));
+  on('prompt.submit', ($: unknown, e: { text: string; origin?: { kind: string } }) => {
+    if (e.origin?.kind === 'plugin') {
+      if (gh.wakeRejects) throw new Error('refused');
+      seen.wakes.push(e.text);
+    }
+    return { text: e.text };
+  });
   on('ui.toast', ($: unknown, e: { text: string }) => {
     seen.toasts.push(e.text);
     return { value: undefined };
@@ -285,6 +294,7 @@ describe('a pull request Claude opens', () => {
     expect(seen.runs.filter((r) => r.includes('graphql')).length).toBeLessThanOrEqual(4);
     expect(seen.toasts).toHaveLength(1);
     expect(seen.toasts[0]).toMatch(/^pr-watch could not save #128: /);
+    expect(seen.wakes).toEqual([]);
   });
 
   test('leaves the band when it closes without merging', async ($, on) => {
@@ -335,6 +345,281 @@ describe('a pull request Claude opens', () => {
   });
 });
 
+function failedJob(name: string, run = 1, job = 10) {
+  const detailsUrl = `https://github.com/o/r/actions/runs/${run}/job/${job}`;
+  return { name, status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl, isRequired: false };
+}
+
+// A running pull request with these comments, read by `me`.
+function commentedJson(comments: unknown[], reviews: unknown[] = [], suites = [RUNNING_CI]) {
+  const activity = { comments: { nodes: comments }, reviews: { nodes: reviews } };
+  const body = JSON.parse(prJson(activity, suites));
+  body.data.viewer = { login: 'me' };
+  return JSON.stringify(body);
+}
+
+describe('telling Claude', () => {
+  test('wakes it once when the pull request becomes ready to merge', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    gh.pr = prJson();
+    await clock.advance(70_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.wakes[0]).toContain('not a request to merge');
+    // GitHub recomputing the merge state is not a new ready.
+    gh.pr = prJson({ mergeStateStatus: 'UNKNOWN' });
+    await clock.advance(70_000);
+    expect(await lineIn(await band($))).toBe('#128 ○ waiting on checking');
+    gh.pr = prJson();
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('wakes it once per failing run, and again for a new run', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [FAILING_CI]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(
+      'CI: Typecheck failed for o/r#128: https://github.com/o/r/actions/runs/1/job/9',
+    );
+    const typecheck = FAILING_CI.checkRuns.nodes[0];
+    const running = { status: 'QUEUED', conclusion: null };
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [
+      ciSuite(running, [typecheck, failedJob('Lint')]),
+    ]);
+    // A second job failing in the same run is not news.
+    await clock.advance(20_000);
+    expect(seen.wakes).toHaveLength(1);
+    const run2 = ciSuite(running, [failedJob('Lint', 2, 20)]);
+    run2.workflowRun = { ...run2.workflowRun, url: 'https://github.com/o/r/actions/runs/2' };
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [run2]);
+    await clock.advance(60_000);
+    expect(seen.wakes).toHaveLength(2);
+    expect(seen.wakes[1]).toContain('runs/2/job/20');
+  });
+
+  test('wakes it once for conflicts, though its checks are failing', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson({ mergeStateStatus: 'DIRTY' }, [FAILING_CI]) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('o/r#128 has merge conflicts with');
+    expect(seen.wakes[0]).toContain('CI: Typecheck failed');
+    await clock.advance(180_000);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test(
+    'does not wake it when /config turns waking off, and keeps the line',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const theirs = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/2' };
+      const gh: Gh = { pr: commentedJson([]) };
+      const seen = world(on, gh);
+      let saved: any[] = [];
+      on('state.set', ($: unknown, e: any, next: any) => {
+        if (e.key === 'watches') saved = e.value;
+        return next(e);
+      });
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.pr = commentedJson([theirs]);
+      gh.pr = gh.pr.replace('"CLEAN"', '"DIRTY"');
+      await clock.advance(20_000);
+      expect(await lineIn(await band($))).toMatch(/^#128 ● CI \dm\d\ds$/);
+      expect(seen.wakes).toEqual([]);
+      // Heard, so turning waking on reports no history; not told, so the
+      // conflicts still there are told then.
+      expect(saved[0].heard.keys).toEqual(['c/2']);
+      expect(saved[0].told ?? []).toEqual([]);
+    },
+  );
+
+  test('a person’s comment wakes it and a bot’s does not, by default', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const human = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/h' };
+    const bot = {
+      author: { login: 'oakum', __typename: 'Bot' },
+      createdAt: '2026-10-03T22:04:00Z',
+      url: 'c/bot',
+    };
+    const gh: Gh = { pr: commentedJson([]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = commentedJson([human, bot]);
+    await clock.advance(20_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('@alice');
+    expect(seen.wakes[0]).not.toContain('@oakum');
+  });
+
+  test(
+    'wakes it for checks and not comments when /config says checks',
+    { options: { wake: 'checks' } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const person = { author: { login: 'alice' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
+      const gh: Gh = { pr: commentedJson([]) };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.pr = commentedJson([person], [], []);
+      await clock.advance(20_000);
+      expect(seen.wakes).toHaveLength(1);
+      expect(seen.wakes[0]).toContain('ready to merge');
+      expect(seen.wakes[0]).not.toContain('@alice');
+    },
+  );
+
+  // Who wakes Claude among a person's comment, a bot's comment and a bot's
+  // review, by setting.
+  const settings = [
+    [{}, ['@alice']],
+    [{ botComments: 'reviews' }, ['@alice', '@rabbit']],
+    [{ botComments: 'comments and reviews' }, ['@alice', '@oakum', '@rabbit']],
+    [{ wake: 'checks', botComments: 'comments and reviews' }, []],
+  ] as const;
+  for (const [options, woken] of settings) {
+    test(
+      `comments wake it as /config says (${JSON.stringify(options)})`,
+      { options },
+      async ($, on) => {
+        const clock = mock.clock(on, { now: T0 });
+        const person = {
+          author: { login: 'alice' },
+          createdAt: '2026-10-03T22:02:00Z',
+          url: 'c/1',
+        };
+        const bot = {
+          author: { login: 'oakum', __typename: 'Bot' },
+          createdAt: '2026-10-03T22:03:00Z',
+          url: 'c/bot',
+        };
+        const gh: Gh = { pr: commentedJson([]) };
+        const seen = world(on, gh);
+        await start($);
+        await create($);
+        await clock.advance(1000);
+        const review = {
+          author: { login: 'rabbit', __typename: 'Bot' },
+          submittedAt: '2026-10-03T22:04:00Z',
+          state: 'COMMENTED',
+          url: 'r/bot',
+        };
+        gh.pr = commentedJson([person, bot], [review]);
+        await clock.advance(20_000);
+        const text = seen.wakes.join('\n');
+        for (const who of ['@alice', '@oakum', '@rabbit']) {
+          expect(text.includes(who)).toBe((woken as readonly string[]).includes(who));
+        }
+      },
+    );
+  }
+
+  test('wakes it for a comment from someone else, not for the viewer’s own', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const own = { author: { login: 'me' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
+    const theirs = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/2' };
+    const gh: Gh = { pr: commentedJson([]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = commentedJson([own]);
+    await clock.advance(20_000);
+    expect(seen.wakes).toEqual([]);
+    gh.pr = commentedJson([own, theirs]);
+    await clock.advance(20_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('@alice commented on o/r#128: c/2');
+    await clock.advance(60_000);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('stops waking it for comments after ten in a row', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: commentedJson([]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const comments = [];
+    for (let i = 1; i <= 12; i++) {
+      const at = new Date(T0 + i * 1000).toISOString().replace('.000', '');
+      comments.push({ author: { login: `u${i}` }, createdAt: at, url: `c/${i}` });
+      gh.pr = commentedJson(comments);
+      // A read with the comment, then one with nothing new.
+      await clock.advance(20_000);
+    }
+    expect(seen.wakes).toHaveLength(10);
+    expect(seen.wakes[9]).toContain('c/10');
+    expect(seen.wakes[9]).toContain('no more comments or reviews');
+  });
+
+  test('wakes the session for a pull request a subagent opened', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson() });
+    await start($);
+    await ($ as any).tool.call({ tool: 'Bash', command: 'gh pr create --fill', agentId: 'sub-1' });
+    await clock.advance(1000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+  });
+
+  test('says nothing of a pull request closed with a failed job', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson({ state: 'CLOSED' }, [FAILING_CI]) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('says nothing of a read whose line was removed while it ran', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), holdFirst: true };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    await ui.press({ key: `stop-${ID}` });
+    gh.release?.();
+    await clock.advance(1000);
+    expect(seen.toasts).toEqual([]);
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('says so when the session refuses the news', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), wakeRejects: true });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    expect(
+      seen.toasts.some((t) => t.startsWith('pr-watch could not tell Claude about #128: ')),
+    ).toBe(true);
+  });
+});
+
 function isPushLine(command: string): boolean {
   return command.startsWith('git push');
 }
@@ -379,11 +664,16 @@ describe('a merged pull request', () => {
     expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed');
     // A late run could still start, so passing is not said yet.
     expect(seen.toasts).toEqual([]);
+    expect(seen.wakes).toEqual([]);
     // Read on through the 90 s after the merge, then settled: said once,
     // kept a few seconds, and read no more. The read 91 s after the merge,
     // at T0 + 81 s, is the first past the grace.
     await clock.advance(72_000);
     expect(seen.toasts).toEqual(['#128 merged: its checks passed']);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(
+      "o/r#128 merged into main, and the merge commit's checks passed.",
+    );
     const settled = reads(seen.runs);
     // A message does not clear it early.
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
@@ -679,6 +969,8 @@ describe('a push to a branch with no pull request', () => {
     expect(seen.toasts).toEqual([]);
     await clock.advance(1000);
     expect(seen.toasts).toEqual(['push feat/x: its checks passed']);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('The checks on the push to feat/x on o/r passed.');
     expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ✓ checks passed');
     await clock.advance(5000);
     expect(await pushLineIn(ui)).toBeUndefined();
@@ -728,6 +1020,44 @@ describe('a push to a branch with no pull request', () => {
     expect(await pushLineIn(ui)).toBeUndefined();
     const rows = await ui.findAll({ key: `row-${ID}` });
     expect(rows.length).toBe(1);
+  });
+
+  test('a failure told on the push is not told again by the pull request Claude then opens', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = { ...OWN_PR, headRepository: { nameWithOwner: 'o/r' } };
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE') };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(seen.wakes).toHaveLength(1);
+    const tip = JSON.parse(pushJson('COMPLETED', 'FAILURE')).data.repository.ref.target;
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, tip.checkSuites.nodes);
+    gh.push = pushJson('COMPLETED', 'FAILURE', [pr]);
+    await create($, 'gh pr create --fill');
+    await clock.advance(70_000);
+    expect(await lineIn(await band($))).toBe('#128 ✗ Release: Publish failed');
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('a failure Claude was told of on the push is not told again on its pull request', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = { ...OWN_PR, headRepository: { nameWithOwner: 'o/r' } };
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE') };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('Release: Publish failed for the push to feat/x');
+    // The PR's head is the pushed commit, so its runs are the push's.
+    const tip = JSON.parse(pushJson('COMPLETED', 'FAILURE')).data.repository.ref.target;
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, tip.checkSuites.nodes);
+    gh.push = pushJson('COMPLETED', 'FAILURE', [pr]);
+    await clock.advance(70_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 ✗ Release: Publish failed');
+    expect(seen.wakes).toHaveLength(1);
   });
 
   test('a fork’s branch hands its line to the pull request upstream', async ($, on) => {

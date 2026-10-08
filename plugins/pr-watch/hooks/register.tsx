@@ -12,12 +12,19 @@ import {
   lineOf,
   movesPulls,
   isGone,
+  isChecking,
   isSettled,
   labelOf,
   shownOf,
+  settingsOf,
+  tellsOf,
   toastOf,
+  toldAfter,
   verdictOf,
+  wakeOf,
+  type Memory,
   type Segment,
+  type Wake,
 } from './watch';
 
 type $ = EngineInterface;
@@ -44,6 +51,8 @@ let burstUntil = 0;
 let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
+// From /config; a change there reloads the module with the new values.
+let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
 
 const idOf = (w: Pick<Watch, 'host' | 'repo' | 'number' | 'push'>) =>
   `${w.host}/${w.repo}${w.push ? `@${w.push.branch}` : `#${w.number}`}`;
@@ -53,6 +62,19 @@ const isSame = (a: Watch, b: Watch) => idOf(a) === idOf(b) && a.push?.pushedAt =
 
 function errorText(error: unknown): string {
   return errorLine(error instanceof Error ? error.message : String(error));
+}
+
+// Not awaited: a plugin's prompt runs once the session is idle, so the news
+// waits for any turn in progress rather than holding up the poll. A hook that
+// drops it has its reason shown by the engine.
+function wake($: $, text: string, label: string): void {
+  Promise.resolve()
+    .then(() => $.prompt.submit({ text }))
+    .catch((error: unknown) => {
+      $.ui.toast(`pr-watch could not tell Claude about ${label}: ${errorText(error)}`);
+    })
+    // A toast that throws leaves nowhere to say so.
+    .catch(() => null);
 }
 
 // A length that cannot be learned or kept is left unknown, asked again after
@@ -124,11 +146,16 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         return;
       }
       if (read.kind === 'handoff') {
-        const to = read.to;
+        // The PR's runs are the push's, so what Claude was told of carries over.
+        const told = target.told ?? [];
+        const to = { ...read.to, told };
         await update($, watches, (all) => {
           if (!all.some((w) => isSame(w, target))) return all;
           const rest = all.filter((w) => !isSame(w, target));
-          return rest.some((w) => idOf(w) === idOf(to)) ? rest : [...rest, to];
+          if (!rest.some((w) => idOf(w) === idOf(to))) return [...rest, to];
+          return rest.map((w) =>
+            idOf(w) === idOf(to) ? { ...w, told: [...new Set([...(w.told ?? []), ...told])] } : w,
+          );
         });
         return;
       }
@@ -139,28 +166,48 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
       next = { ...target, error: `gh failed: ${errorText(error)}` };
     }
     let toast: string | null = null;
+    let news: string | null = null;
+    let wakeFor: ((last: Memory) => Wake) | null = null;
     let isClosed = false;
     if (next.pull && next.error === undefined) {
-      const verdict = verdictOf(next.pull, await read($, estimates), next.host, now);
-      // A passed merge is said only once no later run can start: until then
-      // it is not yet what the line has said.
-      const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, next.pull, now);
-      if (!isEarly) {
-        toast = toastOf(labelOf(next), verdict, target.shown, next.push ? '' : ' merged');
-        next.shown = shownOf(verdict);
-      }
+      const pull = next.pull;
+      const verdict = verdictOf(pull, await read($, estimates), next.host, now);
       isClosed = verdict.kind === 'closed';
+      if (!isClosed) {
+        // A passed merge is said only once no later run can start: until then
+        // it is not yet what the line has said.
+        const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
+        const shown = target.shown;
+        wakeFor = (last) => wakeOf(next, pull, verdict, last, { isEarly, tells: config.tells });
+        // A ready pull request read as checking is not ready again afterwards.
+        if (!isEarly && !isChecking(verdict)) {
+          toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
+          next.shown = shownOf(verdict);
+        }
+      }
     }
     let isSaved = false;
     await update($, watches, (all) => {
       isSaved = all.some((w) => isSame(w, target));
-      return isClosed
-        ? all.filter((w) => !isSame(w, target))
-        : all.map((w) => (isSame(w, target) ? next : w));
+      if (isClosed) return all.filter((w) => !isSame(w, target));
+      if (wakeFor) {
+        // Judged against every watch on the host as saved now: a push and its
+        // pull request read the same runs, and either may be read first.
+        const known = all.filter((w) => w.host === next.host).flatMap((w) => w.told ?? []);
+        const told = [...new Set([...(target.told ?? []), ...known])];
+        const woke = wakeFor({ told, heard: target.heard });
+        // With waking off, comments are still heard, so turning it on reports no
+        // history of them.
+        if (config.isAwake) news = woke.text;
+        next.told = toldAfter(woke.told, target.told, config.isAwake);
+        next.heard = woke.heard;
+      }
+      return all.map((w) => (isSame(w, target) ? next : w));
     });
     isSaveFailing = false;
-    // Only once the line says it, so a lost save does not toast again.
+    // Only once the line says it, so a lost save does not toast or wake again.
     if (toast && isSaved) $.ui.toast(toast);
+    if (news && isSaved) wake($, news, labelOf(next));
     if (!isClosed && next.error === undefined) await learnEstimates($, next, now);
   } catch (error) {
     // Kept on the line so the band says why; said once when even that fails.
@@ -220,7 +267,9 @@ async function stop($: $, id: string): Promise<void> {
   await update($, watches, (all) => all.filter((w) => idOf(w) !== id));
 }
 
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
+  const { wake, bots } = settingsOf(options);
+  config = { isAwake: wake !== 'off', tells: tellsOf(wake, bots) };
   on('session.start', async ($, e, next) => {
     const r = await next(e);
     poller?.cancel();

@@ -1,6 +1,6 @@
 {
   "name": "pr-watch",
-  "description": "A line above the prompt for each pull request Claude opens: its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it.",
+  "description": "A line above the prompt for each pull request Claude opens, showing its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it, and telling Claude the same without being asked.",
   "version": "0.2.0",
   "author": {
     "name": "Oak OSS",
@@ -11,5 +11,21 @@
   "repository": "https://github.com/oakoss/claude-plugins",
   "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/pr-watch",
   "keywords": ["pull-request", "github", "ci", "github-actions", "mod", "status"],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "wake": {
+      "type": "string",
+      "title": "Wake Claude",
+      "description": "What a watched pull request tells Claude unasked. Checks: ready to merge, a failed job, conflicts, requested changes, and a merge's checks. Checks and comments: also comments and reviews by people other than you. Off: only you hear it, from the line and its toasts.",
+      "options": ["off", "checks", "checks and comments"],
+      "default": "checks and comments"
+    },
+    "botComments": {
+      "type": "string",
+      "title": "Bots wake Claude",
+      "description": "Which comments and reviews from authors GitHub marks as a bot also tell Claude, when Wake Claude includes comments. Reviews: a review bot's reviews, not plan, coverage or preview comments. Comments and reviews: everything a bot posts.",
+      "options": ["never", "reviews", "comments and reviews"],
+      "default": "never"
+    }
+  }
 }

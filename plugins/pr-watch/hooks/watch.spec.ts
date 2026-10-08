@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import type { Job, Pull, RunStatus, Watch, Workflow } from '../types';
+import type { Activity, Job, Pull, RunStatus, Watch, Workflow } from '../types';
 import {
   barOf,
   clockText,
@@ -16,6 +16,14 @@ import {
   shownOf,
   toastOf,
   verdictOf,
+  QUIET_CAP,
+  settingsOf,
+  tellsOf,
+  toldAfter,
+  wakeOf,
+  type BotSetting,
+  type Memory,
+  type WakeSetting,
 } from './watch';
 
 const AT = Date.parse('2026-10-03T22:01:10Z');
@@ -44,6 +52,7 @@ function flow(id: number, name: string, jobs: Job[], status?: RunStatus): Workfl
     conclusion: isDone ? (bad?.conclusion ?? 'SUCCESS') : null,
     startedAt: '2026-10-03T22:00:00Z',
     isRerun: false,
+    attempt: 1,
     url: `https://x/run/${id}`,
     jobs,
   };
@@ -65,6 +74,9 @@ function pull(workflows: Workflow[], over: Partial<Pull> = {}): Pull {
     base: 'main',
     mergedAt: null,
     mergeRuns: null,
+    activity: [],
+    // As parsePull reads it: at least as new as anyone else's activity.
+    activityAt: over.activity?.at(-1)?.at ?? null,
     ...over,
   };
 }
@@ -401,6 +413,323 @@ describe('toastOf', () => {
     const a = { ...lint, workflow: 'a/b', job: 'c' };
     const b = { ...lint, workflow: 'a', job: 'b/c' };
     expect(shownOf(a)).not.toBe(shownOf(b));
+  });
+});
+
+const minute = (m: number) => `2026-10-03T21:${String(m).padStart(2, '0')}:00Z`;
+
+const said = (author: string, at: string, did = 'commented on', isBot = false) => ({
+  author,
+  at,
+  url: `https://x/${author}`,
+  did,
+  isBot,
+  isReview: did !== 'commented on',
+});
+
+describe('settingsOf and tellsOf', () => {
+  test('read each /config setting, its default when unset or unknown', () => {
+    expect(settingsOf({})).toEqual({ wake: 'checks and comments', bots: 'never' });
+    expect(settingsOf({ wake: 'checks', botComments: 'reviews' })).toEqual({
+      wake: 'checks',
+      bots: 'reviews',
+    });
+    expect(settingsOf({ wake: true, botComments: 'x' })).toEqual({
+      wake: 'checks and comments',
+      bots: 'never',
+    });
+  });
+
+  test('tell a person’s activity, and a bot’s by kind as the settings say', () => {
+    const person = said('alice', minute(1));
+    const botReview = said('coderabbit', minute(2), 'reviewed', true);
+    const botComment = said('oakum', minute(3), 'commented on', true);
+    const told = (wake: WakeSetting, bots: BotSetting) => {
+      const tells = tellsOf(wake, bots);
+      return [person, botReview, botComment].filter((a) => tells(a)).map((a) => a.author);
+    };
+    expect(told('checks and comments', 'never')).toEqual(['alice']);
+    expect(told('checks and comments', 'reviews')).toEqual(['alice', 'coderabbit']);
+    expect(told('checks and comments', 'comments and reviews')).toEqual([
+      'alice',
+      'coderabbit',
+      'oakum',
+    ]);
+    expect(told('checks', 'comments and reviews')).toEqual([]);
+    expect(told('off', 'comments and reviews')).toEqual([]);
+  });
+});
+
+describe('toldAfter', () => {
+  test('with waking off, keeps what was told and lasts, and adds nothing', () => {
+    expect(toldAfter(['a', 'b'], ['a'], true)).toEqual(['a', 'b']);
+    expect(toldAfter(['a', 'b'], ['a', 'c'], false)).toEqual(['a']);
+    expect(toldAfter(['a'], undefined, false)).toEqual([]);
+  });
+
+  test('tells ready again on waking when it ended and came back while waking was off', () => {
+    const pr = { repo: 'o/r', number: 128, url: 'u' };
+    const ready = pull([green()]);
+    const running = pull([ci([job('Test', null)])], { merge: 'BLOCKED' });
+    let told = wakeOf(pr, ready, verdictAt(ready), {}).told;
+    for (const p of [running, ready])
+      told = toldAfter(wakeOf(pr, p, verdictAt(p), { told }).told, told, false);
+    expect(wakeOf(pr, ready, verdictAt(ready), { told }).text).toContain('ready to merge');
+  });
+});
+
+describe('wakeOf', () => {
+  const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+  const push = { ...pr, number: 0, push: { branch: 'feat/x', pushedAt: AT } };
+  // What the next read tells, given what the last one left.
+  const after = (p: Pull, last: Memory = {}, w: typeof pr = pr) => wakeOf(w, p, verdictAt(p), last);
+
+  test('says a pull request is ready once, as news rather than a request to merge', () => {
+    const p = pull([green()]);
+    const first = after(p);
+    expect(first.text).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(first.text).toContain('not a request to merge. https://github.com/o/r/pull/128');
+    expect(first.text).not.toContain('checks passed');
+    expect(after(p, first).text).toBeNull();
+  });
+
+  test('says ready again once it stopped being ready, but not after GitHub recomputes', () => {
+    const ready = after(pull([green()]));
+    const checking = after(pull([green()], { merge: 'UNKNOWN' }), ready);
+    expect(after(pull([green()]), checking).text).toBeNull();
+    const running = after(pull([ci([job('Test', null)])], { merge: 'BLOCKED' }), ready);
+    expect(after(pull([green()]), running).text).toContain('ready to merge');
+  });
+
+  test('says nothing of running checks, a wait on review, or a branch behind its base', () => {
+    expect(after(pull([ci([job('Test', null)])])).text).toBeNull();
+    expect(after(pull([green()], { merge: 'BLOCKED', review: 'REVIEW_REQUIRED' })).text).toBeNull();
+    expect(after(pull([green()], { merge: 'BEHIND' })).text).toBeNull();
+  });
+
+  test('says conflicts and requested changes once each, whatever the checks say', () => {
+    const p = pull([ci([job('Lint', 'FAILURE'), job('Test', null)])], {
+      merge: 'DIRTY',
+      review: 'CHANGES_REQUESTED',
+    });
+    const first = after(p);
+    expect(first.text).toContain('o/r#128 has merge conflicts with main.');
+    expect(first.text).toContain('A reviewer requested changes on o/r#128.');
+    expect(first.text).toContain('CI: Lint failed for o/r#128: https://x/Lint');
+    expect(after(p, first).text).toBeNull();
+  });
+
+  test('keeps conflicts told while GitHub recomputes the merge state', () => {
+    const told = after(pull([green()], { merge: 'DIRTY' })).told;
+    const checking = after(pull([green()], { merge: 'UNKNOWN' }), { told });
+    expect(after(pull([green()], { merge: 'DIRTY' }), checking).text).toBeNull();
+  });
+
+  test('tells each failing run once, in workflows that gate the merge or not', () => {
+    const p = pull([
+      ci([job('Test', 'FAILURE', true), job('Lint', 'FAILURE'), job('Build', null)]),
+      flow(2, 'Docs', [job('Links', 'FAILURE')]),
+    ]);
+    const first = after(p);
+    expect(first.text).toContain(
+      'CI: Test, Lint failed for o/r#128: https://x/Test; the run: https://x/run/1',
+    );
+    expect(first.text).toContain('Docs: Links failed');
+    expect(after(p, first).text).toBeNull();
+  });
+
+  test('does not tell a later job failing in a run already told, a summary job among them', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE'), job('CI Summary', null, true)])]));
+    const summary = pull([ci([job('Lint', 'FAILURE'), job('CI Summary', 'FAILURE', true)])]);
+    expect(after(summary, first).text).toBeNull();
+  });
+
+  test('tells a re-run attempt of a run failing again', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE')])]));
+    const rerun = { ...ci([job('Lint', 'FAILURE')]), attempt: 2 };
+    expect(after(pull([rerun]), first).text).toContain('CI: Lint failed');
+  });
+
+  test('keeps a pull request’s conditions its own when told is shared across watches', () => {
+    const dirty = pull([green()], { merge: 'DIRTY' });
+    const other = { ...pr, number: 7 };
+    expect(after(dirty, after(dirty, undefined, other)).text).toContain(
+      'o/r#128 has merge conflicts',
+    );
+  });
+
+  test('tells the same job failing on a new run', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE')])]));
+    const again = {
+      ...ci([{ ...job('Lint', 'FAILURE'), url: 'https://x/run/2/Lint' }]),
+      url: 'https://x/run/2',
+    };
+    expect(after(pull([again]), first).text).toContain('https://x/run/2/Lint');
+  });
+
+  test('tells a failure on the merge commit apart from the same job on the pull request', () => {
+    const first = after(pull([ci([job('Lint', 'FAILURE')])]));
+    const onMerge = { ...flow(1, 'CI', [job('Lint', 'FAILURE')]), url: 'https://x/run/9' };
+    const told = after(merged([onMerge]), first);
+    expect(told.text).toContain('CI: Lint failed on the merge commit for o/r#128');
+    expect(after(merged([codeql('FAILURE')]), first, push).text).toContain(
+      'CodeQL: Analyze failed for the push to feat/x on o/r',
+    );
+  });
+
+  test('says a merge’s and a push’s checks passed, unless the grace has not ended', () => {
+    const passed = merged([green()]);
+    const first = after(passed);
+    expect(first.text).toContain("o/r#128 merged into main, and the merge commit's checks passed.");
+    expect(after(passed, first).text).toBeNull();
+    expect(after(passed, {}, push).text).toContain(
+      'The checks on the push to feat/x on o/r passed.',
+    );
+    const early = wakeOf(pr, passed, verdictAt(passed), { told: ['k'] }, { isEarly: true });
+    expect(early).toEqual({ text: null, told: [], heard: { since: null, keys: [] } });
+  });
+
+  test('tells each push its own passed checks', () => {
+    const passed = merged([green()]);
+    const a = { ...pr, number: 0, push: { branch: 'feat/a', pushedAt: AT } };
+    const b = { ...pr, number: 0, push: { branch: 'feat/b', pushedAt: AT } };
+    const first = after(passed, {}, a);
+    expect(after(passed, first, b).text).toContain(
+      'The checks on the push to feat/b on o/r passed.',
+    );
+  });
+
+  test('says ready again after checks that ran while GitHub recomputed the merge state', () => {
+    const ready = after(pull([green()]));
+    const running = after(pull([ci([job('Test', null)])], { merge: 'UNKNOWN' }), ready);
+    expect(after(pull([green()]), running).text).toContain('ready to merge');
+  });
+
+  test('hears the comments and reviews already there on the first read without telling them', () => {
+    const p = pull([ci([job('Test', null)])], {
+      activity: [said('alice', '2026-10-03T21:00:00Z'), said('bob', '2026-10-03T21:30:00Z')],
+    });
+    const first = after(p);
+    expect(first.text).toBeNull();
+    expect(first.heard).toEqual({
+      since: '2026-10-03T21:30:00Z',
+      keys: ['https://x/alice', 'https://x/bob'],
+    });
+    expect(after(pull([ci([job('Test', null)])])).heard).toEqual({ since: null, keys: [] });
+  });
+
+  test('tells each comment and review it has not heard, though two share a second', () => {
+    const old = said('alice', '2026-10-03T21:00:00Z');
+    const p = pull([ci([job('Test', null)])], {
+      activity: [
+        old,
+        said('bob', '2026-10-03T21:00:00Z', 'approved'),
+        said('carol', '2026-10-03T21:40:00Z', 'requested changes on'),
+      ],
+    });
+    const woke = after(p, { heard: { since: old.at, keys: [old.url] } });
+    expect(woke.text).toContain('@bob approved o/r#128: https://x/bob');
+    expect(woke.text).toContain('@carol requested changes on o/r#128: https://x/carol');
+    expect(woke.text).not.toContain('@alice');
+    expect(after(p, woke).text).toBeNull();
+  });
+
+  test('tells no comment that slides back into the window once a newer one is deleted', () => {
+    const window = Array.from({ length: 10 }, (_, i) => said(`u${i + 1}`, minute(i + 1)));
+    const first = after(pull([], { activity: window }));
+    const newest = said('u11', minute(11));
+    const later = after(pull([], { activity: [...window.slice(1), newest] }), first);
+    expect(later.text).toContain('@u11');
+    const older = said('u0', minute(0));
+    const deleted = [older, ...window.slice(0, 9)];
+    expect(after(pull([], { activity: deleted }), later).text).toBeNull();
+    expect(after(pull([], { activity: window }), later).text).toBeNull();
+  });
+
+  test('tells a bot’s comment only when bots are asked for, and hears it either way', () => {
+    const first = after(pull([]));
+    const p = pull([], { activity: [said('oakum[bot]', minute(1), 'commented on', true)] });
+    const quiet = wakeOf(pr, p, verdictAt(p), first);
+    expect(quiet.text).toBeNull();
+    expect(quiet.heard?.keys).toEqual(['https://x/oakum[bot]']);
+    const tells = tellsOf('checks and comments', 'comments and reviews');
+    expect(wakeOf(pr, p, verdictAt(p), first, { tells }).text).toContain(
+      '@oakum[bot] commented on o/r#128',
+    );
+  });
+
+  test('stops comment-only wakes after QUIET_CAP in a row, saying so on the last', () => {
+    let last: Memory = after(pull([]));
+    const items: Activity[] = [];
+    const texts: (string | null)[] = [];
+    for (let i = 1; i <= QUIET_CAP + 2; i++) {
+      items.push(said(`u${i}`, minute(i)));
+      const woke = after(pull([], { activity: [...items] }), last);
+      texts.push(woke.text);
+      // Reads with nothing new, and one that cannot tell whose comments are
+      // whose, hold the count.
+      const quiet = after(pull([], { activity: [...items] }), woke);
+      expect(quiet.text).toBeNull();
+      const unknown = after(pull([], { activity: null }), quiet);
+      expect(unknown.text).toBeNull();
+      last = unknown;
+    }
+    expect(texts.slice(0, QUIET_CAP).every((t) => t !== null)).toBe(true);
+    expect(texts[QUIET_CAP - 2]).not.toContain('no more comments');
+    expect(texts[QUIET_CAP - 1]).toContain(`https://x/u${QUIET_CAP}`);
+    expect(texts[QUIET_CAP - 1]).toContain(
+      'pr-watch will tell you of no more comments or reviews on o/r#128',
+    );
+    expect(texts.slice(QUIET_CAP)).toEqual([null, null]);
+    // Other news after the cap tells no comment held back by it.
+    const failing = pull([ci([job('Lint', 'FAILURE')])], { activity: [...items] });
+    const reset = after(failing, last);
+    expect(reset.text).toContain('CI: Lint failed');
+    expect(reset.text).not.toContain(`u${QUIET_CAP + 1}`);
+  });
+
+  test('other news resets the cap and carries the comments that came with it', () => {
+    let last: Memory = { heard: { since: null, keys: [], streak: QUIET_CAP + 3 } };
+    const comment = said('alice', minute(1));
+    const failing = pull([ci([job('Lint', 'FAILURE')])], { activity: [comment] });
+    const woke = after(failing, last);
+    expect(woke.text).toContain('CI: Lint failed');
+    expect(woke.text).toContain('@alice commented on');
+    expect(woke.heard?.streak).toBeUndefined();
+    last = woke;
+    const next = pull([ci([job('Lint', 'FAILURE')])], {
+      activity: [comment, said('bob', minute(2))],
+    });
+    expect(after(next, last).heard?.streak).toBe(1);
+  });
+
+  test('takes the floor from the viewer’s own newer comments too', () => {
+    const alice = said('alice', minute(1));
+    const first = after(pull([], { activity: [alice], activityAt: minute(19) }));
+    expect(first.heard?.since).toBe(minute(19));
+    const older = said('bob', minute(0));
+    expect(
+      after(pull([], { activity: [older, alice], activityAt: minute(18) }), first).text,
+    ).toBeNull();
+  });
+
+  test('hears nothing from a read that cannot tell whose comments are whose', () => {
+    const p = pull([ci([job('Test', null)])], { activity: null });
+    expect(after(p)).toEqual({ text: null, told: [], heard: undefined });
+    const heard = { since: null, keys: ['https://x/alice'] };
+    expect(after(p, { heard }).heard).toEqual(heard);
+    const known = pull([ci([job('Test', null)])], {
+      activity: [said('alice', '2026-10-01T00:00:00Z')],
+    });
+    expect(after(known, after(p)).text).toBeNull();
+  });
+
+  test('tells a comment on a pull request that had none when first read', () => {
+    const first = after(pull([ci([job('Test', null)])]));
+    const p = pull([ci([job('Test', null)])], {
+      activity: [said('alice', '2026-10-03T21:00:00Z')],
+    });
+    expect(after(p, first).text).toContain('@alice commented on o/r#128');
   });
 });
 

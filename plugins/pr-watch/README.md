@@ -30,10 +30,35 @@ A toast says when a pull request turns ready to merge, a job fails in a workflow
 
 pr-watch draws above whatever other plugins draw in the same band, rather than replacing it.
 
+## Telling Claude
+
+pr-watch also tells Claude, so you do not have to prompt it. It submits a message to the session, which runs once Claude is idle, when:
+
+- GitHub reports a pull request ready to merge;
+- a run fails, in any workflow, as soon as its first job does, naming the jobs failed by then with links to the first job's log and to the run;
+- a pull request has merge conflicts or a reviewer requests changes, whatever its checks say;
+- a merge's or a push's checks pass, once its 90 seconds are up;
+- someone other than you comments on or reviews it.
+
+Each is told once while it lasts: a later job failing in a run already told, such as a summary job, is not told again, while a new run or a re-run that fails, or a pull request ready again after new checks, is. A watch's first read hears the comments and reviews already there without telling them. The message says it is news, not a request to merge. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason.
+
+After ten reads in a row whose only news was comments and reviews, those stop waking Claude until other news comes, so a chatty bot or thread cannot keep it busy. The tenth message says so.
+
+### Settings
+
+In `/config`:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| Wake Claude | `off`, `checks`, `checks and comments` | `checks and comments` |
+| Bots wake Claude | `never`, `reviews`, `comments and reviews` | `never` |
+
+`checks` tells everything above except comments and reviews. `off` leaves the line and its toasts as they are. The bot setting applies when Wake Claude includes comments: `reviews` lets a review bot's reviews through, such as CodeRabbit or Copilot, but not bot comments such as plans, coverage reports or previews. Changing a setting reports no history: comments heard while they were not told stay quiet, and whatever still lasts when waking is turned back on is told once.
+
 ## How it works
 
 - It watches the pull request in the output of a `gh pr create` that Claude runs through its Bash tool, and the branches in the output of a `git push` it runs there. Pull requests opened and branches pushed from your own terminal or a GitHub tool are not seen.
-- It reads each pull request with one `gh api graphql` call: every 10 seconds while any workflow runs or GitHub is still settling, every 60 seconds while it waits on a person. When Claude runs `git push`, `gh pr merge`, `gh run rerun` or `gh workflow run`, it reads every watched pull request at once and every 5 seconds for the next minute, while GitHub starts the new runs. Each workflow's length comes from one `gh api` call the first time pr-watch sees it, asked again a minute later if that call fails.
+- It reads each pull request, with its latest 10 comments and 10 reviews, in one `gh api graphql` call: every 10 seconds while any workflow runs or GitHub is still settling, every 60 seconds while it waits on a person. When Claude runs `git push`, `gh pr merge`, `gh run rerun` or `gh workflow run`, it reads every watched pull request at once and every 5 seconds for the next minute, while GitHub starts the new runs. Each workflow's length comes from one `gh api` call the first time pr-watch sees it, asked again a minute later if that call fails.
 - It needs [`gh`](https://cli.github.com), logged in to the pull request's host. GitHub Enterprise hosts are passed to `gh` as `--hostname`.
 - Watched pull requests last for the session; a new session starts with none.
 

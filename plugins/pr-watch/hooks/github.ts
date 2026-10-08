@@ -1,6 +1,6 @@
 // The gh calls pr-watch makes and what it reads from their output. Pure:
 // register.tsx runs the commands.
-import type { Job, Pull, RunStatus, Workflow } from '../types';
+import type { Activity, Job, Pull, RunStatus, Workflow } from '../types';
 
 // Whether a check is required is asked only of the head commit: the base
 // branch's runs after a merge gate nothing.
@@ -13,11 +13,15 @@ const suites = (required: string) => `checkSuites(first: 100) {
       }
     }`;
 
+// The latest comments and reviews, and who reads them: someone else's are news.
 const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
+  viewer { login }
   repository(owner: $o, name: $r) { pullRequest(number: $n) {
     number title url state isDraft mergeStateStatus reviewDecision baseRefName mergedAt
     commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }
     mergeCommit { ${suites('')} }
+    comments(last: 10) { nodes { author { login __typename } createdAt url } }
+    reviews(last: 10) { nodes { author { login __typename } submittedAt state url } }
   } }
 }`;
 
@@ -142,6 +146,7 @@ function workflowOf(s: any): Workflow | null {
     startedAt: run.createdAt,
     // A re-run keeps the first attempt's creation time, so its clock is unknown.
     isRerun: typeof run.runAttempt === 'number' && run.runAttempt > 1,
+    attempt: typeof run.runAttempt === 'number' ? run.runAttempt : 1,
     url: str(run.url) ?? '',
     jobs,
   };
@@ -181,6 +186,53 @@ function runsOf({ workflows, isTruncated }: Checks): Pull['mergeRuns'] {
   return { workflows, isTruncated };
 }
 
+const isBot = (author: any) => author?.__typename === 'Bot';
+
+const REVIEWED: Record<string, string> = {
+  APPROVED: 'approved',
+  CHANGES_REQUESTED: 'requested changes on',
+  COMMENTED: 'reviewed',
+  DISMISSED: 'reviewed',
+};
+
+// Null without the viewer, whose own are not news, or without either list,
+// which a reply carrying errors may leave out.
+function activityOf(pr: any, viewer: string | null): Activity[] | null {
+  if (viewer === null || !Array.isArray(pr.comments?.nodes) || !Array.isArray(pr.reviews?.nodes)) {
+    return null;
+  }
+  const found: Activity[] = [];
+  for (const c of list(pr.comments?.nodes)) {
+    const author = str(c?.author?.login);
+    if (author === null || author === viewer || !isTime(c.createdAt)) continue;
+    const url = str(c.url) ?? '';
+    const bot = isBot(c.author);
+    found.push({ author, at: c.createdAt, url, did: 'commented on', isBot: bot, isReview: false });
+  }
+  for (const r of list(pr.reviews?.nodes)) {
+    const author = str(r?.author?.login);
+    const did = REVIEWED[str(r?.state) ?? ''];
+    if (author === null || author === viewer || !did || !isTime(r.submittedAt)) continue;
+    const url = str(r.url) ?? '';
+    found.push({ author, at: r.submittedAt, url, did, isBot: isBot(r.author), isReview: true });
+  }
+  return found.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+// The newest comment or review in the window, the viewer's included: an older
+// one can only come into view when a newer one is deleted.
+function windowNewest(pr: any): string | null {
+  let newest: string | null = null;
+  const times = [
+    ...list(pr.comments?.nodes).map((c) => c?.createdAt),
+    ...list(pr.reviews?.nodes).map((r) => r?.submittedAt),
+  ];
+  for (const t of times) {
+    if (isTime(t) && (newest === null || Date.parse(t) > Date.parse(newest))) newest = t;
+  }
+  return newest;
+}
+
 export function parsePull(stdout: string): Pull {
   const body: any = parse(stdout);
   const pr = body?.data?.repository?.pullRequest;
@@ -202,6 +254,8 @@ export function parsePull(stdout: string): Pull {
     mergedAt: isTime(pr.mergedAt) ? pr.mergedAt : null,
     ...checksOf(pr.commits?.nodes?.[0]?.commit?.checkSuites),
     mergeRuns: pr.mergeCommit ? runsOf(checksOf(pr.mergeCommit.checkSuites)) : null,
+    activity: activityOf(pr, str(body?.data?.viewer?.login)),
+    activityAt: windowNewest(pr),
   };
 }
 

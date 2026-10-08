@@ -8,7 +8,7 @@ Curated [Claude Code](https://code.claude.com) plugins published by [Oak OSS](ht
 | --- | --- |
 | [`review-cycle`](./plugins/review-cycle) | Automated multi-agent code review cycle with hook-driven gates. Spawns its own reviewer subagents in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, prevents commits on unreviewed changes. |
 | [`pr-kit`](./plugins/pr-kit) | Pull-request workflow toolkit: summarize review feedback, resolve merge conflicts, make diffs reviewable, and drive CI to green. |
-| [`pr-watch`](./plugins/pr-watch) | A line above the prompt for each pull request Claude opens: its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it. A branch Claude pushes gets a line too, until its checks pass. |
+| [`pr-watch`](./plugins/pr-watch) | A line above the prompt for each pull request Claude opens: its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it. A branch Claude pushes gets a line too, until its checks pass. Claude is told of the same news, and of comments and reviews from others, without being asked. |
 | [`prose`](./plugins/prose) | Plain technical prose for Claude: an always-on output style and a cleanup skill that remove AI filler, distilled from the Google developer style guide. |
 
 ## Install

@@ -69,7 +69,24 @@ const SUMMARY = {
   isRequired: true,
 };
 
+// A comment or review as parsePull reads it, made at 21:`minute`.
+const read = (author: string, minute: number, url: string, did: string, isBot = false) => ({
+  author,
+  at: `2026-10-03T21:${minute}:00Z`,
+  url,
+  did,
+  isBot,
+  isReview: did !== 'commented on',
+});
+
 describe('parsePull', () => {
+  test('reads a re-run’s attempt, which keeps the run’s URL', () => {
+    const [w] = parsePull(prOutput([suite({ runAttempt: 2 })])).workflows;
+    expect(w).toMatchObject({ attempt: 2, isRerun: true });
+    const [first] = parsePull(prOutput([suite({ runAttempt: undefined })])).workflows;
+    expect(first).toMatchObject({ attempt: 1, isRerun: false });
+  });
+
   test('reads the pull request and its workflows', () => {
     const pull = parsePull(prOutput([suite({}, [TYPECHECK, SUMMARY])]));
     expect(pull).toMatchObject({
@@ -89,6 +106,7 @@ describe('parsePull', () => {
         conclusion: null,
         startedAt: '2026-10-03T22:38:02Z',
         isRerun: false,
+        attempt: 1,
         url: 'https://github.com/oakoss/claude-plugins/actions/runs/37159100895',
         jobs: [
           {
@@ -204,6 +222,125 @@ describe('parsePull', () => {
 
   test('says when gh printed something other than JSON', () => {
     expect(() => parsePull('HTTP 502')).toThrow('gh printed something other than JSON');
+  });
+
+  test('reads comments and reviews by anyone but the viewer, oldest first', () => {
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: [
+            { author: { login: 'me' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
+            { author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' },
+            { author: null, createdAt: '2026-10-03T21:21:00Z', url: 'u/3' },
+            {
+              author: { login: 'oakum', __typename: 'Bot' },
+              createdAt: '2026-10-03T21:22:00Z',
+              url: 'u/4',
+            },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: 'bob' },
+              submittedAt: '2026-10-03T21:10:00Z',
+              state: 'APPROVED',
+              url: 'r/1',
+            },
+            { author: { login: 'carol' }, submittedAt: null, state: 'PENDING', url: 'r/2' },
+            {
+              author: { login: 'dan' },
+              submittedAt: '2026-10-03T21:30:00Z',
+              state: 'CHANGES_REQUESTED',
+              url: 'r/3',
+            },
+            {
+              author: { login: 'me' },
+              submittedAt: '2026-10-03T21:31:00Z',
+              state: 'APPROVED',
+              url: 'r/4',
+            },
+            {
+              author: { login: 'erin', __typename: 'Bot' },
+              submittedAt: '2026-10-03T21:32:00Z',
+              state: 'COMMENTED',
+              url: 'r/5',
+            },
+            {
+              author: { login: 'finn' },
+              submittedAt: '2026-10-03T21:33:00Z',
+              state: 'DISMISSED',
+              url: 'r/6',
+            },
+            {
+              author: { login: 'gus' },
+              submittedAt: '2026-10-03T21:34:00Z',
+              state: 'NEW_STATE',
+              url: 'r/7',
+            },
+          ],
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activity).toEqual([
+      read('bob', 10, 'r/1', 'approved'),
+      read('alice', 20, 'u/2', 'commented on'),
+      read('oakum', 22, 'u/4', 'commented on', true),
+      read('dan', 30, 'r/3', 'requested changes on'),
+      read('erin', 32, 'r/5', 'reviewed', true),
+      read('finn', 33, 'r/6', 'reviewed'),
+    ]);
+  });
+
+  test('reads the newest comment or review in the window, the viewer’s included', () => {
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: [
+            { author: { login: 'alice' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
+            { author: { login: 'me' }, createdAt: '2026-10-03T21:50:00Z', url: 'u/2' },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: 'bob' },
+              submittedAt: '2026-10-03T21:40:00Z',
+              state: 'APPROVED',
+              url: 'r/1',
+            },
+          ],
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T21:50:00Z');
+    const review = {
+      author: { login: 'me' },
+      submittedAt: '2026-10-03T22:00:00Z',
+      state: 'APPROVED',
+      url: 'r/2',
+    };
+    body.data.repository.pullRequest.reviews.nodes.push(review);
+    expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T22:00:00Z');
+    expect(parsePull(prOutput([])).activityAt).toBeNull();
+  });
+
+  test('reads no comments when it cannot tell whose they are', () => {
+    const comments = {
+      nodes: [{ author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' }],
+    };
+    expect(parsePull(prOutput([], { comments })).activity).toBeNull();
+  });
+
+  test('reads no comments from a reply that left either list out', () => {
+    const comments = { nodes: [] };
+    for (const pr of [{ comments }, { comments, reviews: null }, { reviews: { nodes: [] } }]) {
+      const body = JSON.parse(prOutput([], pr));
+      body.data.viewer = { login: 'me' };
+      expect(parsePull(JSON.stringify(body)).activity).toBeNull();
+    }
   });
 });
 

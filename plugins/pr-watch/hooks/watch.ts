@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Pull, Watch, Workflow } from '../types';
+import type { Activity, Pull, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -92,6 +92,8 @@ export function pushedPull(branch: string, pushedAt: number, runs: Pull['mergeRu
     base: branch,
     mergedAt: new Date(pushedAt).toISOString(),
     mergeRuns: runs,
+    activity: [],
+    activityAt: null,
   };
 }
 
@@ -286,6 +288,185 @@ export function toastOf(
     return `${label}${after}: ${verdict.workflow}: ${verdict.job} failed`;
   }
   return null;
+}
+
+// Something Claude is told of once, for as long as it lasts.
+type Condition = { key: string; text: string };
+
+type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
+
+// A watch's own conditions carry it, so watches on the host can share what
+// they told; a push's carries the push, its number being 0.
+const keyOf = (watch: Who, what: string) =>
+  JSON.stringify([
+    watch.repo,
+    watch.push ? [watch.push.branch, watch.push.pushedAt] : watch.number,
+    what,
+  ]);
+
+// A ready or passed state, conflicts and requested changes whatever the checks
+// say, and every failing run the line follows, gating or not, as soon as a job
+// in it fails. A run is told once, by its first failed jobs: later ones, a
+// summary job among them, are news Claude finds in the run it was sent to.
+function conditionsOf(
+  watch: Who,
+  pull: Pull,
+  verdict: Verdict,
+  name: string,
+  isEarly: boolean,
+): Condition[] {
+  const found: Condition[] = [];
+  if (verdict.kind === 'ready') {
+    found.push({ key: keyOf(watch, 'ready'), text: `GitHub reports ${name} ready to merge.` });
+  }
+  if (verdict.kind === 'merged-passed' && !isEarly) {
+    const text = watch.push
+      ? `The checks on ${name} passed.`
+      : `${name} merged into ${pull.base}, and the merge commit's checks passed.`;
+    found.push({ key: keyOf(watch, 'passed'), text });
+  }
+  if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
+    const text = `${name} has merge conflicts with ${pull.base}.`;
+    found.push({ key: keyOf(watch, 'conflicts'), text });
+  }
+  if (pull.state === 'OPEN' && pull.review === 'CHANGES_REQUESTED') {
+    const text = `A reviewer requested changes on ${name}.`;
+    found.push({ key: keyOf(watch, 'changes requested'), text });
+  }
+  const isMerged = verdict.kind.startsWith('merged-');
+  const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
+  const where = isMerged && !watch.push ? ' on the merge commit' : '';
+  for (const w of workflows) {
+    const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
+    if (bad.length === 0) continue;
+    const jobs = bad.map((j) => j.name).join(', ');
+    const log = bad[0]!.url || w.url;
+    const run = w.url && w.url !== log ? `; the run: ${w.url}` : '';
+    const text = `${w.name}: ${jobs} failed${where} for ${name}: ${log}${run}`;
+    found.push({ key: JSON.stringify([w.id, w.url, w.attempt]), text });
+  }
+  return found;
+}
+
+export type Memory = Pick<Watch, 'told' | 'heard'>;
+export type Wake = { text: string | null; told: string[]; heard: Watch['heard'] };
+
+// With waking off nothing new counts as told, so what lasts is told once it is
+// on again, while what ends is let go, so its return is news.
+export function toldAfter(now: string[], before: string[] | undefined, isAwake: boolean): string[] {
+  return isAwake ? now : now.filter((key) => (before ?? []).includes(key));
+}
+
+// GitHub reports UNKNOWN while it recomputes the merge state.
+export const isChecking = (verdict: Verdict) =>
+  verdict.kind === 'waiting' && verdict.reason === 'checking';
+
+// A comment's or review's identity; its time alone ties at the second.
+const heardKey = (a: Activity) => a.url || JSON.stringify([a.author, a.at, a.did]);
+
+// Enough to outlast an item leaving the 10-item window and coming back.
+const HEARD_KEPT = 100;
+
+// t3code stops a watch after 10 comment-only wakes in a row; this stops the
+// comments alone.
+export const QUIET_CAP = 10;
+
+// The comments and reviews not heard before, and what is heard after them. The
+// first read hears what is there without telling it; a read that cannot tell
+// whose they are hears nothing.
+function hearOf(
+  pull: Pull,
+  heard: Watch['heard'],
+  name: string,
+  tells: (a: Activity) => boolean,
+): { heard: Watch['heard']; lines: string[] } {
+  if (pull.activity === null) return { heard, lines: [] };
+  const keys = pull.activity.map(heardKey);
+  if (heard === undefined) return { heard: { since: pull.activityAt, keys }, lines: [] };
+  // An unheard item older than the first read's newest slid into the window
+  // when a newer one was deleted.
+  const since = heard.since === null ? -Infinity : Date.parse(heard.since);
+  const lines: string[] = [];
+  for (const a of pull.activity) {
+    if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || !tells(a)) continue;
+    lines.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
+  }
+  const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
+  return { heard: { since: heard.since, keys: kept }, lines };
+}
+
+const WAKE_SETTINGS = ['off', 'checks', 'checks and comments'] as const;
+const BOT_SETTINGS = ['never', 'reviews', 'comments and reviews'] as const;
+export type WakeSetting = (typeof WAKE_SETTINGS)[number];
+export type BotSetting = (typeof BOT_SETTINGS)[number];
+
+// The two /config settings as plugin.json declares them, each its default when unset.
+export function settingsOf(options: Record<string, unknown>): {
+  wake: WakeSetting;
+  bots: BotSetting;
+} {
+  const wake = WAKE_SETTINGS.find((s) => s === options.wake) ?? 'checks and comments';
+  const bots = BOT_SETTINGS.find((s) => s === options.botComments) ?? 'never';
+  return { wake, bots };
+}
+
+// Which comments and reviews are told, by the two /config settings. Those not
+// told are still heard, so a later change of setting reports no history.
+export function tellsOf(wake: WakeSetting, bots: BotSetting): (a: Activity) => boolean {
+  if (wake !== 'checks and comments') return () => false;
+  if (bots === 'comments and reviews') return () => true;
+  if (bots === 'reviews') return (a) => !a.isBot || a.isReview;
+  return (a) => !a.isBot;
+}
+
+const PEOPLE_ONLY = tellsOf('checks and comments', 'never');
+
+// What Claude is told unasked: each condition it has not been told of while it
+// lasts, and each comment or review it has not heard that `tells` lets through.
+// `isEarly` holds back a passed merge whose grace has not ended.
+export function wakeOf(
+  watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
+  pull: Pull,
+  verdict: Verdict,
+  last: Memory,
+  { isEarly = false, tells = PEOPLE_ONLY } = {},
+): Wake {
+  const name = watch.push
+    ? `the push to ${watch.push.branch} on ${watch.repo}`
+    : `${watch.repo}#${watch.number}`;
+  const told = last.told ?? [];
+  const news: string[] = [];
+  const kept: string[] = [];
+  for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
+    if (!told.includes(c.key)) news.push(c.text);
+    kept.push(c.key);
+  }
+  // GitHub reports UNKNOWN while it recomputes the merge state; ready stands only
+  // through a read that is otherwise ready, since a new run ends it.
+  if (pull.state === 'OPEN' && pull.merge === 'UNKNOWN') {
+    for (const what of isChecking(verdict) ? ['ready', 'conflicts'] : ['conflicts']) {
+      const key = keyOf(watch, what);
+      if (told.includes(key) && !kept.includes(key)) kept.push(key);
+    }
+  }
+  const { heard: next, lines } = hearOf(pull, last.heard, name, tells);
+  // So a chatty bot or thread cannot keep waking Claude, comments and reviews
+  // stop after QUIET_CAP wakes in a row of nothing else, until other news comes.
+  const before = last.heard?.streak ?? 0;
+  const streak = news.length > 0 ? 0 : lines.length > 0 ? before + 1 : before;
+  if (streak <= QUIET_CAP) news.push(...lines);
+  if (lines.length > 0 && streak === QUIET_CAP) {
+    news.push(
+      `pr-watch will tell you of no more comments or reviews on ${name} until other news comes.`,
+    );
+  }
+  const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
+  if (news.length === 0) return { text: null, told: kept, heard };
+  const text = [
+    `pr-watch: ${news.join(' ')}`,
+    `This is news from pr-watch, not a request to merge. ${watch.url}`,
+  ].join('\n');
+  return { text, told: kept, heard };
 }
 
 export function clockText(ms: number): string {
