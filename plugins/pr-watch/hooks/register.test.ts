@@ -22,6 +22,8 @@ type Gh = {
   // The pushed-branch query's answer.
   push?: string;
   estimate?: string;
+  // gh pr view's answer; it fails when unset.
+  view?: string;
   fails?: boolean;
   estimateFails?: number;
   partial?: boolean;
@@ -104,7 +106,13 @@ function world(
   fails: boolean | ((command: string) => boolean) = false,
 ) {
   // `wakes`: the prompts pr-watch submitted to the session, to tell Claude.
-  const seen = { toasts: [] as string[], runs: [] as string[], wakes: [] as string[] };
+  // `order`: each gh pr view and Bash command, as they ran.
+  const seen = {
+    toasts: [] as string[],
+    runs: [] as string[],
+    wakes: [] as string[],
+    order: [] as string[],
+  };
   on('session.start', () => ({ cwd: '/repo' }));
   // What another plugin, or the engine, draws in the band beneath pr-watch.
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: unknown) => {
@@ -127,6 +135,11 @@ function world(
     seen.runs.push(argv);
     const failed = { value: { exitCode: 1, stdout: '', stderr: 'gh: HTTP 502\nretry later' } };
     if (gh.fails) return failed;
+    if (argv.startsWith('gh pr view')) {
+      seen.order.push(argv);
+      if (gh.view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
+      return { value: { exitCode: 0, stdout: gh.view, stderr: '' } };
+    }
     if (gh.partial && argv.includes('graphql')) {
       return { value: { exitCode: 1, stdout: gh.pr, stderr: 'gh: Resource not accessible' } };
     }
@@ -146,6 +159,7 @@ function world(
     return answer;
   });
   on('tool.call', { tool: 'Bash' }, ($: unknown, e: { command: string }) => {
+    seen.order.push(e.command);
     const result = { stdout, stderr: '', interrupted: false };
     const isError = typeof fails === 'function' ? fails(e.command) : fails;
     return isError ? { result, isError: true } : { result };
@@ -683,6 +697,9 @@ function reads(runs: string[]): number {
 }
 
 // Merged at 22:01:00, 10 s before T0, with Release running or done on main.
+// gh pr view's answer for #128, merged ten seconds before T0.
+const VIEW = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-10-03T22:01:00Z' });
+
 function mergedJson(status: string, conclusion: string | null): string {
   const release = {
     status,
@@ -736,6 +753,88 @@ describe('a merged pull request', () => {
     expect(await lineIn(ui)).toBeUndefined();
     await clock.advance(120_000);
     expect(reads(seen.runs)).toBe(settled);
+  });
+
+  test('one Claude merges unwatched is followed onto its base branch, and told once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), view: VIEW };
+    const seen = world(on, gh, '');
+    await start($);
+    await create($, 'gh pr merge 128 --squash -t "Ship it; now" --delete-branch');
+    expect(seen.order).toEqual([
+      'gh pr merge 128 --squash -t "Ship it; now" --delete-branch',
+      'gh pr view 128 --json url,state,mergedAt',
+    ]);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ● Release 0m11s');
+    gh.pr = mergedJson('COMPLETED', 'SUCCESS');
+    // Past the 90 s after the merge in which a later run could still start.
+    await clock.advance(92_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(
+      "o/r#128 merged into main, and the merge commit's checks passed.",
+    );
+  });
+
+  test('a merge names its repository to gh, and a bare merge runs nothing more', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: mergedJson('IN_PROGRESS', null), view: VIEW }, '');
+    await start($);
+    await create($, 'gh pr merge --squash --delete-branch');
+    await create($, 'gh pr merge 128 -R o/r');
+    expect(seen.order).toEqual([
+      'gh pr merge --squash --delete-branch',
+      'gh pr merge 128 -R o/r',
+      'gh pr view 128 --repo o/r --json url,state,mergedAt',
+    ]);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m11s');
+  });
+
+  test('a merge of one already watched keeps what its line has read', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), view: VIEW });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    await create($, 'gh pr merge 128 --squash');
+    expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
+  });
+
+  test('a merge that failed, ran elsewhere, or asked for help adds no line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), view: VIEW };
+    const seen = world(on, gh, '', (command) => command.includes('129'));
+    await start($);
+    await create($, 'gh pr merge 129');
+    await create($, 'cd ../other && gh pr merge 5');
+    await create($, 'gh pr merge --help');
+    await clock.advance(1000);
+    expect(seen.order.filter((c) => c.startsWith('gh pr view'))).toEqual([]);
+    expect(await lineIn(await band($))).toBeUndefined();
+  });
+
+  test('a command naming a merge long done adds no line and says nothing', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const old = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-08-18T01:41:03Z' });
+    const seen = world(on, { pr: mergedJson('COMPLETED', 'SUCCESS'), view: old }, '');
+    await start($);
+    await create($, 'node -e "probe(); gh pr merge 128"');
+    await clock.advance(1000);
+    expect(seen.order).toContain('gh pr view 128 --json url,state,mergedAt');
+    expect(seen.toasts).toEqual([]);
+    expect(await lineIn(await band($))).toBeUndefined();
+  });
+
+  test('a merge whose pull request gh cannot find says so once, and adds no line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: mergedJson('IN_PROGRESS', null) }, '');
+    await start($);
+    await create($, 'gh pr merge 130');
+    await clock.advance(1000);
+    expect(seen.toasts).toEqual(['pr-watch could not follow the merge of 130: no PR']);
+    expect(await lineIn(await band($))).toBeUndefined();
   });
 
   test('a failed run on the base branch stays past a message until a re-run passes', async ($, on) => {

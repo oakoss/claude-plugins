@@ -1,9 +1,19 @@
 import { atom, read, update, type EngineInterface, type Register, type Timer } from 'claude-code';
 
 import type { Pull, Watch } from '../types';
-import { estimateArgs, parseEstimate, parsePull, parsePush, pullArgs, pushArgs } from './github';
+import {
+  estimateArgs,
+  parseEstimate,
+  parsePull,
+  parsePush,
+  pullArgs,
+  pushArgs,
+  viewArgs,
+} from './github';
 import {
   createdPull,
+  mergedPullOf,
+  mergingPull,
   pushedBranches,
   pushedPull,
   delayOf,
@@ -22,6 +32,7 @@ import {
   toldAfter,
   verdictOf,
   wakeOf,
+  type Merging,
   type Memory,
   type Segment,
   type Wake,
@@ -35,6 +46,7 @@ const clock = atom({ plugin: 'pr-watch', key: 'now' } as const, 0);
 
 const TICK_MS = 1000;
 const ESTIMATE_RETRY_MS = 60_000;
+const VIEW_TIMEOUT_MS = 10_000;
 const busy = new Set<string>();
 // When each watch was last read, kept here too so a read whose result could
 // not be saved still waits out its delay.
@@ -272,6 +284,27 @@ async function safeTick($: $): Promise<void> {
   }
 }
 
+// Watches the pull request a merge named, unless something already does.
+async function followMerge($: $, m: Merging, startedAt: number): Promise<void> {
+  try {
+    const r = await $.process.run(viewArgs(m.pull, m.repo), { timeoutMs: VIEW_TIMEOUT_MS });
+    if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `gh exited ${r.exitCode}`);
+    const target = mergedPullOf(r.stdout, startedAt);
+    if (target === 'stale') return;
+    if (target === null) {
+      throw new Error(
+        `gh pr view named no pull request: ${r.stdout.trim().slice(0, 80) || '(empty)'}`,
+      );
+    }
+    const id = idOf(target);
+    await update($, watches, (all) =>
+      all.some((w) => idOf(w) === id) ? all : [...all, { ...target, checkedAt: 0 }],
+    );
+  } catch (error) {
+    $.ui.toast(`pr-watch could not follow the merge of ${m.pull}: ${errorText(error)}`);
+  }
+}
+
 async function stop($: $, id: string): Promise<void> {
   await update($, watches, (all) => all.filter((w) => idOf(w) !== id));
 }
@@ -288,6 +321,8 @@ export const register: Register = (on, options) => {
   });
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const merging = mergingPull(e.command);
+    const startedAt = merging ? await $.clock.now() : 0;
     const r = await next(e);
     if ('deny' in r) return r;
     // A failed push still bursts: the exit status is the whole shell line's, so
@@ -314,6 +349,9 @@ export const register: Register = (on, options) => {
       await update($, watches, (all) => [...all.filter((w) => !ids.has(idOf(w))), ...fresh]);
     }
     if (r.isError) return r;
+    // A merged pull request nothing watched yet is followed onto its base
+    // branch. Not awaited, so the merge's result waits on no gh call.
+    if (merging) void followMerge($, merging, startedAt).catch(() => null);
     const target = createdPull(e.command, stdout);
     if (target) {
       const id = idOf(target);
