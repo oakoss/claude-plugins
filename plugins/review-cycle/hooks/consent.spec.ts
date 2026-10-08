@@ -124,6 +124,25 @@ describe('merges, approvals, releases and review replies', () => {
     ['approve the PR and merge it', { ...APPROVE, merge: true }],
     ['release it', RELEASE],
     ['cut a release', RELEASE],
+    // Merging the version pull request is the release.
+    ['Ok, lets merge the release', RELEASE],
+    ['merge the version PR', RELEASE],
+    ['merge the release PR', RELEASE],
+    ['merge the version packages pull request', RELEASE],
+    ['merge the release now', RELEASE],
+    ['merge the version PR #140', RELEASE],
+    ["don't merge the release yet", NONE],
+    // Only where the noun ends the request: anything else names other work.
+    ['merge the release branch into main', NONE],
+    ['merge the release into main', NONE],
+    ['merge the release PR branch into main', NONE],
+    ['merge the release-please branch', NONE],
+    ['merge the version changes', NONE],
+    ['merge the release fixes', NONE],
+    ['merge the release #3 fixes', NONE],
+    ['merge the version 2 PR', NONE],
+    ['merge the version 2.0 PR', NONE],
+    ['merge the release 3.5', NONE],
     ['ok, publish the new release', RELEASE],
     ['the release notes look good', NONE],
     ['publish it', RELEASE],
@@ -190,6 +209,7 @@ describe('merges, approvals, releases and review replies', () => {
     ['Release `v0.25.0`?', RELEASE],
     ['Reply to the review on #116?', REPLY],
     ['Merge and release #62?', { ...merging('62'), release: true }],
+    ['Merge the version-packages PR?', RELEASE],
   ])('a yes to the refusal\'s "%s" grants it', (question, grant) => {
     expect(grantOf('yes', question)).toEqual(grant);
     expect(holdsOf('not yet', question)).toBe(true);
@@ -218,6 +238,7 @@ describe('merges, approvals, releases and review replies', () => {
     ['replying to the review', REPLY],
     ['responding to the review', REPLY],
     ['releasing the crate', RELEASE],
+    ['merging the version PR', RELEASE],
   ])('a yes to going ahead with %s grants it', (offer, grant) => {
     expect(grantOf('yes', `Shall I go ahead with ${offer}?`)).toEqual(grant);
   });

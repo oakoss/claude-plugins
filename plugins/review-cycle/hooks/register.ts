@@ -19,7 +19,17 @@ import {
   shownCommand,
   type Classification,
 } from './command';
-import { covers, grantOf, holdOf, liftsHold, NO_GRANT, type Grant } from './consent';
+import {
+  covers,
+  grantOf,
+  holdOf,
+  liftsHold,
+  NO_GRANT,
+  isReply,
+  stepsNamed,
+  type Grant,
+  type HoldStep,
+} from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -161,6 +171,8 @@ type Message = {
   prWindow: boolean;
 };
 
+type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
+
 type GateState = {
   // undefined until resolved; null when the session is not in a repository.
   root: Repo | null | undefined;
@@ -170,6 +182,11 @@ type GateState = {
   // How many messages the user has typed, queued ones included.
   messages: number;
   lastAnswer: string;
+  // The user's latest message, and the answer it replied to.
+  said: { text: string; before: string };
+  // Refusals of a step the user's message or the offer it answered named:
+  // candidate consent-grammar misses, kept in this session only.
+  misses: Miss[];
   // The user's shell aliases, which the Bash tool expands.
   shellAliases: Map<string, string>;
   aliasError: string | null;
@@ -208,6 +225,8 @@ const state: GateState = {
   message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
   messages: 0,
   lastAnswer: '',
+  said: { text: '', before: '' },
+  misses: [],
   shellAliases: new Map(),
   aliasError: null,
   aliasErrorShown: false,
@@ -341,7 +360,65 @@ async function ensureRoot($: $): Promise<Repo | null> {
 }
 
 function deny(reason: string): { deny: string } {
+  if (reason.includes(ASKS_THEM)) noteMiss(reason);
   return { deny: `review-cycle: ${reason}` };
+}
+
+// What every refusal asking the user to decide a step says.
+const ASKS_THEM = 'stop and ask them in your reply';
+const MAX_MISSES = 20;
+const MISS_TEXT = 300;
+const clip = (s: string) => s.slice(0, MISS_TEXT);
+
+// The question the answer ended on, which a reply like "yes" answers.
+// The answer's last three lines, which the grammar reads an offer from.
+function closingOf(answer: string): string {
+  return answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+}
+
+// The question those lines end on. Sentences split at a mark before a space,
+// so a version in backticks ("Release `v0.25.0`?") stays whole.
+function questionOf(closing: string): string {
+  const sentences = closing.split(/(?<=[.!?])\s+/);
+  return sentences.findLast((s) => s.trim().endsWith('?'))?.trim() ?? '';
+}
+
+// The step a refusal is about, from how notAsked and the merge check word it:
+// "doesn't ask for a merge", "the merge may be a release". Commits and
+// approvals are not consent the grammar misses.
+function refusedStep(refusal: string): HoldStep | null {
+  if (/\bmay be a release\b/.test(refusal)) return 'release';
+  const named =
+    /\bask(?:ed)? for (a (?:force |bare )?push|a bare force|a pull request|a merge|a release)\b/.exec(
+      refusal,
+    )?.[1];
+  if (named === undefined) return null;
+  if (named.endsWith('push') || named === 'a bare force') return 'push';
+  return named === 'a pull request' ? 'pr' : named === 'a merge' ? 'merge' : 'release';
+}
+
+function grants(grant: Grant, step: HoldStep): boolean {
+  if (step === 'push') return covers(grant, 'push');
+  if (step === 'merge') return grant.merge || grant.autoMerge;
+  // A merge the user asked for covers the version pull request too.
+  if (step === 'release') return grant.release || grant.merge;
+  return grant.pr;
+}
+
+function noteMiss(refusal: string): void {
+  const step = refusedStep(refusal);
+  if (step === null) return;
+  const { text, before } = state.said;
+  // The whole closing is kept, so a spec row drafted from it reads as the gate did.
+  const offer = isReply(text) ? closingOf(before) : '';
+  const steps = [...new Set([...stepsNamed(text), ...stepsNamed(questionOf(offer))])];
+  // Merging the version pull request is a release, so naming the merge counts.
+  const named = steps.includes(step) || (step === 'release' && steps.includes('merge'));
+  // A message queued while the gate judged may grant what an older one did not.
+  if (!named || grants(grantOf(text, before), step)) return;
+  const miss = { message: clip(text), offer: clip(offer), steps, refusal: clip(refusal) };
+  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
+  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
 }
 
 async function onSessionStart(
@@ -369,6 +446,16 @@ async function onSessionStart(
   } catch {
     // The gate works without its status tool; the skill notes when it is missing.
   }
+  try {
+    await $.tool.register({
+      name: 'misses',
+      description:
+        "The gate's refusals of a push, pull request, merge or release that the user's latest message, or the offer it answered, named: candidate rows for the consent grammar's spec. Each has the message, the offer (the answer's last lines, when the message replied to it), the steps named and the refusal. Read-only; kept in memory until Claude Code restarts.",
+      inputSchema: { type: 'object', properties: {} },
+    });
+  } catch {
+    // The misses skill says when the tool is missing.
+  }
   return next(e);
 }
 
@@ -380,6 +467,7 @@ async function onPromptSubmit(
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
     // What a held message asks for still runs: "push it; don't open a PR yet".
+    state.said = { text: e.text, before: state.lastAnswer };
     const grant = grantOf(e.text, state.lastAnswer);
     const hold = holdOf(e.text, state.lastAnswer);
     if (hold !== null) state.held = hold;
@@ -1234,7 +1322,7 @@ function pushRefusal(
   switch (missing) {
     case 'bare': {
       const leaseToo = covers(granted, 'lease') ? '' : ', which also needs their request';
-      return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for one, so nothing ran.${alone} Use ${LEASE} instead${leaseToo}; if they want a bare --force, ${ask('"Force-push `fix/x` to `origin` without a lease?"')}`;
+      return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for a bare force, so nothing ran.${alone} Use ${LEASE} instead${leaseToo}; if they want a bare --force, ${ask('"Force-push `fix/x` to `origin` without a lease?"')}`;
     }
     case 'lease': {
       return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('"Force-push `fix/x` to `origin` with a lease?"')}`;
@@ -1755,4 +1843,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'NotebookEdit' }, onNotebookEdit);
   on('tool.call', { tool: 'Monitor' }, onMonitor).catch(onMonitorError);
   on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatus);
+  on('tool.call', { tool: 'mcp__review-cycle__misses' }, () => ({
+    result: JSON.stringify({ misses: state.misses }),
+  }));
 };

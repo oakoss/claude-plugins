@@ -159,20 +159,28 @@ const OFFERED: Readonly<Record<string, Family>> = Object.fromEntries(
 // release", "publish the new release"; "mark it ready for review", "ready for
 // review".
 function prPhrase(text: string): string {
-  return text
-    .replaceAll(
-      /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
-      (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
-    )
-    .replaceAll(/\bready for review\b/gi, 'markready')
-    .replaceAll(
-      /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
-      (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
-    )
-    .replaceAll(
-      /\b(?:(cut|create|make|publish|do)|(cutting|creating|making|publishing|doing))\s+(?:(?:a|an|the|new)\s+)*release\b/gi,
-      (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
-    );
+  return (
+    text
+      .replaceAll(
+        /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
+        (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
+      )
+      .replaceAll(/\bready for review\b/gi, 'markready')
+      .replaceAll(
+        /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
+        (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
+      )
+      .replaceAll(
+        /\b(?:(cut|create|make|publish|do)|(cutting|creating|making|publishing|doing))\s+(?:(?:a|an|the|new)\s+)*release\b/gi,
+        (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
+      )
+      // Merging the version pull request is the release, but only where the noun
+      // ends the clause: "merge the release fixes" names other work.
+      .replaceAll(
+        /\b(?:(merge)|(merging))\s+(?:(?:the|this|that|our|new)\s+)*(?:release|version(?:[\s-]packages)?)(?:\s+(?:pr|pull[\s-]request))?(?:\s+#?\d+)?(?=\s*(?:$|[.,;:!?)](?!\d))|\s+(?:now|please|then|and|too|yet|first|next)\b)/gi,
+        (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
+      )
+  );
 }
 
 // A bare --force named apart from a lease ("`--force`", "bare force push",
@@ -872,6 +880,28 @@ const RELEASE_WORD =
 
 // A step mentioned without being asked for, or an offer of one held off ("not yet").
 export type HoldStep = 'push' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+
+// Deleting a remote branch is a push.
+const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
+  ['push', PUSH_WORD],
+  ['push', /\b(delete|deletes|deleting|deleted)\b/i],
+  ['pr', PR_WORD],
+  ['merge', MERGE_WORD],
+  ['approve', APPROVE_WORD],
+  ['release', RELEASE_WORD],
+];
+
+// A message that is a yes or a go-ahead and nothing more, as the grammar
+// reads one: it answers the offer before it.
+export function isReply(text: string): boolean {
+  return AFFIRMATIVE.test(text.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok'));
+}
+
+// The steps a message names by their verbs, asked for or not.
+export function stepsNamed(text: string): HoldStep[] {
+  const read = prPhrase(unquote(forcePhrase(text)));
+  return [...new Set(STEP_WORDS.filter(([, word]) => word.test(read)).map(([step]) => step))];
+}
 export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
 
 // A step mentioned without being asked for holds every step but a commit, read
