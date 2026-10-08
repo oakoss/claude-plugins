@@ -1,6 +1,6 @@
 # pr-watch
 
-A line above the Claude Code prompt for each pull request Claude opens, from the moment `gh pr create` prints its URL until the pull request closes, or until its merge has run its checks on the base branch. A branch Claude pushes gets a line too, until its checks pass.
+A line above the Claude Code prompt for each pull request Claude opens, merges by number, URL or branch, or is asked to watch, until the pull request closes, or until its merge has run its checks on the base branch. A branch Claude pushes gets a line too, until its checks pass.
 
 ```text
 #128 ● CI ████████████▏░░░░░░░░░░░ 1m11s / ~2m20s · CodeQL ✓ · Dependency Review ●
@@ -55,9 +55,18 @@ In `/config`:
 
 `checks` tells everything above except comments and reviews. `off` leaves the line and its toasts as they are. The bot setting applies when Wake Claude includes comments: `reviews` lets a review bot's reviews through, such as CodeRabbit or Copilot, but not bot comments such as plans, coverage reports or previews. Changing a setting reports no history: comments heard while they were not told stay quiet, and whatever still lasts when waking is turned back on is told once.
 
+## Tools for Claude
+
+pr-watch gives Claude three tools, so it can follow a pull request it did not open, such as a teammate's, instead of polling `gh pr checks` or sleeping:
+
+- **`watch`** takes a pull request's number, URL or head branch, with a repository when it is not the current directory's. It reads the pull request at once and answers with what its line shows, along with any news that first read found; pr-watch then tells Claude when that changes.
+- **`unwatch`** stops watching a pull request, by number, URL or head branch, or a pushed branch. A number two watched repositories share is refused until the repository is named.
+- **`watches`** lists what pr-watch is watching and what each line shows.
+
 ## How it works
 
 - It watches the pull request in the output of a `gh pr create` that Claude runs through its Bash tool, and the branches in the output of a `git push` it runs there. Pull requests opened and branches pushed from your own terminal or a GitHub tool are not seen.
+- A `gh pr merge` Claude runs that names its pull request (a number, URL or branch) watches it too, if nothing did, and follows its merge onto the base branch; with `--auto`, the line follows the open pull request until it merges. A bare `gh pr merge` is not followed: after `--delete-branch`, or on a fork's branch, nothing names its pull request. Neither is a merge run after a `cd` in the same command or with a `GH_HOST=` prefix, nor a pull request merged more than two minutes before the command started (the leeway is for GitHub's clock), so a command that only mentions an old merge adds nothing.
 - It reads each pull request, with its latest 10 comments and 10 reviews, in one `gh api graphql` call: every 10 seconds while any workflow runs or GitHub is still settling, every 60 seconds while it waits on a person. When Claude runs `git push`, `gh pr merge`, `gh run rerun` or `gh workflow run`, it reads every watched pull request at once and every 5 seconds for the next minute, while GitHub starts the new runs. Each workflow's length comes from one `gh api` call the first time pr-watch sees it, asked again a minute later if that call fails.
 - It needs [`gh`](https://cli.github.com), logged in to the pull request's host. GitHub Enterprise hosts are passed to `gh` as `--hostname`.
 - Watched pull requests last for the session; a new session starts with none.

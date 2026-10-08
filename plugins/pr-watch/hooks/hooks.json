@@ -1,4 +1,4 @@
 {
-  "description": "pr-watch: a line above the prompt for each pull request Claude opens, with its workflows' progress and whether it is ready to merge.",
+  "description": "pr-watch: a line above the prompt for each pull request Claude opens, merges by number, or is asked to watch, with its workflows' progress and whether it is ready to merge.",
   "modules": ["./register.tsx"]
 }
