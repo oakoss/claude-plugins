@@ -11,5 +11,19 @@
   "repository": "https://github.com/oakoss/claude-plugins",
   "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/pr-watch",
   "keywords": ["pull-request", "github", "ci", "github-actions", "mod", "status"],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "wake": {
+      "type": "boolean",
+      "title": "Wake Claude",
+      "description": "Tell Claude when a watched pull request is ready to merge, a job fails, it conflicts or someone asks for changes, a merge's checks finish, or someone else comments or reviews. Off, only you hear it, from the line and its toasts.",
+      "default": true
+    },
+    "botComments": {
+      "type": "boolean",
+      "title": "Bot comments wake Claude",
+      "description": "Also tell Claude of comments and reviews whose author GitHub marks as a bot, such as plan comments, coverage reports and review bots. A person's always do.",
+      "default": false
+    }
+  }
 }

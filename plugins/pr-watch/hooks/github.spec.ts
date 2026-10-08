@@ -214,6 +214,11 @@ describe('parsePull', () => {
             { author: { login: 'me' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
             { author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' },
             { author: null, createdAt: '2026-10-03T21:21:00Z', url: 'u/3' },
+            {
+              author: { login: 'oakum', __typename: 'Bot' },
+              createdAt: '2026-10-03T21:22:00Z',
+              url: 'u/4',
+            },
           ],
         },
         reviews: {
@@ -238,7 +243,7 @@ describe('parsePull', () => {
               url: 'r/4',
             },
             {
-              author: { login: 'erin' },
+              author: { login: 'erin', __typename: 'Bot' },
               submittedAt: '2026-10-03T21:32:00Z',
               state: 'COMMENTED',
               url: 'r/5',
@@ -261,11 +266,24 @@ describe('parsePull', () => {
     );
     body.data.viewer = { login: 'me' };
     expect(parsePull(JSON.stringify(body)).activity).toEqual([
-      { author: 'bob', at: '2026-10-03T21:10:00Z', url: 'r/1', did: 'approved' },
-      { author: 'alice', at: '2026-10-03T21:20:00Z', url: 'u/2', did: 'commented on' },
-      { author: 'dan', at: '2026-10-03T21:30:00Z', url: 'r/3', did: 'requested changes on' },
-      { author: 'erin', at: '2026-10-03T21:32:00Z', url: 'r/5', did: 'reviewed' },
-      { author: 'finn', at: '2026-10-03T21:33:00Z', url: 'r/6', did: 'reviewed' },
+      { author: 'bob', at: '2026-10-03T21:10:00Z', url: 'r/1', did: 'approved', isBot: false },
+      {
+        author: 'alice',
+        at: '2026-10-03T21:20:00Z',
+        url: 'u/2',
+        did: 'commented on',
+        isBot: false,
+      },
+      { author: 'oakum', at: '2026-10-03T21:22:00Z', url: 'u/4', did: 'commented on', isBot: true },
+      {
+        author: 'dan',
+        at: '2026-10-03T21:30:00Z',
+        url: 'r/3',
+        did: 'requested changes on',
+        isBot: false,
+      },
+      { author: 'erin', at: '2026-10-03T21:32:00Z', url: 'r/5', did: 'reviewed', isBot: true },
+      { author: 'finn', at: '2026-10-03T21:33:00Z', url: 'r/6', did: 'reviewed', isBot: false },
     ]);
   });
 

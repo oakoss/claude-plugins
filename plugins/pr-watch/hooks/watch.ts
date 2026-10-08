@@ -349,6 +349,12 @@ function conditionsOf(
 export type Memory = Pick<Watch, 'told' | 'heard'>;
 export type Wake = { text: string | null; told: string[]; heard: Watch['heard'] };
 
+// With waking off nothing new counts as told, so what lasts is told once it is
+// on again, while what ends is let go, so its return is news.
+export function toldAfter(now: string[], before: string[] | undefined, isAwake: boolean): string[] {
+  return isAwake ? now : now.filter((key) => (before ?? []).includes(key));
+}
+
 // GitHub reports UNKNOWN while it recomputes the merge state.
 export const isChecking = (verdict: Verdict) =>
   verdict.kind === 'waiting' && verdict.reason === 'checking';
@@ -366,6 +372,7 @@ function hearOf(
   pull: Pull,
   heard: Watch['heard'],
   name: string,
+  bots: boolean,
 ): { heard: Watch['heard']; lines: string[] } {
   if (pull.activity === null) return { heard, lines: [] };
   const keys = pull.activity.map(heardKey);
@@ -375,7 +382,9 @@ function hearOf(
   const since = heard.since === null ? -Infinity : Date.parse(heard.since);
   const lines: string[] = [];
   for (const a of pull.activity) {
-    if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since) continue;
+    if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || (a.isBot && !bots)) {
+      continue;
+    }
     lines.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
   }
   const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
@@ -383,14 +392,14 @@ function hearOf(
 }
 
 // What Claude is told unasked: each condition it has not been told of while it
-// lasts, and each comment or review it has not heard. `isEarly` holds back a
-// passed merge whose grace has not ended.
+// lasts, and each comment or review it has not heard, a bot's only with `bots`.
+// `isEarly` holds back a passed merge whose grace has not ended.
 export function wakeOf(
   watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
   pull: Pull,
   verdict: Verdict,
   last: Memory,
-  isEarly = false,
+  { isEarly = false, bots = false } = {},
 ): Wake {
   const name = watch.push
     ? `the push to ${watch.push.branch} on ${watch.repo}`
@@ -410,7 +419,7 @@ export function wakeOf(
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }
   }
-  const { heard, lines } = hearOf(pull, last.heard, name);
+  const { heard, lines } = hearOf(pull, last.heard, name, bots);
   news.push(...lines);
   if (news.length === 0) return { text: null, told: kept, heard };
   const text = [

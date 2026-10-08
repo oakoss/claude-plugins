@@ -20,8 +20,8 @@ const PULL_QUERY = `query($o: String!, $r: String!, $n: Int!) {
     number title url state isDraft mergeStateStatus reviewDecision baseRefName mergedAt
     commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }
     mergeCommit { ${suites('')} }
-    comments(last: 10) { nodes { author { login } createdAt url } }
-    reviews(last: 10) { nodes { author { login } submittedAt state url } }
+    comments(last: 10) { nodes { author { login __typename } createdAt url } }
+    reviews(last: 10) { nodes { author { login __typename } submittedAt state url } }
   } }
 }`;
 
@@ -185,6 +185,8 @@ function runsOf({ workflows, isTruncated }: Checks): Pull['mergeRuns'] {
   return { workflows, isTruncated };
 }
 
+const isBot = (author: any) => author?.__typename === 'Bot';
+
 const REVIEWED: Record<string, string> = {
   APPROVED: 'approved',
   CHANGES_REQUESTED: 'requested changes on',
@@ -202,13 +204,14 @@ function activityOf(pr: any, viewer: string | null): Activity[] | null {
   for (const c of list(pr.comments?.nodes)) {
     const author = str(c?.author?.login);
     if (author === null || author === viewer || !isTime(c.createdAt)) continue;
-    found.push({ author, at: c.createdAt, url: str(c.url) ?? '', did: 'commented on' });
+    const url = str(c.url) ?? '';
+    found.push({ author, at: c.createdAt, url, did: 'commented on', isBot: isBot(c.author) });
   }
   for (const r of list(pr.reviews?.nodes)) {
     const author = str(r?.author?.login);
     const did = REVIEWED[str(r?.state) ?? ''];
     if (author === null || author === viewer || !did || !isTime(r.submittedAt)) continue;
-    found.push({ author, at: r.submittedAt, url: str(r.url) ?? '', did });
+    found.push({ author, at: r.submittedAt, url: str(r.url) ?? '', did, isBot: isBot(r.author) });
   }
   return found.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }

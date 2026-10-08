@@ -16,6 +16,7 @@ import {
   shownOf,
   toastOf,
   verdictOf,
+  toldAfter,
   wakeOf,
   type Memory,
 } from './watch';
@@ -411,11 +412,30 @@ describe('toastOf', () => {
 
 const minute = (m: number) => `2026-10-03T21:${String(m).padStart(2, '0')}:00Z`;
 
-const said = (author: string, at: string, did = 'commented on') => ({
+const said = (author: string, at: string, did = 'commented on', isBot = false) => ({
   author,
   at,
   url: `https://x/${author}`,
   did,
+  isBot,
+});
+
+describe('toldAfter', () => {
+  test('with waking off, keeps what was told and lasts, and adds nothing', () => {
+    expect(toldAfter(['a', 'b'], ['a'], true)).toEqual(['a', 'b']);
+    expect(toldAfter(['a', 'b'], ['a', 'c'], false)).toEqual(['a']);
+    expect(toldAfter(['a'], undefined, false)).toEqual([]);
+  });
+
+  test('tells ready again on waking when it ended and came back while waking was off', () => {
+    const pr = { repo: 'o/r', number: 128, url: 'u' };
+    const ready = pull([green()]);
+    const running = pull([ci([job('Test', null)])], { merge: 'BLOCKED' });
+    let told = wakeOf(pr, ready, verdictAt(ready), {}).told;
+    for (const p of [running, ready])
+      told = toldAfter(wakeOf(pr, p, verdictAt(p), { told }).told, told, false);
+    expect(wakeOf(pr, ready, verdictAt(ready), { told }).text).toContain('ready to merge');
+  });
 });
 
 describe('wakeOf', () => {
@@ -509,7 +529,7 @@ describe('wakeOf', () => {
     expect(after(passed, {}, push).text).toContain(
       'The checks on the push to feat/x on o/r passed.',
     );
-    const early = wakeOf(pr, passed, verdictAt(passed), { told: ['k'] }, true);
+    const early = wakeOf(pr, passed, verdictAt(passed), { told: ['k'] }, { isEarly: true });
     expect(early).toEqual({ text: null, told: [], heard: { since: null, keys: [] } });
   });
 
@@ -568,6 +588,17 @@ describe('wakeOf', () => {
     const deleted = [older, ...window.slice(0, 9)];
     expect(after(pull([], { activity: deleted }), later).text).toBeNull();
     expect(after(pull([], { activity: window }), later).text).toBeNull();
+  });
+
+  test('tells a bot’s comment only when bots are asked for, and hears it either way', () => {
+    const first = after(pull([]));
+    const p = pull([], { activity: [said('oakum[bot]', minute(1), 'commented on', true)] });
+    const quiet = wakeOf(pr, p, verdictAt(p), first);
+    expect(quiet.text).toBeNull();
+    expect(quiet.heard?.keys).toEqual(['https://x/oakum[bot]']);
+    expect(wakeOf(pr, p, verdictAt(p), first, { bots: true }).text).toContain(
+      '@oakum[bot] commented on o/r#128',
+    );
   });
 
   test('takes the floor from the viewer’s own newer comments too', () => {

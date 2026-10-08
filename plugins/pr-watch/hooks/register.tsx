@@ -17,6 +17,7 @@ import {
   labelOf,
   shownOf,
   toastOf,
+  toldAfter,
   verdictOf,
   wakeOf,
   type Memory,
@@ -48,6 +49,8 @@ let burstUntil = 0;
 let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
+// From /config; a change there reloads the module with the new values.
+let config = { wake: true, bots: false };
 
 const idOf = (w: Pick<Watch, 'host' | 'repo' | 'number' | 'push'>) =>
   `${w.host}/${w.repo}${w.push ? `@${w.push.branch}` : `#${w.number}`}`;
@@ -173,7 +176,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         // it is not yet what the line has said.
         const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
         const shown = target.shown;
-        wakeFor = (last) => wakeOf(next, pull, verdict, last, isEarly);
+        wakeFor = (last) => wakeOf(next, pull, verdict, last, { isEarly, bots: config.bots });
         // A ready pull request read as checking is not ready again afterwards.
         if (!isEarly && !isChecking(verdict)) {
           toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
@@ -191,8 +194,10 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         const known = all.filter((w) => w.host === next.host).flatMap((w) => w.told ?? []);
         const told = [...new Set([...(target.told ?? []), ...known])];
         const woke = wakeFor({ told, heard: target.heard });
-        news = woke.text;
-        next.told = woke.told;
+        // With waking off, comments are still heard, so turning it on reports no
+        // history of them.
+        if (config.wake) news = woke.text;
+        next.told = toldAfter(woke.told, target.told, config.wake);
         next.heard = woke.heard;
       }
       return all.map((w) => (isSame(w, target) ? next : w));
@@ -260,7 +265,8 @@ async function stop($: $, id: string): Promise<void> {
   await update($, watches, (all) => all.filter((w) => idOf(w) !== id));
 }
 
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
+  config = { wake: options.wake !== false, bots: options.botComments === true };
   on('session.start', async ($, e, next) => {
     const r = await next(e);
     poller?.cancel();

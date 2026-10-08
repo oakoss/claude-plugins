@@ -21,7 +21,7 @@ export type Workflow = {
 };
 
 // A comment or review on a pull request by someone other than the viewer.
-export type Activity = { author: string; at: string; url: string; did: string };
+export type Activity = { author: string; at: string; url: string; did: string; isBot: boolean };
 
 export type Pull = {
   number: number;

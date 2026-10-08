@@ -422,6 +422,77 @@ describe('telling Claude', () => {
     expect(seen.wakes).toHaveLength(1);
   });
 
+  test(
+    'does not wake it when /config turns waking off, and keeps the line',
+    { options: { wake: false } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const theirs = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/2' };
+      const gh: Gh = { pr: commentedJson([]) };
+      const seen = world(on, gh);
+      let saved: any[] = [];
+      on('state.set', ($: unknown, e: any, next: any) => {
+        if (e.key === 'watches') saved = e.value;
+        return next(e);
+      });
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.pr = commentedJson([theirs]);
+      gh.pr = gh.pr.replace('"CLEAN"', '"DIRTY"');
+      await clock.advance(20_000);
+      expect(await lineIn(await band($))).toMatch(/^#128 ● CI \dm\d\ds$/);
+      expect(seen.wakes).toEqual([]);
+      // Heard, so turning waking on reports no history; not told, so the
+      // conflicts still there are told then.
+      expect(saved[0].heard.keys).toEqual(['c/2']);
+      expect(saved[0].told ?? []).toEqual([]);
+    },
+  );
+
+  test('a person’s comment wakes it and a bot’s does not, by default', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const human = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/h' };
+    const bot = {
+      author: { login: 'oakum', __typename: 'Bot' },
+      createdAt: '2026-10-03T22:04:00Z',
+      url: 'c/bot',
+    };
+    const gh: Gh = { pr: commentedJson([]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = commentedJson([human, bot]);
+    await clock.advance(20_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('@alice');
+    expect(seen.wakes[0]).not.toContain('@oakum');
+  });
+
+  for (const botComments of [false, true]) {
+    test(
+      `a bot’s comment wakes it only when /config asks for bots (${botComments})`,
+      { options: { botComments } },
+      async ($, on) => {
+        const clock = mock.clock(on, { now: T0 });
+        const bot = {
+          author: { login: 'oakum', __typename: 'Bot' },
+          createdAt: '2026-10-03T22:03:00Z',
+          url: 'c/bot',
+        };
+        const gh: Gh = { pr: commentedJson([]) };
+        const seen = world(on, gh);
+        await start($);
+        await create($);
+        await clock.advance(1000);
+        gh.pr = commentedJson([bot]);
+        await clock.advance(20_000);
+        expect(seen.wakes).toHaveLength(botComments ? 1 : 0);
+      },
+    );
+  }
+
   test('wakes it for a comment from someone else, not for the viewer’s own', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const own = { author: { login: 'me' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
