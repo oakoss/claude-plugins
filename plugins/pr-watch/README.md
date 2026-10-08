@@ -35,12 +35,12 @@ pr-watch draws above whatever other plugins draw in the same band, rather than r
 pr-watch also tells Claude, so you do not have to prompt it. It submits a message to the session, which runs once Claude is idle, when:
 
 - GitHub reports a pull request ready to merge;
-- a job fails, in any workflow, as soon as it fails;
+- a run fails, in any workflow, as soon as its first job does, naming the jobs failed by then with links to the first job's log and to the run;
 - a pull request has merge conflicts or a reviewer requests changes, whatever its checks say;
 - a merge's or a push's checks pass, once its 90 seconds are up;
 - someone other than you comments on or reviews it.
 
-Each is told once while it lasts: a job that fails again on a new run, or a pull request ready again after new checks, is told again. A watch's first read hears the comments and reviews already there without telling them. The message says it is news, not a request to merge. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason.
+Each is told once while it lasts: a later job failing in a run already told, such as a summary job, is not told again, while a new run or a re-run that fails, or a pull request ready again after new checks, is. A watch's first read hears the comments and reviews already there without telling them. The message says it is news, not a request to merge. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason.
 
 After ten reads in a row whose only news was comments and reviews, those stop waking Claude until other news comes, so a chatty bot or thread cannot keep it busy. The tenth message says so.
 

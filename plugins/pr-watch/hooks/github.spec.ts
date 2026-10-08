@@ -80,6 +80,13 @@ const read = (author: string, minute: number, url: string, did: string, isBot = 
 });
 
 describe('parsePull', () => {
+  test('reads a re-run’s attempt, which keeps the run’s URL', () => {
+    const [w] = parsePull(prOutput([suite({ runAttempt: 2 })])).workflows;
+    expect(w).toMatchObject({ attempt: 2, isRerun: true });
+    const [first] = parsePull(prOutput([suite({ runAttempt: undefined })])).workflows;
+    expect(first).toMatchObject({ attempt: 1, isRerun: false });
+  });
+
   test('reads the pull request and its workflows', () => {
     const pull = parsePull(prOutput([suite({}, [TYPECHECK, SUMMARY])]));
     expect(pull).toMatchObject({
@@ -99,6 +106,7 @@ describe('parsePull', () => {
         conclusion: null,
         startedAt: '2026-10-03T22:38:02Z',
         isRerun: false,
+        attempt: 1,
         url: 'https://github.com/oakoss/claude-plugins/actions/runs/37159100895',
         jobs: [
           {
