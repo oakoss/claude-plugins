@@ -14,7 +14,7 @@ A line above the Claude Code prompt for each pull request Claude opens, from the
 
 ## What it shows
 
-- **Running.** Of the running workflows that hold a required check (any running one when nothing on the commit is required), the longest gets a progress bar. Its length is that workflow's last successful run, so the bar stops short of full until the run ends; a workflow with no successful run shows only the time so far, and a re-run shows `re-run`, since GitHub keeps its first attempt's start time. The other workflows follow as marks: `✓` passed, `✗` failed, `●` running.
+- **Running.** Of the running workflows that hold a required check (any running one when nothing on the commit is required), the longest gets a progress bar. Its length is the median of that workflow's last 10 successful runs, re-runs left out, learned again each time a run of it finishes, so the bar stops short of full until the run ends; a workflow with no successful run shows only the time so far, and a re-run shows `re-run`, since GitHub keeps its first attempt's start time. The other workflows follow as marks: `✓` passed, `✗` failed, `●` running.
 - **Ready to merge.** GitHub reports the pull request mergeable: required checks pass, no review blocks it, and it has no conflicts.
 - **Failing.** A job failed in a workflow that holds a required check, or in any workflow when nothing on the commit is required. The line names that job rather than a summary job that failed on it, and links to its log.
 - **Blocked.** Conflicts, changes requested, a branch behind its base, or a rule GitHub does not name (`⚠ blocked`).

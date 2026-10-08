@@ -344,8 +344,16 @@ describe('parsePull', () => {
   });
 });
 
+// A successful run that took `s` seconds.
+const took = (s: number, attempt = 1) => ({
+  run_attempt: attempt,
+  run_started_at: '2026-10-03T22:00:00Z',
+  updated_at: new Date(Date.parse('2026-10-03T22:00:00Z') + s * 1000).toISOString(),
+});
+const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
+
 describe('parseEstimate', () => {
-  test('is the last successful run’s length', () => {
+  test('is the last successful run’s length when it is the only one', () => {
     const out = JSON.stringify({
       workflow_runs: [
         { run_started_at: '2026-10-03T22:49:09Z', updated_at: '2026-10-03T22:50:48Z' },
@@ -354,8 +362,26 @@ describe('parseEstimate', () => {
     expect(parseEstimate(out)).toBe(99_000);
   });
 
-  test('is 0 when the workflow never succeeded', () => {
-    expect(parseEstimate(JSON.stringify({ workflow_runs: [] }))).toBe(0);
+  test('is the median of the recent runs, not the latest', () => {
+    expect(parseEstimate(runs(took(133), took(254), took(277), took(231), took(297)))).toBe(
+      254_000,
+    );
+    expect(parseEstimate(runs(took(100), took(300), took(200), took(400)))).toBe(250_000);
+  });
+
+  test('leaves out a run with no length, and a missing run', () => {
+    expect(parseEstimate(runs(took(0), took(250)))).toBe(250_000);
+    expect(parseEstimate(runs(took(-5)))).toBeNull();
+    expect(parseEstimate(runs(null, took(250)))).toBe(250_000);
+  });
+
+  test('leaves out re-runs, whose length counts only what ran again', () => {
+    expect(parseEstimate(runs(took(7, 4), took(7, 2), took(250)))).toBe(250_000);
+  });
+
+  test('is 0 when the workflow never succeeded on a first attempt', () => {
+    expect(parseEstimate(runs())).toBe(0);
+    expect(parseEstimate(runs(took(7, 2)))).toBe(0);
   });
 
   test('is unknown when the answer does not say', () => {
@@ -397,7 +423,7 @@ describe('the gh calls', () => {
       'api',
       '--hostname',
       'ghe.example.com',
-      'repos/a/b/actions/workflows/9/runs?status=success&per_page=1',
+      'repos/a/b/actions/workflows/9/runs?status=success&per_page=10',
     ]);
   });
 });

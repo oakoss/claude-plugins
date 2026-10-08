@@ -74,12 +74,16 @@ export function pushArgs(host: string, repo: string, branch: string): string[] {
   ];
 }
 
+// Over three repositories' history, 10 runs predicted the next run as well as
+// 20 or better; a median of 20 lagged a CI slowdown by about 10 runs.
+const ESTIMATE_RUNS = 10;
+
 export function estimateArgs(host: string, repo: string, workflowId: number): string[] {
   return [
     'gh',
     'api',
     ...onHost(host),
-    `repos/${repo}/actions/workflows/${workflowId}/runs?status=success&per_page=1`,
+    `repos/${repo}/actions/workflows/${workflowId}/runs?status=success&per_page=${ESTIMATE_RUNS}`,
   ];
 }
 
@@ -290,8 +294,9 @@ export function parsePush(stdout: string): Pushed {
   return { kind: 'runs', runs: runsOf(checksOf(ref.target?.checkSuites)) };
 }
 
-// The last successful run's length; 0 when the workflow has none, null when
-// gh's answer does not say.
+// The median length of the recent successful first attempts: one run off a
+// release branch or a cached re-run (7 s, measured) does not set it. 0 when the
+// workflow has none, null when gh's answer does not say.
 export function parseEstimate(stdout: string): number | null {
   let body: any;
   try {
@@ -301,9 +306,14 @@ export function parseEstimate(stdout: string): number | null {
   }
   const runs = body?.workflow_runs;
   if (!Array.isArray(runs)) return null;
-  const run = runs[0];
-  if (!run) return 0;
-  if (!isTime(run.run_started_at) || !isTime(run.updated_at)) return null;
-  const ms = Date.parse(run.updated_at) - Date.parse(run.run_started_at);
-  return ms > 0 ? ms : null;
+  const firsts = runs.filter((run) => run && (run.run_attempt ?? 1) === 1);
+  if (firsts.length === 0) return 0;
+  const lengths = firsts
+    .filter((run) => isTime(run.run_started_at) && isTime(run.updated_at))
+    .map((run) => Date.parse(run.updated_at) - Date.parse(run.run_started_at))
+    .filter((ms) => ms > 0)
+    .toSorted((a, b) => a - b);
+  if (lengths.length === 0) return null;
+  const mid = Math.floor(lengths.length / 2);
+  return lengths.length % 2 === 1 ? lengths[mid]! : (lengths[mid - 1]! + lengths[mid]!) / 2;
 }
