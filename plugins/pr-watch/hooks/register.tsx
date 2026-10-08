@@ -18,6 +18,7 @@ import {
   toastOf,
   verdictOf,
   wakeOf,
+  type Heard,
   type Segment,
   type Wake,
 } from './watch';
@@ -160,7 +161,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
     }
     let toast: string | null = null;
     let news: string | null = null;
-    let wakeFor: ((told: readonly string[]) => Wake) | null = null;
+    let wakeFor: ((last: Heard) => Wake) | null = null;
     let isClosed = false;
     if (next.pull && next.error === undefined) {
       const pull = next.pull;
@@ -171,7 +172,7 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         // it is not yet what the line has said.
         const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
         const shown = target.shown;
-        wakeFor = (told) => wakeOf(next, pull, verdict, shown, told, isEarly);
+        wakeFor = (last) => wakeOf(next, pull, verdict, last, isEarly);
         // GitHub reports UNKNOWN while it recomputes the merge state, so a ready
         // pull request read as checking is not ready again afterwards.
         const isChecking = verdict.kind === 'waiting' && verdict.reason === 'checking';
@@ -189,9 +190,11 @@ async function refresh($: $, target: Watch, now: number): Promise<void> {
         // Judged against every watch on the host as saved now: a push and its
         // pull request read the same runs, and either may be read first.
         const known = all.filter((w) => w.host === next.host).flatMap((w) => w.told ?? []);
-        const woke = wakeFor([...new Set([...(target.told ?? []), ...known])]);
+        const told = [...new Set([...(target.told ?? []), ...known])];
+        const woke = wakeFor({ told, heard: target.heard });
         news = woke.text;
         next.told = woke.told;
+        next.heard = woke.heard;
       }
       return all.map((w) => (isSame(w, target) ? next : w));
     });

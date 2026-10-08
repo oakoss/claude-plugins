@@ -20,6 +20,9 @@ export type Workflow = {
   jobs: Job[];
 };
 
+// A comment or review on a pull request by someone other than the viewer.
+export type Activity = { author: string; at: string; url: string; did: string };
+
 export type Pull = {
   number: number;
   title: string;
@@ -39,6 +42,11 @@ export type Pull = {
   base: string;
   mergedAt: string | null;
   mergeRuns: { workflows: Workflow[]; isTruncated: boolean } | null;
+  // The latest comments and reviews by others, oldest first; null when the
+  // reply lacks the viewer or either list.
+  activity: Activity[] | null;
+  // The newest comment or review in the window, the viewer's included.
+  activityAt: string | null;
 };
 
 // A pull request the band follows, as the last poll left it. A push Claude
@@ -55,9 +63,11 @@ export type Watch = {
   checkedAt: number;
   // What the line last said, so a toast fires once per change.
   shown?: string;
-  // Keys of the conditions Claude has been told of (failed jobs, conflicts,
-  // requested changes), so each is told once.
+  // The conditions Claude has been told of, so each is told once while it lasts.
   told?: string[];
+  // The comments and reviews heard, and the newest time at the first read,
+  // which hears without telling: older ones are history.
+  heard?: { since: string | null; keys: string[] };
 };
 
 declare module 'claude-code' {

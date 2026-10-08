@@ -17,6 +17,7 @@ import {
   toastOf,
   verdictOf,
   wakeOf,
+  type Heard,
 } from './watch';
 
 const AT = Date.parse('2026-10-03T22:01:10Z');
@@ -66,6 +67,8 @@ function pull(workflows: Workflow[], over: Partial<Pull> = {}): Pull {
     base: 'main',
     mergedAt: null,
     mergeRuns: null,
+    activity: [],
+    activityAt: null,
     ...over,
   };
 }
@@ -405,20 +408,36 @@ describe('toastOf', () => {
   });
 });
 
+const minute = (m: number) => `2026-10-03T21:${String(m).padStart(2, '0')}:00Z`;
+
+const said = (author: string, at: string, did = 'commented on') => ({
+  author,
+  at,
+  url: `https://x/${author}`,
+  did,
+});
+
 describe('wakeOf', () => {
   const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
   const push = { ...pr, number: 0, push: { branch: 'feat/x', pushedAt: AT } };
   // What the next read tells, given what the last one left.
-  const after = (p: Pull, last?: { shown?: string; told?: string[] }, w: typeof pr = pr) =>
-    wakeOf(w, p, verdictAt(p), last?.shown, last?.told);
+  const after = (p: Pull, last: Heard = {}, w: typeof pr = pr) => wakeOf(w, p, verdictAt(p), last);
 
   test('says a pull request is ready once, as news rather than a request to merge', () => {
     const p = pull([green()]);
-    const first = after(p, { shown: 'running' });
+    const first = after(p);
     expect(first.text).toContain('GitHub reports o/r#128 ready to merge.');
     expect(first.text).toContain('not a request to merge. https://github.com/o/r/pull/128');
     expect(first.text).not.toContain('checks passed');
-    expect(after(p, { shown: 'ready' }).text).toBeNull();
+    expect(after(p, first).text).toBeNull();
+  });
+
+  test('says ready again once it stopped being ready, but not after GitHub recomputes', () => {
+    const ready = after(pull([green()]));
+    const checking = after(pull([green()], { merge: 'UNKNOWN' }), ready);
+    expect(after(pull([green()]), checking).text).toBeNull();
+    const running = after(pull([ci([job('Test', null)])], { merge: 'BLOCKED' }), ready);
+    expect(after(pull([green()]), running).text).toContain('ready to merge');
   });
 
   test('says nothing of running checks, a wait on review, or a branch behind its base', () => {
@@ -483,15 +502,100 @@ describe('wakeOf', () => {
 
   test('says a merge’s and a push’s checks passed, unless the grace has not ended', () => {
     const passed = merged([green()]);
-    expect(after(passed, { shown: 'merged-running' }).text).toContain(
-      "o/r#128 merged into main, and the merge commit's checks passed.",
-    );
-    expect(after(passed, { shown: 'merged-passed' }).text).toBeNull();
-    expect(after(passed, { shown: 'merged-running' }, push).text).toContain(
+    const first = after(passed);
+    expect(first.text).toContain("o/r#128 merged into main, and the merge commit's checks passed.");
+    expect(after(passed, first).text).toBeNull();
+    expect(after(passed, {}, push).text).toContain(
       'The checks on the push to feat/x on o/r passed.',
     );
-    const early = wakeOf(pr, passed, verdictAt(passed), 'merged-running', ['k'], true);
-    expect(early).toEqual({ text: null, told: [] });
+    const early = wakeOf(pr, passed, verdictAt(passed), { told: ['k'] }, true);
+    expect(early).toEqual({ text: null, told: [], heard: { since: null, keys: [] } });
+  });
+
+  test('tells each push its own passed checks', () => {
+    const passed = merged([green()]);
+    const a = { ...pr, number: 0, push: { branch: 'feat/a', pushedAt: AT } };
+    const b = { ...pr, number: 0, push: { branch: 'feat/b', pushedAt: AT } };
+    const first = after(passed, {}, a);
+    expect(after(passed, first, b).text).toContain(
+      'The checks on the push to feat/b on o/r passed.',
+    );
+  });
+
+  test('says ready again after checks that ran while GitHub recomputed the merge state', () => {
+    const ready = after(pull([green()]));
+    const running = after(pull([ci([job('Test', null)])], { merge: 'UNKNOWN' }), ready);
+    expect(after(pull([green()]), running).text).toContain('ready to merge');
+  });
+
+  test('hears the comments and reviews already there on the first read without telling them', () => {
+    const p = pull([ci([job('Test', null)])], {
+      activity: [said('alice', '2026-10-03T21:00:00Z'), said('bob', '2026-10-03T21:30:00Z')],
+    });
+    const first = after(p);
+    expect(first.text).toBeNull();
+    expect(first.heard).toEqual({
+      since: '2026-10-03T21:30:00Z',
+      keys: ['https://x/alice', 'https://x/bob'],
+    });
+    expect(after(pull([ci([job('Test', null)])])).heard).toEqual({ since: null, keys: [] });
+  });
+
+  test('tells each comment and review it has not heard, though two share a second', () => {
+    const old = said('alice', '2026-10-03T21:00:00Z');
+    const p = pull([ci([job('Test', null)])], {
+      activity: [
+        old,
+        said('bob', '2026-10-03T21:00:00Z', 'approved'),
+        said('carol', '2026-10-03T21:40:00Z', 'requested changes on'),
+      ],
+    });
+    const woke = after(p, { heard: { since: old.at, keys: [old.url] } });
+    expect(woke.text).toContain('@bob approved o/r#128: https://x/bob');
+    expect(woke.text).toContain('@carol requested changes on o/r#128: https://x/carol');
+    expect(woke.text).not.toContain('@alice');
+    expect(after(p, woke).text).toBeNull();
+  });
+
+  test('tells no comment that slides back into the window once a newer one is deleted', () => {
+    const window = Array.from({ length: 10 }, (_, i) => said(`u${i + 1}`, minute(i + 1)));
+    const first = after(pull([], { activity: window }));
+    const newest = said('u11', minute(11));
+    const later = after(pull([], { activity: [...window.slice(1), newest] }), first);
+    expect(later.text).toContain('@u11');
+    const older = said('u0', minute(0));
+    const deleted = [older, ...window.slice(0, 9)];
+    expect(after(pull([], { activity: deleted }), later).text).toBeNull();
+    expect(after(pull([], { activity: window }), later).text).toBeNull();
+  });
+
+  test('takes the floor from the viewer’s own newer comments too', () => {
+    const alice = said('alice', minute(1));
+    const first = after(pull([], { activity: [alice], activityAt: minute(19) }));
+    expect(first.heard?.since).toBe(minute(19));
+    const older = said('bob', minute(0));
+    expect(
+      after(pull([], { activity: [older, alice], activityAt: minute(18) }), first).text,
+    ).toBeNull();
+  });
+
+  test('hears nothing from a read that cannot tell whose comments are whose', () => {
+    const p = pull([ci([job('Test', null)])], { activity: null });
+    expect(after(p)).toEqual({ text: null, told: [], heard: undefined });
+    const heard = { since: null, keys: ['https://x/alice'] };
+    expect(after(p, { heard }).heard).toEqual(heard);
+    const known = pull([ci([job('Test', null)])], {
+      activity: [said('alice', '2026-10-01T00:00:00Z')],
+    });
+    expect(after(known, after(p)).text).toBeNull();
+  });
+
+  test('tells a comment on a pull request that had none when first read', () => {
+    const first = after(pull([ci([job('Test', null)])]));
+    const p = pull([ci([job('Test', null)])], {
+      activity: [said('alice', '2026-10-03T21:00:00Z')],
+    });
+    expect(after(p, first).text).toContain('@alice commented on o/r#128');
   });
 });
 

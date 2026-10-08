@@ -205,6 +205,111 @@ describe('parsePull', () => {
   test('says when gh printed something other than JSON', () => {
     expect(() => parsePull('HTTP 502')).toThrow('gh printed something other than JSON');
   });
+
+  test('reads comments and reviews by anyone but the viewer, oldest first', () => {
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: [
+            { author: { login: 'me' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
+            { author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' },
+            { author: null, createdAt: '2026-10-03T21:21:00Z', url: 'u/3' },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: 'bob' },
+              submittedAt: '2026-10-03T21:10:00Z',
+              state: 'APPROVED',
+              url: 'r/1',
+            },
+            { author: { login: 'carol' }, submittedAt: null, state: 'PENDING', url: 'r/2' },
+            {
+              author: { login: 'dan' },
+              submittedAt: '2026-10-03T21:30:00Z',
+              state: 'CHANGES_REQUESTED',
+              url: 'r/3',
+            },
+            {
+              author: { login: 'me' },
+              submittedAt: '2026-10-03T21:31:00Z',
+              state: 'APPROVED',
+              url: 'r/4',
+            },
+            {
+              author: { login: 'erin' },
+              submittedAt: '2026-10-03T21:32:00Z',
+              state: 'COMMENTED',
+              url: 'r/5',
+            },
+            {
+              author: { login: 'finn' },
+              submittedAt: '2026-10-03T21:33:00Z',
+              state: 'DISMISSED',
+              url: 'r/6',
+            },
+            {
+              author: { login: 'gus' },
+              submittedAt: '2026-10-03T21:34:00Z',
+              state: 'NEW_STATE',
+              url: 'r/7',
+            },
+          ],
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activity).toEqual([
+      { author: 'bob', at: '2026-10-03T21:10:00Z', url: 'r/1', did: 'approved' },
+      { author: 'alice', at: '2026-10-03T21:20:00Z', url: 'u/2', did: 'commented on' },
+      { author: 'dan', at: '2026-10-03T21:30:00Z', url: 'r/3', did: 'requested changes on' },
+      { author: 'erin', at: '2026-10-03T21:32:00Z', url: 'r/5', did: 'reviewed' },
+      { author: 'finn', at: '2026-10-03T21:33:00Z', url: 'r/6', did: 'reviewed' },
+    ]);
+  });
+
+  test('reads the newest comment or review in the window, the viewer’s included', () => {
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: [
+            { author: { login: 'alice' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
+            { author: { login: 'me' }, createdAt: '2026-10-03T21:50:00Z', url: 'u/2' },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: 'bob' },
+              submittedAt: '2026-10-03T21:40:00Z',
+              state: 'APPROVED',
+              url: 'r/1',
+            },
+          ],
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T21:50:00Z');
+    expect(parsePull(prOutput([])).activityAt).toBeNull();
+  });
+
+  test('reads no comments when it cannot tell whose they are', () => {
+    const comments = {
+      nodes: [{ author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' }],
+    };
+    expect(parsePull(prOutput([], { comments })).activity).toBeNull();
+  });
+
+  test('reads no comments from a reply that left either list out', () => {
+    const comments = { nodes: [] };
+    for (const pr of [{ comments }, { comments, reviews: null }, { reviews: { nodes: [] } }]) {
+      const body = JSON.parse(prOutput([], pr));
+      body.data.viewer = { login: 'me' };
+      expect(parsePull(JSON.stringify(body)).activity).toBeNull();
+    }
+  });
 });
 
 describe('parseEstimate', () => {

@@ -350,6 +350,14 @@ function failedJob(name: string, run = 1, job = 10) {
   return { name, status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl, isRequired: false };
 }
 
+// A running pull request with these comments, read by `me`.
+function commentedJson(comments: unknown[]): string {
+  const activity = { comments: { nodes: comments }, reviews: { nodes: [] } };
+  const body = JSON.parse(prJson(activity, [RUNNING_CI]));
+  body.data.viewer = { login: 'me' };
+  return JSON.stringify(body);
+}
+
 describe('telling Claude', () => {
   test('wakes it once when the pull request becomes ready to merge', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
@@ -411,6 +419,26 @@ describe('telling Claude', () => {
     expect(seen.wakes[0]).toContain('o/r#128 has merge conflicts with');
     expect(seen.wakes[0]).toContain('CI: Typecheck failed');
     await clock.advance(180_000);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('wakes it for a comment from someone else, not for the viewer’s own', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const own = { author: { login: 'me' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
+    const theirs = { author: { login: 'alice' }, createdAt: '2026-10-03T22:03:00Z', url: 'c/2' };
+    const gh: Gh = { pr: commentedJson([]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = commentedJson([own]);
+    await clock.advance(20_000);
+    expect(seen.wakes).toEqual([]);
+    gh.pr = commentedJson([own, theirs]);
+    await clock.advance(20_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('@alice commented on o/r#128: c/2');
+    await clock.advance(60_000);
     expect(seen.wakes).toHaveLength(1);
   });
 

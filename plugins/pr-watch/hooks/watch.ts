@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Pull, Watch, Workflow } from '../types';
+import type { Activity, Pull, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -92,6 +92,8 @@ export function pushedPull(branch: string, pushedAt: number, runs: Pull['mergeRu
     base: branch,
     mergedAt: new Date(pushedAt).toISOString(),
     mergeRuns: runs,
+    activity: [],
+    activityAt: null,
   };
 }
 
@@ -291,25 +293,44 @@ export function toastOf(
 // Something Claude is told of once, for as long as it lasts.
 type Condition = { key: string; text: string };
 
-// Conflicts and requested changes whatever the checks say, and every failed job
-// on the runs the line follows, gating or not, each as soon as it fails. A
-// failure's key is its run's and job's own, so watches on the host can share
-// what they told; a pull request's own conditions carry its number.
+type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
+
+// A watch's own conditions carry it, so watches on the host can share what
+// they told; a push's carries the push, its number being 0.
+const keyOf = (watch: Who, what: string) =>
+  JSON.stringify([
+    watch.repo,
+    watch.push ? [watch.push.branch, watch.push.pushedAt] : watch.number,
+    what,
+  ]);
+
+// A ready or passed state, conflicts and requested changes whatever the checks
+// say, and every failed job on the runs the line follows, gating or not, each
+// as soon as it fails. A failure's key is its run's and job's own.
 function conditionsOf(
-  watch: Pick<Watch, 'repo' | 'number' | 'push'>,
+  watch: Who,
   pull: Pull,
   verdict: Verdict,
   name: string,
+  isEarly: boolean,
 ): Condition[] {
   const found: Condition[] = [];
-  const self = `${watch.repo}#${watch.number}`;
+  if (verdict.kind === 'ready') {
+    found.push({ key: keyOf(watch, 'ready'), text: `GitHub reports ${name} ready to merge.` });
+  }
+  if (verdict.kind === 'merged-passed' && !isEarly) {
+    const text = watch.push
+      ? `The checks on ${name} passed.`
+      : `${name} merged into ${pull.base}, and the merge commit's checks passed.`;
+    found.push({ key: keyOf(watch, 'passed'), text });
+  }
   if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
     const text = `${name} has merge conflicts with ${pull.base}.`;
-    found.push({ key: conflictsKey(watch), text });
+    found.push({ key: keyOf(watch, 'conflicts'), text });
   }
   if (pull.state === 'OPEN' && pull.review === 'CHANGES_REQUESTED') {
     const text = `A reviewer requested changes on ${name}.`;
-    found.push({ key: JSON.stringify([self, 'changes requested']), text });
+    found.push({ key: keyOf(watch, 'changes requested'), text });
   }
   const isMerged = verdict.kind.startsWith('merged-');
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
@@ -325,49 +346,72 @@ function conditionsOf(
   return found;
 }
 
-const conflictsKey = (watch: Pick<Watch, 'repo' | 'number'>) =>
-  JSON.stringify([`${watch.repo}#${watch.number}`, 'conflicts']);
+export type Heard = Pick<Watch, 'told' | 'heard'>;
+export type Wake = Heard & { text: string | null; told: string[] };
 
-export type Wake = { text: string | null; told: string[] };
+// A comment's or review's identity; its time alone ties at the second.
+const heardKey = (a: Activity) => a.url || JSON.stringify([a.author, a.at, a.did]);
 
-// What Claude is told unasked: a new ready or passed state, and each condition
-// it has not been told of while it lasts. `told` is what it then knows of.
-// `isEarly` holds back a passed merge whose grace has not ended.
+// Enough to outlast an item leaving the 10-item window and coming back.
+const HEARD_KEPT = 100;
+
+// What Claude is told unasked: each condition it has not been told of while it
+// lasts, and each comment or review it has not heard. `isEarly` holds back a
+// passed merge whose grace has not ended.
 export function wakeOf(
   watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
   pull: Pull,
   verdict: Verdict,
-  shown: string | undefined,
-  told: readonly string[] = [],
+  last: Heard,
   isEarly = false,
 ): Wake {
   const name = watch.push
     ? `the push to ${watch.push.branch} on ${watch.repo}`
     : `${watch.repo}#${watch.number}`;
+  const told = last.told ?? [];
   const news: string[] = [];
-  const isNew = !isEarly && shownOf(verdict) !== shown;
-  if (isNew && verdict.kind === 'ready') news.push(`GitHub reports ${name} ready to merge.`);
-  if (isNew && verdict.kind === 'merged-passed') {
-    news.push(
-      watch.push
-        ? `The checks on ${name} passed.`
-        : `${name} merged into ${pull.base}, and the merge commit's checks passed.`,
-    );
-  }
   const kept: string[] = [];
-  for (const c of conditionsOf(watch, pull, verdict, name)) {
+  for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
     if (!told.includes(c.key)) news.push(c.text);
     kept.push(c.key);
   }
-  // GitHub reports UNKNOWN while it recomputes the merge state, conflicts included.
-  const conflicts = conflictsKey(watch);
-  if (pull.merge === 'UNKNOWN' && told.includes(conflicts)) kept.push(conflicts);
-  if (news.length === 0) return { text: null, told: kept };
+  // GitHub reports UNKNOWN while it recomputes the merge state; ready stands only
+  // through a read that is otherwise ready, since a new run ends it.
+  if (pull.state === 'OPEN' && pull.merge === 'UNKNOWN') {
+    const isChecking = verdict.kind === 'waiting' && verdict.reason === 'checking';
+    for (const what of isChecking ? ['ready', 'conflicts'] : ['conflicts']) {
+      const key = keyOf(watch, what);
+      if (told.includes(key) && !kept.includes(key)) kept.push(key);
+    }
+  }
+  let heard = last.heard;
+  if (pull.activity !== null) {
+    const keys = pull.activity.map(heardKey);
+    if (heard === undefined) {
+      let since = pull.activityAt;
+      const own = pull.activity.at(-1)?.at;
+      if (own !== undefined && (since === null || Date.parse(own) > Date.parse(since))) since = own;
+      heard = { since, keys };
+    } else {
+      // An unheard item older than the first read's newest slid into the window
+      // when a newer one was deleted.
+      const since = heard.since === null ? -Infinity : Date.parse(heard.since);
+      for (const a of pull.activity) {
+        if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since) continue;
+        news.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
+      }
+      heard = {
+        since: heard.since,
+        keys: [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT),
+      };
+    }
+  }
+  if (news.length === 0) return { text: null, told: kept, heard };
   const text = [
     `pr-watch: ${news.join(' ')}`,
     `This is news from pr-watch, not a request to merge. ${watch.url}`,
   ].join('\n');
-  return { text, told: kept };
+  return { text, told: kept, heard };
 }
 
 export function clockText(ms: number): string {
