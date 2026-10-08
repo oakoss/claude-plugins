@@ -2972,6 +2972,72 @@ describe('the stop-before setting', () => {
     w.git = github('feat/x');
     expect(denied(await bash($, 'gh pr merge 63'), 'merge')).toBe(true);
   });
+  test('a refusal of a step the message named is kept as a miss; one it did not name is not', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('merge') },
+      git: github('oakum/version-packages'),
+    });
+    const misses = async () => {
+      const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+      return JSON.parse((r as { result: string }).result).misses;
+    };
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    expect(await misses()).toEqual([]);
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    // Refused again, it is kept once.
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    const [miss, ...rest] = await misses();
+    expect(rest).toEqual([]);
+    expect(miss.message).toBe('can we merge the version PRs whenever');
+    expect(miss.steps).toEqual(['merge']);
+    expect(miss.refusal).toContain('stop and ask them in your reply');
+    // A "yes" to an offer the grammar did not read is kept with that offer, a
+    // dotted version and all.
+    const closing = 'All green.\nShould I go ahead with the version bump merge for `v0.25.0`?';
+    await endTurn($, 'answer', closing);
+    await say($, 'yep');
+    w.git = github('oakum/version-packages');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    const all = await misses();
+    const latest = all.at(-1);
+    expect(latest.offer).toBe(closing);
+    expect(latest.steps).toEqual(['merge']);
+  });
+  test('a miss needs the refused step named, and an offer counts only when answered', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('commit') },
+      git: github('feat/x'),
+    });
+    const count = async () => {
+      const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+      return JSON.parse((r as { result: string }).result).misses.length;
+    };
+    // A push named, a merge refused.
+    await say($, 'push it later');
+    expect(denied(await bash($, 'gh pr merge 63'), 'merge')).toBe(true);
+    // A commit refused: not consent the grammar reads.
+    await say($, 'did the push fail?');
+    expect(denied(await bash($, 'git commit -m x'), 'commit')).toBe(true);
+    // An offer of a merge the message does not answer.
+    await endTurn($, 'answer', 'Tests pass.\nShould I merge 63?');
+    for (const text of [
+      'now fix the lexer too',
+      'please fix the lexer',
+      "let's fix it first",
+      'do it later',
+      'go ahead and fix the lexer',
+    ]) {
+      await say($, text);
+      expect(denied(await bash($, 'gh pr merge 63'), 'merge')).toBe(true);
+    }
+    expect(await count()).toBe(0);
+    // A bare force push named and refused is kept, as on the gh path.
+    await say($, 'force push it whenever');
+    expect(denied(await bash($, 'git push --force origin fix/x'), 'bare force')).toBe(true);
+    expect(await count()).toBe(1);
+  });
   test('a merge whose pull request cannot be looked up asks where a release would', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
     await say($, 'fix the parser');

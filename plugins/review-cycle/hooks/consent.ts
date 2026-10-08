@@ -880,6 +880,28 @@ const RELEASE_WORD =
 
 // A step mentioned without being asked for, or an offer of one held off ("not yet").
 export type HoldStep = 'push' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+
+// Deleting a remote branch is a push.
+const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
+  ['push', PUSH_WORD],
+  ['push', /\b(delete|deletes|deleting|deleted)\b/i],
+  ['pr', PR_WORD],
+  ['merge', MERGE_WORD],
+  ['approve', APPROVE_WORD],
+  ['release', RELEASE_WORD],
+];
+
+// A message that is a yes or a go-ahead and nothing more, as the grammar
+// reads one: it answers the offer before it.
+export function isReply(text: string): boolean {
+  return AFFIRMATIVE.test(text.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok'));
+}
+
+// The steps a message names by their verbs, asked for or not.
+export function stepsNamed(text: string): HoldStep[] {
+  const read = prPhrase(unquote(forcePhrase(text)));
+  return [...new Set(STEP_WORDS.filter(([, word]) => word.test(read)).map(([step]) => step))];
+}
 export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
 
 // A step mentioned without being asked for holds every step but a commit, read

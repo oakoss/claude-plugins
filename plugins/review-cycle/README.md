@@ -76,6 +76,10 @@ Single-pass, report-only review of a GitHub pull request, run from your machine.
 
 Nothing is fixed and nothing is posted by default. Say `and post` (or ask after reading the report) to publish the findings as a single COMMENT review — never an approval — with fingerprint-marked comments, inline and body-level alike, that deduplicate across re-runs. Its reviewers never count toward your own changes: the gate sees the skill start, and the legs it spawns review the PR, not your working tree.
 
+### `/review-cycle:misses`
+
+Lists the gate's refusals of a push, pull request, merge or release that your latest message, or the offer it replied to, named by its verb, and drafts each as a candidate row for the consent grammar's spec. A refusal you did not expect is how the grammar's misses are found; this keeps them as they happen, instead of from a pasted transcript. A refusal counts only when the step refused is the one named; an offer counts only when your message is a yes or a go-ahead and nothing more. The gate keeps up to 20 in memory until Claude Code restarts, served by the `mcp__review-cycle__misses` tool; nothing leaves your machine. You decide which rows were requests.
+
 ### `/review-cycle:de-slopify`
 
 Bundled de-slopify skill — methodology for removing AI writing artifacts from prose, maintained here as part of the plugin (originally imported from oakoss/agent-skills, which no longer carries the canonical copy). The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle. Aligned with the standalone `prose` plugin's rules, so cycle cleanup and the always-on style apply the same standard.
