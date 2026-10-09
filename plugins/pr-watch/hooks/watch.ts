@@ -675,7 +675,7 @@ function markSegment(w: Workflow): Segment {
   const mark = markOf(w);
   return {
     text: ` · ${w.name} ${mark}`,
-    color: mark === '✗' ? 'red' : mark === '●' ? 'yellow' : undefined,
+    color: mark === '✗' ? 'red' : mark === '●' ? 'blue' : undefined,
     isDim: mark === '✓',
   };
 }
@@ -751,7 +751,7 @@ export function lineOf(
   const gate = v.gate;
   const elapsed = now - Date.parse(gate.startedAt);
   const estimate = estimates[estimateKey(watch.host, gate.id)] ?? 0;
-  const name = { text: ` ● ${gate.name} `, color: 'yellow', url: gate.url || undefined };
+  const name = { text: ` ● ${gate.name} `, color: 'blue', url: gate.url || undefined };
   const head = [...lead, name];
   if (gate.isRerun) return [...head, { text: 're-run', isDim: true }, ...others(gate.id), ...tail];
   if (estimate <= 0) {
@@ -763,7 +763,7 @@ export function lineOf(
   const bar = barOf(Math.min(elapsed / estimate, 0.97), width);
   return [
     ...head,
-    { text: bar.filled, color: 'yellow' },
+    { text: bar.filled, color: 'blue' },
     { text: bar.rest, isDim: true },
     { text: times, isDim: true },
     ...others(gate.id),
