@@ -72,6 +72,12 @@ export type Watch = {
   checkedAt: number;
   // What the line last said, so a toast fires once per change.
   shown?: string;
+  // When `shown` last changed, so a line long the same is read less often.
+  shownAt?: number;
+  // Reads in a row that failed, a rate limit aside.
+  failures?: number;
+  // When the rate limit pausing its host ends, until a read of its own.
+  limitedUntil?: number;
   // The conditions Claude has been told of, so each is told once while it lasts.
   told?: string[];
   // The comments and reviews heard, and the newest time at the first read,
