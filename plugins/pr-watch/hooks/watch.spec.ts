@@ -1134,6 +1134,16 @@ describe('lineOf', () => {
     expect(textOf(watched(undefined, { error: over.error }))).toBe('#128 gh failed: HTTP 502');
   });
 
+  test('paints what runs blue, keeping yellow for blocked', () => {
+    const segs = lineOf(watched(pull([runningCi(), codeql(null)])), at, KNOWN, 80);
+    const colorOf = (text: RegExp) => segs.find((s) => text.test(s.text))?.color;
+    expect(colorOf(/^ ● CI $/)).toBe('blue');
+    expect(colorOf(/█/)).toBe('blue');
+    expect(colorOf(/CodeQL ●/)).toBe('blue');
+    const blocked = lineOf(watched(pull([green()], { merge: 'DIRTY' })), at, KNOWN, 80);
+    expect(blocked.find((s) => s.text.includes('⚠'))?.color).toBe('yellow');
+  });
+
   test('marks a failed other workflow red', () => {
     const segs = lineOf(watched(pull([runningCi(), codeql('FAILURE')])), at, KNOWN, 80);
     expect(segs.at(-1)).toEqual({ text: ' · CodeQL ✗', color: 'red', isDim: false });
