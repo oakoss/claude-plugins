@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.4.1 (2026-10-09)
+
+### Fixed
+
+Each read of a pull request costs one point of GitHub's GraphQL quota instead of two: an open pull request is read for its head commit's runs and a merged one for its merge commit's, where every read asked for both. The 5,000 points an hour are shared with every `gh` call you and Claude make, so pr-watch now reads the quota left from each answer, and while fewer than a tenth remain it reads every watch on that host once a minute, after a push or merge too, until the quota recovers.
+
+pr-watch pauses when GitHub rate-limits it, and stops polls that would never end. A rate-limited read pauses every watch on that host, whose lines say `rate limited until HH:MM` and are read again as the pause ends. When the last read left no quota, the pause waits for its reset; any other limit waits a minute, doubling each time it is hit again, up to 15 minutes. Other read failures are retried after 10 seconds, doubling up to 5 minutes. After 8 failed reads in a row, about 15 minutes, pr-watch stops watching, toasts why, and tells Claude, so nothing claims to be watching what it cannot read. A line that has shown the same state for half an hour while it waits on a person, such as a pull request waiting on review, conflicts or failed checks, or a failed merge, is read every 5 minutes instead of every minute. Comments and re-runs on it can therefore take up to 5 minutes to reach you.
+
+What is running now shows in blue instead of yellow: the running workflow's name, its progress bar, and the ● beside any other workflow still running. Green still means passed or ready, red failed, and yellow is kept for a pull request that is blocked, such as one with conflicts or requested changes.
+
 ## 0.4.0 (2026-10-08)
 
 ### Added
