@@ -16,7 +16,6 @@ import {
   classify,
   ghActions,
   possibleAliases,
-  recordsContent,
   shownCommand,
   type Classification,
 } from './command';
@@ -69,7 +68,7 @@ import {
   type Repo,
   type Run,
 } from './git';
-import type { PushSpec } from './git-args';
+import type { Finishes, PushSpec } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
 import {
   configured,
@@ -1080,25 +1079,28 @@ async function judgeBash(
   const unreviewed = await reviewed($, root.top, cls);
   if (unreviewed !== null) return deny(unreviewed);
 
-  if (recordsContent(cls) && !granted.commit) {
+  const finishes = cls.commit?.finishes ?? null;
+  if (cls.commit && !cls.commit.dryRun && !granted.commit) {
     const ladder = await ladderOf($);
     if (!permitted(granted, ladder, state.held !== null).commit) {
-      return deny(commitRefusal(e.command, ladder, cls.commit ? null : cls.history));
+      return deny(commitRefusal(e.command, ladder, finishes));
     }
   }
   const ran: Unasked[] = [];
   if (cls.push) {
-    const verdict = await judgePush($, root.top, e.command, cls.commit !== null, cls.push, granted);
+    const commits = cls.commit !== null && finishes === null;
+    const verdict = await judgePush($, root.top, e.command, commits, cls.push, granted);
     if ('deny' in verdict) return deny(verdict.deny);
     if (verdict.ran !== null) ran.push(verdict.ran);
   }
-  const checked = cls.commit
-    ? 'commit'
-    : cls.history === null
-      ? 'push'
-      : cls.continues
-        ? 'continue'
-        : 'history';
+  const checked: Checked =
+    finishes !== null
+      ? { finishes }
+      : cls.commit
+        ? 'commit'
+        : cls.history !== null
+          ? 'history'
+          : 'push';
   return watch($, root, e, next, checked, granted, message, ran);
 }
 
@@ -1109,9 +1111,8 @@ async function reviewed(
   top: string,
   cls: Extract<Classification, { kind: 'gated' }>,
 ): Promise<string | null> {
-  if (!recordsContent(cls)) return null;
-  // A `--continue` records the index as the conflict resolution, on top of HEAD.
-  const amend = cls.commit?.amend ?? false;
+  if (!cls.commit || cls.commit.dryRun) return null;
+  const { amend } = cls.commit;
   const head = await headOf(gitOf($), top);
   // An amend replaces HEAD, so what it records is judged against HEAD's parent.
   const base = amend && head !== EMPTY_TREE ? await parentTree(gitOf($), top) : head;
@@ -1132,7 +1133,7 @@ async function reviewed(
     throw new Error(`could not compare the tree this commit would record with ${against}`);
   }
   if (uncoveredOf(c.rows).length > 0) {
-    return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then ${cls.commit ? 'commit' : 'continue'}.`;
+    return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then ${cls.commit.finishes === undefined ? 'commit' : 'continue'}.`;
   }
   return null;
 }
@@ -1258,16 +1259,15 @@ function quote(command: string): string {
   return shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
 }
 
-// `continues` names the history command a `--continue` finishes.
-function commitRefusal(command: string, ladder: InForce, continues: string | null = null): string {
+function commitRefusal(command: string, ladder: InForce, finishes: Finishes | null): string {
   const setting =
     ladder.unreadable === undefined
       ? `, and the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)})`
       : '';
   const ask =
-    continues === null
+    finishes === null
       ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
-      : `To finish the ${continues}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution and finish the ${continues} on \`fix/x\`?"`, quote(command))}`;
+      : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution and finish the ${finishes} on \`fix/x\`?"`, quote(command))}`;
   return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. ${ask}`;
 }
 
@@ -1362,7 +1362,8 @@ function pushRefusal(
   }
 }
 
-type Checked = 'commit' | 'continue' | 'history' | 'push' | 'unchecked';
+// `finishes`: a `--continue` of that history command.
+type Checked = 'commit' | 'history' | 'push' | 'unchecked' | { finishes: Finishes };
 // HEAD's newest reflog entries and the log's length before a command, so the
 // entries it added can be told apart afterwards.
 type Start = { head: string; refs: Refs; log: Entry[]; count: number };
@@ -1471,9 +1472,8 @@ async function commitNotes(
   if (entries.length === 0 && after !== start.head) {
     throw new Error('HEAD moved without a reflog entry');
   }
-  const resolution = checked === 'continue' ? resolutionOf(entries, start.head) : null;
-  const lineages =
-    checked !== 'continue' ? madeBy(entries, start.head) : resolution ? [resolution] : [];
+  const finishes = typeof checked === 'object' ? checked.finishes : null;
+  const lineages = (finishes === null ? madeBy : resolutionOf)(entries, start.head);
   const tip = lineages.at(-1)?.tip;
   if (tip === undefined) return [];
   const short = tip.slice(0, 12);
@@ -1494,12 +1494,12 @@ async function commitNotes(
   const c = { rows, unread };
   if (checked !== 'history' && uncoveredOf(rows).length > 0) {
     // A rebase runs no pre-commit hook (measured on git 2.56).
-    const rebased = checked === 'continue' && /^rebase\b/.test(entries.at(-1)?.message ?? '');
-    const why = rebased
-      ? "It changed after the gate's check."
-      : checked === 'commit' || checked === 'continue'
-        ? "A pre-commit hook may have changed it after the gate's check."
-        : 'It did not go through the commit gate.';
+    const why =
+      finishes === 'rebase'
+        ? "It changed after the gate's check."
+        : checked === 'commit' || finishes !== null
+          ? "A pre-commit hook may have changed it after the gate's check."
+          : 'It did not go through the commit gate.';
     notes.push(
       `review-cycle: commit ${short} records content no reviewer saw (${explain(c)}). ${why} Tell the user.`,
     );

@@ -2410,6 +2410,14 @@ describe('a push the user did not ask for', () => {
     expect(denied(r, 'To commit without pushing, run the commit on its own.')).toBe(true);
     expect(ran(await bash($, 'git commit -am x'))).toBe(true);
   });
+  test('a reviewed --continue with it is refused without naming a commit', async ($, on) => {
+    fakeWorld(on);
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'GIT_EDITOR=true git rebase --continue && git push');
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(r, 'run the commit on its own')).toBe(false);
+  });
   test('a push alone does not mention a commit', async ($, on) => {
     fakeWorld(on);
     await say($, 'fix the parser');

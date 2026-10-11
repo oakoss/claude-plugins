@@ -141,21 +141,19 @@ describe('resolutionOf', () => {
       entry(D, 'rebase (pick): t2'),
       entry(C, 'rebase (continue): t1'),
     ];
-    expect(resolutionOf(rebase, A)).toEqual({ base: A, tip: C });
+    const resolved = [{ base: A, tip: C }];
+    expect(resolutionOf(rebase, A)).toEqual(resolved);
     const pick = [entry(D, 'cherry-pick: t2'), entry(C, 'commit (cherry-pick): t1')];
-    expect(resolutionOf(pick, A)).toEqual({ base: A, tip: C });
-    expect(resolutionOf([entry(C, "commit (merge): Merge branch 'topic'")], A)).toEqual({
-      base: A,
-      tip: C,
-    });
-    expect(resolutionOf([entry(C, 'commit: Revert "t1"')], A)).toEqual({ base: A, tip: C });
+    expect(resolutionOf(pick, A)).toEqual(resolved);
+    expect(resolutionOf([entry(C, "commit (merge): Merge branch 'topic'")], A)).toEqual(resolved);
+    expect(resolutionOf([entry(C, 'commit: Revert "t1"')], A)).toEqual(resolved);
   });
   test('none when the command recorded no resolution', () => {
-    expect(resolutionOf([], A)).toBeNull();
+    expect(resolutionOf([], A)).toEqual([]);
     const dropped = [
       entry(D, 'rebase (finish): returning to refs/heads/topic'),
       entry(D, 'rebase (pick): t2'),
     ];
-    expect(resolutionOf(dropped, A)).toBeNull();
+    expect(resolutionOf(dropped, A)).toEqual([]);
   });
 });

@@ -66,13 +66,13 @@ export type Lineage = { base: string; tip: string };
 // rebase that drops an emptied commit records none. `rebase --apply` logs its
 // resolution as a pick, so none is found there; no hook changes it after the
 // gate's check (measured on git 2.56).
-export function resolutionOf(entries: readonly Entry[], start: string): Lineage | null {
+export function resolutionOf(entries: readonly Entry[], start: string): Lineage[] {
   const first = entries.at(-1);
-  if (first === undefined) return null;
+  if (first === undefined) return [];
   const colon = first.message.indexOf(': ');
   const action = colon === -1 ? first.message : first.message.slice(0, colon);
-  if (!/^commit\b/.test(action) && action !== 'rebase (continue)') return null;
-  return { base: start, tip: first.id };
+  if (!/^commit\b/.test(action) && action !== 'rebase (continue)') return [];
+  return [{ base: start, tip: first.id }];
 }
 
 // The commits `entries` (newest first) recorded, grouped into lineages: a

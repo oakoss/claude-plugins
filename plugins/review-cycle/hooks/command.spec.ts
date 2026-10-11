@@ -325,26 +325,38 @@ describe('gates the accepted shapes', () => {
       expect.objectContaining({ kind: 'gated', history: 'pull' }),
     );
   });
-  test('a --continue is gated as the resolution it records', () => {
-    for (const c of [
-      'git rebase --continue',
-      'GIT_EDITOR=true git merge --continue',
-      'git cherry-pick --continue',
-      'git revert --continue',
-    ]) {
+  test('a --continue is a commit of the resolution it records', () => {
+    for (const [c, finishes] of [
+      ['git rebase --continue', 'rebase'],
+      ['GIT_EDITOR=true git merge --continue', 'merge'],
+      ['git cherry-pick --continue', 'cherry-pick'],
+      ['git revert --continue', 'revert'],
+    ] as const) {
       expect(classify(c), c).toEqual(
-        expect.objectContaining({ kind: 'gated', history: c.split(' ').at(-2), continues: true }),
+        expect.objectContaining({
+          kind: 'gated',
+          history: null,
+          commit: { all: false, amend: false, dryRun: false, config: [], finishes },
+        }),
       );
     }
     expect(classify('git add -A && git rebase --continue')).toEqual(
-      expect.objectContaining({ kind: 'gated', adds: [['add', '-A']], continues: true }),
+      expect.objectContaining({ adds: [['add', '-A']], commit: expect.anything() }),
+    );
+    expect(classify('git rebase --continue && git push')).toEqual(
+      expect.objectContaining({ push: expect.objectContaining({ after: 'rebase' }) }),
     );
     expect(classify('git rebase --skip')).toEqual(
-      expect.objectContaining({ kind: 'gated', history: 'rebase', continues: false }),
+      expect.objectContaining({ kind: 'gated', history: 'rebase', commit: null }),
     );
     expect(classify('git pull --continue')).toEqual(
-      expect.objectContaining({ kind: 'gated', history: 'pull', continues: false }),
+      expect.objectContaining({ kind: 'gated', history: 'pull', commit: null }),
     );
+    expect(classify('git stash pop && git rebase --continue')).toEqual({
+      kind: 'refuse',
+      reason:
+        'git stash before git rebase --continue can change what it records. Run it as its own command first, then continue',
+    });
   });
   test('a runner named as a bare word in a commit or push is data', () => {
     for (const c of [
