@@ -3567,13 +3567,37 @@ describe('the stop-before setting', () => {
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
     expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
   });
-  test('a commit rung asks before a reviewed --continue', async ($, on) => {
+  test('a commit rung asks before a reviewed --continue, and a yes continues', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('commit') } });
     await review($);
     await say($, 'fix the parser');
     const r = await bash($, 'GIT_EDITOR=true git rebase --continue');
     expect(denied(r, "doesn't ask for a commit")).toBe(true);
-    expect(denied(r, '"Commit the resolution and finish the rebase on `fix/x`?"')).toBe(true);
+    const offer = 'Commit the resolution to `fix/x` and finish the rebase?';
+    expect(denied(r, `"${offer}"`)).toBe(true);
+    await ($ as any).turn.complete({
+      answer: `Reviewed and clean. ${offer}`,
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'main-1',
+      reason: 'answer',
+    });
+    await say($, 'yes');
+    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
+  });
+  test('a finish waiting on CI lets nothing through', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'when CI passes, finish the rebase, then merge it');
+    expect(denied(await bash($, 'GIT_EDITOR=true git rebase --continue'), 'commit')).toBe(true);
+  });
+  test('"finish the rebase" lets that --continue through a commit rung, and nothing else', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'finish the rebase');
+    expect(denied(await bash($, 'GIT_EDITOR=true git merge --continue'), 'commit')).toBe(true);
+    expect(denied(await bash($, 'git commit -am x'), "doesn't ask for a commit")).toBe(true);
+    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
   });
   test('a commit rung asks before a reviewed commit, and a yes commits', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('commit') } });

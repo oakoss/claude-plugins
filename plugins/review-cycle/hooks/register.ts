@@ -1080,7 +1080,9 @@ async function judgeBash(
   if (unreviewed !== null) return deny(unreviewed);
 
   const finishes = cls.commit?.finishes ?? null;
-  if (cls.commit && !cls.commit.dryRun && !granted.commit) {
+  // "finish the rebase" asks for that `--continue`'s commit and no other.
+  const asked = granted.commit || (finishes !== null && granted.finish.includes(finishes));
+  if (cls.commit && !cls.commit.dryRun && !asked) {
     const ladder = await ladderOf($);
     if (!permitted(granted, ladder, state.held !== null).commit) {
       return deny(commitRefusal(e.command, ladder, finishes));
@@ -1267,7 +1269,7 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
   const ask =
     finishes === null
       ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
-      : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution and finish the ${finishes} on \`fix/x\`?"`, quote(command))}`;
+      : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
   return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. ${ask}`;
 }
 

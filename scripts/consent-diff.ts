@@ -79,6 +79,8 @@ const VERBS = [
   'delete the branch',
   'open a PR',
   'approve it',
+  'finish the rebase',
+  'continue the merge',
 ];
 const CONDITIONS = [
   '',
