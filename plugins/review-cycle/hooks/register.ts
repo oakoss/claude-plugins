@@ -153,6 +153,8 @@ type Leg = {
   // Fires once the leg outlives its budget; cancelled when it finishes.
   timer: Timer | null;
   capped: boolean;
+  // A report of it counted, so a later answer without a receipt drops nothing.
+  counted: boolean;
 };
 
 // Measured 2026-09-19 over 138 legs: a fan-out's slowest leg had a median of
@@ -195,16 +197,16 @@ type GateState = {
   aliasesLoaded: boolean;
   // The session-start read of the user's aliases; its error, or null.
   ownRead: Promise<string | null> | undefined;
-  // Reviews that ran but could not be recorded, and why.
-  dropped: string[];
+  // Reviews that ran but could not be recorded, and why: one per leg, since a
+  // leg's later report supersedes its earlier one. `old` predates the latest
+  // recorded review.
+  dropped: { agentId: string; text: string; old: boolean }[];
   // Legs that outlived their budget this cycle, which the session was asked to stop.
   capped: string[];
   // Scratch directories made for review cycles and not yet swept.
   scratch: string[];
   // Whether the sweep tool registered; scratch makes nothing without it.
   sweepServed: boolean;
-  // How many of `dropped` predate the latest recorded review.
-  droppedSince: number;
   // What reviewers' commands changed in the repository under review.
   reviewerChanges: string[];
   // False when the user switched the gate off; the ledger is still served.
@@ -236,7 +238,6 @@ const state: GateState = {
   capped: [],
   scratch: [],
   sweepServed: false,
-  droppedSince: 0,
   reviewerChanges: [],
   gateOn: true,
   stopBefore: null,
@@ -265,9 +266,16 @@ function gitOf($: $): Git {
 function explain(c: Coverage): string {
   const parts = [describeUncovered(uncoveredOf(c.rows))];
   if (c.unread > 0) parts.push(`${c.unread} reviewed tree(s) could not be compared: git failed`);
-  const dropped = state.dropped.slice(state.droppedSince).slice(-3);
-  if (dropped.length > 0) parts.push(`reviews not counted: ${dropped.join('; ')}`);
+  const dropped = state.dropped.filter((d) => !d.old).slice(-3);
+  if (dropped.length > 0) {
+    parts.push(`reviews not counted: ${dropped.map((d) => d.text).join('; ')}`);
+  }
   return parts.join('; ');
+}
+
+function drop(agentId: string, text: string): void {
+  state.dropped = state.dropped.filter((d) => d.agentId !== agentId);
+  state.dropped.push({ agentId, text, old: false });
 }
 
 // Claude Code writes its shell snapshot only once the session's first Bash
@@ -587,7 +595,7 @@ async function onAgentSpawn(
   }
   const r = await next(e);
   if (isLeg && 'agentId' in r && r.agentId) {
-    if (spawnTree === null) state.dropped.push(`${e.subagentType}: ${why}`);
+    if (spawnTree === null) drop(r.agentId, `${e.subagentType}: ${why}`);
     const counts = !state.message.prWindow;
     const leg: Leg = {
       type: e.subagentType,
@@ -596,6 +604,7 @@ async function onAgentSpawn(
       done: false,
       timer: null,
       capped: false,
+      counted: false,
     };
     state.legs.set(r.agentId, leg);
     const id = r.agentId;
@@ -655,12 +664,14 @@ async function onTurnComplete(
   if (!leg?.counts || leg.spawnTree === null || !root) return next(e);
   // A capped leg is already reported as capped, not as a dropped review.
   if (leg.capped && (e.isAborted || e.reason !== 'answer')) return next(e);
+  const reported = !e.isAborted && e.reason === 'answer' && hasReceipt(e.answer);
+  if (leg.counted && !reported) return next(e);
   if (e.isAborted || e.reason !== 'answer') {
-    state.dropped.push(`${leg.type}: it did not finish (${e.isAborted ? 'aborted' : e.reason})`);
+    drop(e.agentId, `${leg.type}: it did not finish (${e.isAborted ? 'aborted' : e.reason})`);
     return next(e);
   }
   if (!hasReceipt(e.answer)) {
-    state.dropped.push(`${leg.type}: its report did not open with the execution receipt`);
+    drop(e.agentId, `${leg.type}: its report did not open with the execution receipt`);
     return next(e);
   }
   try {
@@ -669,10 +680,15 @@ async function onTurnComplete(
     const reviewedPaths = await reviewablePaths(gitOf($), root.top, head, tree);
     if (reviewedPaths === null) throw new Error('the paths it reviewed could not be listed');
     state.reviews.push({ type: leg.type, trees: [leg.spawnTree, tree], reviewedPaths });
-    // Refusals explain the current state; older failures stay in the status tool.
-    state.droppedSince = state.dropped.length;
+    leg.counted = true;
+    // Refusals explain the current state; other legs' older failures stay in
+    // the status tool, and this leg's own are superseded.
+    const agentId = e.agentId;
+    state.dropped = state.dropped
+      .filter((d) => d.agentId !== agentId)
+      .map((d) => ({ ...d, old: true }));
   } catch (error) {
-    state.dropped.push(`${leg.type}: ${error instanceof Error ? error.message : String(error)}`);
+    drop(e.agentId, `${leg.type}: ${error instanceof Error ? error.message : String(error)}`);
   }
   return next(e);
 }
@@ -1520,7 +1536,7 @@ async function onStatus(
     // everything that reviewer may not have read.
     lastReviewedTree: last?.trees[0] ?? null,
     reviews: state.reviews.length,
-    droppedReviews: state.dropped,
+    droppedReviews: state.dropped.map((d) => d.text),
     cappedReviews: state.capped,
     reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,

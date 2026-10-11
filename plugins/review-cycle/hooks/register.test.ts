@@ -391,11 +391,13 @@ async function say($: any, text: string, kind = 'composer') {
 let spawns = 0;
 
 // Spawns a leg and completes it; `during` runs while the leg is running.
+// `answers` completes it once per answer, as a leg reporting more than once does.
 async function review(
   $: any,
   opts: {
     type?: string;
     answer?: string;
+    answers?: string[];
     parentAgentId?: string;
     cwd?: string;
     during?: () => void;
@@ -413,14 +415,16 @@ async function review(
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
   });
   opts.during?.();
-  await $.turn.complete({
-    answer: opts.answer ?? RECEIPT,
-    durationMs: 1,
-    isAborted: false,
-    turnId: `turn-${id}`,
-    agentId: r.agentId,
-    reason: 'answer',
-  });
+  for (const [i, answer] of (opts.answers ?? [opts.answer ?? RECEIPT]).entries()) {
+    await $.turn.complete({
+      answer,
+      durationMs: 1,
+      isAborted: false,
+      turnId: `turn-${id}-${i}`,
+      agentId: r.agentId,
+      reason: 'answer',
+    });
+  }
 }
 
 async function bash($: any, command: string, extra: Record<string, unknown> = {}) {
@@ -1901,6 +1905,33 @@ describe('failures while judging a commit refuse it, naming the cause', () => {
     const status = JSON.parse((r as { result: string }).result);
     expect(status.droppedReviews).toEqual([
       'review-cycle:code-reviewer: git add -A failed: fatal: injected',
+    ]);
+  });
+  test("a leg's counted report clears its earlier drop", async ($, on) => {
+    fakeWorld(on);
+    await review($, { answers: ['Waiting for the hook tests.', RECEIPT] });
+    const r = await ($ as any).tool.call({ tool: 'mcp__review-cycle__status' });
+    const status = JSON.parse((r as { result: string }).result);
+    expect(status.reviews).toBe(1);
+    expect(status.droppedReviews).toEqual([]);
+  });
+  test('an answer after a counted report drops nothing', async ($, on) => {
+    fakeWorld(on);
+    await review($, { answers: [RECEIPT, 'Anything else?'] });
+    const r = await ($ as any).tool.call({ tool: 'mcp__review-cycle__status' });
+    const status = JSON.parse((r as { result: string }).result);
+    expect(status.reviews).toBe(1);
+    expect(status.droppedReviews).toEqual([]);
+  });
+  test('a leg that reports without a receipt again is listed once', async ($, on) => {
+    fakeWorld(on);
+    await review($, { answers: ['Waiting.', 'Still waiting.'] });
+    await review($, { type: 'review-cycle:pr-test-analyzer', answers: ['Waiting.'] });
+    const r = await ($ as any).tool.call({ tool: 'mcp__review-cycle__status' });
+    const status = JSON.parse((r as { result: string }).result);
+    expect(status.droppedReviews).toEqual([
+      'review-cycle:code-reviewer: its report did not open with the execution receipt',
+      'review-cycle:pr-test-analyzer: its report did not open with the execution receipt',
     ]);
   });
   test("a failed comparison on an amend names HEAD's parent", async ($, on) => {
