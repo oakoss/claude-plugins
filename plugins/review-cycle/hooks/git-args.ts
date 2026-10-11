@@ -2,13 +2,21 @@ import type { Word } from './shell';
 
 export type Refusal = { refuse: string };
 
+// History commands with a `--continue`; git pull has none (exit 129 on git 2.56).
+export const FINISHES = ['merge', 'cherry-pick', 'revert', 'rebase'] as const;
+export type Finishes = (typeof FINISHES)[number];
+export function isFinishes(sub: string): sub is Finishes {
+  return (FINISHES as readonly string[]).includes(sub);
+}
+
 export type CommitSpec = {
-  all: boolean;
-  amend: boolean;
-  dryRun: boolean;
   // The commit's own `-c` options, which `-a` staging must see too.
   config: string[];
-};
+} & (
+  | { all: boolean; amend: boolean; dryRun: boolean; finishes?: never }
+  // A `--continue`, which records the index as the conflict resolution.
+  | { all: false; amend: false; dryRun: false; finishes: Finishes }
+);
 
 export type PushSpec = {
   // `lease` is --force-with-lease or --force-if-includes; `bare` is --force,

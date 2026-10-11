@@ -62,6 +62,19 @@ export function recordsCommit(message: string): boolean {
 // first, `tip` the last.
 export type Lineage = { base: string; tip: string };
 
+// The commit a `--continue` recorded from the index, not a replayed pick; a
+// rebase that drops an emptied commit records none. `rebase --apply` logs its
+// resolution as a pick, so none is found there; no hook changes it after the
+// gate's check (measured on git 2.56).
+export function resolutionOf(entries: readonly Entry[], start: string): Lineage[] {
+  const first = entries.at(-1);
+  if (first === undefined) return [];
+  const colon = first.message.indexOf(': ');
+  const action = colon === -1 ? first.message : first.message.slice(0, colon);
+  if (!/^commit\b/.test(action) && action !== 'rebase (continue)') return [];
+  return [{ base: start, tip: first.id }];
+}
+
 // The commits `entries` (newest first) recorded, grouped into lineages: a
 // move between two commits starts a new one, so a commit on another branch is
 // judged apart from one on this. `start` is HEAD before the command.

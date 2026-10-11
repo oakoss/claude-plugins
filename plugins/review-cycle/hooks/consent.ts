@@ -11,6 +11,8 @@
 // A bare affirmative ("yes", "go ahead") grants what the previous answer's
 // closing question offered to do.
 
+import type { Finishes } from './git-args';
+
 // How far the user's message lets a push go; each level covers those before
 // it.
 const PUSH_LEVELS = ['none', 'push', 'lease', 'bare'] as const;
@@ -24,8 +26,11 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // asked for once the pull request is ready ("merge it when CI passes"), which
 // only `gh pr merge --auto` leaves to GitHub. `mergeNamed` holds the pull
 // request numbers a merge request named ("merge 131"), empty for "merge it".
+// `finish` holds the history commands a request to finish named ("finish the
+// rebase"): a commit of that command's `--continue` only.
 export type Grant = Readonly<{
   commit: boolean;
+  finish: readonly Finishes[];
   push: PushLevel;
   pr: boolean;
   merge: boolean;
@@ -38,6 +43,7 @@ export type Grant = Readonly<{
 
 export const NO_GRANT: Grant = Object.freeze({
   commit: false,
+  finish: [],
   push: 'none',
   pr: false,
   merge: false,
@@ -53,7 +59,16 @@ export function covers(grant: Grant, level: PushLevel): boolean {
   return pushRank(grant.push) >= pushRank(level);
 }
 
-type Verb = 'commit' | 'push' | 'force' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+type Verb =
+  | 'commit'
+  | 'finish'
+  | 'push'
+  | 'force'
+  | 'pr'
+  | 'merge'
+  | 'approve'
+  | 'release'
+  | 'comment';
 type MutableGrant = { -readonly [K in keyof Grant]: Grant[K] };
 
 const fresh = (): MutableGrant => ({ ...NO_GRANT });
@@ -104,8 +119,21 @@ const releasing = (forms: Family['forms']): Family => ({
   packaged: true,
 });
 
+// "finish the rebase", read as one word by `prPhrase`.
+const FINISHED: Readonly<Record<string, Finishes>> = {
+  finishmerge: 'merge',
+  finishcherrypick: 'cherry-pick',
+  finishrevert: 'revert',
+  finishrebase: 'rebase',
+};
+const finishing = (op: string): Family => ({
+  forms: [`finish${op}`, `finishing${op}`],
+  grants: ['finish'],
+});
+
 const FAMILIES: readonly Family[] = [
   { forms: ['commit', 'committing'], grants: ['commit'] },
+  ...['merge', 'cherrypick', 'revert', 'rebase'].map((op) => finishing(op)),
   { forms: ['push', 'pushing'], grants: ['push'] },
   { forms: ['ship', 'shipping'], grants: ['commit', 'push', 'pr'] },
   // Deleting a remote branch is a push: the branch is what goes, so "delete it
@@ -161,6 +189,13 @@ const OFFERED: Readonly<Record<string, Family>> = Object.fromEntries(
 function prPhrase(text: string): string {
   return (
     text
+      // "finish the rebase", "continue the cherry-pick": the history command's
+      // `--continue`, so the merge here is not a pull request's.
+      .replaceAll(
+        /\b(?:(finish|continue|complete)|(finishing|continuing|completing))\s+(?:(?:the|this|that|our)\s+)?(?:current\s+)?(rebase|merge|cherry[\s-]?pick|revert)\b/gi,
+        (_m: string, verb: string | undefined, _ing: string | undefined, op: string) =>
+          `${verb ? 'finish' : 'finishing'}${op.toLowerCase().replaceAll(/[\s-]/g, '')}`,
+      )
       .replaceAll(
         /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
         (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
@@ -685,7 +720,12 @@ function samePullRequest(condition: string, request: string): boolean {
 // Only a merge once it is ready: anything else the sentence asks for may wait
 // on the same condition.
 function onlyAutoMerge(g: MutableGrant): boolean {
-  return g.autoMerge && g.push === 'none' && STEPS.every((s) => s === 'autoMerge' || !g[s]);
+  return (
+    g.autoMerge &&
+    g.push === 'none' &&
+    g.finish.length === 0 &&
+    STEPS.every((s) => s === 'autoMerge' || !g[s])
+  );
 }
 
 // What a clause leaves for the clauses after it in the sentence: a mood
@@ -736,6 +776,8 @@ function grammarGrant(
       heard?.add(family);
       const granted = family.grants;
       if (granted.includes('commit')) into.commit = true;
+      const finished = FINISHED[(part[at] ?? '').replace(/^finishing/, 'finish')];
+      if (granted.includes('finish') && finished) into.finish = [...into.finish, finished];
       if (granted.includes('push')) raise(into, 'push');
       if (granted.includes('force')) raise(into, 'lease');
       if (granted.includes('pr')) into.pr = true;
@@ -801,6 +843,7 @@ const STEPS = ['commit', 'pr', 'merge', 'autoMerge', 'approve', 'release', 'comm
 
 function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
+  into.finish = [...into.finish, ...from.finish];
   into.mergeNamed = [...into.mergeNamed, ...from.mergeNamed];
   raise(into, from.push);
 }

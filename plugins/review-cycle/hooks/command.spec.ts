@@ -325,6 +325,39 @@ describe('gates the accepted shapes', () => {
       expect.objectContaining({ kind: 'gated', history: 'pull' }),
     );
   });
+  test('a --continue is a commit of the resolution it records', () => {
+    for (const [c, finishes] of [
+      ['git rebase --continue', 'rebase'],
+      ['GIT_EDITOR=true git merge --continue', 'merge'],
+      ['git cherry-pick --continue', 'cherry-pick'],
+      ['git revert --continue', 'revert'],
+    ] as const) {
+      expect(classify(c), c).toEqual(
+        expect.objectContaining({
+          kind: 'gated',
+          history: null,
+          commit: { all: false, amend: false, dryRun: false, config: [], finishes },
+        }),
+      );
+    }
+    expect(classify('git add -A && git rebase --continue')).toEqual(
+      expect.objectContaining({ adds: [['add', '-A']], commit: expect.anything() }),
+    );
+    expect(classify('git rebase --continue && git push')).toEqual(
+      expect.objectContaining({ push: expect.objectContaining({ after: 'rebase' }) }),
+    );
+    expect(classify('git rebase --skip')).toEqual(
+      expect.objectContaining({ kind: 'gated', history: 'rebase', commit: null }),
+    );
+    expect(classify('git pull --continue')).toEqual(
+      expect.objectContaining({ kind: 'gated', history: 'pull', commit: null }),
+    );
+    expect(classify('git stash pop && git rebase --continue')).toEqual({
+      kind: 'refuse',
+      reason:
+        'git stash before git rebase --continue can change what it records. Run it as its own command first, then continue',
+    });
+  });
   test('a runner named as a bare word in a commit or push is data', () => {
     for (const c of [
       'git commit -m tsx',
@@ -732,10 +765,10 @@ describe('refuses every other shape that commits or pushes', () => {
     'git mv a b && git commit -m x',
     'git add a; git commit -m x',
     'git add a\ngit commit -m x',
-    'git merge --continue',
+    'git add a && git merge topic',
+    'git stash pop && git rebase --continue',
     'git rebase --exec "git commit --amend --no-edit" HEAD~3',
     'git rebase -x "make test" main',
-    'git rebase --continue',
     'git am < patch.mbox',
     'git stash pop --index && git commit -m x',
     'git checkout other -- a.ts && git commit -m x',

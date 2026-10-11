@@ -509,6 +509,50 @@ describe('reviewed?', () => {
     await say($, 'commit it');
     expect(ran(await bash($, 'git add -A && git commit -m x'))).toBe(true);
   });
+  test('a --continue no reviewer saw is refused, judged on a scratch index', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'finish the rebase');
+    const r = await bash($, 'GIT_EDITOR=true git rebase --continue');
+    expect(denied(r, 'never reviewed: a.ts')).toBe(true);
+    expect(denied(r, 'then continue')).toBe(true);
+  });
+  test('a reviewed --continue goes through, its add replayed on a scratch index', async ($, on) => {
+    const w = fakeWorld(on);
+    await review($);
+    await say($, 'finish the rebase');
+    expect(ran(await bash($, 'git add -A && GIT_EDITOR=true git merge --continue'))).toBe(true);
+    const add = w.calls.find((c) => c.argv.join(' ') === 'git -C . add -A');
+    expect(add?.env?.GIT_INDEX_FILE).toBe('/tmp/scratch-index');
+  });
+  test('a --continue is judged against HEAD, which the rebase already picked', async ($, on) => {
+    const head = 'c'.repeat(40);
+    const parent = 'b'.repeat(40);
+    fakeWorld(on, {
+      work: { 'a.ts': 'one' },
+      commits: { [head]: { 'a.ts': 'one' }, [parent]: { 'a.ts': 'zero' } },
+      parents: { [head]: parent },
+    });
+    await say($, 'finish the rebase');
+    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
+  });
+  test('a --continue with unresolved conflicts names them', async ($, on) => {
+    let judging = false;
+    fakeWorld(on, {
+      git: (a) =>
+        judging && a === 'git write-tree'
+          ? {
+              exitCode: 128,
+              stderr: `a.ts: unmerged (${'e'.repeat(40)})\nfatal: git-write-tree: error building trees`,
+            }
+          : null,
+    });
+    await review($);
+    await say($, 'finish the rebase');
+    judging = true;
+    const r = await bash($, 'GIT_EDITOR=true git rebase --continue');
+    expect(denied(r, 'conflicts are still unresolved, starting with a.ts (')).toBe(true);
+    expect(denied(r, '`git add` or `git rm` them')).toBe(true);
+  });
   test('an edit after the review is refused as edited after review', async ($, on) => {
     const w = fakeWorld(on);
     await review($);
@@ -753,6 +797,64 @@ describe('after the command', () => {
     expect(has(contextOf(await bash($, './sync.sh')), 'records content no reviewer saw')).toBe(
       true,
     );
+  });
+  // The working tree, which the review covers, holds `one`.
+  const MID = 'b'.repeat(40);
+  const resolved = {
+    [HEAD]: { 'a.ts': 'zero' },
+    [MID]: { 'a.ts': 'one' },
+    [THEIRS]: { 'a.ts': 'two' },
+  };
+  test("a --continue's resolution a pre-commit hook changed is reported", async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: resolved,
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [`${THEIRS} commit (cherry-pick): t1`];
+      },
+    });
+    await review($);
+    await say($, 'finish it');
+    const context = contextOf(await bash($, 'GIT_EDITOR=true git cherry-pick --continue'));
+    expect(has(context, 'A pre-commit hook may have changed it')).toBe(true);
+  });
+  test("a rebase's changed resolution is reported without blaming a pre-commit hook", async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: resolved,
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [`${THEIRS} rebase (continue): t1`];
+      },
+    });
+    await review($);
+    await say($, 'finish it');
+    const context = contextOf(await bash($, 'GIT_EDITOR=true git rebase --continue'));
+    expect(
+      has(
+        context,
+        "records content no reviewer saw (edited after the last review: a.ts). It changed after the gate's check.",
+      ),
+    ).toBe(true);
+    expect(has(context, 'pre-commit')).toBe(false);
+  });
+  test('the picks a --continue replays after its resolution are not reported', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: resolved,
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [
+          `${THEIRS} rebase (finish): returning to refs/heads/topic`,
+          `${THEIRS} rebase (pick): t2`,
+          `${MID} rebase (continue): t1`,
+        ];
+      },
+    });
+    await review($);
+    await say($, 'finish it');
+    expect(contextOf(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toEqual([]);
   });
   test('a rebase is judged from the commit it rebased onto', async ($, on) => {
     fakeWorld(on, {
@@ -2308,6 +2410,14 @@ describe('a push the user did not ask for', () => {
     expect(denied(r, 'To commit without pushing, run the commit on its own.')).toBe(true);
     expect(ran(await bash($, 'git commit -am x'))).toBe(true);
   });
+  test('a reviewed --continue with it is refused without naming a commit', async ($, on) => {
+    fakeWorld(on);
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'GIT_EDITOR=true git rebase --continue && git push');
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(r, 'run the commit on its own')).toBe(false);
+  });
   test('a push alone does not mention a commit', async ($, on) => {
     fakeWorld(on);
     await say($, 'fix the parser');
@@ -3456,6 +3566,38 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
     expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
+  });
+  test('a commit rung asks before a reviewed --continue, and a yes continues', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'GIT_EDITOR=true git rebase --continue');
+    expect(denied(r, "doesn't ask for a commit")).toBe(true);
+    const offer = 'Commit the resolution to `fix/x` and finish the rebase?';
+    expect(denied(r, `"${offer}"`)).toBe(true);
+    await ($ as any).turn.complete({
+      answer: `Reviewed and clean. ${offer}`,
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'main-1',
+      reason: 'answer',
+    });
+    await say($, 'yes');
+    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
+  });
+  test('a finish waiting on CI lets nothing through', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'when CI passes, finish the rebase, then merge it');
+    expect(denied(await bash($, 'GIT_EDITOR=true git rebase --continue'), 'commit')).toBe(true);
+  });
+  test('"finish the rebase" lets that --continue through a commit rung, and nothing else', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'finish the rebase');
+    expect(denied(await bash($, 'GIT_EDITOR=true git merge --continue'), 'commit')).toBe(true);
+    expect(denied(await bash($, 'git commit -am x'), "doesn't ask for a commit")).toBe(true);
+    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
   });
   test('a commit rung asks before a reviewed commit, and a yes commits', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('commit') } });

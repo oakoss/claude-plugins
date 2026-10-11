@@ -10,7 +10,15 @@
 // a quoted heredoc into `cat`. Handed to anything that runs code — a shell,
 // an interpreter, `xargs`, `find -exec` — it is refused.
 
-import { addArgv, commitSpec, pushSpec, type CommitSpec, type PushSpec } from './git-args';
+import {
+  addArgv,
+  commitSpec,
+  FINISHES,
+  isFinishes,
+  pushSpec,
+  type CommitSpec,
+  type PushSpec,
+} from './git-args';
 import { apiActions, asking, type GhAction, type GhContext, type Unlookable } from './github';
 import { PUBLISH_TEXT, publishActionsOf } from './publish';
 import {
@@ -92,8 +100,8 @@ export const KEYWORDS: ReadonlySet<string> = new Set([
   'noglob',
 ]);
 // Commands that record existing commits. Their `--continue` forms record a
-// conflict resolution instead, which is new content, so those are refused.
-const HISTORY = new Set(['merge', 'cherry-pick', 'revert', 'pull', 'rebase']);
+// conflict resolution instead, which is new content, so those are commits.
+const HISTORY: ReadonlySet<string> = new Set([...FINISHES, 'pull']);
 // A mention of a git command that commits or pushes.
 // `git` and the subcommand as separate words, so `pre-commit`, `.git/hooks/`,
 // `fix/merge-conflicts` and helpers like `git merge-base` do not count.
@@ -814,7 +822,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
         ...spec,
         argv: spec.argv === null ? null : { ...spec.argv, config: g.config },
         // `git rebase <upstream> <branch>` checks the branch out first.
-        after: retargeted ?? history,
+        after: retargeted ?? history ?? commit?.finishes ?? null,
       };
     } else {
       if (commit || history || push)
@@ -833,7 +841,9 @@ function judge(command: string, aliases: ShellAliases): Classification {
         if ('refuse' in spec) return { kind: 'refuse', reason: spec.refuse };
         commit = { ...spec, config: g.config };
       } else if (HISTORY.has(g.sub)) {
-        if (adds.length > 0)
+        const finishes =
+          isFinishes(g.sub) && g.args.some((w) => w.text === '--continue') ? g.sub : null;
+        if (adds.length > 0 && finishes === null)
           return { kind: 'refuse', reason: `git add before git ${g.sub}. ${SHAPE}` };
         if (g.sub === 'rebase' && g.args.some(execs)) {
           return {
@@ -841,13 +851,16 @@ function judge(command: string, aliases: ShellAliases): Classification {
             reason: `git ${g.sub} --exec, which runs commands the gate cannot see. The user can run it from their terminal`,
           };
         }
-        if (g.args.some((w) => w.text === '--continue')) {
+        if (finishes === null) {
+          history = g.sub;
+        } else if (movedIndex !== null) {
           return {
             kind: 'refuse',
-            reason: `git ${g.sub} --continue records the conflict resolution, content no reviewer has seen. Review the resolution first; the user can finish it from their terminal`,
+            reason: `git ${movedIndex} before git ${g.sub} --continue can change what it records. Run it as its own command first, then continue`,
           };
+        } else {
+          commit = { all: false, amend: false, dryRun: false, config: g.config, finishes };
         }
-        history = g.sub;
       } else {
         return { kind: 'refuse', reason: `git ${g.sub} alongside a commit or push. ${SHAPE}` };
       }

@@ -941,3 +941,46 @@ describe('each cue word counts on its own', () => {
     },
   );
 });
+
+const finish = (...ops: string[]) => ({ ...NONE, finish: ops });
+
+describe('finishing a history command', () => {
+  test.each([
+    ['finish the rebase', finish('rebase')],
+    ['ok, continue the merge please', finish('merge')],
+    ['complete the cherry-pick', finish('cherry-pick')],
+    ['finish the cherry pick', finish('cherry-pick')],
+    ['continue this revert', finish('revert')],
+    ['finish the rebase and push it', { ...finish('rebase'), push: 'push' }],
+    ['finish the rebase. push it.', { ...finish('rebase'), push: 'push' }],
+    ['finish the rebase and continue the merge', finish('rebase', 'merge')],
+    ['finish our rebase', finish('rebase')],
+    ['continue that cherrypick', finish('cherry-pick')],
+    ['finish the current merge', finish('merge')],
+  ])('%j asks for that --continue, not a commit', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
+  });
+  test.each([
+    "don't finish the rebase yet",
+    "I'll finish the rebase",
+    'finish the rebase once CI passes',
+    'should I finish the rebase?',
+    'finish the rebase docs',
+    ...['rebase', 'merge', 'cherry-pick', 'revert'].map(
+      (op) => `when CI passes, finish the ${op}, then merge it`,
+    ),
+  ])('%j grants nothing', (prompt) => {
+    expect(grantOf(prompt)).toEqual(NONE);
+  });
+  test("a history merge is not a pull request's", () => {
+    expect(grantOf('continue the merge').merge).toBe(false);
+    expect(holdsOf('continue the merge')).toBe(false);
+  });
+  test('yes to an offer to finish grants it', () => {
+    expect(grantOf('yes', 'Should I finish the rebase?')).toEqual(finish('rebase'));
+    expect(grantOf('yes', 'Should I go ahead with continuing the merge?')).toEqual(finish('merge'));
+    expect(grantOf('yes', 'Commit the resolution to `fix/x` and finish the revert?')).toEqual(
+      finish('revert'),
+    );
+  });
+});
