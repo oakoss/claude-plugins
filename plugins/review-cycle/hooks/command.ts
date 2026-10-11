@@ -92,7 +92,8 @@ export const KEYWORDS: ReadonlySet<string> = new Set([
   'noglob',
 ]);
 // Commands that record existing commits. Their `--continue` forms record a
-// conflict resolution instead, which is new content, so those are refused.
+// conflict resolution instead, which is new content, so those are judged on
+// review like a commit.
 const HISTORY = new Set(['merge', 'cherry-pick', 'revert', 'pull', 'rebase']);
 // A mention of a git command that commits or pushes.
 // `git` and the subcommand as separate words, so `pre-commit`, `.git/hooks/`,
@@ -541,11 +542,17 @@ type Gated = {
   adds: string[][];
 } & (
   | { commit: CommitSpec; history: null; push: PushSpec | null }
-  | { commit: null; history: string; push: PushSpec | null }
+  // `continues`: a `--continue`, which records the index as the resolution.
+  | { commit: null; history: string; continues: boolean; push: PushSpec | null }
   | { commit: null; history: null; push: PushSpec }
 );
 
 export type Classification = { kind: 'none' } | { kind: 'refuse'; reason: string } | Gated;
+
+export function recordsContent(cls: Gated): boolean {
+  if (cls.commit) return !cls.commit.dryRun;
+  return cls.history !== null && cls.continues;
+}
 
 const SHAPE =
   'Run the commit as its own command, optionally after `git add …` and read-only git commands, joined with && (for example `git add -A && git commit -m …`).';
@@ -743,6 +750,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
   const adds: string[][] = [];
   let commit: CommitSpec | null = null;
   let history: string | null = null;
+  let continues = false;
   let push: PushSpec | null = null;
   let movedIndex: string | null = null;
   let retargeted: string | null = null;
@@ -833,7 +841,9 @@ function judge(command: string, aliases: ShellAliases): Classification {
         if ('refuse' in spec) return { kind: 'refuse', reason: spec.refuse };
         commit = { ...spec, config: g.config };
       } else if (HISTORY.has(g.sub)) {
-        if (adds.length > 0)
+        // git pull has no --continue (exit 129 on git 2.56).
+        continues = g.sub !== 'pull' && g.args.some((w) => w.text === '--continue');
+        if (adds.length > 0 && !continues)
           return { kind: 'refuse', reason: `git add before git ${g.sub}. ${SHAPE}` };
         if (g.sub === 'rebase' && g.args.some(execs)) {
           return {
@@ -841,10 +851,10 @@ function judge(command: string, aliases: ShellAliases): Classification {
             reason: `git ${g.sub} --exec, which runs commands the gate cannot see. The user can run it from their terminal`,
           };
         }
-        if (g.args.some((w) => w.text === '--continue')) {
+        if (continues && movedIndex !== null) {
           return {
             kind: 'refuse',
-            reason: `git ${g.sub} --continue records the conflict resolution, content no reviewer has seen. Review the resolution first; the user can finish it from their terminal`,
+            reason: `git ${movedIndex} before git ${g.sub} --continue can change what it records. Run it as its own command first, then continue`,
           };
         }
         history = g.sub;
@@ -855,7 +865,8 @@ function judge(command: string, aliases: ShellAliases): Classification {
   }
   const at = dir ?? base;
   if (commit) return { kind: 'gated', dir: at, adds, commit, history: null, push };
-  if (history !== null) return { kind: 'gated', dir: at, adds, commit: null, history, push };
+  if (history !== null)
+    return { kind: 'gated', dir: at, adds, commit: null, history, continues, push };
   if (push) return { kind: 'gated', dir: at, adds, commit: null, history: null, push };
   throw new Error('a command that commits was classified with nothing to gate');
 }

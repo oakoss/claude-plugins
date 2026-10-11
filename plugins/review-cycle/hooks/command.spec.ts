@@ -325,6 +325,27 @@ describe('gates the accepted shapes', () => {
       expect.objectContaining({ kind: 'gated', history: 'pull' }),
     );
   });
+  test('a --continue is gated as the resolution it records', () => {
+    for (const c of [
+      'git rebase --continue',
+      'GIT_EDITOR=true git merge --continue',
+      'git cherry-pick --continue',
+      'git revert --continue',
+    ]) {
+      expect(classify(c), c).toEqual(
+        expect.objectContaining({ kind: 'gated', history: c.split(' ').at(-2), continues: true }),
+      );
+    }
+    expect(classify('git add -A && git rebase --continue')).toEqual(
+      expect.objectContaining({ kind: 'gated', adds: [['add', '-A']], continues: true }),
+    );
+    expect(classify('git rebase --skip')).toEqual(
+      expect.objectContaining({ kind: 'gated', history: 'rebase', continues: false }),
+    );
+    expect(classify('git pull --continue')).toEqual(
+      expect.objectContaining({ kind: 'gated', history: 'pull', continues: false }),
+    );
+  });
   test('a runner named as a bare word in a commit or push is data', () => {
     for (const c of [
       'git commit -m tsx',
@@ -732,10 +753,10 @@ describe('refuses every other shape that commits or pushes', () => {
     'git mv a b && git commit -m x',
     'git add a; git commit -m x',
     'git add a\ngit commit -m x',
-    'git merge --continue',
+    'git add a && git merge topic',
+    'git stash pop && git rebase --continue',
     'git rebase --exec "git commit --amend --no-edit" HEAD~3',
     'git rebase -x "make test" main',
-    'git rebase --continue',
     'git am < patch.mbox',
     'git stash pop --index && git commit -m x',
     'git checkout other -- a.ts && git commit -m x',

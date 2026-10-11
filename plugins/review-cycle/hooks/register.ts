@@ -10,12 +10,13 @@ import type {
   ToolCallResult,
 } from 'claude-code';
 
-import { added, madeBy, MARK, type Entry } from './attribution';
+import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
 import {
   aliasCommits,
   classify,
   ghActions,
   possibleAliases,
+  recordsContent,
   shownCommand,
   type Classification,
 } from './command';
@@ -1079,10 +1080,10 @@ async function judgeBash(
   const unreviewed = await reviewed($, root.top, cls);
   if (unreviewed !== null) return deny(unreviewed);
 
-  if (cls.commit && !cls.commit.dryRun && !granted.commit) {
+  if (recordsContent(cls) && !granted.commit) {
     const ladder = await ladderOf($);
     if (!permitted(granted, ladder, state.held !== null).commit) {
-      return deny(commitRefusal(e.command, ladder));
+      return deny(commitRefusal(e.command, ladder, cls.commit ? null : cls.history));
     }
   }
   const ran: Unasked[] = [];
@@ -1091,7 +1092,13 @@ async function judgeBash(
     if ('deny' in verdict) return deny(verdict.deny);
     if (verdict.ran !== null) ran.push(verdict.ran);
   }
-  const checked = cls.commit ? 'commit' : cls.history !== null ? 'history' : 'push';
+  const checked = cls.commit
+    ? 'commit'
+    : cls.history === null
+      ? 'push'
+      : cls.continues
+        ? 'continue'
+        : 'history';
   return watch($, root, e, next, checked, granted, message, ran);
 }
 
@@ -1102,21 +1109,30 @@ async function reviewed(
   top: string,
   cls: Extract<Classification, { kind: 'gated' }>,
 ): Promise<string | null> {
-  if (!cls.commit || cls.commit.dryRun) return null;
+  if (!recordsContent(cls)) return null;
+  // A `--continue` records the index as the conflict resolution, on top of HEAD.
+  const amend = cls.commit?.amend ?? false;
   const head = await headOf(gitOf($), top);
   // An amend replaces HEAD, so what it records is judged against HEAD's parent.
-  const base = cls.commit.amend && head !== EMPTY_TREE ? await parentTree(gitOf($), top) : head;
+  const base = amend && head !== EMPTY_TREE ? await parentTree(gitOf($), top) : head;
   if (base === null)
     throw new Error("could not read the tree of HEAD's parent, which an amend replaces");
-  const prospect = await prospectTree(gitOf($), top, cls);
+  let prospect: string;
+  try {
+    prospect = await prospectTree(gitOf($), top, cls);
+  } catch (error) {
+    // git names one unmerged path per line; the error keeps the first.
+    const unmerged = /write-tree failed: (.+): unmerged \(/.exec(messageOf(error))?.[1];
+    if (unmerged === undefined) throw error;
+    return `conflicts are still unresolved, starting with ${unmerged} (paths are from the repository root; \`git status\` lists the rest). Resolve them and \`git add\` or \`git rm\` them; once a reviewer has seen the resolution, run the command again.`;
+  }
   const c = await coverageOf(gitOf($), top, base, prospect, state.reviews);
   if (c === null) {
-    const against =
-      base === EMPTY_TREE ? 'the empty tree' : cls.commit.amend ? "HEAD's parent" : 'HEAD';
+    const against = base === EMPTY_TREE ? 'the empty tree' : amend ? "HEAD's parent" : 'HEAD';
     throw new Error(`could not compare the tree this commit would record with ${against}`);
   }
   if (uncoveredOf(c.rows).length > 0) {
-    return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then commit.`;
+    return `no reviewer has seen what this commit records (${explain(c)}). Invoke /review-cycle:review via the Skill tool so a reviewer sees the current tree, then ${cls.commit ? 'commit' : 'continue'}.`;
   }
   return null;
 }
@@ -1242,12 +1258,17 @@ function quote(command: string): string {
   return shown.length > MAX_SHOWN ? `${shown.slice(0, MAX_SHOWN)}…` : shown;
 }
 
-function commitRefusal(command: string, ladder: InForce): string {
+// `continues` names the history command a `--continue` finishes.
+function commitRefusal(command: string, ladder: InForce, continues: string | null = null): string {
   const setting =
     ladder.unreadable === undefined
       ? `, and the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)})`
       : '';
-  return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`;
+  const ask =
+    continues === null
+      ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
+      : `To finish the ${continues}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution and finish the ${continues} on \`fix/x\`?"`, quote(command))}`;
+  return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. ${ask}`;
 }
 
 // How long the user waits on a gh read before the step asks instead.
@@ -1341,7 +1362,7 @@ function pushRefusal(
   }
 }
 
-type Checked = 'commit' | 'history' | 'push' | 'unchecked';
+type Checked = 'commit' | 'continue' | 'history' | 'push' | 'unchecked';
 // HEAD's newest reflog entries and the log's length before a command, so the
 // entries it added can be told apart afterwards.
 type Start = { head: string; refs: Refs; log: Entry[]; count: number };
@@ -1353,8 +1374,9 @@ const MAX_ADDED = 200;
 // Runs the command, then reports a commit the gate did not check (a script),
 // one whose content changed after the check (a pre-commit hook restaging),
 // and a push the user did not ask for. A history command records existing
-// commits by design, so it is not judged on review. A commit made in another
-// worktree is not seen: each worktree has its own HEAD.
+// commits, so only a `--continue`'s resolution commit is judged afterwards,
+// not the picks it replays. A commit made in another worktree is not seen:
+// each worktree has its own HEAD.
 async function watch(
   $: $,
   root: Repo | null,
@@ -1449,7 +1471,9 @@ async function commitNotes(
   if (entries.length === 0 && after !== start.head) {
     throw new Error('HEAD moved without a reflog entry');
   }
-  const lineages = madeBy(entries, start.head);
+  const resolution = checked === 'continue' ? resolutionOf(entries, start.head) : null;
+  const lineages =
+    checked !== 'continue' ? madeBy(entries, start.head) : resolution ? [resolution] : [];
   const tip = lineages.at(-1)?.tip;
   if (tip === undefined) return [];
   const short = tip.slice(0, 12);
@@ -1469,8 +1493,11 @@ async function commitNotes(
   const notes: string[] = [];
   const c = { rows, unread };
   if (checked !== 'history' && uncoveredOf(rows).length > 0) {
-    const why =
-      checked === 'commit'
+    // A rebase runs no pre-commit hook (measured on git 2.56).
+    const rebased = checked === 'continue' && /^rebase\b/.test(entries.at(-1)?.message ?? '');
+    const why = rebased
+      ? "It changed after the gate's check."
+      : checked === 'commit' || checked === 'continue'
         ? "A pre-commit hook may have changed it after the gate's check."
         : 'It did not go through the commit gate.';
     notes.push(

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { added, madeBy, parseReflog, recordsCommit, type Entry } from './attribution';
+import { added, madeBy, parseReflog, recordsCommit, resolutionOf, type Entry } from './attribution';
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -130,5 +130,32 @@ describe('madeBy', () => {
   });
   test('the first entry recorded is based on HEAD before the command', () => {
     expect(madeBy([entry(C, 'commit: c')], A)).toEqual([{ base: A, tip: C }]);
+  });
+});
+
+// Reflog messages measured on git 2.56 for each `--continue`.
+describe('resolutionOf', () => {
+  test('the resolution is the first entry, not the picks replayed after it', () => {
+    const rebase = [
+      entry(D, 'rebase (finish): returning to refs/heads/topic'),
+      entry(D, 'rebase (pick): t2'),
+      entry(C, 'rebase (continue): t1'),
+    ];
+    expect(resolutionOf(rebase, A)).toEqual({ base: A, tip: C });
+    const pick = [entry(D, 'cherry-pick: t2'), entry(C, 'commit (cherry-pick): t1')];
+    expect(resolutionOf(pick, A)).toEqual({ base: A, tip: C });
+    expect(resolutionOf([entry(C, "commit (merge): Merge branch 'topic'")], A)).toEqual({
+      base: A,
+      tip: C,
+    });
+    expect(resolutionOf([entry(C, 'commit: Revert "t1"')], A)).toEqual({ base: A, tip: C });
+  });
+  test('none when the command recorded no resolution', () => {
+    expect(resolutionOf([], A)).toBeNull();
+    const dropped = [
+      entry(D, 'rebase (finish): returning to refs/heads/topic'),
+      entry(D, 'rebase (pick): t2'),
+    ];
+    expect(resolutionOf(dropped, A)).toBeNull();
   });
 });
