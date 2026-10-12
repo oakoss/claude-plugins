@@ -59,6 +59,8 @@ attempted-but-failed: <every verification that would not run, each with the firs
 
 Both land the same label when nothing succeeded, so the distinction lives in what you write on line two: name the command and its failure, so a reader can tell a broken build from one you never ran.
 
+**One report, when your work is done.** Ending your turn delivers your report, so never end it to wait. Wait for every command you started in the background to finish with a foreground command, such as an `until` loop on its output (at most 10 minutes per call), before you end it. An interim answer ("waiting on the remaining mutants") is not a report: each one wakes the caller as if you had finished. In a review cycle each leg has 30 minutes, after which it is stopped and its report lost, so sample a long check such as a mutation suite rather than run all of it, and label what you skipped inferred. When your caller asks for your findings now, report what you have, receipt first, and stop what is still running.
+
 ## Output
 
 Emit the execution receipt above this, as the first two lines of your report.
