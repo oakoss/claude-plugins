@@ -90,6 +90,9 @@ describe('passes commands that do not commit or push', () => {
     'git checkout main && git pull --ff-only',
     'git fetch && git pull --ff-only origin main',
     'git pull --no-ff --ff-only',
+    'git merge -q --ff-only main',
+    'git stash push -m wip && git merge --ff-only main && git stash pop',
+    'cp a.json a.bak && git stash push -q -- a.json && git merge -q --ff-only main && git stash pop -q',
     'git -C $DIR config --get user.email',
     'H=plugins/review-cycle && ls $H',
   ];
@@ -299,19 +302,56 @@ describe('gates the accepted shapes', () => {
       /^an assignment with a substitution or redirect alongside/,
     );
   });
+  test('a branch or message naming a commit or push is data in a merge or pull', () => {
+    for (const c of [
+      'git merge --no-ff fix/git-push-verdict',
+      'git merge --no-ff feat -m "feat: refuse git push without review"',
+      'git pull origin fix/git-commit-gate',
+    ]) {
+      expect(classify(c), c).toEqual(expect.objectContaining({ kind: 'gated' }));
+    }
+  });
   test('a fast-forward pull is neutral before a push; a pull or merge that may merge is not', () => {
     expect(classify('git pull --ff-only && git push')).toEqual(
       expect.objectContaining({ kind: 'gated', history: null, push: PUSHES }),
     );
+    expect(classify('git merge --ff-only main && git push')).toEqual(
+      expect.objectContaining({ kind: 'gated', history: null, push: PUSHES }),
+    );
+    // Measured on git 2.56: `-s ours` and `-s subtree` record a merge despite --ff-only.
     for (const c of [
       'git pull --ff-only --no-ff',
       'git pull "$R" --ff-only',
-      'git merge --ff-only origin/main',
+      'git pull --ff-only -s ours',
+      'git merge --ff-only --no-ff origin/main',
       'git merge --ff-only -s ours origin/main',
+      'git merge --ff-only --strategy=subtree origin/main',
+      'git merge --ff-only -qs ours main',
+      'git merge --ff-only -vs ours main',
+      'git -c pull.twohead=ours merge --ff-only main',
+      'git -c branch.topic.mergeOptions=-sours merge --ff-only main',
+      // Unlisted options stay gated, whatever they turn out to do.
+      'git pull --ff-only -ps ours origin topic',
+      'git pull --ff-only -fs ours origin topic',
+      'git pull --ff-only --rebase origin main',
+      'git merge --ff-only --squash main',
     ]) {
       expect(classify(c), c).toEqual(
-        expect.objectContaining({ kind: 'gated', history: c.split(' ')[1] }),
+        expect.objectContaining({
+          kind: 'gated',
+          history: c.includes(' pull ') ? 'pull' : 'merge',
+        }),
       );
+    }
+    // `-X`/`--strategy-option` only tunes the strategy; git still fast-forwards.
+    for (const c of [
+      'cp a b && git pull --ff-only --strategy-option=ours origin topic',
+      'git stash && git pull --ff-only -Xours main && git stash pop',
+      'cp a b && git merge --ff-only -Xsubtree=lib topic',
+      'cp a b && git pull -q --ff-only --autostash --no-stat origin main',
+      'git stash && git merge --ff-only fix/git-push-verdict && git stash pop',
+    ]) {
+      expect(classify(c), c).toEqual({ kind: 'none' });
     }
   });
   test('everyday steps before the commit or push are allowed', () => {
@@ -788,6 +828,7 @@ describe('refuses every other shape that commits or pushes', () => {
     'git -c $KEY log',
     'git -C',
     "git pull --ff-only --upload-pack='git push x' ../other",
+    "git pull --upload-pack='git push x' ../other",
     "timeout 30 git pull --ff-only --upload-pack='git push x' ../other",
     'timeout 30 git pull --ff-only',
     "git pull --ff-only <<'EOF'\ngit push origin main\nEOF",
@@ -801,6 +842,8 @@ describe('refuses every other shape that commits or pushes', () => {
     'X=$(git reset --soft HEAD~3) && git commit -m m',
     'git pull --ff-only --squash && git commit -m x',
     'git pull --ff-only && git commit -m x',
+    'git merge --ff-only main && git commit -m x',
+    'git merge --ff-only --squash main && git commit -m x',
     'x=$(git push) && git commit -m y',
   ];
   for (const c of refuse) {
@@ -808,6 +851,18 @@ describe('refuses every other shape that commits or pushes', () => {
       expect(classify(c).kind).toBe('refuse');
     });
   }
+  test('a step refused for sharing a command names the git step it shared it with', () => {
+    expect(classify('cp a b && git merge topic')).toEqual(
+      expect.objectContaining({
+        reason: expect.stringContaining(
+          '`cp` alongside `git merge`, which the gate checks as a commit or push',
+        ),
+      }),
+    );
+    expect(classify('git merge --ff-only main && cp a b && git commit -m x')).toEqual(
+      expect.objectContaining({ reason: expect.stringContaining('alongside `git commit`') }),
+    );
+  });
 });
 
 describe('aliases', () => {

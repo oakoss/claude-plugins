@@ -3313,7 +3313,7 @@ describe('the stop-before setting', () => {
     await review($);
     await say($, 'commit it and merge it');
     expect(
-      denied(await bash($, 'git commit -am x && gh pr merge 116'), '`gh` alongside a commit'),
+      denied(await bash($, 'git commit -am x && gh pr merge 116'), '`gh` alongside `git commit`'),
     ).toBe(true);
   });
   test('a GitHub MCP merge is judged as gh pr merge, under any server name', async ($, on) => {
