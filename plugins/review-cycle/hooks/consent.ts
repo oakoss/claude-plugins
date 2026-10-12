@@ -632,8 +632,14 @@ function words(text: string): string[] {
 }
 
 // "commit it", "push to main now": nothing but tail words, with "to" naming a
-// destination and a message only in "with a message".
-function isTail(tail: string[], family: Family): boolean {
+// destination and a message only in "with a message". A request's closing
+// "first" orders the step ("merge 168 first"); an offer's stays, since offers
+// do not yet read every condition (cpl-pakf).
+function isTail(words: string[], family: Family, requested: boolean): boolean {
+  const at = requested ? words.lastIndexOf('first') : -1;
+  const closing =
+    at !== -1 && words[at - 1] !== 'the' && words.slice(at + 1).every((x) => COURTESY.has(x));
+  const tail = closing ? words.toSpliced(at, 1) : words;
   if (family.tail === 'pull-request') return namesPullRequest(tail);
   const publish = family.tail === 'publish';
   for (const [i, word] of tail.entries()) {
@@ -799,7 +805,7 @@ function grammarGrant(
       family !== undefined &&
       !described &&
       isLead(part.slice(0, at), lead, agreed) &&
-      isTail(tail, family) &&
+      isTail(tail, family, verbs === REQUESTED) &&
       (family.object?.(tail) ?? true);
     if (asks) {
       heard?.add(family);
