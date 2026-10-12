@@ -25,7 +25,9 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // a pull request, asked for by addressing its review. `autoMerge` is a merge
 // asked for once the pull request is ready ("merge it when CI passes"), which
 // only `gh pr merge --auto` leaves to GitHub. `mergeNamed` holds the pull
-// request numbers a merge request named ("merge 131"), empty for "merge it".
+// request numbers a merge request named ("merge 131"), empty for "merge it";
+// `readyNamed` those a merge asked for once ready named, kept apart so they
+// never cover a merge now.
 // `finish` holds the history commands a request to finish named ("finish the
 // rebase"): a commit of that command's `--continue` only.
 export type Grant = Readonly<{
@@ -36,6 +38,7 @@ export type Grant = Readonly<{
   merge: boolean;
   mergeNamed: readonly string[];
   autoMerge: boolean;
+  readyNamed: readonly string[];
   approve: boolean;
   release: boolean;
   comment: boolean;
@@ -49,6 +52,7 @@ export const NO_GRANT: Grant = Object.freeze({
   merge: false,
   mergeNamed: [],
   autoMerge: false,
+  readyNamed: [],
   approve: false,
   release: false,
   comment: false,
@@ -770,6 +774,7 @@ function grammarGrant(
   const w = words(clause);
   if (isReadyMerge(w, verbs, lead, agreed)) {
     into.autoMerge = true;
+    into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
     return 'ready';
   }
   if (w.some((x) => SUBORDINATE.has(x)) || asSoonAs(w) !== -1) return 'mood';
@@ -869,6 +874,7 @@ function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
   into.finish = [...into.finish, ...from.finish];
   into.mergeNamed = [...into.mergeNamed, ...from.mergeNamed];
+  into.readyNamed = [...into.readyNamed, ...from.readyNamed];
   raise(into, from.push);
 }
 
@@ -1027,8 +1033,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
   if (AFFIRMATIVE.test(text)) {
     const offer = asked(previousAnswer);
-    if (!offer.merge || offer.mergeNamed.length > 0) return offer;
-    return settled({ ...offer, mergeNamed: unnamedMerge('', previousAnswer) });
+    return settled({ ...offer, ...namedFrom(offer, '', previousAnswer) });
   }
   if (CONTINUE_REPLY.test(text))
     return settled({ ...fresh(), finish: asked(previousAnswer).finish });
@@ -1093,8 +1098,22 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       sentence.trim().endsWith(';') && words(sentence).some((x) => Object.hasOwn(REQUESTED, x));
     prev = tied ? (withheld ? 'mood' : carry) : 'none';
   }
-  if (g.merge && g.mergeNamed.length === 0) g.mergeNamed = unnamedMerge(typed, previousAnswer);
-  return settled(g);
+  return settled({ ...g, ...namedFrom(g, typed, previousAnswer) });
+}
+
+// A merge, now or once ready, that named no pull request names the one the
+// agent offered, each kind in its own list.
+function namedFrom(
+  g: Grant,
+  typed: string,
+  previousAnswer: string,
+): Pick<Grant, 'mergeNamed' | 'readyNamed'> {
+  const unnamed = (asked: boolean, named: readonly string[]) =>
+    asked && named.length === 0 ? unnamedMerge(typed, previousAnswer) : named;
+  return {
+    mergeNamed: unnamed(g.merge, g.mergeNamed),
+    readyNamed: unnamed(g.autoMerge, g.readyNamed),
+  };
 }
 
 // Never a pull request number: a merge naming it covers no pull request by name.

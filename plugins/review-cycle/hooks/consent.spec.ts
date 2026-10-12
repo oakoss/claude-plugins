@@ -26,6 +26,7 @@ const MERGE = { ...NONE, merge: true };
 // A merge request that names its pull requests: "merge 116".
 const merging = (...named: string[]) => ({ ...MERGE, mergeNamed: named });
 const AUTO = { ...NONE, autoMerge: true };
+const autoNamed = (...numbers: string[]) => ({ ...AUTO, readyNamed: numbers });
 const APPROVE = { ...NONE, approve: true };
 const RELEASE = { ...NONE, release: true };
 const REPLY = { ...NONE, comment: true };
@@ -38,7 +39,7 @@ describe('merges, approvals, releases and review replies', () => {
     // A condition auto-merge waits on grants only `gh pr merge --auto`.
     ['lets merge it when its ready', AUTO],
     ["Let's merge it when it's ready.", AUTO],
-    ['merge 132 once CI passes', AUTO],
+    ['merge 132 once CI passes', autoNamed('132')],
     ['merge it when the checks pass', AUTO],
     ['merge the PR once it is green', AUTO],
     ['merge it after CI is green', AUTO],
@@ -75,9 +76,9 @@ describe('merges, approvals, releases and review replies', () => {
     ["don't merge it when it's ready", NONE],
     // A readiness condition may lead, as "merge it once it's ready" trails.
     ['when its ready, merge it', AUTO],
-    ['Ok, once PR 133 is ready lets merge it', AUTO],
+    ['Ok, once PR 133 is ready lets merge it', autoNamed('133')],
     ['when CI passes, merge it', AUTO],
-    ['When the checks pass, lets merge #132.', AUTO],
+    ['When the checks pass, lets merge #132.', autoNamed('132')],
     ['as soon as CI is green, merge it', AUTO],
     ['once it is ready, then merge it', AUTO],
     // Any other leading condition withholds the whole prompt.
@@ -98,7 +99,9 @@ describe('merges, approvals, releases and review replies', () => {
     // A condition naming a pull request names the one merged.
     ['once PR 133 is ready, merge 134', NONE],
     ['merge 134 once PR 133 is ready', NONE],
-    ['once PR 133 is ready, merge 133', AUTO],
+    ['once PR 133 is ready, merge 133', autoNamed('133')],
+    // With no number and no offer, a ready merge names no pull request.
+    ['merge it when its ready', AUTO],
     ['commit it when the tests pass', NONE],
     ['push it once CI is green', NONE],
     ['approve it when its ready', NONE],
@@ -301,7 +304,17 @@ describe('merges, approvals, releases and review replies', () => {
     expect(holdsOf('merge it when I say so')).toBe(true);
     expect(holdsOf('not yet', 'Should I merge #132 when its checks pass?')).toBe(true);
     expect(holdsOf('wait', 'Should I merge #132 once CI passes?')).toBe(true);
-    expect(grantOf('yes', 'Should I merge #132 when its checks pass?')).toEqual(AUTO);
+    expect(grantOf('yes', 'Should I merge #132 when its checks pass?')).toEqual(autoNamed('132'));
+    // An offer that names its pull request only before the question.
+    expect(grantOf('yes', 'Opened #46.\nShould I merge it once CI passes?')).toEqual(
+      autoNamed('46'),
+    );
+    expect(grantOf('yes', 'Pushed #46 and #47.\nMerge it once CI passes?')).toEqual(autoNamed('?'));
+    // A ready merge's numbers never name a merge now.
+    expect(grantOf('merge 46, and merge 62 once CI passes')).toMatchObject({
+      mergeNamed: ['46'],
+      readyNamed: ['62'],
+    });
     expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));
   });
 });

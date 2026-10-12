@@ -1197,8 +1197,11 @@ const STEP_NAME: Record<Step, string> = {
   release: 'a release',
 };
 
-function ranUnasked($: $, { step, ladder }: Unasked): string {
-  const line = `review-cycle: ran ${STEP_NAME[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`;
+function ranUnasked($: $, { step, ladder, ready }: Unasked): string {
+  const line =
+    ready === undefined
+      ? `review-cycle: ran ${STEP_NAME[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`
+      : `review-cycle: ran ${STEP_NAME[step]} now, though the user asked for it once the pull request is ready: ${ready}.`;
   $.ui.log(line);
   return line;
 }
@@ -1326,6 +1329,22 @@ function ghLookups($: $): GhLookups {
         ['pr', 'view', ...lookup, '--json', 'headRefName', '--jq', '.headRefName'],
         'the pull request it merges',
       ),
+    mergeTarget: (lookup) =>
+      ghRead(
+        $,
+        [
+          'pr',
+          'view',
+          ...lookup,
+          '--json',
+          'url,state,mergeStateStatus',
+          '--jq',
+          String.raw`"\(.url) \(.state) \(.mergeStateStatus)"`,
+        ],
+        'the pull request it merges',
+      ),
+    repoUrl: () =>
+      ghRead($, ['repo', 'view', '--json', 'url', '--jq', '.url'], 'the current repository'),
     pullRequest: async (head) => {
       const args = ['pr', 'view', ...head, '--json', PR_FIELDS, '--jq', PR_JQ];
       const r = await ghRead($, args, 'the pull request it updates');
