@@ -2,7 +2,7 @@
 // the refusals when they may not. Pure: what it needs from gh or the settings
 // comes through `GhLookups`, which register.ts builds.
 
-import { covers, type Grant, type HoldReason, type HoldStep } from './consent';
+import { covers, NAMED_ELSEWHERE, type Grant, type HoldReason, type HoldStep } from './consent';
 import type { GhAction, PushRef } from './github';
 import { asks, type Ladder, type Step } from './ladder';
 import { askingReason, pushOutcome } from './push-verdict';
@@ -10,7 +10,8 @@ import { askingReason, pushOutcome } from './push-verdict';
 // `unreadable` names the settings file that could not be read, and why.
 export type InForce = Ladder & { unreadable?: string };
 // A step that runs without the user asking for it directly, by the ladder.
-export type Unasked = { step: Step; ladder: Ladder };
+// `ready` says why a merge asked for once the pull request is ready ran now.
+export type Unasked = { step: Step; ladder: Ladder; ready?: string };
 
 // What a gh read printed, or why the step asks instead.
 export type Lookup = { out: string; asks?: never } | { asks: string; out?: never };
@@ -32,6 +33,10 @@ export type GhLookups = {
   ladder: () => Promise<InForce>;
   // The head branch of the pull request `gh pr view <lookup>` names.
   mergeHead: (lookup: readonly string[]) => Promise<Lookup>;
+  // The pull request `gh pr view <lookup>` names: "<url> <state> <mergeStateStatus>".
+  mergeTarget: (lookup: readonly string[]) => Promise<Lookup>;
+  // The current repository's URL.
+  repoUrl: () => Promise<Lookup>;
   pullRequest: (head: readonly string[]) => Promise<PullRequest | { asks: string }>;
   // The default branch of `repo` (HOST/OWNER/NAME or OWNER/NAME), or of the
   // repository gh picks when it is null.
@@ -113,13 +118,72 @@ const CANNOT: Record<'elsewhere' | 'unnamed', string> = {
     'it does not name the pull request by number and repository, so the gate cannot tell a release from a merge',
 };
 
-// The pull request number a merge names (`116`, or a URL ending in it), or
-// null when it names none.
-function pullNumberOf(lookup: readonly string[] | { cannot: string }): string | null {
-  if ('cannot' in lookup) return null;
-  const selector = lookup[0];
-  if (selector === undefined || selector.startsWith('-')) return null;
-  return /(\d+)\/?$/.exec(selector)?.[1] ?? null;
+// The merge states GitHub merges at once, which is all `--auto` waits for:
+// required checks passed and nothing blocks (pr-watch reads ready the same).
+const READY = new Set(['CLEAN', 'HAS_HOOKS', 'UNSTABLE']);
+
+type Target = { number: string; state: string; mergeState: string };
+
+// Why the gate cannot tell which pull request a merge reaches, and the fix.
+const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy: string }> = {
+  beside: {
+    asks: 'other steps in the same command can change which pull request it reaches',
+    remedy: 'Run the merge as its own command.',
+  },
+  elsewhere: {
+    asks: 'something outside its words picks where it merges (`GH_REPO=`, `GH_HOST=`, `GIT_DIR=`, `env -C`, `--hostname`, a `--repo` built at run time, a URL on another host)',
+    remedy:
+      'If the user meant a pull request on another host or repository, give them the command to run themselves; otherwise run it from this repository without those.',
+  },
+  unnamed: { asks: 'it does not name the pull request', remedy: 'Name it by number.' },
+};
+
+// The pull request a merge reaches in this repository, as GitHub resolves its
+// selector (a number, branch or URL), or why the gate cannot tell and the fix
+// (null: retry, or ask the user).
+async function targetOf(
+  lookups: GhLookups,
+  lookup: readonly string[] | { cannot: 'elsewhere' | 'unnamed' | 'beside' },
+): Promise<Target | { asks: string; remedy: string | null }> {
+  if ('cannot' in lookup) return UNTOLD[lookup.cannot];
+  const r = read(await lookups.mergeTarget(lookup), 'the pull request it merges');
+  if (r.asks !== undefined) return { asks: r.asks, remedy: null };
+  const m = /^(https?:\/\/\S+)\/pull\/(\d+) ([A-Z]+) ([A-Z_]+)$/.exec(r.out);
+  if (m === null) {
+    return {
+      asks: `looking up the pull request it merges printed ${JSON.stringify(r.out)}`,
+      remedy: null,
+    };
+  }
+  const [, repo = '', number = '', state = '', mergeState = ''] = m;
+  const home = read(await lookups.repoUrl(), 'the current repository');
+  if (home.asks !== undefined) return { asks: home.asks, remedy: null };
+  if (home.out.toLowerCase() !== repo.toLowerCase()) {
+    // The grammar names no repository, so asking again grants the same.
+    return {
+      asks: `it merges a pull request in ${repo}, not in this repository`,
+      remedy: 'If the user meant that one, give them the command to run themselves.',
+    };
+  }
+  return { number, state, mergeState };
+}
+
+// Whether a merge asked for once the pull request is ready may run now: why
+// not, or why it may.
+function readyNow(t: Target): { asks: string; closed?: true } | { ready: string } {
+  // GitHub reports a merged pull request UNKNOWN for good.
+  if (t.state !== 'OPEN') return { asks: `#${t.number} is ${t.state.toLowerCase()}`, closed: true };
+  if (t.mergeState === 'UNKNOWN') {
+    return {
+      asks: `GitHub has not worked out yet whether #${t.number} can merge; try again shortly`,
+    };
+  }
+  if (!READY.has(t.mergeState)) {
+    return { asks: `GitHub reports #${t.number}'s merge state as ${t.mergeState}` };
+  }
+  return {
+    ready: `GitHub reports #${t.number} ${t.mergeState}, which is all \`--auto\` waits for`,
+  };
 }
 
 // Which step a merge is: a release when it merges the version pull request.
@@ -250,31 +314,97 @@ export async function judgeGh(
             deny: `--admin merges past branch protection, which the gate never lets an agent do, so nothing ran. Give the user the command to run themselves, and say why it needs --admin. The command: ${shown}`,
           };
         }
-        // A merge asked for once the pull request is ready is what `--auto`
-        // does; a merge now goes against that request, whatever the setting.
-        if (granted.autoMerge && !granted.merge && !action.auto) {
-          return {
-            deny: `the user asked to merge only once the pull request is ready, which \`gh pr merge --auto\` leaves to GitHub, so nothing ran. Run \`gh pr merge <number> --auto\`, naming the pull request by number, or ${askThem('the pull request', '"Merge #116 now?"', shown)}`,
+        // Named pull requests bind by the number GitHub resolves, whatever the
+        // setting. One the gate cannot tell (`?`) binds `--auto` to none.
+        const nowNamed = granted.mergeNamed.filter((n) => n !== NAMED_ELSEWHERE);
+        const readyNamed = granted.readyNamed.filter((n) => n !== NAMED_ELSEWHERE);
+        // An unnamed merge now never covers one named for once ready ("merge
+        // it, and merge 62 once CI passes").
+        const nowAny = granted.merge && nowNamed.length === 0;
+        const readyAny =
+          granted.autoMerge &&
+          (action.auto ? readyNamed.length === 0 : granted.readyNamed.length === 0);
+        let covers = { now: nowAny, ready: readyAny };
+        let target: Target | null = null;
+        const free = (nowAny && readyNamed.length === 0) || (readyAny && action.auto);
+        if ((granted.merge || granted.autoMerge) && !free) {
+          const t = await targetOf(lookups, action.lookup);
+          if ('asks' in t) {
+            const named = [...nowNamed, ...readyNamed].map((n) => `#${n}`).join(', ');
+            const remedy =
+              t.remedy === null
+                ? `To go ahead, ${askThem('the pull request', '"Merge #116?"', shown)}`
+                : `${t.remedy} The command: ${shown}`;
+            return {
+              deny: `the user asked to merge ${named || 'a pull request'}, and the gate cannot tell whether this is it: ${t.asks}, so nothing ran. ${remedy}`,
+            };
+          }
+          target = t;
+          covers = {
+            now:
+              granted.merge &&
+              (nowAny ? !readyNamed.includes(t.number) : nowNamed.includes(t.number)),
+            ready: granted.autoMerge && (readyAny || readyNamed.includes(t.number)),
           };
         }
-        const asked = { ...granted, merge: granted.merge || (action.auto && granted.autoMerge) };
+        // A merge now of one asked for once ready runs only when it already is.
+        if (target !== null && covers.ready && !covers.now && !action.auto) {
+          const now = readyNow(target);
+          if ('asks' in now && now.closed) {
+            return {
+              deny: `the user asked to merge only once the pull request is ready, and ${now.asks}, so nothing ran; \`--auto\` cannot merge it either. Tell the user. The command: ${shown}`,
+            };
+          }
+          // `--auto` on oakum's version pull request is a release too.
+          const releases = permitted({ ...granted, merge: true }, ladder, held !== null).release;
+          if ('asks' in now && !releases && !('cannot' in action.lookup)) {
+            const which = await mergeStep(lookups, action.lookup);
+            if ('step' in which && which.step === 'release') return refuse('release', null);
+          }
+          if ('asks' in now) {
+            return {
+              deny: `the user asked to merge only once the pull request is ready, and ${now.asks}, so nothing ran. Run \`gh pr merge ${target.number} --auto\`, which leaves the waiting to GitHub, or ${askThem('the pull request', '"Merge #116 now?"', shown)}`,
+            };
+          }
+          ran.push({ step: 'merge', ladder, ready: now.ready });
+        }
+        // "merge 46 and release it" still covers oakum's version pull request.
+        let known: Awaited<ReturnType<typeof mergeStep>> | null = null;
+        if (target !== null && !covers.now && !covers.ready) {
+          const named = [...nowNamed, ...readyNamed].map((n) => `#${n}`).join(', ');
+          const wanted = named
+            ? `the user asked to merge ${named}`
+            : 'the gate cannot tell which pull request the user asked to merge';
+          if (granted.release && !('cannot' in action.lookup)) {
+            known = await mergeStep(lookups, action.lookup);
+          }
+          const unread = known !== null && 'asks' in known ? ` (${known.asks})` : '';
+          if (known === null || 'asks' in known || known.step !== 'release') {
+            return {
+              deny: `it merges #${target.number}, and ${wanted}${unread}, so nothing ran. To go ahead, ${askThem('the pull request', `"Merge #${target.number}?"`, shown)}`,
+            };
+          }
+        }
+        const asked = { ...granted, merge: covers.now || covers.ready };
         const mayHere = permitted(asked, ladder, held !== null);
         // A merge the user asked for covers oakum's version pull request too:
         // merging it is the only way to release, so "merge it" asks for that,
         // unless the same message held off a release ("merge 131. don't release yet")
         // or named other pull requests ("merge 131" never merges #130).
-        const named = granted.mergeNamed;
-        const target = pullNumberOf(action.lookup);
-        const covered = named.length === 0 || (target !== null && named.includes(target));
-        if (granted.merge && held?.step !== 'release' && covered) break;
-        // Allowed either way, a merge needs no lookup to tell which it is.
-        if (mayHere.merge && mayHere.release) {
+        const covered =
+          granted.mergeNamed.length === 0 || (target !== null && nowNamed.includes(target.number));
+        if (covers.now && held?.step !== 'release' && covered) break;
+        // Allowed either way, a merge needs no lookup to tell which it is,
+        // except one run now on readiness alone: a release there is noted.
+        const readyOnly = target !== null && covers.ready && !covers.now;
+        if (mayHere.merge && mayHere.release && !readyOnly) {
           if (!asked.merge && !asked.release) ran.push({ step: 'merge', ladder });
           break;
         }
         const { lookup } = action;
         let which: Awaited<ReturnType<typeof mergeStep>>;
-        if (!('cannot' in lookup)) which = await mergeStep(lookups, lookup);
+        if (known !== null) which = known;
+        else if (!('cannot' in lookup)) which = await mergeStep(lookups, lookup);
         else if (lookup.cannot === 'beside') {
           return {
             deny: `other steps in the same command can change which pull request the merge reaches, so the gate cannot tell a release from a merge, and nothing ran. Run the merge as its own command. The command: ${shown}`,

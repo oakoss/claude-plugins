@@ -1085,6 +1085,39 @@ function builtArgs(rest: Word[], values: ReadonlySet<string>): boolean {
   });
 }
 
+// Whether a short-option cluster holds a letter that takes a value after its
+// first (`-db 166`, `-sbt`): gh gives it the next word or the rest of the
+// cluster. A value letter first is that option with its value (`-tTitle`).
+function valueInCluster(t: string): boolean {
+  if (!/^-[^-]/.test(t)) return false;
+  const letters = t.slice(2).split('=')[0] ?? '';
+  return !MERGE_VALUE.has(t.slice(0, 2)) && !namesRepo(t) && /[bFtAR]/.test(letters);
+}
+
+// What hides the pull request or repository a `gh pr merge` reaches, skipping
+// option values (`-b -sb` is a body): such a cluster, or a word after `--`,
+// which gh takes as the selector even when it starts with `-`.
+function hiddenTarget(rest: Word[]): { why: string; remedy: string } | null {
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]?.text ?? '';
+    if (t === '--') {
+      if (i + 1 === rest.length) return null;
+      return {
+        why: 'a word after `--` in `gh pr merge` is its selector, which the gate does not look up',
+        remedy: 'Name the pull request by number, without `--`.',
+      };
+    }
+    if (MERGE_VALUE.has(t) || isRepo(t)) i++;
+    else if (valueInCluster(t)) {
+      return {
+        why: `in \`${t}\`, a letter after the first takes the next word or the rest of the cluster as its value, which hides the pull request or repository \`gh pr merge\` reaches`,
+        remedy: 'Write `-b`, `-F`, `-t`, `-A` and `-R` as options of their own (`-s -b "…"`).',
+      };
+    }
+  }
+  return null;
+}
+
 const REVIEW_VALUE = new Set(['-b', '--body', '-F', '--body-file', '-R', '--repo']);
 
 // What a `gh pr` command names for `gh pr view` to look up, or why it cannot be.
@@ -1118,12 +1151,14 @@ function autoSet(rest: Word[]): boolean {
   return flagSet(flags, 'auto', null, '');
 }
 
-function mergeOf(words: Word[], from: number, repo: Word | null, context: GhContext): GhAction {
-  const rest = words.slice(from);
+// `before` holds the options gh reads for merge ahead of its verb (`gh pr
+// --admin merge 46`).
+function mergeOf(before: Word[], rest: Word[], repo: Word | null, context: GhContext): GhAction {
+  const all = [...before, ...rest];
   return {
     kind: 'merge',
-    admin: flagSet(rest, 'admin', null, ''),
-    auto: autoSet(rest),
+    admin: flagSet(all, 'admin', null, ''),
+    auto: autoSet(all),
     lookup: lookupOf(rest, repo, context),
   };
 }
@@ -1183,6 +1218,7 @@ function ghAt(
   }
   const w = words;
   const rest = w.slice(verbAt + 1);
+  const before = [...w.slice(at + 1, sub), ...w.slice(sub + 1, verbAt)];
   // A flag built at run time or fed by xargs could approve, merge with
   // --admin or point --repo elsewhere, which the words do not show.
   const unreadArgs = {
@@ -1193,11 +1229,24 @@ function ghAt(
     if (verb === 'create' || verb === 'new' || verb === 'revert') return { kind: 'pr' };
     if (verb === 'merge') {
       if (fed || builtArgs(rest, new Set([...MERGE_VALUE, '-R', '--repo']))) return unreadArgs;
-      return mergeOf(w, verbAt + 1, seen.repo, context);
+      const hidden = hiddenTarget(rest);
+      if (hidden) return { kind: 'unread', ...hidden };
+      // gh reads merge's options before the verb too (`gh pr -db merge 46`).
+      const early = before.find((x) => MERGE_VALUE.has(x.text) || valueInCluster(x.text));
+      if (early) {
+        return {
+          kind: 'unread',
+          why: `\`${early.text}\` before \`merge\` can take a later word as its value, which hides the pull request or repository it reaches`,
+          remedy:
+            'Put the options after `merge`, writing `-b`, `-F`, `-t`, `-A` and `-R` on their own.',
+        };
+      }
+      return mergeOf(before, rest, seen.repo, context);
     }
     if (verb === 'review') {
       if (fed || builtArgs(rest, REVIEW_VALUE)) return unreadArgs;
-      return { kind: flagSet(rest, 'approve', 'a', 'bFR') ? 'approve' : 'comment' };
+      const approves = flagSet([...before, ...rest], 'approve', 'a', 'bFR');
+      return { kind: approves ? 'approve' : 'comment' };
     }
     if (verb === 'comment') return { kind: 'comment' };
     // `--undo` turns it back into a draft, which asks nobody to review it.

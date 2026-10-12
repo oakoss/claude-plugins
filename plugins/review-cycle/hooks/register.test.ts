@@ -2750,14 +2750,20 @@ function github(
   defaultBranch = 'main',
   fork = false,
   repo = 'github.com/o/r',
+  mergeState = 'BLOCKED',
 ): (a: string) => Partial<Run> | null {
   return (a) => {
     if (a.startsWith('gh pr view')) {
       if (head === 'fail') return { exitCode: 1, stderr: 'no pull requests found for branch "x"' };
+      if (a.includes('mergeStateStatus')) {
+        const n = /gh pr view (\d+)/.exec(a)?.[1] ?? '7';
+        return { stdout: `https://${repo}/pull/${n} OPEN ${mergeState}\n` };
+      }
       // The update-branch lookup's jq prints fork, pull request URL and head branch.
       const update = a.includes('isCrossRepository');
       return { stdout: update ? `${fork} https://${repo}/pull/7 ${head}\n` : `${head}\n` };
     }
+    if (a.startsWith('gh repo view') && a.includes('.url')) return { stdout: `https://${repo}\n` };
     if (a.startsWith('gh repo view')) return { stdout: `${defaultBranch}\n` };
     return null;
   };
@@ -3070,9 +3076,34 @@ describe('the stop-before setting', () => {
   test('a merge asked for once it is ready runs only with --auto', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await say($, 'Lets merge it when its ready');
-    expect(denied(await bash($, 'gh pr merge 116 --squash'), '--auto`, naming')).toBe(true);
-    expect(denied(await bash($, 'gh pr merge 116 --body --auto'), '--auto`, naming')).toBe(true);
+    const remedy = '`gh pr merge 116 --auto`, which leaves';
+    expect(denied(await bash($, 'gh pr merge 116 --squash'), remedy)).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 116 --body --auto'), remedy)).toBe(true);
     expect(ran(await bash($, 'gh pr merge 116 --auto --squash'))).toBe(true);
+  });
+  test('a merge asked for once it is ready runs now when GitHub reports it ready', async ($, on) => {
+    const git = github('fix/x', 'main', false, 'github.com/o/r', 'CLEAN');
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git });
+    await say($, 'Ok, lets merge 116 when its ready');
+    expect(denied(await bash($, 'gh pr merge 117 --squash'), 'the user asked to merge #116')).toBe(
+      true,
+    );
+    expect(denied(await bash($, 'gh pr merge 117 --auto'), 'the user asked to merge #116')).toBe(
+      true,
+    );
+    const r = await bash($, 'gh pr merge 116 --squash');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'GitHub reports #116 CLEAN')).toBe(true);
+    const views = w.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(views.map((c) => c.argv.slice(3))).toContainEqual([
+      '116',
+      '--json',
+      'url,state,mergeStateStatus',
+      '--jq',
+      String.raw`"\(.url) \(.state) \(.mergeStateStatus)"`,
+    ]);
+    const repoViews = w.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh repo view');
+    expect(repoViews.map((c) => c.argv.slice(3))).toContainEqual(['--json', 'url', '--jq', '.url']);
   });
   test('a merge below the rung runs, noted', async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
@@ -3274,7 +3305,8 @@ describe('the stop-before setting', () => {
   test('a merge asked for by number releases only the version PR it names', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
     await say($, 'merge 131');
-    expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
+    const other = 'it merges #130, and the user asked to merge #131';
+    expect(denied(await bash($, 'gh pr merge 130'), other)).toBe(true);
     await say($, 'merge #130');
     expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
   });
@@ -3289,7 +3321,8 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
     await endTurn($, 'answer', 'Merge #131? #130 is the version PR, which releases.');
     await say($, 'merge it');
-    expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
+    const other = 'it merges #130, and the user asked to merge #131';
+    expect(denied(await bash($, 'gh pr merge 130'), other)).toBe(true);
     await endTurn($, 'answer', 'Release by merging #130?');
     await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);

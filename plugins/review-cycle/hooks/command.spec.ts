@@ -1568,8 +1568,8 @@ describe('gh steps', () => {
     ['gh pr merge -b --help', ['merge']],
     ['gh pr merge --body --help', ['merge']],
     ['gh pr merge -t -h 5', ['merge']],
-    ['gh pr merge -- --help', ['merge']],
-    ['gh pr merge -- 5 --help', ['merge']],
+    ['gh pr merge -- --help', ['unread']],
+    ['gh pr merge -- 5 --help', ['unread']],
     ['gh pr merge --help --help=false', ['merge']],
     ['gh pr merge 5 --help --help=0', ['merge']],
     ['gh pr merge 5 --admin --help', ['merge']],
@@ -1601,6 +1601,56 @@ describe('gh steps', () => {
     // could approve, use --admin or point elsewhere, so it is not.
     expect(ghActions('gh pr merge --subject "$S" 116')).toEqual([
       { kind: 'merge', admin: false, auto: false, lookup: ['116'] },
+    ]);
+    // A value letter after a cluster's first takes the next word or the rest
+    // (`-db 166` is a body of 166), so the selector is unread.
+    for (const cluster of ['-db 166', '-dbt 166', '-sF f 166', '-dR o/x 166']) {
+      expect(kinds(`gh pr merge ${cluster}`)).toEqual(['unread']);
+    }
+    expect(kinds('gh pr merge 46 -sb --auto')).toEqual(['unread']);
+    // An option's value is no cluster.
+    expect(ghActions('gh pr merge 46 -s -b "- fixed tests"')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['46'] },
+    ]);
+    expect(ghActions('gh pr merge -b -sb 166')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['166'] },
+    ]);
+    expect(ghActions('gh pr merge -b -- 166')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['166'] },
+    ]);
+    // gh reads merge's options before the verb too.
+    expect(kinds('gh pr -db merge 46 --squash')).toEqual(['unread']);
+    expect(kinds('gh -db pr merge 46')).toEqual(['unread']);
+    expect(kinds('gh pr -b merge 46')).toEqual(['unread']);
+    expect(ghActions('gh pr --admin --squash merge 46')).toEqual([
+      { kind: 'merge', admin: true, auto: false, lookup: ['46'] },
+    ]);
+    expect(ghActions('gh --auto pr merge 46')).toEqual([
+      { kind: 'merge', admin: false, auto: true, lookup: ['46'] },
+    ]);
+    expect(kinds('gh pr --approve review 46')).toEqual(['approve']);
+    expect(ghActions('gh pr -R o/x merge 46')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['46', '--repo', 'o/x'] },
+    ]);
+    // After `--`, gh takes `-db` as the selector, a branch the lookup drops.
+    expect(kinds('gh pr merge --squash -- -db')).toEqual(['unread']);
+    expect(kinds('gh pr merge -- 46')).toEqual(['unread']);
+    expect(kinds('gh pr merge 46 --')).toEqual(['merge']);
+    // A value letter first takes the rest as its value.
+    expect(ghActions('gh pr merge -bd 166')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['166'] },
+    ]);
+    expect(ghActions('gh pr merge -bt 166')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['166'] },
+    ]);
+    expect(ghActions('gh pr merge -tTest 62')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
+    ]);
+    expect(ghActions('gh pr merge -Roakoss/test 62 -d=true')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['62', '--repo', 'oakoss/test'] },
+    ]);
+    expect(ghActions('gh pr merge -Ro/x 62 -sd')).toEqual([
+      { kind: 'merge', admin: false, auto: false, lookup: ['62', '--repo', 'o/x'] },
     ]);
     expect(kinds('gh pr merge "$PR"')).toEqual(['unread']);
     expect(kinds('gh pr merge 116 $(echo --admin)')).toEqual(['unread']);
