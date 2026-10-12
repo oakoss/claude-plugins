@@ -530,8 +530,8 @@ function conditionsOf(
 }
 
 export type Memory = Pick<Watch, 'told' | 'heard'>;
-// `news` is what `text` says, and `ready` the one of them that says the pull
-// request is ready, so a notice held past a merge can leave it out.
+// `ready` is kept apart from the rest of the news, so a notice held past a
+// merge can leave it out.
 export type Wake = {
   text: string | null;
   news: string[];
@@ -540,17 +540,15 @@ export type Wake = {
   heard: Watch['heard'];
 };
 
-// News held again for the same watch: each line once, and the ready line only
-// while it is one of them.
 export function heldWith(was: Held, next: Held): Held {
   const news = [...new Set([...was.news, ...next.news])];
-  const ready = next.ready ?? was.ready;
-  return { ...next, news, ready: ready !== null && news.includes(ready) ? ready : null };
+  return { ...next, news, ready: next.ready ?? was.ready };
 }
 
-export function noticeOf(news: readonly string[], url: string): string {
+// The ready line leads: it is the news Claude acts on.
+export function noticeOf(news: readonly string[], ready: string | null, url: string): string {
   return [
-    `pr-watch: ${news.join(' ')}`,
+    `pr-watch: ${[...(ready === null ? [] : [ready]), ...news].join(' ')}`,
     `This is news from pr-watch, not a request to merge. ${url}`,
   ].join('\n');
 }
@@ -645,10 +643,9 @@ export function wakeOf(
   let ready: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
     const isQuiet = isOwnMerge && c.key === keyOf(watch, 'passed');
-    if (!told.includes(c.key) && !isQuiet) {
-      news.push(c.text);
-      if (c.key === keyOf(watch, 'ready')) ready = c.text;
-    }
+    const isNew = !told.includes(c.key) && !isQuiet;
+    if (isNew && c.key === keyOf(watch, 'ready')) ready = c.text;
+    else if (isNew) news.push(c.text);
     kept.push(c.key);
   }
   // GitHub reports UNKNOWN while it recomputes the merge state; ready stands only
@@ -663,7 +660,8 @@ export function wakeOf(
   // So a chatty bot or thread cannot keep waking Claude, comments and reviews
   // stop after QUIET_CAP wakes in a row of nothing else, until other news comes.
   const before = last.heard?.streak ?? 0;
-  const streak = news.length > 0 ? 0 : lines.length > 0 ? before + 1 : before;
+  const isOther = news.length > 0 || ready !== null;
+  const streak = isOther ? 0 : lines.length > 0 ? before + 1 : before;
   if (streak <= QUIET_CAP) news.push(...lines);
   if (lines.length > 0 && streak === QUIET_CAP) {
     news.push(
@@ -671,8 +669,8 @@ export function wakeOf(
     );
   }
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
-  if (news.length === 0) return { text: null, news, ready, told: kept, heard };
-  return { text: noticeOf(news, watch.url), news, ready, told: kept, heard };
+  if (news.length === 0 && ready === null) return { text: null, news, ready, told: kept, heard };
+  return { text: noticeOf(news, ready, watch.url), news, ready, told: kept, heard };
 }
 
 export function clockText(ms: number): string {

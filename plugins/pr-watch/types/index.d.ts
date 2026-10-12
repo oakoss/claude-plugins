@@ -97,7 +97,9 @@ declare module 'claude-code' {
       estimates: Record<string, number>;
       now: number;
       // On the host, so a reload mid-turn keeps held news already saved as told.
-      turn: { isTurning: boolean; held: Held[]; ownMerges: string[] };
+      turn: { isTurning: boolean; held: Held[] };
+      // Watch ids, kept apart from the watch so a read in flight cannot drop one.
+      ownMerges: string[];
     };
   }
 }

@@ -30,6 +30,7 @@ import {
   toldAfter,
   wakeOf,
   heldWith,
+  noticeOf,
   type BotSetting,
   type Memory,
   type WakeSetting,
@@ -813,18 +814,18 @@ describe('wakeOf', () => {
     expect(wakeOf(pr, failed, verdictAt(failed), {}, own).text).toContain('CodeQL: Analyze failed');
   });
 
-  test('names the ready line among the news, and holds each line once', () => {
+  test('keeps the ready line apart, leads with it, and holds each line once', () => {
     const ready = pull([ci([job('Test', 'SUCCESS')])]);
     const woke = wakeOf(pr, ready, verdictAt(ready), {});
     expect(woke.ready).toBe('GitHub reports o/r#128 ready to merge.');
-    expect(woke.news).toContain(woke.ready);
-    const held = { id: 'x', label: '#128', url: pr.url, news: woke.news, ready: woke.ready };
-    const again = heldWith({ ...held, news: ['@alice commented'], ready: null }, held);
-    expect(again.news).toEqual(['@alice commented', woke.ready]);
-    expect(heldWith(held, { ...held, news: ['@bob commented'], ready: null }).ready).toBe(
-      woke.ready,
+    expect(woke.news).toEqual([]);
+    expect(noticeOf(['@alice commented'], woke.ready, pr.url)).toMatch(
+      /^pr-watch: GitHub reports o\/r#128 ready to merge\. @alice commented\n/,
     );
-    expect(heldWith(held, { ...held, news: [], ready: 'gone' }).ready).toBeNull();
+    const held = { id: 'x', label: '#128', url: pr.url, news: ['@alice commented'], ready: null };
+    const again = heldWith(held, { ...held, news: ['@alice commented', '@bob commented'] });
+    expect(again.news).toEqual(['@alice commented', '@bob commented']);
+    expect(heldWith({ ...held, ready: woke.ready }, held).ready).toBe(woke.ready);
   });
 
   test('tells each push its own passed checks', () => {
@@ -939,6 +940,15 @@ describe('wakeOf', () => {
       activity: [comment, said('bob', minute(2))],
     });
     expect(after(next, last).heard?.streak).toBe(1);
+  });
+
+  test('a pull request turning ready resets the cap too', () => {
+    const last: Memory = { heard: { since: null, keys: [], streak: QUIET_CAP + 3 } };
+    const ready = pull([ci([job('Test', 'SUCCESS')])], { activity: [said('alice', minute(1))] });
+    const woke = after(ready, last);
+    expect(woke.ready).not.toBeNull();
+    expect(woke.text).toContain('@alice commented on');
+    expect(woke.heard?.streak).toBeUndefined();
   });
 
   test('takes the floor from the viewer’s own newer comments too', () => {

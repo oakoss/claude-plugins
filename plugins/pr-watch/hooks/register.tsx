@@ -61,11 +61,9 @@ const estimates = atom({ plugin: 'pr-watch', key: 'estimates' } as const, {});
 const clock = atom({ plugin: 'pr-watch', key: 'now' } as const, 0);
 // A plugin's prompt waits out the turn, so a ready pull request merged in it
 // would arrive stale: news is held until the turn ends.
-const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, {
-  isTurning: false,
-  held: [],
-  ownMerges: [],
-});
+const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, { isTurning: false, held: [] });
+// Merges Claude ran, whose passed checks are no news to it.
+const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
 
 const TICK_MS = 1000;
 const ESTIMATE_RETRY_MS = 60_000;
@@ -120,8 +118,8 @@ function wake($: $, text: string, label: string): void {
 }
 
 async function tell($: $, h: Held): Promise<void> {
-  if (h.news.length === 0) return;
-  if (!(await hold($, h))) wake($, noticeOf(h.news, h.url), h.label);
+  if (h.news.length === 0 && h.ready === null) return;
+  if (!(await hold($, h))) wake($, noticeOf(h.news, h.ready, h.url), h.label);
 }
 
 // Decided in the same write, so a turn ending meanwhile cannot strand it.
@@ -147,30 +145,43 @@ async function isOpen($: $, url: string): Promise<boolean> {
   }
 }
 
-// A ready line stands while the watch's latest read still found it ready and
-// GitHub still has the pull request open.
+// Not awaited, so the turn's end waits on no gh call.
+function releaseHeld($: $): void {
+  void release($).catch((error) =>
+    $.ui.toast(`pr-watch could not send the news it held: ${errorText(error)}`),
+  );
+}
+
+// Each watch's news at once, so one slow read delays only its own.
 async function release($: $): Promise<void> {
   const { held } = await read($, turn);
-  for (const { id } of held) {
-    let h: Held | undefined;
-    await update($, turn, (t) => {
-      h = t.held.find((x) => x.id === id);
-      return { ...t, held: t.held.filter((x) => x.id !== id) };
-    });
-    if (!h) continue;
-    let news = h.news;
-    const ready = h.ready;
-    if (ready !== null) {
-      // The saved watch is read after GitHub, so a read during it counts.
-      const isStillOpen = await isOpen($, h.url);
-      const all = await read($, watches);
-      const w = all.find((x) => idOf(x) === id);
-      if (!isStillOpen || !w || !isToldReady(w)) news = news.filter((n) => n !== ready);
-    }
-    // A turn that started during the read holds it again, to be read once more.
-    const again = { ...h, news, ready: news.includes(ready ?? '') ? ready : null };
-    if (news.length > 0 && !(await hold($, again))) wake($, noticeOf(news, h.url), h.label);
+  await Promise.all(held.map(({ id }) => releaseOne($, id)));
+}
+
+// A ready line stands while the watch's latest read still found it ready and
+// GitHub still has the pull request open.
+async function releaseOne($: $, id: string): Promise<void> {
+  const { held } = await read($, turn);
+  const seen = held.find((x) => x.id === id);
+  if (!seen) return;
+  let isStale = false;
+  if (seen.ready !== null) {
+    // The saved watch is read after GitHub, so a read during it counts.
+    const isStillOpen = await isOpen($, seen.url);
+    const all = await read($, watches);
+    const w = all.find((x) => idOf(x) === id);
+    isStale = !isStillOpen || !w || !isToldReady(w);
   }
+  // Taken only now: a reload during the read leaves it held, news held for it
+  // meanwhile joins this notice, and a turn started meanwhile keeps it.
+  let h: Held | undefined;
+  await update($, turn, (t) => {
+    h = t.isTurning ? undefined : t.held.find((x) => x.id === id);
+    return h ? { ...t, held: t.held.filter((x) => x.id !== id) } : t;
+  });
+  if (!h) return;
+  const ready = isStale ? null : h.ready;
+  if (h.news.length > 0 || ready !== null) wake($, noticeOf(h.news, ready, h.url), h.label);
 }
 
 // An unknown length that cannot be learned or kept is asked again after the
@@ -361,8 +372,8 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         // it is not yet what the line has said.
         const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
         const shown = target.shown;
-        const { ownMerges } = await read($, turn);
-        const isOwnMerge = ownMerges.includes(idOf(next));
+        const merged = await read($, ownMerges);
+        const isOwnMerge = merged.includes(idOf(next));
         wakeFor = (last) =>
           wakeOf(next, pull, verdict, last, { isEarly, isOwnMerge, tells: config.tells });
         // A ready pull request read as checking is not ready again afterwards.
@@ -412,10 +423,11 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     }
     if (news && isSaved) {
       if (kept) kept.news = news;
-      else if (woke?.text === news) {
+      else if (isGivenUp || !woke) wake($, news, labelOf(next));
+      else {
         const { news: lines, ready } = woke;
         await tell($, { id: idOf(next), label: labelOf(next), url: next.url, news: lines, ready });
-      } else wake($, news, labelOf(next));
+      }
     }
     if (!isClosed && isFresh) await learnEstimates($, next, now);
   } catch (error) {
@@ -529,7 +541,7 @@ async function followMerge($: $, m: Merging, startedAt: number): Promise<void> {
     const id = idOf(target);
     // Not one GitHub merged later on --auto, which is news to Claude.
     if (viewedPull(r.stdout)?.body?.state === 'MERGED') {
-      await update($, turn, (t) => ({ ...t, ownMerges: [...new Set([...t.ownMerges, id])] }));
+      await update($, ownMerges, (ids) => [...new Set([...ids, id])]);
     }
     await update($, watches, (all) =>
       all.some((w) => idOf(w) === id) ? all : [...all, { ...target, checkedAt: 0 }],
@@ -745,9 +757,7 @@ export const register: Register = (on, options) => {
       // A subagent's run raises turn.complete but no turn.start.
       if (!e.agentId) {
         await update($, turn, (t) => ({ ...t, isTurning: false }));
-        void release($).catch((error) =>
-          $.ui.toast(`pr-watch could not send the news it held: ${errorText(error)}`),
-        );
+        releaseHeld($);
       }
     }
   });
@@ -759,6 +769,8 @@ export const register: Register = (on, options) => {
     poller?.cancel();
     // oxlint-disable-next-line unicorn/no-array-method-this-argument -- a timer, not Array#every
     poller = $.clock.every(TICK_MS, () => void safeTick($));
+    // A reload between turns finds news a turn held; no turn is left to end it.
+    releaseHeld($);
     return r;
   });
 

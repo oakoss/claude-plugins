@@ -519,7 +519,7 @@ describe('news held through a turn', () => {
       await clock.advance(1);
       expect(seen.wakes).toHaveLength(1);
       expect(seen.wakes[0]).toContain('@alice commented on o/r#128');
-      if (isReady) expect(seen.wakes[0]).toContain('ready to merge');
+      if (isReady) expect(seen.wakes[0]).toMatch(/^pr-watch: GitHub reports o\/r#128 ready/);
       else expect(seen.wakes[0]).not.toContain('ready to merge');
     });
   }
@@ -586,6 +586,111 @@ describe('news held through a turn', () => {
     await clock.advance(1);
     expect(seen.wakes).toHaveLength(1);
     expect(seen.wakes[0]).toContain('ready to merge');
+  });
+
+  test('two turn ends whose reads overlap tell the news once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    gh.holdView = true;
+    await ($ as any).turn.complete(done);
+    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await ($ as any).turn.start(turn);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    gh.release!();
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('one slow read at the turn’s end holds back only its own news', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE'), view: OPEN_VIEW };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    gh.holdView = true;
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('failed for the push to');
+    gh.release!();
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(2);
+    expect(seen.wakes[1]).toContain('ready to merge');
+  });
+
+  test('a session start sends news a turn left held, once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    gh.holdView = true;
+    await ($ as any).turn.complete(done);
+    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await start($);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    gh.release!();
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('a pull request unwatched during the turn is not called ready', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    await tool($, 'unwatch', { pull: '128' });
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('news it cannot send at the turn’s end is said in a toast', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    // Taking the held news out is refused: the store refuses undefined.
+    on('state.set', ($: unknown, e: any, next: any) =>
+      e.key === 'turn' && !e.value.isTurning && e.value.held.length === 0
+        ? next({ ...e, value: undefined })
+        : next(e),
+    );
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toEqual([]);
+    expect(seen.toasts.at(-1)).toMatch(/^pr-watch could not send the news it held/);
   });
 
   test('a turn whose end fails beneath pr-watch still ends the hold', async ($, on) => {
