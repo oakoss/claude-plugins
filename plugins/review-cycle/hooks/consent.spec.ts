@@ -107,6 +107,7 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge main into it', NONE],
     ['merge origin/main into the branch', NONE],
     ['merge 116 into main', merging('116')],
+    ['merge 116 into main please', merging('116')],
     ['merge the PR into main', MERGE],
     ['merge it into the main branch', MERGE],
     // A merge into anything but the base names a local merge.
@@ -204,6 +205,10 @@ describe('merges, approvals, releases and review replies', () => {
   // The questions the gate's refusals give the agent to ask (register.ts GH_ASK).
   test.each([
     ['Merge #116?', merging('116')],
+    // An agent told to put names in backticks may backtick the number too.
+    ['Merge `#116`?', merging('116')],
+    ['Merge `#116` into `main` now?', merging('116')],
+    ['Merge #116 into main now?', merging('116')],
     ['Approve #116?', APPROVE],
     // A bare version's dots end sentences; backticked, it names what is released.
     ['Release `v0.25.0`?', RELEASE],
@@ -214,6 +219,16 @@ describe('merges, approvals, releases and review replies', () => {
     expect(grantOf('yes', question)).toEqual(grant);
     expect(holdsOf('not yet', question)).toBe(true);
   });
+  // A branch merged into the base is a local merge, not a pull request's.
+  test.each([
+    'Merge `fix/x` into `main`?',
+    'Merge `feature` into `main` now?',
+    'Merge `fix/x` into main now?',
+    'Merge `v0.25.0` into main now?',
+    'Merge fix/x into main?',
+    'Merge `fix/x` to main now?',
+    'Should I merge fix/x against the base please?',
+  ])('a yes to "%s" grants no merge', (question) => expect(grantOf('yes', question)).toEqual(NONE));
   test.each([
     ['Should I respond to the review on #116?', REPLY],
     ['Should I respond to the comments?', NONE],
