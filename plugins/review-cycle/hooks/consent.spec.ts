@@ -957,6 +957,11 @@ describe('finishing a history command', () => {
     ['finish our rebase', finish('rebase')],
     ['continue that cherrypick', finish('cherry-pick')],
     ['finish the current merge', finish('merge')],
+    ['continue with the rebase', finish('rebase')],
+    ['finish up the rebase', finish('rebase')],
+    ['carry on with the cherry-pick', finish('cherry-pick')],
+    ['continue rebasing', finish('rebase')],
+    ['resume the revert', finish('revert')],
   ])('%j asks for that --continue, not a commit', (prompt, grant) => {
     expect(grantOf(prompt)).toEqual(grant);
   });
@@ -982,5 +987,38 @@ describe('finishing a history command', () => {
     expect(grantOf('yes', 'Commit the resolution to `fix/x` and finish the revert?')).toEqual(
       finish('revert'),
     );
+    expect(grantOf('yes', 'Should I continue the rebase on `fix/x`?')).toEqual(finish('rebase'));
+  });
+  test.each(['continue', 'ok continue', 'yes, continue', 'go on', 'carry on', 'keep going'])(
+    '%j answers an offer to finish with that finish alone',
+    (reply) => {
+      expect(grantOf(reply, 'Should I continue the rebase?')).toEqual(finish('rebase'));
+      expect(grantOf(reply, 'Should I finish the merge and push?')).toEqual(finish('merge'));
+    },
+  );
+  test.each([
+    ['finish the merge of #12', ''],
+    ['continue the revert of #12', ''],
+    ['yes', 'Should I continue merging #12 and #13?'],
+  ])('%j names a pull request, not a --continue', (prompt, offer) => {
+    expect(grantOf(prompt, offer).finish).toEqual([]);
+  });
+  test.each([
+    'continue merging PR 131',
+    'continue merging the other PRs',
+    "don't resume the merge of PR #12",
+    "don't continue with the merge of PR #12",
+    "don't carry on with the merge of the PRs",
+  ])('%j grants no finish and still holds the merge', (prompt) => {
+    expect(grantOf(prompt).finish).toEqual([]);
+    expect(holdsOf(prompt)).toBe(true);
+  });
+  test("a merge of pull requests still holds when it isn't asked for", () => {
+    expect(holdsOf("don't continue merging the PRs yet")).toBe(true);
+  });
+  test.each(['continue', 'keep going', 'go on'])('%j answers nothing else', (reply) => {
+    expect(grantOf(reply)).toEqual(NONE);
+    expect(grantOf(reply, 'Should I push `fix/x`?')).toEqual(NONE);
+    expect(grantOf(reply, 'Should I commit it?')).toEqual(NONE);
   });
 });

@@ -3616,6 +3616,22 @@ describe('the stop-before setting', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
   });
+  test('"ok continue" to the offer continues, and commits nothing else', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('commit') } });
+    await review($);
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'GIT_EDITOR=true git rebase --continue'), 'commit')).toBe(true);
+    await ($ as any).turn.complete({
+      answer: 'Reviewed and clean. Commit the resolution to `fix/x` and finish the rebase?',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 'main-1',
+      reason: 'answer',
+    });
+    await say($, 'ok continue');
+    expect(denied(await bash($, 'git commit -am x'), "doesn't ask for a commit")).toBe(true);
+    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
+  });
   test('a finish waiting on CI lets nothing through', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('commit') } });
     await review($);
