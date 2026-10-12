@@ -320,12 +320,31 @@ function commits(sub: string): boolean {
   return sub === 'commit' || sub === 'push' || HISTORY.has(sub);
 }
 
-// A fast-forward pull records no commit. The last of `--ff`, `--no-ff` and
-// `--ff-only` wins, and a run-time word could be any; `merge --ff-only -s ours`
-// still records a merge, so merge is not included.
+// An allowlist, since `-s ours` merges despite `--ff-only` (git 2.56) and has
+// too many spellings to block; a `-c` setting can change the merge too.
+const FAST_FORWARD_OPTION =
+  /^(--(no-)?ff(-only)?|-[qvn]+|--(quiet|verbose|(no-)?stat|no-edit|(no-)?autostash)|-X.*|--strategy-option(=.*)?)$/;
+
+// The last of `--ff`, `--no-ff`, `--ff-only` wins.
 function fastForwardOnly(g: GitCall): boolean {
-  if (g.sub !== 'pull' || g.args.some((w) => w.dynamic)) return false;
+  if ((g.sub !== 'pull' && g.sub !== 'merge') || g.config.length > 0) return false;
+  if (
+    g.args.some((w) => w.dynamic || (w.text.startsWith('-') && !FAST_FORWARD_OPTION.test(w.text)))
+  )
+    return false;
   return g.args.findLast((w) => /^--(no-)?ff(-only)?$/.test(w.text))?.text === '--ff-only';
+}
+
+function uploadPacks(args: Word[]): string {
+  return args
+    .flatMap((w, i) =>
+      w.text === '--upload-pack'
+        ? [args[i + 1]?.text ?? '']
+        : w.text.startsWith('--upload-pack=')
+          ? [w.text.slice('--upload-pack='.length)]
+          : [],
+    )
+    .join(' ');
 }
 
 function records(g: GitCall): boolean {
@@ -493,15 +512,19 @@ function hidden(statements: Statement[], text: string, aliases: ShellAliases): s
       if (sub === 'subtree' && k.git.args.some((w) => /^(push|add|merge|pull)$/.test(w.text))) {
         return 'git subtree, which commits or pushes where the gate cannot judge it';
       }
+      // Of a pull's words, only `--upload-pack` runs a program; a merge's run
+      // none, so a branch or message naming `git push` is data.
+      const pulled =
+        sub === 'pull'
+          ? ` ${uploadPacks(k.git.args)} ${st.heredocs.map((h) => h.body).join(' ')}`
+          : '';
       if (records(k.git) || sub === 'add') {
         if (nested) return `git ${sub} inside a substitution, group or heredoc`;
         if (k.via) return `git ${sub} run through ${k.via}`;
+        if (MENTION.test(pulled)) return `git ${sub} running a git command that commits or pushes`;
         return null;
       }
-      // A fast-forward's own `git pull` is not a mention; its arguments may be.
-      const judged = fastForwardOnly(k.git)
-        ? ` ${[...k.git.args.map((w) => w.text), ...st.heredocs.map((h) => h.body)].join(' ')}`
-        : own;
+      const judged = sub === 'pull' ? pulled : sub === 'merge' ? '' : own;
       if (!READ_ONLY.has(sub) && MENTION.test(judged)) {
         return `git ${sub} running a git command that commits or pushes`;
       }
@@ -734,8 +757,10 @@ function judge(command: string, aliases: ShellAliases): Classification {
   if (reason) return { kind: 'refuse', reason: `${reason}. ${SHAPE}` };
 
   const all = sts.map((st) => ({ st, k: kindOf(st) }));
-  const sensitive = all.some(({ k }) => k.kind === 'git' && records(k.git));
-  if (!sensitive) return { kind: 'none' };
+  const sensitive = all.find(({ k }) => k.kind === 'git' && records(k.git))?.k;
+  if (sensitive?.kind !== 'git') return { kind: 'none' };
+  // Named in refusals, so a step refused for sharing a command says what it shared it with.
+  const alongside = `alongside \`git ${sensitive.git.sub}\`, which the gate checks as a commit or push`;
   // A pipe into a plain output filter at the very end reads what the commit or
   // push printed and runs nothing, so it is set aside before judging.
   let end = all.length;
@@ -761,8 +786,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
         reason: `a commit or push in a command joined with \`${st.op}\`. ${SHAPE}`,
       };
     }
-    if (st.group)
-      return { kind: 'refuse', reason: `a group or function alongside a commit or push. ${SHAPE}` };
+    if (st.group) return { kind: 'refuse', reason: `a group or function ${alongside}. ${SHAPE}` };
     if (k.kind === 'refuse') return { kind: 'refuse', reason: `${k.reason}. ${SHAPE}` };
     if (k.kind === 'assign') continue;
     if (k.kind === 'cd') {
@@ -779,14 +803,14 @@ function judge(command: string, aliases: ShellAliases): Classification {
     if (k.kind === 'other')
       return {
         kind: 'refuse',
-        reason: `${k.head ? `\`${k.head}\`` : 'an assignment with a substitution or redirect'} alongside a commit or push. ${SHAPE}`,
+        reason: `${k.head ? `\`${k.head}\`` : 'an assignment with a substitution or redirect'} ${alongside}. ${SHAPE}`,
       };
     const g = k.git;
     const d = joinDir(base, g.dirs);
     if (reads(g.sub, g.args)) continue;
     if ((NEUTRAL.has(g.sub) || fastForwardOnly(g)) && !commit && history === null && !push) {
-      // A pull moves HEAD, and `--squash` stages what it brings in.
-      if (MOVES_INDEX.has(g.sub) || g.sub === 'pull') movedIndex = g.sub;
+      // A fast-forward moves HEAD, and `--squash` stages what it brings in.
+      if (MOVES_INDEX.has(g.sub) || g.sub === 'pull' || g.sub === 'merge') movedIndex = g.sub;
       // Any of them can move HEAD, a branch, an upstream or a remote URL.
       retargeted ??= g.sub;
       continue;
@@ -862,7 +886,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
           commit = { all: false, amend: false, dryRun: false, config: g.config, finishes };
         }
       } else {
-        return { kind: 'refuse', reason: `git ${g.sub} alongside a commit or push. ${SHAPE}` };
+        return { kind: 'refuse', reason: `git ${g.sub} ${alongside}. ${SHAPE}` };
       }
     }
   }
