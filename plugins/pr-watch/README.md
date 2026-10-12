@@ -80,4 +80,4 @@ claude plugin marketplace add oakoss/claude-plugins
 claude plugin install pr-watch@oakoss
 ```
 
-pr-watch is a mod: Claude Code runs its hooks module itself. It is built and tested against Claude Code 2.1.289.
+pr-watch is a mod: Claude Code runs its hooks module itself.
