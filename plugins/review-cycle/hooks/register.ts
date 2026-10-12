@@ -941,9 +941,12 @@ function onGithubToolError(
     (next.error.kind === 'timeout'
       ? 'it ran out of time; calling it again may work'
       : next.error.kind);
-  return deny(
-    `the gate could not check this call (${why}), so it is refused. Tell the user; they can make the change on GitHub themselves.`,
-  );
+  return deny(gateFailed('could not check this call', why, 'making the change on GitHub'));
+}
+
+// Offering another route as the next step would skip the check that failed.
+function gateFailed(what: string, why: string, elsewhere: string): string {
+  return `the gate ${what} (${why}), so it is refused. Tell the user what failed and stop; suggest ${elsewhere} only if they ask.`;
 }
 
 // A reviewer's Bash is not refused, since it cannot be read for where it
@@ -1851,7 +1854,7 @@ function onBashError(
     );
   }
   return deny(
-    `the gate failed while checking this command (${why}), so it is refused. The user can run it from their own terminal.`,
+    gateFailed('failed while checking this command', why, 'running the step outside the gate'),
   );
 }
 

@@ -863,6 +863,17 @@ describe('refuses every other shape that commits or pushes', () => {
       expect.objectContaining({ reason: expect.stringContaining('alongside `git commit`') }),
     );
   });
+  test('a rebase --exec refusal offers a gated route, not the terminal', () => {
+    const r = classify('git rebase -x "make test" main');
+    expect(r).toEqual(
+      expect.objectContaining({
+        reason: expect.stringContaining(
+          'that runs it once, not after every commit, so ask the user when a per-commit run matters',
+        ),
+      }),
+    );
+    expect(JSON.stringify(r)).not.toContain('terminal');
+  });
 });
 
 describe('aliases', () => {
