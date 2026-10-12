@@ -81,6 +81,8 @@ const VERBS = [
   'approve it',
   'finish the rebase',
   'continue the merge',
+  'carry on with the rebase',
+  'continue merging',
 ];
 const CONDITIONS = [
   '',
@@ -110,6 +112,8 @@ const REPLIES = [
   'looks good',
   'fix the TODO, then delete it',
   'no, not the branch. delete it',
+  'ok continue',
+  'keep going',
 ];
 const OFFERS = [
   '',
@@ -120,6 +124,7 @@ const OFFERS = [
   'Delete `fix/x` from `origin`?',
   'Release `review-cycle@0.27.0`?',
   'Should I merge it when CI passes?',
+  'Should I continue the rebase on `fix/x`?',
 ];
 
 const prompts = [...new Set([...quoted, ...generated, ...REPLIES])];

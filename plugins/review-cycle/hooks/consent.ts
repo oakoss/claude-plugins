@@ -88,9 +88,9 @@ type Family = Readonly<
   } &
     // A merge or approval names a pull request, and nothing else.
     (
-      | { tail: 'pull-request'; numbered?: never; packaged?: never; from?: never }
+      | { tail: 'pull-request'; numbered?: never; packaged?: never; from?: never; on?: never }
       // A publish names a version or a registry, never git work.
-      | { tail: 'publish'; numbered: true; packaged: true; from?: never }
+      | { tail: 'publish'; numbered: true; packaged: true; from?: never; on?: never }
       | {
           tail?: never;
           // A number or "on": "Release 0.25.0?", "Reply to the review on #116?".
@@ -99,6 +99,8 @@ type Family = Readonly<
           packaged?: true;
           // "from" names a pull request's head; after a push it names a source.
           from?: true;
+          // "on" and no number: "finish the rebase on `fix/x`".
+          on?: true;
         }
     )
 >;
@@ -119,6 +121,14 @@ const releasing = (forms: Family['forms']): Family => ({
   packaged: true,
 });
 
+// The operation `prPhrase` reads, its -ing form stripped: "rebasing" is "rebas".
+const OPERATION: Readonly<Record<string, string>> = {
+  rebase: 'rebase',
+  rebas: 'rebase',
+  cherrypick: 'cherrypick',
+  revert: 'revert',
+};
+
 // "finish the rebase", read as one word by `prPhrase`.
 const FINISHED: Readonly<Record<string, Finishes>> = {
   finishmerge: 'merge',
@@ -126,9 +136,11 @@ const FINISHED: Readonly<Record<string, Finishes>> = {
   finishrevert: 'revert',
   finishrebase: 'rebase',
 };
+// An offer to "finish the rebase on `fix/x`" reads its branch as "on it".
 const finishing = (op: string): Family => ({
   forms: [`finish${op}`, `finishing${op}`],
   grants: ['finish'],
+  on: true,
 });
 
 const FAMILIES: readonly Family[] = [
@@ -189,12 +201,17 @@ const OFFERED: Readonly<Record<string, Family>> = Object.fromEntries(
 function prPhrase(text: string): string {
   return (
     text
-      // "finish the rebase", "continue the cherry-pick": the history command's
-      // `--continue`, so the merge here is not a pull request's.
+      // A history command's `--continue` ("carry on rebasing").
       .replaceAll(
-        /\b(?:(finish|continue|complete)|(finishing|continuing|completing))\s+(?:(?:the|this|that|our)\s+)?(?:current\s+)?(rebase|merge|cherry[\s-]?pick|revert)\b/gi,
+        /\b(?:(finish|continue|complete|resume|carry\s+on)|(finishing|continuing|completing|resuming|carrying\s+on))\s+(?:up\s+)?(?:with\s+)?(?:(?:the|this|that|our)\s+)?(?:current\s+)?(rebas(?:e|ing)|cherry[\s-]?pick(?:ing)?|revert(?:ing)?)\b/gi,
         (_m: string, verb: string | undefined, _ing: string | undefined, op: string) =>
-          `${verb ? 'finish' : 'finishing'}${op.toLowerCase().replaceAll(/[\s-]/g, '')}`,
+          `${verb ? 'finish' : 'finishing'}${OPERATION[op.toLowerCase().replaceAll(/[\s-]|ing$/g, '')]}`,
+      )
+      // Only the plainest forms of a merge's: "continue merging" or "resume the
+      // merge of #12" usually means pull requests, and must keep their hold.
+      .replaceAll(
+        /\b(?:(finish|continue|complete)|(finishing|continuing|completing))\s+(?:(?:the|this|that|our)\s+)?(?:current\s+)?merge\b/gi,
+        (_m: string, verb?: string) => (verb ? 'finishmerge' : 'finishingmerge'),
       )
       .replaceAll(
         /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
@@ -587,6 +604,12 @@ const AFFIRMATIVE = new RegExp(
   String.raw`^(?:${YES}|(?:${AGREEMENT}[\s,.!]+)+${GO_AHEAD}|${GO_AHEAD})\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$`,
   'i',
 );
+// "ok continue", "keep going": a yes only to an offer to finish an operation.
+// Anywhere else "continue" means keep working, so it grants nothing.
+const CONTINUE_REPLY = new RegExp(
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:continue|go on|carry on|keep going)\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$`,
+  'i',
+);
 
 // Quoted text is a commit message or a name, never part of the request, even
 // when it runs over several lines.
@@ -615,6 +638,7 @@ function isTail(tail: string[], family: Family): boolean {
     const after = tail.slice(i + 1).find((x) => !/^(the|a|my|our|your)$/.test(x)) ?? '';
     if (publish && where && !PACKAGE.has(after)) return false;
     if (family.numbered && (word === 'on' || /^\d+$/.test(word))) continue;
+    if (family.on && word === 'on') continue;
     if (family.packaged && PACKAGE.has(word)) continue;
     // "Publish branch" is a first push in editors, so a publish names no git work.
     if (publish && !PUBLISH_TAIL.has(word)) return false;
@@ -996,6 +1020,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     if (!offer.merge || offer.mergeNamed.length > 0) return offer;
     return settled({ ...offer, mergeNamed: unnamedMerge('', previousAnswer) });
   }
+  if (CONTINUE_REPLY.test(text))
+    return settled({ ...fresh(), finish: asked(previousAnswer).finish });
   // "delete it", answering an offer to delete a branch, names that branch;
   // only as the whole reply, since "delete it, meaning the TODO" names another.
   const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
