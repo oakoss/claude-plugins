@@ -678,7 +678,7 @@ describe('where the commit lands', () => {
     expect(
       denied(
         await bash($, 'git -C /nope commit -m x'),
-        'so it is refused. The user can run it from their own terminal.',
+        'so it is refused. Tell the user what failed and stop; suggest running the step outside the gate only if they ask.',
       ),
     ).toBe(true);
   });

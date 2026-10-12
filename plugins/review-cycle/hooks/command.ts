@@ -872,7 +872,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
         if (g.sub === 'rebase' && g.args.some(execs)) {
           return {
             kind: 'refuse',
-            reason: `git ${g.sub} --exec, which runs commands the gate cannot see. The user can run it from their terminal`,
+            reason: `git ${g.sub} --exec, which runs commands the gate cannot see. Run the rebase without --exec and each command as its own step afterwards; that runs it once, not after every commit, so ask the user when a per-commit run matters`,
           };
         }
         if (finishes === null) {
