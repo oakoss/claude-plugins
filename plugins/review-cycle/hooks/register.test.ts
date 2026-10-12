@@ -2789,23 +2789,37 @@ function pushing(setup: Partial<World>): Partial<World> {
 const RAN_PUSH =
   'review-cycle: ran a push without asking, since the stop-before setting is open PR (.claude/settings.local.json).';
 
+// The on-screen line for a step the setting runs unasked is a /config choice.
+const NOTICE = { options: { unaskedNotice: true } };
+
 describe('the stop-before setting', () => {
-  test('a push below the rung runs without asking, logged and told to the agent', async ($, on) => {
+  test('a push below the rung runs without asking, told to the agent but not shown', async ($, on) => {
     const w = fakeWorld(on, pushing({ settings: { local: stops('open PR') } }));
     await say($, 'fix the parser');
     const r = await bash($, 'git push');
     expect(ran(r)).toBe(true);
     expect(contextOf(r)).toEqual([RAN_PUSH]);
-    expect(w.logs).toEqual([RAN_PUSH]);
+    expect(w.logs ?? []).toEqual([]);
   });
-  test('a push a script makes below the rung is logged, not reported as unasked', async ($, on) => {
+  test('with the notice on, a push below the rung is shown too', NOTICE, async ($, on) => {
     const w = fakeWorld(on, pushing({ settings: { local: stops('open PR') } }));
     await say($, 'fix the parser');
-    const context = contextOf(await bash($, './release.sh'));
-    expect(has(context, RAN_PUSH)).toBe(true);
-    expect(has(context, 'without the user asking')).toBe(false);
-    expect(w.logs).toHaveLength(1);
+    const r = await bash($, 'git push');
+    expect(contextOf(r)).toEqual([RAN_PUSH]);
+    expect(w.logs).toEqual([RAN_PUSH]);
   });
+  test(
+    'a push a script makes below the rung is logged, not reported as unasked',
+    NOTICE,
+    async ($, on) => {
+      const w = fakeWorld(on, pushing({ settings: { local: stops('open PR') } }));
+      await say($, 'fix the parser');
+      const context = contextOf(await bash($, './release.sh'));
+      expect(has(context, RAN_PUSH)).toBe(true);
+      expect(has(context, 'without the user asking')).toBe(false);
+      expect(w.logs).toHaveLength(1);
+    },
+  );
   // Each dry-run output is what git 2.56 printed for that push.
   const asking: [string, readonly string[] | 'fail' | null, string][] = [
     [
@@ -3012,7 +3026,7 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
     expect(w.logs ?? []).toEqual([]);
   });
-  test('never stop lets a pull request run, logged', async ($, on) => {
+  test('never stop lets a pull request run, logged', NOTICE, async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('never stop') } });
     await say($, 'fix the parser');
     expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
@@ -3038,14 +3052,14 @@ describe('the stop-before setting', () => {
     expect(w.logs ?? []).toEqual([]);
   });
   // The note says the step ran, not that it succeeded, so it stands either way.
-  test('a pull request that failed is still noted as run', async ($, on) => {
+  test('a pull request that failed is still noted as run', NOTICE, async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('never stop') }, bashFails: true });
     await say($, 'fix the parser');
     const r = await bash($, 'gh pr create --fill');
     expect(has(contextOf(r), 'ran a pull request without asking')).toBe(true);
     expect(w.logs).toHaveLength(1);
   });
-  test('a permitted push that moved no ref is still noted as run', async ($, on) => {
+  test('a permitted push that moved no ref is still noted as run', NOTICE, async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('open PR') }, git: remoteSide() });
     await say($, 'fix the parser');
     expect(ran(await bash($, 'git push'))).toBe(true);
@@ -3094,6 +3108,8 @@ describe('the stop-before setting', () => {
     const r = await bash($, 'gh pr merge 116 --squash');
     expect(ran(r)).toBe(true);
     expect(has(contextOf(r), 'GitHub reports #116 CLEAN')).toBe(true);
+    // Shown whatever the notice setting: GitHub's state, not the setting, let it run.
+    expect(w.logs?.some((l) => l.includes('GitHub reports #116 CLEAN'))).toBe(true);
     const views = w.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
     expect(views.map((c) => c.argv.slice(3))).toContainEqual([
       '116',
