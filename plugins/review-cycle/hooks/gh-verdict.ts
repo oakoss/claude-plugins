@@ -64,7 +64,7 @@ export function permitted(granted: Grant, ladder: Ladder, held: boolean): Allowe
 // The agent asks in its reply, naming the step and its target, and ends its turn.
 // `shown` is the call as the refusal quotes it.
 export function askThem(naming: string, example: string, shown: string): string {
-  return `stop and ask them in your reply, naming ${naming} with names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${shown}`;
+  return `stop and ask them in your reply, naming ${naming} with branch and version names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${shown}`;
 }
 
 // Why the steps are held, or null when nothing holds them.

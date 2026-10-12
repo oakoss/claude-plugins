@@ -482,7 +482,7 @@ function namesPullRequest(tail: string[]): boolean {
     pr &&
     /^(into|to|against)$/.test(tail[into] ?? '') &&
     where.some((x) => BASE.has(x)) &&
-    where.every((x) => BASE.has(x) || x === 'the' || x === 'branch')
+    where.every((x) => BASE.has(x) || x === 'the' || x === 'branch' || COURTESY.has(x))
   );
 }
 
@@ -901,6 +901,16 @@ function asked(answer: string, heard?: Set<Family>): Grant {
         /^[\w-]+$/.test(name) && !/^(main|master)$/i.test(name)
           ? `${lead}remote`
           : `${lead}\`${name}\``,
+    )
+    // A backticked pull request is still its number, and the base it goes into
+    // its name: "Merge `#163` into `main`?". A named branch or version merged
+    // into, to or against a base stays a branch: "Merge `fix/x` to main?" is a
+    // local merge.
+    .replaceAll(/`(#\d+)`/g, '$1')
+    .replaceAll(/(#\d+\s+into\s+)`(main|master)`/gi, '$1$2')
+    .replaceAll(
+      /(\bmerg(?:e|ing)\s+)(?:`[\w./-]+`|[\w.-]+\/[\w./-]*[\w-])(?=\s+(?:into|to|against)\b)/gi,
+      '$1branch',
     )
     // A backticked hand-back stays a word: "or would you `rather` do it?".
     .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>
