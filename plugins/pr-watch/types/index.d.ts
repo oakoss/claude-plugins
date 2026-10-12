@@ -86,6 +86,8 @@ export type Watch = {
   heard?: { since: string | null; keys: string[]; streak?: number };
 };
 
+export type Held = { id: string; label: string; url: string; news: string[]; ready: string | null };
+
 declare module 'claude-code' {
   interface PluginState {
     'pr-watch': {
@@ -94,6 +96,8 @@ declare module 'claude-code' {
       // when the workflow has none.
       estimates: Record<string, number>;
       now: number;
+      // On the host, so a reload mid-turn keeps held news already saved as told.
+      turn: { isTurning: boolean; held: Held[]; ownMerges: string[] };
     };
   }
 }

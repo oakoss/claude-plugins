@@ -36,9 +36,11 @@ type Gh = {
   readsFail?: boolean;
   estimateFails?: number;
   partial?: boolean;
-  // Holds the first PR read, or every pushed-branch read, until the test calls `release`.
+  // Holds the first PR read, every pushed-branch read, or the next gh pr view,
+  // until the test calls `release`.
   holdFirst?: boolean;
   holdPush?: boolean;
+  holdView?: boolean;
   // pr-watch's prompts are refused: the hook throws, so the kit finds nothing beneath.
   wakeRejects?: boolean;
   release?: () => void;
@@ -161,7 +163,14 @@ function world(
     if (argv.startsWith('gh pr view')) {
       seen.order.push(argv);
       if (gh.view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
-      return { value: { exitCode: 0, stdout: gh.view, stderr: '' } };
+      const viewed = { value: { exitCode: 0, stdout: gh.view, stderr: '' } };
+      if (gh.holdView) {
+        gh.holdView = false;
+        return new Promise((resolve) => {
+          gh.release = () => resolve(viewed);
+        });
+      }
+      return viewed;
     }
     if (argv.includes('mergeCommit {') && (gh.mergedFails ?? 0) > 0) {
       gh.mergedFails = (gh.mergedFails ?? 0) - 1;
@@ -453,6 +462,171 @@ function commentedJson(comments: unknown[], reviews: unknown[] = [], suites = [R
   body.data.viewer = { login: 'me' };
   return JSON.stringify(body);
 }
+
+describe('news held through a turn', () => {
+  const turn = { text: 'go', turnId: 't1' };
+  const done = { answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' };
+  const OPEN_VIEW = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+  const MERGED_VIEW = JSON.stringify({
+    url: URL,
+    state: 'MERGED',
+    mergedAt: '2026-10-03T22:01:00Z',
+  });
+
+  for (const [what, view, wakes] of [
+    ['a ready pull request merged during the turn is not called ready', MERGED_VIEW, 0],
+    ['one still open after the turn is told then', OPEN_VIEW, 1],
+    ['one that cannot be read again is told as held', undefined, 1],
+  ] as const) {
+    test(what, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: prJson(), view };
+      const seen = world(on, gh);
+      on('turn.start', () => ({ turnId: turn.turnId }));
+      on('turn.complete', () => ({ text: done.answer }));
+      await start($);
+      await ($ as any).turn.start(turn);
+      await create($);
+      await clock.advance(1000);
+      expect(seen.wakes).toEqual([]);
+      await ($ as any).turn.complete(done);
+      await clock.advance(1);
+      expect(seen.order.filter((o) => o.startsWith(`gh pr view ${URL}`))).toHaveLength(1);
+      expect(seen.wakes).toHaveLength(wakes);
+      if (wakes) expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    });
+  }
+
+  const alice = { author: { login: 'alice' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
+  for (const [view, isReady] of [
+    [OPEN_VIEW, true],
+    [MERGED_VIEW, false],
+  ] as const) {
+    test(`news from two reads is told together, ready only while ${isReady ? 'open' : 'unmerged'}`, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: commentedJson([], [], []), view };
+      const seen = world(on, gh);
+      on('turn.start', () => ({ turnId: turn.turnId }));
+      on('turn.complete', () => ({ text: done.answer }));
+      await start($);
+      await ($ as any).turn.start(turn);
+      await create($);
+      await clock.advance(1000);
+      gh.pr = commentedJson([alice], [], []);
+      await clock.advance(61_000);
+      expect(seen.wakes).toEqual([]);
+      await ($ as any).turn.complete(done);
+      await clock.advance(1);
+      expect(seen.wakes).toHaveLength(1);
+      expect(seen.wakes[0]).toContain('@alice commented on o/r#128');
+      if (isReady) expect(seen.wakes[0]).toContain('ready to merge');
+      else expect(seen.wakes[0]).not.toContain('ready to merge');
+    });
+  }
+
+  test('a ready pull request whose checks start again in the turn is not called ready', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    await clock.advance(61_000);
+    gh.pr = prJson();
+    await clock.advance(61_000);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    await clock.advance(61_000);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('ready twice in one turn is told once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    await clock.advance(61_000);
+    gh.pr = prJson();
+    await clock.advance(61_000);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]!.split('ready to merge')).toHaveLength(2);
+  });
+
+  test('a turn that starts while the news is read again holds it until that turn ends', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    gh.holdView = true;
+    await ($ as any).turn.complete(done);
+    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await ($ as any).turn.start(turn);
+    gh.release!();
+    await clock.advance(1);
+    expect(seen.wakes).toEqual([]);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('ready to merge');
+  });
+
+  test('a turn whose end fails beneath pr-watch still ends the hold', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => {
+      throw new Error('beneath');
+    });
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    await ($ as any).turn.complete(done).catch(() => null);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test("a subagent's turn ending leaves the news held, and a later turn tells it no more", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN_VIEW };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: turn.turnId }));
+    on('turn.complete', () => ({ text: done.answer }));
+    await start($);
+    await ($ as any).turn.start(turn);
+    await create($);
+    await clock.advance(1000);
+    await ($ as any).turn.complete({ ...done, agentId: 'sub-1' });
+    await clock.advance(1);
+    expect(seen.wakes).toEqual([]);
+    expect(seen.order.filter((o) => o.startsWith('gh pr view'))).toEqual([]);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    await ($ as any).turn.start(turn);
+    await ($ as any).turn.complete(done);
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+  });
+});
 
 describe('telling Claude', () => {
   test('wakes it once when the pull request becomes ready to merge', async ($, on) => {
@@ -870,7 +1044,7 @@ describe('a merged pull request', () => {
     expect(reads(seen.runs)).toBe(settled);
   });
 
-  test('one Claude merges unwatched is followed onto its base branch, and told once', async ($, on) => {
+  test('one Claude merges unwatched is followed onto its base branch, and its passed checks wake no one', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), view: VIEW };
     const seen = world(on, gh, '');
@@ -886,10 +1060,32 @@ describe('a merged pull request', () => {
     gh.pr = mergedJson('COMPLETED', 'SUCCESS');
     // Past the 90 s after the merge in which a later run could still start.
     await clock.advance(92_000);
+    expect(seen.wakes).toEqual([]);
+  });
+  test('a merge Claude made still wakes it when the merge commit fails', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), view: VIEW };
+    const seen = world(on, gh, '');
+    await start($);
+    await create($, 'gh pr merge 128 --squash');
+    await clock.advance(1000);
+    gh.pr = mergedJson('COMPLETED', 'FAILURE');
+    await clock.advance(92_000);
     expect(seen.wakes).toHaveLength(1);
-    expect(seen.wakes[0]).toContain(
-      "o/r#128 merged into main, and the merge commit's checks passed.",
-    );
+    expect(seen.wakes[0]).toContain('failed on the merge commit for o/r#128');
+  });
+  test('a merge GitHub makes later on --auto is news, its passed checks told', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const open = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), view: open };
+    const seen = world(on, gh, '');
+    await start($);
+    await create($, 'gh pr merge 128 --squash --auto');
+    await clock.advance(1000);
+    gh.pr = mergedJson('COMPLETED', 'SUCCESS');
+    await clock.advance(92_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain("merge commit's checks passed");
   });
 
   test('a merge names its repository to gh, and a bare merge runs nothing more', async ($, on) => {

@@ -29,6 +29,7 @@ import {
   tellsOf,
   toldAfter,
   wakeOf,
+  heldWith,
   type BotSetting,
   type Memory,
   type WakeSetting,
@@ -793,7 +794,37 @@ describe('wakeOf', () => {
       'The checks on the push to feat/x on o/r passed.',
     );
     const early = wakeOf(pr, passed, verdictAt(passed), { told: ['k'] }, { isEarly: true });
-    expect(early).toEqual({ text: null, told: [], heard: { since: null, keys: [] } });
+    expect(early).toEqual({
+      text: null,
+      news: [],
+      ready: null,
+      told: [],
+      heard: { since: null, keys: [] },
+    });
+  });
+
+  test('a merge Claude made tells a failure but not passed checks', () => {
+    const own = { isOwnMerge: true };
+    const passed = merged([green()]);
+    const quiet = wakeOf(pr, passed, verdictAt(passed), {}, own);
+    expect(quiet.text).toBeNull();
+    expect(quiet.told).toHaveLength(1);
+    const failed = merged([codeql('FAILURE')]);
+    expect(wakeOf(pr, failed, verdictAt(failed), {}, own).text).toContain('CodeQL: Analyze failed');
+  });
+
+  test('names the ready line among the news, and holds each line once', () => {
+    const ready = pull([ci([job('Test', 'SUCCESS')])]);
+    const woke = wakeOf(pr, ready, verdictAt(ready), {});
+    expect(woke.ready).toBe('GitHub reports o/r#128 ready to merge.');
+    expect(woke.news).toContain(woke.ready);
+    const held = { id: 'x', label: '#128', url: pr.url, news: woke.news, ready: woke.ready };
+    const again = heldWith({ ...held, news: ['@alice commented'], ready: null }, held);
+    expect(again.news).toEqual(['@alice commented', woke.ready]);
+    expect(heldWith(held, { ...held, news: ['@bob commented'], ready: null }).ready).toBe(
+      woke.ready,
+    );
+    expect(heldWith(held, { ...held, news: [], ready: 'gone' }).ready).toBeNull();
   });
 
   test('tells each push its own passed checks', () => {
@@ -922,7 +953,7 @@ describe('wakeOf', () => {
 
   test('hears nothing from a read that cannot tell whose comments are whose', () => {
     const p = pull([ci([job('Test', null)])], { activity: null });
-    expect(after(p)).toEqual({ text: null, told: [], heard: undefined });
+    expect(after(p)).toEqual({ text: null, news: [], ready: null, told: [], heard: undefined });
     const heard = { since: null, keys: ['https://x/alice'] };
     expect(after(p, { heard }).heard).toEqual(heard);
     const known = pull([ci([job('Test', null)])], {

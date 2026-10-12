@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Pull, Watch, Workflow } from '../types';
+import type { Activity, Held, Pull, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -482,6 +482,9 @@ const keyOf = (watch: Who, what: string) =>
     what,
   ]);
 
+export const isToldReady = (watch: Who & Pick<Watch, 'told'>) =>
+  (watch.told ?? []).includes(keyOf(watch, 'ready'));
+
 // A ready or passed state, conflicts and requested changes whatever the checks
 // say, and every failing run the line follows, gating or not, as soon as a job
 // in it fails. A run is told once, by its first failed jobs: later ones, a
@@ -527,7 +530,30 @@ function conditionsOf(
 }
 
 export type Memory = Pick<Watch, 'told' | 'heard'>;
-export type Wake = { text: string | null; told: string[]; heard: Watch['heard'] };
+// `news` is what `text` says, and `ready` the one of them that says the pull
+// request is ready, so a notice held past a merge can leave it out.
+export type Wake = {
+  text: string | null;
+  news: string[];
+  ready: string | null;
+  told: string[];
+  heard: Watch['heard'];
+};
+
+// News held again for the same watch: each line once, and the ready line only
+// while it is one of them.
+export function heldWith(was: Held, next: Held): Held {
+  const news = [...new Set([...was.news, ...next.news])];
+  const ready = next.ready ?? was.ready;
+  return { ...next, news, ready: ready !== null && news.includes(ready) ? ready : null };
+}
+
+export function noticeOf(news: readonly string[], url: string): string {
+  return [
+    `pr-watch: ${news.join(' ')}`,
+    `This is news from pr-watch, not a request to merge. ${url}`,
+  ].join('\n');
+}
 
 // With waking off nothing new counts as told, so what lasts is told once it is
 // on again, while what ends is let go, so its return is news.
@@ -601,13 +627,14 @@ const PEOPLE_ONLY = tellsOf('checks and comments', 'never');
 
 // What Claude is told unasked: each condition it has not been told of while it
 // lasts, and each comment or review it has not heard that `tells` lets through.
-// `isEarly` holds back a passed merge whose grace has not ended.
+// `isEarly` holds back a passed merge whose grace has not ended; `isOwnMerge`
+// counts a passed merge Claude made as told, since only a failure is news then.
 export function wakeOf(
   watch: Pick<Watch, 'repo' | 'number' | 'push' | 'url'>,
   pull: Pull,
   verdict: Verdict,
   last: Memory,
-  { isEarly = false, tells = PEOPLE_ONLY } = {},
+  { isEarly = false, isOwnMerge = false, tells = PEOPLE_ONLY } = {},
 ): Wake {
   const name = watch.push
     ? `the push to ${watch.push.branch} on ${watch.repo}`
@@ -615,8 +642,13 @@ export function wakeOf(
   const told = last.told ?? [];
   const news: string[] = [];
   const kept: string[] = [];
+  let ready: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
-    if (!told.includes(c.key)) news.push(c.text);
+    const isQuiet = isOwnMerge && c.key === keyOf(watch, 'passed');
+    if (!told.includes(c.key) && !isQuiet) {
+      news.push(c.text);
+      if (c.key === keyOf(watch, 'ready')) ready = c.text;
+    }
     kept.push(c.key);
   }
   // GitHub reports UNKNOWN while it recomputes the merge state; ready stands only
@@ -639,12 +671,8 @@ export function wakeOf(
     );
   }
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
-  if (news.length === 0) return { text: null, told: kept, heard };
-  const text = [
-    `pr-watch: ${news.join(' ')}`,
-    `This is news from pr-watch, not a request to merge. ${watch.url}`,
-  ].join('\n');
-  return { text, told: kept, heard };
+  if (news.length === 0) return { text: null, news, ready, told: kept, heard };
+  return { text: noticeOf(news, watch.url), news, ready, told: kept, heard };
 }
 
 export function clockText(ms: number): string {
