@@ -75,6 +75,8 @@ const VERBS = [
   'merge 131 and 130',
   'merge 130 into main',
   'merge main into it',
+  'merge the first PR',
+  'merge the first',
   'push it',
   'commit it',
   'release it',
@@ -96,7 +98,17 @@ const CONDITIONS = [
   ' once its fixed',
   ' when you are done',
 ];
-const TAILS = ['', ', then release it', ', but hold off', '. push it', ' please', '?'];
+const TAILS = [
+  '',
+  ', then release it',
+  ', but hold off',
+  '. push it',
+  ' please',
+  '?',
+  ' first',
+  ' first please',
+  ' first then start on the docs',
+];
 const generated = LEADS.flatMap((lead) =>
   VERBS.flatMap((verb) =>
     CONDITIONS.flatMap((when) => TAILS.map((tail) => `${lead}${verb}${when}${tail}`)),
@@ -133,6 +145,12 @@ const OFFERS = [
   'Delete `fix/x` from `origin`?',
   'Release `review-cycle@0.27.0`?',
   'Should I merge it when CI passes?',
+  'Should I merge #130, if the tests pass?',
+  'Should I merge #130 first?',
+  'Should I merge #130 first, but only if CI passes?',
+  'Should I push it, and when CI passes, merge #130?',
+  'Should I merge #130 first? If the tests pass.',
+  'If that looks right, should I push?',
   'Should I continue the rebase on `fix/x`?',
 ];
 

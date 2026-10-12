@@ -36,6 +36,14 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge it', MERGE],
     ['Ok, merge the PR', MERGE],
     ['Can we merge 73?', merging('73')],
+    // A closing "first" orders the step; elsewhere it is an ordinal.
+    ['Lets merge 168 first then start on cpl-mm6y', merging('168')],
+    ['merge it first please', MERGE],
+    ['release it first', RELEASE],
+    ['merge the first PR', NONE],
+    ['merge the first', NONE],
+    ['approve the first', NONE],
+    ["don't merge it first", NONE],
     // A condition auto-merge waits on grants only `gh pr merge --auto`.
     ['lets merge it when its ready', AUTO],
     ["Let's merge it when it's ready.", AUTO],
@@ -191,6 +199,8 @@ describe('merges, approvals, releases and review replies', () => {
   });
   test('a yes to an offered merge or release grants it', () => {
     expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));
+    // An offer's closing "first" stays unread until offers read every condition (cpl-pakf).
+    expect(grantOf('yes', 'Should I merge #168 first, but only if CI passes?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I cut the release?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Publish `review-cycle@0.25.0` to npm?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I mark #119 ready for review?')).toEqual(PR);
@@ -332,6 +342,8 @@ describe('grants on a request', () => {
     ['ship it', SHIP],
     ['Ok, lets ship', SHIP],
     ['commit and push', BOTH],
+    ['push it first', PUSH],
+    ['commit it first, then push', BOTH],
     ["Commit it. Don't push.", COMMIT],
     ['I want you to commit this', COMMIT],
     ['can you push?', PUSH],
