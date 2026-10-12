@@ -30,6 +30,12 @@
       "title": "Review nudge",
       "description": "At the end of a turn that left changes no reviewer has seen, prompt the agent to run /review-cycle:review, unless its last message ends with a question mark. A project's .claude/settings.json can turn it off; .claude/settings.local.json can set it either way. Only you can change this, here in /config.",
       "default": true
+    },
+    "unaskedNotice": {
+      "type": "boolean",
+      "title": "Unasked-step notice",
+      "description": "Show a line on screen when a push, pull request, merge or release runs without your asking because Stop before allows it. The agent is told either way; a merge run now on a request to merge once ready is always shown. Only you can change this, here in /config.",
+      "default": false
     }
   }
 }

@@ -9,7 +9,11 @@ type Handler = (...args: unknown[]) => unknown;
 type Next = (e: unknown) => Promise<unknown>;
 
 // Every handler registered for each `event:matcher`, in registration order.
-function load(enabled: boolean, stopBefore?: string): Map<string, Handler[]> {
+function load(
+  enabled: boolean,
+  stopBefore?: string,
+  more: Record<string, unknown> = {},
+): Map<string, Handler[]> {
   const hooks = new Map<string, Handler[]>();
   const on = (event: string, a: unknown, b?: unknown) => {
     const matcher = typeof a === 'function' ? undefined : (a as { tool?: string; key?: string });
@@ -18,7 +22,11 @@ function load(enabled: boolean, stopBefore?: string): Map<string, Handler[]> {
     hooks.set(key, [...(hooks.get(key) ?? []), handler]);
     return { catch: () => null };
   };
-  (register as unknown as (on: unknown, options: unknown) => void)(on, { enabled, stopBefore });
+  (register as unknown as (on: unknown, options: unknown) => void)(on, {
+    enabled,
+    stopBefore,
+    ...more,
+  });
   return hooks;
 }
 
@@ -119,11 +127,17 @@ describe('with the gate on', () => {
     };
     const e = { tool: 'Bash', command: 'gh pr create --fill' };
     const runs = Object.assign(() => edited(), { signal: { aborted: false } });
-    const [never] = load(true, 'never stop').get('tool.call:Bash') ?? [];
+    const notice = { unaskedNotice: true };
+    const [never] = load(true, 'never stop', notice).get('tool.call:Bash') ?? [];
     expect(await never?.($$, e, runs)).toMatchObject({ result: 'edited' });
     expect(logs).toEqual([
       'review-cycle: ran a pull request without asking, since the stop-before setting is never stop (/config).',
     ]);
+    // Off by default, the notice reaches the agent alone.
+    logs.length = 0;
+    const [quiet] = load(true, 'never stop').get('tool.call:Bash') ?? [];
+    expect(await quiet?.($$, e, runs)).toMatchObject({ result: 'edited' });
+    expect(logs).toEqual([]);
     const [unset] = load(true).get('tool.call:Bash') ?? [];
     expect(await unset?.($$, e, runs)).toEqual({
       deny: expect.stringContaining("doesn't ask for a pull request"),

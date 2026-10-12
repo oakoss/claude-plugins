@@ -131,7 +131,13 @@ type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch'
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type ConfigHook = MatchedHook<
   'config.set',
-  { key: 'review-cycle.enabled' | 'review-cycle.stopBefore' | 'review-cycle.nudge' }
+  {
+    key:
+      | 'review-cycle.enabled'
+      | 'review-cycle.stopBefore'
+      | 'review-cycle.nudge'
+      | 'review-cycle.unaskedNotice';
+  }
 >;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
@@ -215,6 +221,8 @@ type GateState = {
   stopBefore: StopBefore | null;
   // The user's /config value for the end-of-turn review nudge.
   nudge: boolean;
+  // The user's /config value for showing a step the setting ran unasked.
+  unaskedNotice: boolean;
   // "don't push yet" makes every step ask until a message asks for one.
   held: Hold;
 };
@@ -242,6 +250,7 @@ const state: GateState = {
   gateOn: true,
   stopBefore: null,
   nudge: true,
+  unaskedNotice: false,
   held: null,
 };
 
@@ -1186,8 +1195,8 @@ async function ladderOf($: $): Promise<InForce> {
   return effective(state.stopBefore, rungs.project ?? null, rungs.local ?? null);
 }
 
-// Shown to the user as a dim line, and to the agent, so the step is never
-// silent. Worded as having run, not succeeded: the command may still fail.
+// Told to the agent, so the step is never silent. Worded as having run, not
+// succeeded: the command may still fail.
 const STEP_NAME: Record<Step, string> = {
   commit: 'a commit',
   push: 'a push',
@@ -1202,7 +1211,8 @@ function ranUnasked($: $, { step, ladder, ready }: Unasked): string {
     ready === undefined
       ? `review-cycle: ran ${STEP_NAME[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`
       : `review-cycle: ran ${STEP_NAME[step]} now, though the user asked for it once the pull request is ready: ${ready}.`;
-  $.ui.log(line);
+  // A step the setting lets through repeats a choice the user made once.
+  if (ready !== undefined || state.unaskedNotice) $.ui.log(line);
   return line;
 }
 
@@ -1881,9 +1891,11 @@ export const register: Register = (on, options) => {
   state.gateOn = options.enabled !== false;
   state.stopBefore = stopBeforeOf(options.stopBefore);
   state.nudge = options.nudge !== false;
+  state.unaskedNotice = options.unaskedNotice === true;
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
   on('config.set', { key: 'review-cycle.stopBefore' }, onConfigSet);
   on('config.set', { key: 'review-cycle.nudge' }, onConfigSet);
+  on('config.set', { key: 'review-cycle.unaskedNotice' }, onConfigSet);
   on('tool.call', { tool: 'Edit' }, onEditSlop);
   on('tool.call', { tool: 'Write' }, onWriteSlop);
   on('session.start', onSessionStart);
