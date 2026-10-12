@@ -1,6 +1,8 @@
 ---
-review-cycle: patch
+review-cycle: minor
 ---
+
+### Changed
 
 A merge request that names pull requests now covers only those, and a merge asked for once a pull request is ready now runs without `--auto` when GitHub already reports it ready. Before, "merge 116" let `gh pr merge 117` run, a ready merge let `--auto` reach any pull request, and "merge 46 when it's ready" refused `gh pr merge 46 --squash` even with every check green.
 
