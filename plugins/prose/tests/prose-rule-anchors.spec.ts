@@ -163,44 +163,57 @@ test('the enumerations have not collapsed', () => {
   }
 });
 
-test('no file outside the declared set carries a scope statement', () => {
-  // Divergence by addition is at least as likely as divergence by edit: it is
-  // what happens when someone adds a reference page or a second snippet.
-  //
-  // Enumerated with git, not a filesystem walk: a gitignored *.md under the
-  // plugin sits on disk without being part of it. Untracked files still count,
-  // because a fourth copy is a divergence before it is committed -- but merge
-  // artifacts are dropped, since .orig and .rej are copies by definition and
-  // would report every conflicted merge as a divergent scope statement. The
-  // floor is what stops a broken enumeration from reading as a clean tree.
-  const listing = spawnSync(
-    'git',
-    ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-    { cwd: PLUGIN_ROOT, encoding: 'utf8' },
-  );
-  const entries = (listing.stdout ?? '').split('\0').filter((e) => e !== '');
-  expect(
-    entries.length,
-    `enumeration reached ${entries.length} files, expected at least ${FILE_FLOOR}`,
-  ).toBeGreaterThanOrEqual(FILE_FLOOR);
-  const withScope: string[] = [];
-  for (const rel of entries) {
-    let text: string;
-    try {
-      text = readFileSync(path.join(PLUGIN_ROOT, rel), 'utf8');
-    } catch {
-      continue;
-    }
-    if (linesOf(text).some((l) => l.startsWith('Scope: prose only.'))) withScope.push(rel);
-  }
-  const found = sorted(withScope.filter((rel) => !/\.(orig|rej|bak)$|~$/.test(rel)));
-  expect(found, 'no scope statement found in any tracked file').not.toBe('');
-  const expected = sorted(SCOPE_FILES);
-  expect(
-    found,
-    `scope statements on disk do not match the declared set\n  on disk:  ${found.replaceAll('\n', ' ')}\n  declared: ${expected.replaceAll('\n', ' ')}`,
-  ).toBe(expected);
+// Outside a work tree (a review leg's scratch copy), or in a gitignored one,
+// git cannot tell a gitignored file from part of the plugin, so the check
+// skips. `check-ignore` exits 1 for a path it does not ignore, 128 outside one.
+const IN_CHECKOUT =
+  spawnSync('git', ['check-ignore', '-q', '.'], { cwd: PLUGIN_ROOT, stdio: 'ignore' }).status === 1;
+
+test.runIf(process.env.CI)('CI runs the scope enumeration in a git checkout', () => {
+  expect(IN_CHECKOUT).toBe(true);
 });
+
+test.skipIf(!IN_CHECKOUT)(
+  'no file outside the declared set carries a scope statement (needs a git checkout)',
+  () => {
+    // Divergence by addition is at least as likely as divergence by edit: it is
+    // what happens when someone adds a reference page or a second snippet.
+    //
+    // Enumerated with git, not a filesystem walk: a gitignored *.md under the
+    // plugin sits on disk without being part of it. Untracked files still count,
+    // because a fourth copy is a divergence before it is committed -- but merge
+    // artifacts are dropped, since .orig and .rej are copies by definition and
+    // would report every conflicted merge as a divergent scope statement. The
+    // floor is what stops a broken enumeration from reading as a clean tree.
+    const listing = spawnSync(
+      'git',
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+      { cwd: PLUGIN_ROOT, encoding: 'utf8' },
+    );
+    const entries = (listing.stdout ?? '').split('\0').filter((e) => e !== '');
+    expect(
+      entries.length,
+      `enumeration reached ${entries.length} files, expected at least ${FILE_FLOOR}`,
+    ).toBeGreaterThanOrEqual(FILE_FLOOR);
+    const withScope: string[] = [];
+    for (const rel of entries) {
+      let text: string;
+      try {
+        text = readFileSync(path.join(PLUGIN_ROOT, rel), 'utf8');
+      } catch {
+        continue;
+      }
+      if (linesOf(text).some((l) => l.startsWith('Scope: prose only.'))) withScope.push(rel);
+    }
+    const found = sorted(withScope.filter((rel) => !/\.(orig|rej|bak)$|~$/.test(rel)));
+    expect(found, 'no scope statement found in any tracked file').not.toBe('');
+    const expected = sorted(SCOPE_FILES);
+    expect(
+      found,
+      `scope statements on disk do not match the declared set\n  on disk:  ${found.replaceAll('\n', ' ')}\n  declared: ${expected.replaceAll('\n', ' ')}`,
+    ).toBe(expected);
+  },
+);
 
 test('the scope statement is byte-identical in all three copies', () => {
   const [firstFile, ...rest] = SCOPE_FILES;
