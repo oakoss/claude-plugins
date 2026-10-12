@@ -37,10 +37,10 @@ pr-watch also tells Claude, so you do not have to prompt it. It submits a messag
 - GitHub reports a pull request ready to merge;
 - a run fails, in any workflow, as soon as its first job does, naming the jobs failed by then with links to the first job's log and to the run;
 - a pull request has merge conflicts or a reviewer requests changes, whatever its checks say;
-- a merge's or a push's checks pass, once its 90 seconds are up;
+- a merge's or a push's checks pass, once its 90 seconds are up, unless Claude made the merge itself (a failure on the merge commit is still told);
 - someone other than you comments on or reviews it.
 
-Each is told once while it lasts: a later job failing in a run already told, such as a summary job, is not told again, while a new run or a re-run that fails, or a pull request ready again after new checks, is. A watch's first read hears the comments and reviews already there without telling them. The message says it is news, not a request to merge. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason.
+Each is told once while it lasts: a later job failing in a run already told, such as a summary job, is not told again, while a new run or a re-run that fails, or a pull request ready again after new checks, is. A watch's first read hears the comments and reviews already there without telling them. The message says it is news, not a request to merge. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason. A message that says a pull request is ready to merge says so first. News from these reads that arrives while Claude is working is held until the turn ends, each line once. A pull request it calls ready is then read again, and is not called ready if it has merged or closed meanwhile, or a later read found it no longer ready; a read that fails counts as still open.
 
 After ten reads in a row whose only news was comments and reviews, those stop waking Claude until other news comes, so a chatty bot or thread cannot keep it busy. The tenth message says so.
 

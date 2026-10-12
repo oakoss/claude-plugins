@@ -29,6 +29,8 @@ import {
   tellsOf,
   toldAfter,
   wakeOf,
+  heldWith,
+  noticeOf,
   type BotSetting,
   type Memory,
   type WakeSetting,
@@ -793,7 +795,37 @@ describe('wakeOf', () => {
       'The checks on the push to feat/x on o/r passed.',
     );
     const early = wakeOf(pr, passed, verdictAt(passed), { told: ['k'] }, { isEarly: true });
-    expect(early).toEqual({ text: null, told: [], heard: { since: null, keys: [] } });
+    expect(early).toEqual({
+      text: null,
+      news: [],
+      ready: null,
+      told: [],
+      heard: { since: null, keys: [] },
+    });
+  });
+
+  test('a merge Claude made tells a failure but not passed checks', () => {
+    const own = { isOwnMerge: true };
+    const passed = merged([green()]);
+    const quiet = wakeOf(pr, passed, verdictAt(passed), {}, own);
+    expect(quiet.text).toBeNull();
+    expect(quiet.told).toHaveLength(1);
+    const failed = merged([codeql('FAILURE')]);
+    expect(wakeOf(pr, failed, verdictAt(failed), {}, own).text).toContain('CodeQL: Analyze failed');
+  });
+
+  test('keeps the ready line apart, leads with it, and holds each line once', () => {
+    const ready = pull([ci([job('Test', 'SUCCESS')])]);
+    const woke = wakeOf(pr, ready, verdictAt(ready), {});
+    expect(woke.ready).toBe('GitHub reports o/r#128 ready to merge.');
+    expect(woke.news).toEqual([]);
+    expect(noticeOf(['@alice commented'], woke.ready, pr.url)).toMatch(
+      /^pr-watch: GitHub reports o\/r#128 ready to merge\. @alice commented\n/,
+    );
+    const held = { id: 'x', label: '#128', url: pr.url, news: ['@alice commented'], ready: null };
+    const again = heldWith(held, { ...held, news: ['@alice commented', '@bob commented'] });
+    expect(again.news).toEqual(['@alice commented', '@bob commented']);
+    expect(heldWith({ ...held, ready: woke.ready }, held).ready).toBe(woke.ready);
   });
 
   test('tells each push its own passed checks', () => {
@@ -910,6 +942,15 @@ describe('wakeOf', () => {
     expect(after(next, last).heard?.streak).toBe(1);
   });
 
+  test('a pull request turning ready resets the cap too', () => {
+    const last: Memory = { heard: { since: null, keys: [], streak: QUIET_CAP + 3 } };
+    const ready = pull([ci([job('Test', 'SUCCESS')])], { activity: [said('alice', minute(1))] });
+    const woke = after(ready, last);
+    expect(woke.ready).not.toBeNull();
+    expect(woke.text).toContain('@alice commented on');
+    expect(woke.heard?.streak).toBeUndefined();
+  });
+
   test('takes the floor from the viewer’s own newer comments too', () => {
     const alice = said('alice', minute(1));
     const first = after(pull([], { activity: [alice], activityAt: minute(19) }));
@@ -922,7 +963,7 @@ describe('wakeOf', () => {
 
   test('hears nothing from a read that cannot tell whose comments are whose', () => {
     const p = pull([ci([job('Test', null)])], { activity: null });
-    expect(after(p)).toEqual({ text: null, told: [], heard: undefined });
+    expect(after(p)).toEqual({ text: null, news: [], ready: null, told: [], heard: undefined });
     const heard = { since: null, keys: ['https://x/alice'] };
     expect(after(p, { heard }).heard).toEqual(heard);
     const known = pull([ci([job('Test', null)])], {
