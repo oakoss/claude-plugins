@@ -958,7 +958,7 @@ describe('a force push has to be named', () => {
     ["don't force push", NONE],
     ['force push it. never mind', NONE],
     ['force push it, but not until CI passes', NONE],
-    ['open a PR. bare force push it. no wait, never mind. force push it', LEASE],
+    ['open a PR. bare force push it. no wait, never mind. force push it', { ...LEASE, pr: true }],
     // A bare force mentioned outside the clause that asks grants none.
     ['force push it. never do a bare force though', LEASE],
     ['force push it. The hook refused `--force` earlier', LEASE],
@@ -1025,6 +1025,51 @@ describe('holds', () => {
     expect(holdsOf('not yet, rename the helper first', 'Push `fix/x` to `origin`?')).toBe(true);
     expect(holdsOf('not yet', 'Open a PR from `fix/x` into `main`?')).toBe(true);
     expect(holdsOf('not yet', 'Should I rename the helper?')).toBe(false);
+  });
+});
+
+describe('a retraction cancels the sentence it retracts', () => {
+  test.each([
+    // Re-asked: the sentences before the retracted one stand.
+    ['open a PR. push it. never mind. merge it', { ...PR, merge: true }],
+    ['commit it. bare force push it. no wait. force push it', { ...COMMIT, push: 'lease' }],
+    ['open a PR. push it. thanks. never mind. merge it', { ...PR, merge: true }],
+    ['open a PR. push it, but hold off. never mind. merge it', { ...PR, merge: true }],
+    ['commit it. open a PR. never mind. push it. never mind. merge it', { ...COMMIT, merge: true }],
+    ['open a PR. commit it. never mind. push it', PUSH_PR],
+    ['open a PR. push it. never mind. commit it', COMMIT_PR],
+    ['open a PR. finish the rebase. never mind. push it', PUSH_PR],
+    ['open a PR. push it. never mind. finish the rebase', { ...PR, finish: ['rebase'] }],
+    ['open a PR. push it. Never mind. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. no, don’t. merge it', { ...PR, merge: true }],
+    // After a semicolon a retraction cancels everything.
+    ['open a PR. push it; then merge it. never mind. commit it', COMMIT],
+    ['open a PR. I fixed the tests; push it. never mind. commit it', COMMIT],
+    ['push it, but hold off; never mind; then push it', PUSH],
+    ['we push it; never mind; then merge it', MERGE],
+    // So does one followed by anything but a request.
+    ['Merge it. Release it. No. None of that. Commit it.', COMMIT],
+    ['Merge it. Release it. No wait. Forget everything. Commit it.', COMMIT],
+    ['Merge it. Release it. No. Never mind. Commit it.', COMMIT],
+    // A retraction that says more than its cue words cancels everything.
+    ['open a PR. push it. never mind. merge it. no wait, none of that. push it', PUSH],
+    ['merge it. push it. no wait, don’t merge. push it', PUSH],
+    ["merge it. push it. no wait, don't merge. push it", PUSH],
+    ['merge it. push it. never mind the merge. push it', PUSH],
+    ['merge #12. open a PR. scratch that, forget everything. push it', PUSH],
+    ['open a PR. push it. no wait, none of that. merge it', MERGE],
+    ['release it. open a PR. no wait, not the release. open a PR', PR],
+    ['open a PR. push it. never mind; commit it', COMMIT_PR],
+    ['open a PR. push it. never mind. merge it, but hold off. commit it', COMMIT],
+    ['open a PR. push it. never mind. merge it, but not yet. commit it', COMMIT],
+    // Nothing asked after it: everything before it is cancelled.
+    ['open a PR. push it. never mind', NONE],
+    ['open a PR. push it. never mind. thanks', NONE],
+    ['open a PR. push it. never mind, merge it', NONE],
+    ['open a PR. never mind. push it. never mind', NONE],
+    ['open a PR. never mind. push it', PUSH],
+  ])('%s', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
   });
 });
 

@@ -605,6 +605,8 @@ const AGREE_WORD = new Set([
 // A clause with no verb that holds off: "not yet, commit later".
 const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const RETRACT = /^\s*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don'?t))\b/i;
+const BARE_RETRACT =
+  /^(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t)\b[\s,.!;:…—-]*)+$/i;
 const DECLINED =
   /^\s*(?:(?:ok|okay|yes|yeah|sure|alright|great|cool|perfect)[\s,]+)*(?:do\s+not|don['’]?t|never)\s+merge\b/i;
 // A clause opening with one of these makes the whole prompt conditional.
@@ -956,6 +958,10 @@ function merged(into: MutableGrant, from: MutableGrant): void {
   raise(into, from.push);
 }
 
+function asksAny(g: Grant): boolean {
+  return STEPS.some((step) => g[step]) || g.push !== 'none' || g.finish.length > 0;
+}
+
 // Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
   return g.pr || g.merge || g.autoMerge || g.approve || g.release || g.comment;
@@ -1151,7 +1157,14 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
   let declined = false;
-  for (const raw of sentences(prPhrase(unquote(forcePhrase(typed))))) {
+  let before = fresh();
+  // Each retraction, with the requests it would keep (null when it keeps none).
+  const retractions: { at: number; keeps: MutableGrant | null }[] = [];
+  const asking = new Set<number>();
+  let semicolon = false;
+  for (const [at, raw] of sentences(prPhrase(unquote(forcePhrase(typed)))).entries()) {
+    const semicolonBefore = semicolon;
+    if (raw.trim().endsWith(';')) semicolon = true;
     const flipped = leadingReady(raw);
     const sentence = flipped ?? raw;
     // "once it's ready, do not merge it" declines the merge, so the message
@@ -1163,8 +1176,13 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       continue;
     }
     if (flipped !== null && (RETRACT.test(sentence) || isQuestion(sentence))) return NO_GRANT;
-    // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
+      // A semicolon ties requests the retraction cannot tell apart.
+      retractions.push({
+        at,
+        keeps: BARE_RETRACT.test(sentence) && !semicolonBefore ? before : null,
+      });
+      before = fresh();
       g = fresh();
       prev = 'none';
       continue;
@@ -1201,12 +1219,25 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     }
     // Any other condition leading a sentence withholds the whole prompt.
     if (flipped !== null && (withheld || !onlyAutoMerge(mine))) return NO_GRANT;
+    if (asksAny(mine)) before = { ...g };
     if (!withheld) merged(g, mine);
+    if (!withheld && asksAny(mine)) asking.add(at);
     // Only a semicolon ties two sentences together, and only around the verbs:
     // "I fixed it. Then push it." asks.
     const tied =
       sentence.trim().endsWith(';') && words(sentence).some((x) => Object.hasOwn(REQUESTED, x));
     prev = tied ? (withheld ? 'mood' : carry) : 'none';
+  }
+  // "no wait, never mind" alone cancels only the last request, and only when
+  // the next sentence asks again; any other retraction cancels them all.
+  let kept = fresh();
+  for (const { at, keeps } of retractions) {
+    if (keeps !== null && asking.has(at + 1)) merged(kept, keeps);
+    else kept = fresh();
+  }
+  if (asksAny(g)) {
+    merged(kept, g);
+    g = kept;
   }
   // Merging the version pull request is the release, so a declined merge holds it too.
   if (declined) {

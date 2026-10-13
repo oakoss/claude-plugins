@@ -1,0 +1,1246 @@
+[
+  {
+    "prompt": "merge the first PR",
+    "may": []
+  },
+  {
+    "prompt": "merge the first",
+    "may": []
+  },
+  {
+    "prompt": "approve the first",
+    "may": []
+  },
+  {
+    "prompt": "don't merge it first",
+    "may": []
+  },
+  {
+    "prompt": "merge 132 when it's ready, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "merge 132 when it's ready, if Bob approves",
+    "may": []
+  },
+  {
+    "prompt": "merge 132 when it's ready, but don't do it yet",
+    "may": []
+  },
+  {
+    "prompt": "merge it as soon as I say so, then release it",
+    "may": []
+  },
+  {
+    "prompt": "commit it as soon as you can, then push it",
+    "may": ["push"],
+    "missed": true
+  },
+  {
+    "prompt": "merge it when it's ready, but I'll check first",
+    "may": []
+  },
+  {
+    "prompt": "squash and merge it when ready",
+    "may": []
+  },
+  {
+    "prompt": "merge it when I say its ready",
+    "may": []
+  },
+  {
+    "prompt": "merge it once Bob says the PR is ready",
+    "may": []
+  },
+  {
+    "prompt": "merge it unless CI passes",
+    "may": []
+  },
+  {
+    "prompt": "merge it until CI passes",
+    "may": []
+  },
+  {
+    "prompt": "merge it before the checks pass",
+    "may": ["merge"]
+  },
+  {
+    "prompt": "merge it when I say so",
+    "may": []
+  },
+  {
+    "prompt": "merge it after I review it",
+    "may": []
+  },
+  {
+    "prompt": "merge it when its ready and then start the next one",
+    "may": []
+  },
+  {
+    "prompt": "don't merge it when it's ready",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, push it",
+    "may": []
+  },
+  {
+    "prompt": "once I say so, merge it",
+    "may": []
+  },
+  {
+    "prompt": "if CI fails, merge it",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, merge it and push",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, merge it, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, push it. commit it",
+    "may": []
+  },
+  {
+    "prompt": "when it is ready to merge. merge it when I say so",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, release it, merge it",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, push it, merge it",
+    "may": []
+  },
+  {
+    "prompt": "once it's ready, do not merge it. Push it.",
+    "may": ["push"]
+  },
+  {
+    "prompt": "commit it. once it's ready, do not merge it",
+    "may": []
+  },
+  {
+    "prompt": "once PR 133 is ready, merge 134",
+    "may": []
+  },
+  {
+    "prompt": "merge 134 once PR 133 is ready",
+    "may": []
+  },
+  {
+    "prompt": "commit it when the tests pass",
+    "may": []
+  },
+  {
+    "prompt": "push it once CI is green",
+    "may": []
+  },
+  {
+    "prompt": "approve it when its ready",
+    "may": []
+  },
+  {
+    "prompt": "merge main into it when its ready",
+    "may": []
+  },
+  {
+    "prompt": "merge main into it",
+    "may": []
+  },
+  {
+    "prompt": "merge origin/main into the branch",
+    "may": []
+  },
+  {
+    "prompt": "merge into main",
+    "may": ["merge"]
+  },
+  {
+    "prompt": "merge now into main",
+    "may": ["merge"]
+  },
+  {
+    "prompt": "merge this into the PR",
+    "may": []
+  },
+  {
+    "prompt": "merge it into the branch",
+    "may": []
+  },
+  {
+    "prompt": "merge it from main",
+    "may": []
+  },
+  {
+    "prompt": "address the comments",
+    "may": []
+  },
+  {
+    "prompt": "Good, push on.",
+    "may": []
+  },
+  {
+    "prompt": "commit on it",
+    "may": []
+  },
+  {
+    "prompt": "don't merge the release yet",
+    "may": []
+  },
+  {
+    "prompt": "merge the release branch into main",
+    "may": []
+  },
+  {
+    "prompt": "merge the release-please branch",
+    "may": []
+  },
+  {
+    "prompt": "merge the release fixes",
+    "may": []
+  },
+  {
+    "prompt": "merge the release #3 fixes",
+    "may": []
+  },
+  {
+    "prompt": "merge the version 2 PR",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "merge the version 2.0 PR",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "merge the release 3.5",
+    "may": []
+  },
+  {
+    "prompt": "the release notes look good",
+    "may": []
+  },
+  {
+    "prompt": "publish the docs to the wiki",
+    "may": []
+  },
+  {
+    "prompt": "push to npm",
+    "may": ["release"]
+  },
+  {
+    "prompt": "push the package",
+    "may": ["push", "release"]
+  },
+  {
+    "prompt": "commit the package",
+    "may": []
+  },
+  {
+    "prompt": "publish the branch",
+    "may": ["push"]
+  },
+  {
+    "prompt": "publish the PR to github",
+    "may": ["pr", "push"]
+  },
+  {
+    "prompt": "publish the changes",
+    "may": ["push"]
+  },
+  {
+    "prompt": "publish to it",
+    "may": []
+  },
+  {
+    "prompt": "publish to the",
+    "may": []
+  },
+  {
+    "prompt": "publish to github",
+    "may": ["push"]
+  },
+  {
+    "prompt": "address the TODO comments in the code",
+    "may": []
+  },
+  {
+    "prompt": "Should I respond to the comments?",
+    "may": []
+  },
+  {
+    "prompt": "Should I reply to the comments?",
+    "may": []
+  },
+  {
+    "prompt": "Should I ship it from fix/x?",
+    "may": []
+  },
+  {
+    "prompt": "open a PR, but not until CI passes",
+    "may": []
+  },
+  {
+    "prompt": "push the v1 tag",
+    "may": ["push", "release"]
+  },
+  {
+    "prompt": "push it from main",
+    "may": []
+  },
+  {
+    "prompt": "Please open the PR into `later`",
+    "may": []
+  },
+  {
+    "prompt": "open the file",
+    "may": []
+  },
+  {
+    "prompt": "open a PR for the docs",
+    "may": ["pr"],
+    "missed": true
+  },
+  {
+    "prompt": "create a test for the PR",
+    "may": []
+  },
+  {
+    "prompt": "don't force push",
+    "may": []
+  },
+  {
+    "prompt": "force push it. never mind",
+    "may": []
+  },
+  {
+    "prompt": "force push it, but not until CI passes",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I merge #168 first, but only if CI passes?",
+    "may": []
+  },
+  {
+    "prompt": "delete the file",
+    "may": []
+  },
+  {
+    "prompt": "delete it from the branch",
+    "may": []
+  },
+  {
+    "prompt": "delete the branch comments",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I rename the helper?",
+    "may": []
+  },
+  {
+    "prompt": "ok",
+    "offer": "I did not commit anything.",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I hold off on committing until CI passes?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "I will not push. Want me to run the tests?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I rename src/a.ts?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Do we push fix/x to main?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I push, or would you rather/prefer to do it?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Want me to push, or skip/defer it?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I push, or would you `rather/prefer` do it?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I push, or would you `rather` do it?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Want me to push, or run it in your `terminal`?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I push, or can't we `skip` it as 'deferred'?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "That's rather slow. Should I push, or you'd prefer to?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push this to `next sprint`",
+    "may": []
+  },
+  {
+    "prompt": "push it to \"later\"",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I delete src/old.ts?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Delete scratch/tmp?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Do we commit, then push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Do we commit; then push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I commit and push; or wait?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Can we commit, then push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "We commit, then push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Do we push to main?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes",
+    "offer": "Can we push to main, or is it protected?",
+    "may": ["push"],
+    "missed": true
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I delete it?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Ready to push. Run the tests?",
+    "may": []
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I commit to the new layout?",
+    "may": []
+  },
+  {
+    "prompt": "sure",
+    "may": []
+  },
+  {
+    "prompt": "did it publish?",
+    "may": []
+  },
+  {
+    "prompt": "is it ready for review?",
+    "may": []
+  },
+  {
+    "prompt": "don't continue merging the PRs yet",
+    "may": []
+  },
+  {
+    "prompt": "don't merge it",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) merge it",
+    "may": []
+  },
+  {
+    "prompt": "don’t merge it",
+    "may": []
+  },
+  {
+    "prompt": "merge it if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "merge it when its done",
+    "may": []
+  },
+  {
+    "prompt": "merge it once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "merge it when you are done",
+    "may": ["merge"]
+  },
+  {
+    "prompt": "merge it, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "don't merge 130",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) merge 130",
+    "may": []
+  },
+  {
+    "prompt": "don’t merge 130",
+    "may": []
+  },
+  {
+    "prompt": "merge 130 when I say so",
+    "may": []
+  },
+  {
+    "prompt": "merge 130 if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "merge 130 when its done",
+    "may": []
+  },
+  {
+    "prompt": "merge 130 once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "merge 130 when you are done",
+    "may": ["merge"]
+  },
+  {
+    "prompt": "merge 130, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "don't push it",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) push it",
+    "may": []
+  },
+  {
+    "prompt": "don’t push it",
+    "may": []
+  },
+  {
+    "prompt": "push it when I say so",
+    "may": []
+  },
+  {
+    "prompt": "push it if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "push it when its done",
+    "may": []
+  },
+  {
+    "prompt": "push it once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "push it when you are done",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push it, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "don't commit it",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) commit it",
+    "may": []
+  },
+  {
+    "prompt": "don’t commit it",
+    "may": []
+  },
+  {
+    "prompt": "commit it when I say so",
+    "may": []
+  },
+  {
+    "prompt": "commit it if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "commit it when its done",
+    "may": []
+  },
+  {
+    "prompt": "commit it once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "commit it when you are done",
+    "may": []
+  },
+  {
+    "prompt": "commit it, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "don't release it",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) release it",
+    "may": []
+  },
+  {
+    "prompt": "don’t release it",
+    "may": []
+  },
+  {
+    "prompt": "release it when I say so",
+    "may": []
+  },
+  {
+    "prompt": "release it if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "release it when its done",
+    "may": []
+  },
+  {
+    "prompt": "release it once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "release it when you are done",
+    "may": ["release"]
+  },
+  {
+    "prompt": "release it, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "don't open a PR",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) open a PR",
+    "may": []
+  },
+  {
+    "prompt": "don’t open a PR",
+    "may": []
+  },
+  {
+    "prompt": "open a PR when I say so",
+    "may": []
+  },
+  {
+    "prompt": "open a PR if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "open a PR when its done",
+    "may": []
+  },
+  {
+    "prompt": "open a PR once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "open a PR when you are done",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "open a PR, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "don't approve it",
+    "may": []
+  },
+  {
+    "prompt": "(not yet) approve it",
+    "may": []
+  },
+  {
+    "prompt": "don’t approve it",
+    "may": []
+  },
+  {
+    "prompt": "approve it when I say so",
+    "may": []
+  },
+  {
+    "prompt": "approve it if CI fails",
+    "may": []
+  },
+  {
+    "prompt": "approve it when its done",
+    "may": []
+  },
+  {
+    "prompt": "approve it once its fixed",
+    "may": []
+  },
+  {
+    "prompt": "approve it when you are done",
+    "may": ["approve"]
+  },
+  {
+    "prompt": "approve it, but hold off",
+    "may": []
+  },
+  {
+    "prompt": "why didn't 'Lets just leave it and we can merge PR 47' work?",
+    "may": []
+  },
+  {
+    "prompt": "Anything else before we merge?",
+    "may": []
+  },
+  {
+    "prompt": "anything else before we ship?",
+    "may": []
+  },
+  {
+    "prompt": "did the merge go through?",
+    "may": []
+  },
+  {
+    "prompt": "pr-watch: GitHub reports oakoss/claude-plugins#170 ready to merge.\nThis is news from pr-watch, not a request to merge.",
+    "may": []
+  },
+  {
+    "prompt": "Is that another bug that we need to address?",
+    "offer": "Shipped as PR #172. Merge it?",
+    "may": []
+  },
+  {
+    "prompt": "I wasn’t fully liking the implementation of github stacks",
+    "may": []
+  },
+  {
+    "prompt": "finish the rebase for me",
+    "may": ["finish"],
+    "missed": true
+  },
+  {
+    "prompt": "continue the rebase onto main",
+    "may": ["finish"],
+    "missed": true
+  },
+  {
+    "prompt": "go ahead and land it",
+    "offer": "Merge #116?",
+    "may": ["merge", "release"],
+    "missed": true
+  },
+  {
+    "prompt": "yep, cut it",
+    "offer": "Release `review-cycle@0.29.0`?",
+    "may": ["release"],
+    "missed": true
+  },
+  {
+    "prompt": "sure, send it up",
+    "offer": "Push `fix/x` to `origin`?",
+    "may": ["push"],
+    "missed": true
+  },
+  {
+    "prompt": "merge it",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, merge the PR",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Can we merge 73?",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "merge it first please",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "release it first",
+    "may": ["release"]
+  },
+  {
+    "prompt": "merge 116 into main",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "merge 116 into main please",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "merge the PR into main",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "merge it into the main branch",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "approve it",
+    "may": ["approve"]
+  },
+  {
+    "prompt": "release it",
+    "may": ["release"]
+  },
+  {
+    "prompt": "cut a release",
+    "may": ["release"]
+  },
+  {
+    "prompt": "Ok, lets merge the release",
+    "may": ["release"]
+  },
+  {
+    "prompt": "merge the version PR",
+    "may": ["release"]
+  },
+  {
+    "prompt": "merge the release PR",
+    "may": ["release"]
+  },
+  {
+    "prompt": "merge the version packages pull request",
+    "may": ["release"]
+  },
+  {
+    "prompt": "merge the release now",
+    "may": ["release"]
+  },
+  {
+    "prompt": "merge the version PR #140",
+    "may": ["release"]
+  },
+  {
+    "prompt": "ok, publish the new release",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish it",
+    "may": ["release"]
+  },
+  {
+    "prompt": "ok, publish to npm",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish the package",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish to crates",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish the package to npm",
+    "may": ["release"]
+  },
+  {
+    "prompt": "release the package",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish them",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish all packages",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish my package to npm",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish on npm",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish it to the registry",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish it to our registry",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish it to my registry",
+    "may": ["release"]
+  },
+  {
+    "prompt": "publish to the npm registry",
+    "may": ["release"]
+  },
+  {
+    "prompt": "mark it ready for review",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "mark the PR as ready",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "ok, ready for review",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "address the review comments",
+    "may": ["comment"]
+  },
+  {
+    "prompt": "reply to the reviewer",
+    "may": ["comment"]
+  },
+  {
+    "prompt": "ship it",
+    "may": ["pr", "push"]
+  },
+  {
+    "prompt": "push it",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Ok, lets ship",
+    "may": ["pr", "push"]
+  },
+  {
+    "prompt": "commit and push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push it first",
+    "may": ["push"]
+  },
+  {
+    "prompt": "commit it first, then push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "can you push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Could you commit and push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "will you push?",
+    "may": ["push"]
+  },
+  {
+    "prompt": "commit the code and open a PR",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "push the tag",
+    "may": ["push"]
+  },
+  {
+    "prompt": "open a pull request",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "create a new draft PR",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "push it and create a draft PR against main",
+    "may": ["pr", "push"]
+  },
+  {
+    "prompt": "Please open the PR into main",
+    "may": ["pr"]
+  },
+  {
+    "prompt": "push the commits to origin",
+    "may": ["push"]
+  },
+  {
+    "prompt": "yes, commit everything and push it up",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Ok, we can delete the branch",
+    "may": ["push"]
+  },
+  {
+    "prompt": "delete the remote branch",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Ok, we can ship",
+    "may": ["pr", "push"]
+  },
+  {
+    "prompt": "Ok, we can push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "commit; then push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "fix it; then push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "I fixed it. Then please push it.",
+    "may": ["push"]
+  },
+  {
+    "prompt": "I won't commit. Then please push it.",
+    "may": ["push"]
+  },
+  {
+    "prompt": "we're done; then push it",
+    "may": ["push"]
+  },
+  {
+    "prompt": "we commit; then push. Then push it.",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Ok we can push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "I want you to commit separately and push",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it",
+    "may": ["push"]
+  },
+  {
+    "prompt": "ok, force-push it to origin",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it with a lease",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it without a lease",
+    "may": ["push"]
+  },
+  {
+    "prompt": "bare force push it",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it with `--force`",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it with `--force-with-lease`",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push it with --force",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push --force",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push it with `--force`",
+    "may": ["push"]
+  },
+  {
+    "prompt": "open a PR. bare force push it. no wait, never mind. force push it",
+    "may": ["pr", "push"]
+  },
+  {
+    "prompt": "force push it. never do a bare force though",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it. The hook refused `--force` earlier",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Force push it with a lease. Do not use `--force`.",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it. Do not use --force.",
+    "may": ["push"]
+  },
+  {
+    "prompt": "force push it, without a lease",
+    "may": ["push"]
+  },
+  {
+    "prompt": "commit and push it with a message `--force`",
+    "may": ["push"]
+  },
+  {
+    "prompt": "push it. force push it with --force, but not until CI passes",
+    "may": ["push"]
+  },
+  {
+    "prompt": "Ok, lets merge the release",
+    "offer": "I'd release now. Together the batch makes a complete pr-watch 0.3.0: Claude is told when a PR needs it, plus the estimate fix, and both were checked live. Your other projects, like the UI repo where you hit the estimate bug, only get them from a release.\nThe remaining pr-watch beads don't need to ride with it:\n- **`cpl-91z`** (query cost, rate limit) is internal efficiency. You wouldn't notice it unless you watch many PRs.\n- **`cpl-9pam`** (pausing on the rate limit) is blocked by `cpl-91z`.\n- **`cpl-9egq`** (tools for Claude to watch a PR) is a new feature and the largest of the three. It's a natural start for 0.4.0, not something to wait for.\nThe one loose end is seeing the refreshed estimate (about `~2m29s`) on a CI bar. #144's own CI run will show that, so you can check it on the way to merging.",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, lets get started with the plan",
+    "offer": "All three recorded. Every decision the rewrite plan depends on is now settled — scope, packaging, tokenizer, matcher, anchor rule, convergence criterion. Nothing independent left to request; the next step is the plan itself. Say `/plan` and I'll produce it.",
+    "may": []
+  },
+  {
+    "prompt": "That doesn't work either.[Image #2]",
+    "offer": "The line continuation broke on paste. Your shell ran only the first line, as a suspended background job, and the `--settings` part never reached `claude`. Clear it, then run everything as one line:\n```bash\nkill %1\nclaude --plugin-dir ~/.code/github/oakoss/claude-plugins/plugins/review-cycle --settings '{\"enabledPlugins\":{\"review-cycle@oakoss\":false}}'\n```\nOnce it's up, check 1 (the status tool) confirms the new gate loaded instead of the installed one.",
+    "may": []
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "   - dropping the wrapper table.\n   Doing them now costs another review round. Deferring them makes a clean follow-up PR.\n5. **Commit and PR.** Four commits per the plan, which takes some care because the changes are interleaved. Then CI, where `claude plugin test` gets its first run on a real runner. Also needs your OK to close the six sentinel beads as won't-fix.\n6. **Housekeeping I'll just do:** retire the stale sentinel memory, sync the plan file with the later amendments, and drop the leftover `$HOME/.claude` line in the test helpers.\n7. **After merge:** install the new version, then remove `~/.claude/.disable-review-gate`. No release until you say so.\nI'd start 2, 3 and 6 now, since none of them needs you, while you decide on 1 and 4. Go?",
+    "may": []
+  },
+  {
+    "prompt": "Ok, lets merge",
+    "offer": "CI passed on PR [#76](https://github.com/oakoss/claude-plugins/pull/76), and the PR is ready to merge.\n- **All 11 checks passed,** including CI Summary, the one required check.\n- **The Bats job is gone** and nothing asked for it.\n- **The tests actually ran in CI:** 81 plugin tests and 451 unit tests, so the anchor suites now run under vitest.\n- **ShellCheck passed** with its narrower scope, the eval scaffold scripts.\nI won't merge or release until you ask. When you merge, the Release workflow will refresh the version PR with review-cycle as a patch and prose unchanged.",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Can we do the structural suggestions now",
+    "offer": "**Structural suggestions from the maintainability audit (report-only):**\n- Split `register.ts`, now about 1,130 lines. Move the git reads behind an injected `git` function, which it measured passing `validate`, and make commit attribution a pure module tested against real-git fixtures.\n- Consider HEAD's own reflog as the \"made here\" signal. That would delete the fetch-attribution code, at the cost of missing plumbing-built commits.\n- Fold the nudge's per-message state into one record.\n**Commit shape:** the fixes and the nudge touch the same hunks in `register.ts` and `register.test.ts`, and the gate refuses `git add -p`. So this lands as one commit with both bump files, or two only if I rebuild the split by hand.\nSay \"commit it\" when you're ready.",
+    "may": []
+  },
+  {
+    "prompt": "Ok, lets release",
+    "offer": "Release first.\n- **It stops the friction you're seeing.** #78 fixes the false \"landed without asking\" reports that followed both merges today. It also stops the gate refusing `git pull --ff-only`, a computed `git -C` on read-only commands, and literal assignments. None of that reaches you until 0.20.0 is installed.\n- **The spike needs the current gate.** It will be measured against the gate running in your sessions. Testing on 0.19.0 would mean working around bugs that are already fixed.\n- **It's cheap and already done.** Version PR #77 is ready and was refreshed after #79 merged: review-cycle 0.19.0 → 0.20.0 (minor). Releasing is just merging it, then reinstalling.\n- **The spike is open-ended.** It might replace consent parsing outright. That's its own release later, and it shouldn't hold back fixes that are finished.\nSay the word and I'll merge #77.",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, lets start building",
+    "offer": "1. **A shared promise, not fire-and-forget.** `session.start` starts the read, and the first Bash or Monitor call waits for it. A slow rc can't then race the first command. Waits on `$` don't count against the hook's 10-second budget.\n2. **Fallback order:** own read first, then the snapshot as today, then the existing \"could not read aliases\" note. A read that times out or exits nonzero falls through, so a broken rc costs a slower first call, not a lockout or a silent pass.\n3. **Login shell (`-l`)** to match Claude Code. That also runs `.zprofile`/`.zlogin`, which the probe skipped, so I'll re-measure the time with `-l` during the build. The timeout will be about 5 s.\n4. **The `time -p <alias>` fix** goes on the same branch as its own commit. It's a separate bug, but the same alias code.\nThen the usual path: tests for the recipe, the fallbacks and bad rc files (fake `HOME`, never yours), mutation checks, and a live check in rw-lab. After that, `/review-cycle:review` before anything is committed.\nStart building?",
+    "may": []
+  },
+  {
+    "prompt": "Ok, lets merge 136",
+    "offer": "PR #142 is merged into `main` as `695ae02`. CI passed beforehand, with ShellCheck skipped as usual. The branch is deleted locally and on GitHub, and your checkout is on `main` at the merge commit.\nThe version PR (#136) will now pick up these two review-cycle patches alongside everything else shipped today:\n- review-cycle 0.27.0: the merge-the-version-PR change, the \"as soon as\" fix, and these two ledger fixes\n- pr-watch 0.2.0: merges clear themselves, push lines, and the `merged into main` lead\nMerging #136 releases both.",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, lets do that. But I think if I say ship or ship it it should just do it all review, commit, push,  and create the PR.",
+    "offer": "2. **Consent:** the gate wants your message to ask for the commit or push, and shows the popup when it can't tell. That's where the interruptions come from.\nConsent is worth different amounts for the two actions:\n- **Commits** are local. A commit you didn't want costs one `git reset`, and the coverage check already guarantees it was reviewed. Asking you about every commit adds friction and protects very little.\n- **Pushes**, including deleting a remote branch, leave your machine. Other people see them, CI runs on them, and undoing one isn't always clean. That's where asking you pays for itself.\n**My recommendation:** keep the review-coverage check, drop consent for commits, and keep it for pushes. The agent can then commit reviewed work on its own, which also changes the \"only when you say `commit it`\" rule in your AGENTS.md. You'd only see a popup for a push, and I'd also teach the parser \"delete the branch\" so your ui case wouldn't have asked.\nShould I make that change, or would you rather keep commit consent and just widen the parser?",
+    "may": []
+  },
+  {
+    "prompt": "Ok, lets do that. You can run part 1 and set up part 2 and when everything is ready I'll test part 2.",
+    "offer": "  | `commit` | `git commit` of a staged change | refused |\n- **What I check:** the hook's result and the bare remote's refs before and after each run. That proves both that a refused push never landed and that the dry run moved nothing.\n**Part 2: whether `/config` reaches the gate mid-session (needs you, about 2 minutes)**\n`/config` is interactive, so `claude -p` can't drive it. Reading the code, a hand edit to the settings files takes effect on the next command, because the gate rereads them each time. The rung you set in `/config` comes in through the plugin's options when it loads, though, so it might only apply after `/reload-plugins` — that's the real unknown.\nI'd set up the test repo and give you three steps: start a session with the plugin, change Stop before in `/config`, then ask for the status tool. The status shows which rung is in force and where it came from. If it doesn't update, we know `/reload-plugins` is required, and I'd document that.\nWant me to go ahead with Part 1 and set up Part 2?",
+    "may": []
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "- the lockfile entry that fixes CI's frozen install;\n- the close button's space and missing brackets, and the gap above the band.\nNothing else is needed:\n- **Release note:** no new bump file. The existing `pr-watch: minor` covers these changes, since 0.1.0 hasn't released yet.\n- **Checks:** everything passes locally, including the frozen install that failed in CI.\nI'd push and update the description together. Should I go ahead?",
+    "may": ["push"],
+    "missed": true
+  },
+  {
+    "prompt": "Ok, lets merge it",
+    "offer": "| Plugin | Version | Contents |\n|---|---|---|\n| pr-watch | 0.0.0 → **0.1.0** | the first release: the line above the prompt, faster reads after a push or merge, following a merge onto its base branch |\n| review-cycle | 0.25.0 → **0.26.0** | merge-when-ready (`--auto`), short go-ahead replies, branch-delete replies, hold reasons, and a leading readiness condition |\n**Changelogs:** I read the review-cycle 0.26.0 entry in the PR. Merge-when-ready sits under Added, and the four fixes under Fixed, each with its own paragraph and examples. The `marketplace.json`, `plugin.json` and `package.json` versions all agree.\nAfter you merge it, run `/plugin` and update both plugins in your sessions. Then we can do the live tests from #133 and #134.",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, lets release when the PR is ready",
+    "offer": "- **Its CI is still running.** Static Analysis and Audit pass; Tests and the Windows run are pending.\n- **Renovate PRs are optional and not needed for 0.5.0:**\n  - **#240** (tooling plus patch-level dependency updates) is still running CI.\n  - **#241** (`jsonc-parser` 0.34, a breaking 0.x bump) is failing CI.\n  I'd take both after the release rather than add risk to it.\nMerging #239 once its CI is green triggers the release workflow, which tags `v0.5.0` and publishes. Since that publishes, I'll merge only when you say so. After it's out, I'll tell ui-86 their two bugs are fixed.",
+    "may": ["merge", "release"],
+    "missed": true
+  },
+  {
+    "prompt": "Ok, lets push",
+    "offer": "Yes. #16 can't merge without it:\n- **The PR is blocked.** GitHub shows #16 as `BLOCKED` because the required CI Summary check failed on its current head (`a6c5507`).\n- **CI only runs pushed commits.** The fix is local in `63a9134`, so CI can't see it yet.\n- **Merging now would mean bypassing that gate.** It would also put the `HoverAndPress` failure on `main`, which is already red from #15.\nPushing runs CI on the fix. If it passes, the gate clears and I can merge.",
+    "may": ["merge", "push", "release"]
+  },
+  {
+    "prompt": "Ok, lets merge it",
+    "offer": "No, nothing else. #16 is ready:\n- Every check still passes after the body edit, and GitHub shows the PR as `CLEAN`.\n- The PR body now covers every change, and the beads are closed and synced.\n- The working tree is clean.\nReply \"merge it\" and I'll squash-merge #16, then delete `feat/reference-components` locally and on origin.",
+    "may": ["merge", "push", "release"]
+  },
+  {
+    "prompt": "Push the branch delete",
+    "offer": "`feat/reference-components` is still on `origin`. The commit gate blocked the delete because it only recognizes a request that says \"push\", and \"Lets delete it\" doesn't. I won't route around the gate with another command.\nEither of these works:\n- Reply \"push the branch delete\", and I'll run it.\n- Run it yourself: `! git push origin --delete feat/reference-components`",
+    "may": ["push"],
+    "missed": true
+  },
+  {
+    "prompt": "Ok, lets merge",
+    "offer": "Nothing else is needed before the merge. Three things I checked:\n- **Up to date:** #25 is based on the current `main` (`10880ec`), mergeable with a clean merge state, and all its checks pass.\n- **Tag permissions:** the org ruleset \"Release Tags - Org\" blocks creating `v*` tags, but the oakoss App (id 3174795) is on its bypass list. That's the identity the release job pushes with, so the `v0.1.0` push should go through.\n- **Release contents:** the CHANGELOG section matches `first-release.md`, and the README's pin example already uses `#v0.1.0`.\nAfter the merge, I'll confirm the tag and the GitHub release, then try the real consumer path in a scratch project: `npx shadcn@latest add oakoss/ui/button#v0.1.0`. That's the first time a pinned install can be tested.\nShould I merge #25 now?",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, lets merge 31",
+    "offer": "Nothing blocks the merge. PR #31 shows mergeable and clean, `main` hasn't moved, and there are no review comments.\n**CI test counts** (I read these from the run log rather than relying on the \"no retries\" signal): Storybook 398 passed, `@oakoss/ui` 132, tokens 939, docs 111, and oxlint config 5, all on the first attempt.\n**Release:** the only comment is oakum's release plan, `@oakoss/ui` 0.1.0 → 0.2.0. That's the pending minor; this PR adds no release-note entry. Merging updates version PR #28 to include the fix, so 0.2.0 ships Tooltip and HoverCard with it.\nReady to merge when you say.",
+    "may": ["merge", "release"]
+  },
+  {
+    "prompt": "Ok, lets ship the react aria update",
+    "offer": "| Docs tests, locally | 293 unit and 18 e2e passed |\nThe new Chromium 156 and the release's breaking changes, including the `screen` forwarding in device presets, didn't affect anything.\nSince 1.64 passes, it can go in now as its own PR or follow this one:\n- **Ship React Aria alone:** say `ship it`. Playwright then waits for Renovate's monthly group or a separate PR.\n- **Also do Playwright now:** a separate small branch that bumps `playwright` and `@playwright/test` to `^1.64.0`. It doesn't depend on the React Aria change.\nI'd ship React Aria now and do Playwright as its own PR right after, so each one reverts on its own.",
+    "may": ["pr", "push"],
+    "missed": true
+  },
+  {
+    "prompt": "Lets just leave it and we can merge PR 47",
+    "offer": "- **So:** keep the ignore rule as it is. Clearing the old files is optional, and safe whenever you like.\n**The lock-file branch:** Renovate didn't close #42; your account did. GitHub's history for the PR shows `closed jbabin91 2026-10-11T22:55:00Z`, the same minute #46 merged. That's why the branch is still there:\n- **GitHub:** its \"delete branch\" setting is on for this repo, but it deletes head branches only when a PR merges, not when one closes.\n- **Renovate:** it deletes its own branches when it decides they're stale, and appends \" - autoclosed\" to any open PR it closes. #42 has no such suffix, which confirms Renovate didn't close it.\n- **What happens next:** Renovate will likely prune the branch on its next run, since it no longer needs it. That last point is my inference from its docs, which say it prunes branches it has no use for. Deleting it now is also safe, since nothing references it.\nWant me to delete `renovate/lock-file-maintenance` from `origin`, or leave it for Renovate?",
+    "may": ["merge", "release"],
+    "missed": true
+  }
+]

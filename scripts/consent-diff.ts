@@ -157,6 +157,14 @@ const TAILS = [
   ' in an hour',
   '\nwhen you are done, merge it',
   ': when you are done, merge it',
+  // A retraction, alone, re-asked, or re-asked in its own sentence.
+  '. never mind',
+  '. open a PR. no wait, never mind. push it',
+  '. never mind. merge it',
+  '. never mind, push it',
+  '. push it. never mind. thanks',
+  '. thanks. never mind. push it',
+  '. never mind. merge it. never mind',
 ];
 const generated = LEADS.flatMap((lead) =>
   VERBS.flatMap((verb) =>
