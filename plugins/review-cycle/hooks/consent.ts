@@ -815,7 +815,7 @@ function onlyAutoMerge(g: MutableGrant): boolean {
 type Carry = 'none' | 'mood' | 'described' | 'ready';
 
 const MEANS_NOW =
-  / (?:(?:when|once|after) (?:you are|you're) (?:done|finished)(?: with (?:it|that|this|them))?|as soon as (?:you can|possible)|before (?:the )?(?:checks|ci|tests) (?:pass|passes|finish|finishes|complete|completes))$/;
+  / (?:(?:when|once|after) (?:you are|you're) (?:done|finished)(?: with (?:it|that|this|them))?|(?:when|whenever) (?:you|we) can|as soon as (?:you can|we can|possible)|before (?:the )?(?:checks|ci|tests) (?:pass|passes|finish|finishes|complete|completes))$/;
 
 // Never in an offer, where "you" is the user. Outside its own request's part,
 // or after punctuation, it may lead the next request ("push it -- when you are
