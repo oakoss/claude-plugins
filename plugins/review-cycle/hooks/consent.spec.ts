@@ -952,6 +952,108 @@ describe('an affirmative grants what the previous answer asked', () => {
   });
 });
 
+describe('a yes does not meet the condition an offer sets', () => {
+  test.each([
+    'Should I merge #168, if the tests pass?',
+    'Should I merge #168, but only if CI passes?',
+    'Should I merge #168, but not until CI passes?',
+    'Should I merge #168, and only once CI is green?',
+    'Should I merge #168, provided CI passes?',
+    'Should I merge #168, assuming CI passes?',
+    'Should I merge #168 as long as the tests pass?',
+    'Should I merge #168 when CI passes, and only once staging is deployed?',
+    'Should I push it, and when CI passes, merge #168?',
+    'Should I push it, then if CI passes, merge #168?',
+    'When CI passes, should I merge #168?',
+    'If the tests pass, should I merge #168?',
+    'Should I merge #168? If the tests pass.',
+    'Should I merge #168? Only once CI passes.',
+    'Should I push? Not before CI passes.',
+    'Should I push it, and then if CI passes, merge #168?',
+    'Should I merge #168, as long as the tests pass?',
+    'Should I merge #168, unless CI fails?',
+    'Should I merge #168? Only if CI passes, though.',
+    'Should I merge #168? Until CI passes, hold off.',
+    'Should I merge #168? Thanks. If the tests pass.',
+    'Should I merge #168? I will only do that if CI passes.',
+    "Should I merge #168? If CI passes, I'll do it right away.",
+    'Can we push? Not until CI is green.',
+    'Do we commit, then push? Only if CI passes.',
+    'Once that works, should I merge #168?',
+    'Should I merge #168, if/when CI passes?',
+    'If CI passes,\nshould I merge #168?',
+    'Should I merge #168, or release it, provided CI passes?',
+    'If that looks right and CI passes, should I push?',
+    "When it's ready, should I merge #168?",
+    'If everything is ready, should I merge #168?',
+    'If CI passes, should I push `README.md`?',
+    'If the tests pass, should I merge #168? Or do you want to wait?',
+    "Once it's good, should I push?",
+    'After that looks good, should I push?',
+    'If it looks good to reviewers, should I push?',
+    'Should I merge #168? If that looks good, and CI passes.',
+    "Should I merge #168? I'll merge it once CI passes.",
+    "Want me to merge #168? I can merge it as soon as it's green.",
+    'Should I merge #168 when CI passes and staging is deployed?',
+  ])('"%s" offers nothing', (offer) => {
+    expect(grantOf('yes', offer)).toEqual(NONE);
+  });
+  test.each([
+    ["Should I push? If yes, I'll open the PR next.", PUSH],
+    ["Should I open the PR? If so, I'll draft the body.", PR],
+    ["When you're ready, should I push?", PUSH],
+    ["Once you're ready, should I push?", PUSH],
+    ['If that looks right, should I push?', PUSH],
+    ["If that's right, should I push?", PUSH],
+    ['If it looks good, should I push?', PUSH],
+    ['If everything looks good, should I push?', PUSH],
+    ["If you're happy with it, should I push?", PUSH],
+    ['If that works for you, should I push?', PUSH],
+    ['If you agree, should I push?', PUSH],
+    ['Assuming you agree, should I push?', PUSH],
+    ['Should I push? Only if you want.', PUSH],
+    ["Should I push? If you'd like.", PUSH],
+    ['If so, should I merge #168?', merging('168')],
+    ['Should I merge #168 when CI passes?', autoNamed('168')],
+  ])('"%s" offers what it names', (offer, grant) => {
+    expect(grantOf('yes', offer)).toEqual(grant);
+  });
+  test('a condition after the question withholds it even where it only orders the steps', () => {
+    expect(grantOf('yes', 'Should I push? After that, CI will run.')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I push and, after that, open the PR?')).toEqual(NONE);
+  });
+  test('a decline still holds what a conditional offer named', () => {
+    expect(holdOf('not yet', 'Should I merge #130, provided CI passes?')).toEqual({
+      step: 'merge',
+      how: 'declined',
+    });
+    expect(holdOf('hold off', 'Should I push? Not until CI is green.')).toEqual({
+      step: 'push',
+      how: 'declined',
+    });
+    expect(holdOf('not yet', 'Should I push and open a PR as long as CI passes?')).toEqual({
+      step: 'push',
+      how: 'declined',
+    });
+  });
+  test.each([
+    'merge 168, provided CI passes',
+    'merge 168, assuming CI passes',
+    'merge 168, as long as the tests pass',
+    'merge 168. Only if CI passes.',
+    'merge 168. Only if CI passes, though.',
+    'merge 168. Not before CI passes.',
+    'push it. Only if CI passes.',
+    'push it. But only if CI passes.',
+    'merge 168. And only if CI passes.',
+  ])('typed, "%s" grants nothing', (prompt) => {
+    expect(grantOf(prompt)).toEqual(NONE);
+  });
+  test('typed, a sentence that orders the steps with "before" withholds nothing', () => {
+    expect(grantOf('push it. Before that, run the tests.')).toEqual(PUSH);
+  });
+});
+
 describe('a force push has to be named', () => {
   test.each([
     ['force push it', LEASE],

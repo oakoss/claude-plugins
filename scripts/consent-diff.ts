@@ -147,6 +147,12 @@ const CONDITIONS = [
   ' as soon as we can',
   ' when I can',
   ' when we can review it',
+  ', provided CI passes',
+  ', assuming CI passes',
+  ' as long as the tests pass',
+  ', as long as the tests pass',
+  ', but only if CI passes',
+  ', but not until CI passes',
 ];
 const TAILS = [
   '',
@@ -172,6 +178,11 @@ const TAILS = [
   '. push it. never mind. thanks',
   '. thanks. never mind. push it',
   '. never mind. merge it. never mind',
+  // A condition in a sentence of its own.
+  '. Only if CI passes.',
+  '. Not before CI passes.',
+  '. If CI passes.',
+  '. If CI fails, fix it.',
 ];
 const generated = LEADS.flatMap((lead) =>
   VERBS.flatMap((verb) =>
@@ -237,6 +248,24 @@ const OFFERS = [
   'Merged #134\nMerge #130?',
   'Can we push `--dry-run` to main?',
   'Why do we merge #130 first?',
+  // Conditions an offer sets: in the question, before it, or after it.
+  'Should I merge #130, if the tests pass?',
+  'Should I merge #130, but not until CI passes?',
+  'Should I merge #130, assuming CI passes?',
+  'Should I merge #130 when CI passes, and only once staging is deployed?',
+  'Should I push it, and when CI passes, merge #130?',
+  'When CI passes, should I merge #130?',
+  "When you're ready, should I push?",
+  'If so, should I merge #130?',
+  'Should I merge #130? If the tests pass.',
+  'Should I merge #130? Only once CI passes.',
+  "Should I push? If yes, I'll open the PR next.",
+  'Should I push? After that, CI will run.',
+  'Should I merge #130? Only if CI passes, though.',
+  'Can we push? Not until CI is green.',
+  'If CI passes,\nshould I merge #130?',
+  'If it looks good, should I push?',
+  'If that looks right and CI passes, should I push?',
 ];
 
 const prompts = [...new Set([...quoted, ...generated, ...REPLIES])];
