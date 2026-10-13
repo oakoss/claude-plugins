@@ -36,6 +36,12 @@
       "title": "Unasked-step notice",
       "description": "Show a line on screen when a push, pull request, merge or release runs without your asking because Stop before allows it. The agent is told either way; a merge run now on a request to merge once ready is always shown. Only you can change this, here in /config.",
       "default": false
+    },
+    "modelCheck": {
+      "type": "boolean",
+      "title": "Model check",
+      "description": "When your message doesn't read as asking for a push, pull request, approval or release, ask a model (sonnet, about 800 tokens a call, billed to your account) before refusing. Its yes lets the step run as Stop before would and shows a line on screen; a merge (other than oakum's version pull request, for a release), a force push, a push to the default branch, a tag push and a remote delete still ask. Never runs under claude -p. Only you can change this, here in /config.",
+      "default": true
     }
   }
 }

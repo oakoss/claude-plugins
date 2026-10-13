@@ -139,6 +139,11 @@ describe('vetoes', () => {
     'push it first',
     'never mind the tests, push it',
     "don't wait, push it",
+    "don't forget to push",
+    "don't worry just push it",
+    'do not hesitate to open a PR',
+    "don't wait for CI push it",
+    "don't overthink it and open the PR",
   ])('not %s', (message) => {
     expect(vetoed(message)).toBe(false);
   });
