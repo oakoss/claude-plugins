@@ -1,0 +1,1043 @@
+[
+  {
+    "prompt": "merge the first PR",
+    "reply": "{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the first PR\"}"
+  },
+  {
+    "prompt": "merge the first",
+    "reply": "{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the first\"}"
+  },
+  {
+    "prompt": "approve the first",
+    "reply": "{\"steps\": {\"approve\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"approve the first\"}"
+  },
+  {
+    "prompt": "don't merge it first",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 132 when it's ready, but hold off",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": true}}, \"prs\": [132], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 132 when it's ready, if Bob approves",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [132], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 132 when it's ready, but don't do it yet",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": true}}, \"prs\": [132], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it as soon as I say so, then release it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}, \"release\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it as soon as you can, then push it",
+    "reply": "{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"commit it as soon as you can, then push it\"}"
+  },
+  {
+    "prompt": "merge it when it's ready, but I'll check first",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "squash and merge it when ready",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it when I say its ready",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it once Bob says the PR is ready",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it unless CI passes",
+    "reply": "The message \"merge it unless CI passes\" is oddly worded. Read literally, it asks to merge only if CI does not pass. Either way, the merge hinges on a CI result the agent cannot see come true in advance, so it counts as conditional rather than a plain request now.\n\nNo PR number is named.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it until CI passes",
+    "reply": "The message \"merge it until CI passes\" is ambiguous. It most likely means \"merge it once CI passes\" (a typo), which makes the merge conditional on CI, something the agent cannot see come true. I treat it as conditional and not as a request to merge now.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it when I say so",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it after I review it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it when its ready and then start the next one",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't merge it when it's ready",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, push it",
+    "reply": "{\"steps\":{\"push\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "once I say so, merge it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "if CI fails, merge it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, merge it and push",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}, \"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, merge it, but hold off",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, push it. commit it",
+    "reply": "{\"steps\":{\"push\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "when it is ready to merge. merge it when I say so",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, release it, merge it",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": true, \"declined\": false}, \"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, push it, merge it",
+    "reply": "{\"steps\":{\"push\":{\"now\":false,\"condition\":true,\"declined\":false},\"merge\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "commit it. once it's ready, do not merge it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once PR 133 is ready, merge 134",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [134], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 134 once PR 133 is ready",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [134], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it when the tests pass",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it once CI is green",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "approve it when its ready",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge main into it when its ready",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge main into it",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge origin/main into the branch",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge this into the PR",
+    "reply": "Ambiguous: \"merge this into the PR\" most likely means a local git merge of a branch into the PR's branch, or possibly merging on GitHub. It doesn't name a PR number and doesn't ask to merge the PR itself. \"Merge this into the PR\" means putting changes into the PR's branch, which is not `gh pr merge`. I'll treat it as not the merge step.\n\n```json\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}\n```"
+  },
+  {
+    "prompt": "merge it into the branch",
+    "reply": "The message is ambiguous between a local `git merge` and merging a PR on GitHub. \"Merge it into the branch\" reads most naturally as a local merge of one branch into another. That is not the merge step, so merge is not asked for now.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it from main",
+    "reply": "Ambiguous: \"merge it from main\" most likely means merging main into the current branch locally (git merge main), which is not the gh pr merge step. It doesn't name a PR or mention GitHub.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "address the comments",
+    "reply": "{\"steps\": {\"comment\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"address the comments\"}"
+  },
+  {
+    "prompt": "Good, push on.",
+    "reply": "\"Push on\" is ambiguous: it could mean \"continue\" rather than `git push`. Without context of an agent question offering a push, it most likely means \"keep going.\" The message doesn't clearly request `git push`, so I treat it as not a request.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit on it",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't merge the release yet",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}, \"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release branch into main",
+    "reply": "The message asks for merging the release branch into main. That sounds like a local `git merge` of one branch into another, which the merge step explicitly excludes. It names no pull request and mentions no GitHub merge, so no step applies.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release-please branch",
+    "reply": "The message asks to merge the release-please branch, which is most likely the release pull request. Merging the release pull request counts as the \"release\" step, and since it is a PR merge on GitHub it also counts as \"merge\". No PR number is named.\n\n{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}, \"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the release-please branch\"}"
+  },
+  {
+    "prompt": "merge the release fixes",
+    "reply": "Ambiguous: \"merge the release fixes\" likely means a local git merge of a branch, not a `gh pr merge` call, since no PR number is named and it is phrased as merging a set of changes. That reads as a local git merge, which is not the merge step. It could also refer to merging a release pull request, but nothing in the message says so.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release #3 fixes",
+    "reply": "The message \"merge the release #3 fixes\" reads as an instruction to merge PR #3, which holds the release fixes. It names the number 3 and uses the imperative \"merge\". Alternatively it could mean \"merge the release pull request\", but \"release #3 fixes\" most likely describes the PR's content. I read it as a merge request for PR 3.\n\nWhether it also counts as a release step (merging the release pull request) is ambiguous. The phrase \"the release #3 fixes\" suggests fixes related to the release, not the release PR itself, so I mark release as not asked.\n\n{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [3], \"quote\": \"merge the release #3 fixes\"}"
+  },
+  {
+    "prompt": "merge the release 3.5",
+    "reply": "Ambiguous: \"merge the release 3.5\" likely means merging the release pull request, which counts as a release step. The number 3.5 is a version, not a PR number. It could also be read as a merge step, but since it refers to the release PR, I'll mark release as now. The merge step (gh pr merge) is also what the agent would run, but the definition lists merging the release pull request under release, so merge is not set.\n\n```json\n{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the release 3.5\"}\n```"
+  },
+  {
+    "prompt": "the release notes look good",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "publish the docs to the wiki",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit the package",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "publish to it",
+    "reply": "The message \"publish to it\" is ambiguous. \"Publish\" could mean a package publish (`npm publish`), which is the release step. It could also mean pushing to a remote (\"it\" being a branch or remote). The word \"publish\" most directly matches the release category (a package publish), so I treat this as a release request.\n\n{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"publish to it\"}"
+  },
+  {
+    "prompt": "publish to the",
+    "reply": "The message \"publish to the\" is truncated and incomplete. \"Publish\" could point to a package publish (release), but the target is missing, so it is not clear that it asks for `npm publish` or any other listed step. Without a clear request, I mark nothing as asked for now.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "address the TODO comments in the code",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Should I respond to the comments?",
+    "reply": "{\"steps\": {\"comment\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Should I reply to the comments?",
+    "reply": "{\"steps\": {\"comment\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Should I ship it from fix/x?",
+    "reply": "The message asks whether the person themselves should ship it, which is a question and not a request for the agent to push. \"Ship it\" would count as push, but only if the message asked for it. The word \"Should\" turns it into a question about the step.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR, but not until CI passes",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it from main",
+    "reply": "{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"push it from main\"}"
+  },
+  {
+    "prompt": "Please open the PR into `later`",
+    "reply": "{\"steps\": {\"pr\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Please open the PR into `later`\"}"
+  },
+  {
+    "prompt": "open the file",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR for the docs",
+    "reply": "{\"steps\": {\"pr\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"open a PR for the docs\"}"
+  },
+  {
+    "prompt": "create a test for the PR",
+    "reply": "The message asks for a test to be created for the PR. That is writing test code, not running `gh pr create`. \"create a test for the PR\" does not request opening a pull request, so no step applies.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't force push",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "force push it. never mind",
+    "reply": "The message says \"force push it. never mind\". \"Never mind\" retracts the request, so push is declined.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "force push it, but not until CI passes",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I merge #168 first, but only if CI passes?",
+    "reply": "{\"steps\": {\"merge\": {\"now\": true, \"condition\": true, \"declined\": false}}, \"prs\": [168], \"quote\": \"yes\"}"
+  },
+  {
+    "prompt": "delete the file",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "delete it from the branch",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "delete the branch comments",
+    "reply": "The message \"delete the branch comments\" is ambiguous. It most plausibly means deleting comments in code or on a branch, not a request to post a `gh pr comment` or to delete a remote branch. It does not clearly ask for any listed step. \"Delete the branch\" could mean a remote branch deletion (push), but the trailing \"comments\" makes it read as \"the branch comments,\" which are the things to be deleted. That is not a push or a new comment.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I rename the helper?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "ok",
+    "offer": "I did not commit anything.",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I hold off on committing until CI passes?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "I will not push. Want me to run the tests?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I rename src/a.ts?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push this to `next sprint`",
+    "reply": "{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"push this to `next sprint`\"}"
+  },
+  {
+    "prompt": "push it to \"later\"",
+    "reply": "Ambiguous: \"push it to 'later'\" could mean pushing to a remote/branch named \"later\", or postponing. The quotes around \"later\" suggest a branch or remote named \"later\". The imperative \"push it to\" is a direct request for git push, so I treat it as a push request.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"push it to \\\"later\\\"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I delete src/old.ts?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Delete scratch/tmp?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Can we push to main, or is it protected?",
+    "reply": "The agent's question asks whether pushing to main is possible, not whether to do it. \"yes\" answers that question and doesn't clearly agree to an offer to push. It is ambiguous, but the question is an inquiry about permission or protection, not an offer to push. So push is not requested now.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I delete it?",
+    "reply": "The agent's question \"Should I delete it?\" doesn't say what \"it\" is. Only one listed step involves deleting: deleting a remote branch, which counts as push. Nothing in the question names a remote branch, so it could just as well be a local file or branch. The question does not clearly offer any listed step, so \"yes\" does not clearly request one.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Ready to push. Run the tests?",
+    "reply": "The agent's question is \"Ready to push. Run the tests?\" and the person says \"yes\". That agrees to running the tests, not to pushing. The question's mention of push is a statement of readiness, not an offer of the push step, so no step is requested.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I commit to the new layout?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "sure",
+    "reply": "The message is \"sure\", which agrees to something, but the context shows no agent question offering a step. With no offer visible, I can't tell which step, if any, the person is agreeing to, so no step is asked for now.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "did it publish?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "is it ready for review?",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't continue merging the PRs yet",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't merge it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) merge it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t merge it",
+    "reply": "{\"steps\":{\"merge\":{\"now\":false,\"condition\":false,\"declined\":true}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "merge it if CI fails",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it when its done",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it once its fixed",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it, but hold off",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't merge 130",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) merge 130",
+    "reply": "The message \"(not yet) merge 130\" postpones the merge, so it is not asked for now.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [130], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t merge 130",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130 when I say so",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [130], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130 if CI fails",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [130], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130 when its done",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [130], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130 once its fixed",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [130], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130, but hold off",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [130], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't push it",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) push it",
+    "reply": "The message is ambiguous. \"(not yet)\" is a parenthetical postponement, and \"push it\" is a request. They conflict, so I treated the parenthetical as qualifying the request: the person is saying not yet, and the push is postponed. That means the push is not asked for now.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t push it",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it when I say so",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it if CI fails",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it when its done",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it once its fixed",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it, but hold off",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't commit it",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) commit it",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t commit it",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it when I say so",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it if CI fails",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it when its done",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it once its fixed",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it when you are done",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "commit it, but hold off",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't release it",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) release it",
+    "reply": "The message \"(not yet) release it\" is ambiguous. \"Not yet\" declines or postpones, and \"release it\" is the request. The parenthetical \"(not yet)\" most plausibly modifies the release: don't release yet. That makes release declined and not asked for now.\n\n{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t release it",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "release it when I say so",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "release it if CI fails",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "release it when its done",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "release it once its fixed",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "release it, but hold off",
+    "reply": "{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't open a PR",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) open a PR",
+    "reply": "The message is ambiguous: \"(not yet)\" in parentheses precedes \"open a PR\". It most plausibly postpones the PR, so I read it as a decline.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t open a PR",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR when I say so",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR if CI fails",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR when its done",
+    "reply": "{\"steps\":{\"pr\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "open a PR once its fixed",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR, but hold off",
+    "reply": "The message is contradictory but most plausibly means \"open a PR, but hold off on it.\" \"Hold off\" postpones the step, so I treat it as a decline and do not count the PR as asked for now.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don't approve it",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) approve it",
+    "reply": "Ambiguous: \"(not yet) approve it\". The parenthetical \"not yet\" postpones, which suggests the approval is declined for now. \"approve it\" is the request, but the \"(not yet)\" qualifies it. Reading it as \"not yet — approve it\" is odd; most naturally \"not yet\" applies to the approval, so it is postponed.\n\n{\"steps\": {\"approve\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t approve it",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "approve it when I say so",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "approve it if CI fails",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "approve it when its done",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "approve it once its fixed",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "approve it, but hold off",
+    "reply": "{\"steps\": {\"approve\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "why didn't 'Lets just leave it and we can merge PR 47' work?",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Anything else before we merge?",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "anything else before we ship?",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "did the merge go through?",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "pr-watch: GitHub reports oakoss/claude-plugins#170 ready to merge.\nThis is news from pr-watch, not a request to merge.",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Is that another bug that we need to address?",
+    "offer": "Shipped as PR #172. Merge it?",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "I wasn’t fully liking the implementation of github stacks",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "finish the rebase for me",
+    "reply": "{\"steps\": {\"finish\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"finish the rebase for me\"}"
+  },
+  {
+    "prompt": "continue the rebase onto main",
+    "reply": "{\"steps\": {\"finish\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"continue the rebase onto main\"}"
+  },
+  {
+    "prompt": "go ahead and land it",
+    "offer": "Merge #116?",
+    "reply": "{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [116], \"quote\": \"go ahead and land it\"}"
+  },
+  {
+    "prompt": "yep, cut it",
+    "offer": "Release `review-cycle@0.29.0`?",
+    "reply": "{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"yep, cut it\"}"
+  },
+  {
+    "prompt": "sure, send it up",
+    "offer": "Push `fix/x` to `origin`?",
+    "reply": "{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"sure, send it up\"}"
+  },
+  {
+    "prompt": "Ok, lets get started with the plan",
+    "offer": "All three recorded. Every decision the rewrite plan depends on is now settled — scope, packaging, tokenizer, matcher, anchor rule, convergence criterion. Nothing independent left to request; the next step is the plan itself. Say `/plan` and I'll produce it.",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "That doesn't work either.[Image #2]",
+    "offer": "The line continuation broke on paste. Your shell ran only the first line, as a suspended background job, and the `--settings` part never reached `claude`. Clear it, then run everything as one line:\n```bash\nkill %1\nclaude --plugin-dir ~/.code/github/oakoss/claude-plugins/plugins/review-cycle --settings '{\"enabledPlugins\":{\"review-cycle@oakoss\":false}}'\n```\nOnce it's up, check 1 (the status tool) confirms the new gate loaded instead of the installed one.",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "   - dropping the wrapper table.\n   Doing them now costs another review round. Deferring them makes a clean follow-up PR.\n5. **Commit and PR.** Four commits per the plan, which takes some care because the changes are interleaved. Then CI, where `claude plugin test` gets its first run on a real runner. Also needs your OK to close the six sentinel beads as won't-fix.\n6. **Housekeeping I'll just do:** retire the stale sentinel memory, sync the plan file with the later amendments, and drop the leftover `$HOME/.claude` line in the test helpers.\n7. **After merge:** install the new version, then remove `~/.claude/.disable-review-gate`. No release until you say so.\nI'd start 2, 3 and 6 now, since none of them needs you, while you decide on 1 and 4. Go?",
+    "reply": "The agent asked \"Go?\" about starting items 2, 3 and 6 now, which are not push, PR, merge, or similar steps. Item 5 (commit and PR) is not part of the \"start now\" offer. The person agreed to \"that\", which is items 2, 3 and 6 only, so no PR is requested.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": false}, \"release\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Can we do the structural suggestions now",
+    "offer": "**Structural suggestions from the maintainability audit (report-only):**\n- Split `register.ts`, now about 1,130 lines. Move the git reads behind an injected `git` function, which it measured passing `validate`, and make commit attribution a pure module tested against real-git fixtures.\n- Consider HEAD's own reflog as the \"made here\" signal. That would delete the fetch-attribution code, at the cost of missing plumbing-built commits.\n- Fold the nudge's per-message state into one record.\n**Commit shape:** the fixes and the nudge touch the same hunks in `register.ts` and `register.test.ts`, and the gate refuses `git add -p`. So this lands as one commit with both bump files, or two only if I rebuild the split by hand.\nSay \"commit it\" when you're ready.",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets start building",
+    "offer": "1. **A shared promise, not fire-and-forget.** `session.start` starts the read, and the first Bash or Monitor call waits for it. A slow rc can't then race the first command. Waits on `$` don't count against the hook's 10-second budget.\n2. **Fallback order:** own read first, then the snapshot as today, then the existing \"could not read aliases\" note. A read that times out or exits nonzero falls through, so a broken rc costs a slower first call, not a lockout or a silent pass.\n3. **Login shell (`-l`)** to match Claude Code. That also runs `.zprofile`/`.zlogin`, which the probe skipped, so I'll re-measure the time with `-l` during the build. The timeout will be about 5 s.\n4. **The `time -p <alias>` fix** goes on the same branch as its own commit. It's a separate bug, but the same alias code.\nThen the usual path: tests for the recipe, the fallbacks and bad rc files (fake `HOME`, never yours), mutation checks, and a live check in rw-lab. After that, `/review-cycle:review` before anything is committed.\nStart building?",
+    "reply": "{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that. But I think if I say ship or ship it it should just do it all review, commit, push,  and create the PR.",
+    "offer": "2. **Consent:** the gate wants your message to ask for the commit or push, and shows the popup when it can't tell. That's where the interruptions come from.\nConsent is worth different amounts for the two actions:\n- **Commits** are local. A commit you didn't want costs one `git reset`, and the coverage check already guarantees it was reviewed. Asking you about every commit adds friction and protects very little.\n- **Pushes**, including deleting a remote branch, leave your machine. Other people see them, CI runs on them, and undoing one isn't always clean. That's where asking you pays for itself.\n**My recommendation:** keep the review-coverage check, drop consent for commits, and keep it for pushes. The agent can then commit reviewed work on its own, which also changes the \"only when you say `commit it`\" rule in your AGENTS.md. You'd only see a popup for a push, and I'd also teach the parser \"delete the branch\" so your ui case wouldn't have asked.\nShould I make that change, or would you rather keep commit consent and just widen the parser?",
+    "reply": "The person agrees to the recommended change (a config/parser change, not a git step). Then they say that \"ship\" or \"ship it\" should do review, commit, push, and create the PR. This is a description of a desired rule for future behavior rather than a request to ship now. The message sets a rule for how the gate should treat \"ship it\" and does not itself say \"ship it\" as a command. So no step is asked for now.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}, \"pr\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that. You can run part 1 and set up part 2 and when everything is ready I'll test part 2.",
+    "offer": "  | `commit` | `git commit` of a staged change | refused |\n- **What I check:** the hook's result and the bare remote's refs before and after each run. That proves both that a refused push never landed and that the dry run moved nothing.\n**Part 2: whether `/config` reaches the gate mid-session (needs you, about 2 minutes)**\n`/config` is interactive, so `claude -p` can't drive it. Reading the code, a hand edit to the settings files takes effect on the next command, because the gate rereads them each time. The rung you set in `/config` comes in through the plugin's options when it loads, though, so it might only apply after `/reload-plugins` — that's the real unknown.\nI'd set up the test repo and give you three steps: start a session with the plugin, change Stop before in `/config`, then ask for the status tool. The status shows which rung is in force and where it came from. If it doesn't update, we know `/reload-plugins` is required, and I'd document that.\nWant me to go ahead with Part 1 and set up Part 2?",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "- the lockfile entry that fixes CI's frozen install;\n- the close button's space and missing brackets, and the gap above the band.\nNothing else is needed:\n- **Release note:** no new bump file. The existing `pr-watch: minor` covers these changes, since 0.1.0 hasn't released yet.\n- **Checks:** everything passes locally, including the frozen install that failed in CI.\nI'd push and update the description together. Should I go ahead?",
+    "reply": "The agent asked \"I'd push and update the description together. Should I go ahead?\" The person agreed with \"Ok, lets do that\", so push is requested now. Updating the description would be a PR edit (`gh pr edit`), which is not one of the listed steps. It is not a comment either.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Ok, lets do that\"}"
+  },
+  {
+    "prompt": "Ok, lets release when the PR is ready",
+    "offer": "- **Its CI is still running.** Static Analysis and Audit pass; Tests and the Windows run are pending.\n- **Renovate PRs are optional and not needed for 0.5.0:**\n  - **#240** (tooling plus patch-level dependency updates) is still running CI.\n  - **#241** (`jsonc-parser` 0.34, a breaking 0.x bump) is failing CI.\n  I'd take both after the release rather than add risk to it.\nMerging #239 once its CI is green triggers the release workflow, which tags `v0.5.0` and publishes. Since that publishes, I'll merge only when you say so. After it's out, I'll tell ui-86 their two bugs are fixed.",
+    "reply": "{\"steps\":{\"merge\":{\"now\":false,\"condition\":true,\"declined\":false},\"release\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[239],\"quote\":\"lets release when the PR is ready\"}"
+  },
+  {
+    "prompt": "Push the branch delete",
+    "offer": "`feat/reference-components` is still on `origin`. The commit gate blocked the delete because it only recognizes a request that says \"push\", and \"Lets delete it\" doesn't. I won't route around the gate with another command.\nEither of these works:\n- Reply \"push the branch delete\", and I'll run it.\n- Run it yourself: `! git push origin --delete feat/reference-components`",
+    "reply": "{\"steps\":{\"push\":{\"now\":true,\"condition\":false,\"declined\":false}},\"prs\":[],\"quote\":\"Push the branch delete\"}"
+  },
+  {
+    "prompt": "Ok, lets ship the react aria update",
+    "offer": "| Docs tests, locally | 293 unit and 18 e2e passed |\nThe new Chromium 156 and the release's breaking changes, including the `screen` forwarding in device presets, didn't affect anything.\nSince 1.64 passes, it can go in now as its own PR or follow this one:\n- **Ship React Aria alone:** say `ship it`. Playwright then waits for Renovate's monthly group or a separate PR.\n- **Also do Playwright now:** a separate small branch that bumps `playwright` and `@playwright/test` to `^1.64.0`. It doesn't depend on the React Aria change.\nI'd ship React Aria now and do Playwright as its own PR right after, so each one reverts on its own.",
+    "reply": "{\"steps\":{\"push\":{\"now\":true,\"condition\":false,\"declined\":false}},\"prs\":[],\"quote\":\"Ok, lets ship the react aria update\"}"
+  },
+  {
+    "prompt": "Lets just leave it and we can merge PR 47",
+    "offer": "- **So:** keep the ignore rule as it is. Clearing the old files is optional, and safe whenever you like.\n**The lock-file branch:** Renovate didn't close #42; your account did. GitHub's history for the PR shows `closed jbabin91 2026-10-11T22:55:00Z`, the same minute #46 merged. That's why the branch is still there:\n- **GitHub:** its \"delete branch\" setting is on for this repo, but it deletes head branches only when a PR merges, not when one closes.\n- **Renovate:** it deletes its own branches when it decides they're stale, and appends \" - autoclosed\" to any open PR it closes. #42 has no such suffix, which confirms Renovate didn't close it.\n- **What happens next:** Renovate will likely prune the branch on its next run, since it no longer needs it. That last point is my inference from its docs, which say it prunes branches it has no use for. Deleting it now is also safe, since nothing references it.\nWant me to delete `renovate/lock-file-maintenance` from `origin`, or leave it for Renovate?",
+    "reply": "{\"steps\":{\"push\":{\"now\":false,\"condition\":false,\"declined\":true},\"merge\":{\"now\":true,\"condition\":false,\"declined\":false}},\"prs\":[47],\"quote\":\"we can merge PR 47\"}"
+  },
+  {
+    "prompt": "merge it unless CI passes",
+    "reply": "The message \"merge it unless CI passes\" is oddly worded. Literally it means: merge if CI does not pass, which makes no sense as a request. It is conditional on CI, which the agent cannot see come true, so the merge is tied to a condition and not asked for now.\n\nNo PR number is named.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it until CI passes",
+    "reply": "The message \"merge it until CI passes\" is ambiguous. It most plausibly means \"merge it once CI passes\" (a typo), which makes the merge conditional on CI, something the agent cannot see come true at this moment. So the merge is tied to a condition and is not asked for now.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"merge it until CI passes\"}"
+  },
+  {
+    "prompt": "once it's ready, push it",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, push it. commit it",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "once it's ready, push it, merge it",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": true, \"declined\": false}, \"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge this into the PR",
+    "reply": "Ambiguous: \"merge this into the PR\" most likely means merging a branch or changes into the PR's branch, which is a local git merge or a push, not `gh pr merge`. It does not ask to merge the pull request itself on GitHub, so no step applies.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it into the branch",
+    "reply": "The message is ambiguous: \"merge it into the branch\" most likely means a local git merge of one branch into another, which is not the `gh pr merge` step. No pull request number is named and no PR is mentioned, so I treat it as a local merge.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it from main",
+    "reply": "The message is ambiguous. \"Merge it from main\" most plausibly means a local merge of main into the current branch (git merge main), which is not the GitHub merge step. No PR number is named and there is no mention of gh or GitHub, so I read it as a local merge and mark the merge step as not asked.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Good, push on.",
+    "reply": "\"Push on\" is ambiguous: it could mean \"continue\" rather than `git push`. In a coding-agent context, \"push on\" idiomatically means proceed with the work, not push to a remote. Without an agent question offering a push, it is not a clear request to run git push.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release branch into main",
+    "reply": "The message asks for a local `git merge` of one branch into another. That is not the `gh pr merge` step, and no pull request is named. No other listed step is requested.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release-please branch",
+    "reply": "The message asks to merge the release-please branch. That most likely means merging the release pull request, which counts as the release step. It could also be read as a plain merge of a PR, so I mark both merge and release. No PR number is named.\n\n{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}, \"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the release-please branch\"}"
+  },
+  {
+    "prompt": "merge the release fixes",
+    "reply": "Ambiguous: \"merge the release fixes\" could mean a local git merge of a branch, or merging a PR on GitHub. There is no PR number and no mention of a pull request, so it reads most naturally as a local git merge of a branch, which is not the merge step. Release is not requested either, since the \"release\" is only part of the branch name or description.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release #3 fixes",
+    "reply": "The message \"merge the release #3 fixes\" is ambiguous, but it reads as an imperative to merge something, with #3 as the PR number. \"The release #3 fixes\" could mean merging the release PR, or merging a PR that fixes release #3. Either way it asks for a merge now. If it is the release PR, that would also count as release. I think the more natural reading is \"merge the PR #3 (release fixes)\", so I'll mark merge as true with PR 3. The release step is uncertain, so I'll leave it out.\n\n```json\n{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [3], \"quote\": \"merge the release #3 fixes\"}\n```"
+  },
+  {
+    "prompt": "merge the release 3.5",
+    "reply": "\"merge the release 3.5\" is ambiguous: it could mean merging the release pull request (release step) or merging PR 3.5 (not a valid number). Most likely it means merging the release PR for version 3.5, which counts as the release step. Merging a PR on GitHub is also the merge step, but no PR number is given, so the prs list stays empty. I'll mark release as true and merge as true, since the person is asking to merge a pull request.\n\n{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}, \"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the release 3.5\"}"
+  },
+  {
+    "prompt": "publish to it",
+    "reply": "Ambiguous: \"publish to it\" could mean push to a remote branch, or npm publish. \"it\" likely refers to something from earlier context, which isn't visible. \"Publish\" is most naturally mapped to release (package publish), but \"publish to it\" suggests pushing to a remote/branch. Without context, \"publish to it\" — publishing to a registry would be \"publish to npm\". Publishing to a branch/remote is a push. I'll go with push.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"publish to it\"}"
+  },
+  {
+    "prompt": "publish to the",
+    "reply": "The message is truncated: \"publish to the\" gives no clear target. It could mean an npm publish (release), but it is incomplete and does not name one. \"Publish\" alone is ambiguous, and no target such as npm is stated, so I treat it as not clearly requesting a release.\n\n{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Should I ship it from fix/x?",
+    "reply": "The person is asking whether they should ship, which is a question about the step and not a request for the agent to do it. \"Ship it\" would count as push, but \"Should I ship it from fix/x?\" only asks for advice.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "create a test for the PR",
+    "reply": "\"Create a test for the PR\" asks to write a test, not to open a pull request. No step is requested.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "force push it. never mind",
+    "reply": "The message says \"force push it. never mind\" — the \"never mind\" retracts the request, so the push is declined.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "delete it from the branch",
+    "reply": "The message \"delete it from the branch\" is ambiguous but most plausibly asks to remove something (code or a file) from the branch, which is a local edit rather than deleting a remote branch. None of the listed steps (push, pr, merge, approve, release, comment, finish) is requested.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "delete the branch comments",
+    "reply": "The message \"delete the branch comments\" is ambiguous, but it most plausibly means removing code comments on the branch, or deleting comments. It does not ask to delete a remote branch (that would be \"delete the branch\"), and it does not ask to post a comment on GitHub. \"Comments\" here is the object of deletion, not a request to run `gh pr comment`.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it to \"later\"",
+    "reply": "The message \"push it to \"later\"\" is ambiguous. It could mean pushing to a remote or branch named \"later\", which would be a git push request. It could also mean postponing, but the phrasing \"push it to\" followed by a quoted name reads as a git push to a remote or branch called \"later\". I read it as a request to push.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"push it to \\\"later\\\"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Can we push to main, or is it protected?",
+    "reply": "The agent asked \"Can we push to main, or is it protected?\" This is a question about permission or feasibility, not an offer to push. The person's \"yes\" answers it ambiguously. It could mean \"yes, you can push.\" It reads most naturally as agreement that pushing is OK, and since the agent's question concerns pushing, \"yes\" is closest to a go-ahead. But the question is \"can we ... or is it protected\", an information question, so a \"yes\" does not clearly request the push.\n\nI lean toward not treating it as a request, since the question asks about capability rather than offering to push.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I delete it?",
+    "reply": "The agent's question, \"Should I delete it?\", doesn't say what \"it\" is. Deleting a remote branch would count as a push, but nothing in the question or the message says it is a remote branch. It could be a local branch or a file. Because the question never offers a listed step, \"yes\" doesn't agree to one, so I return no steps.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Ready to push. Run the tests?",
+    "reply": "The agent's question offered running the tests (\"Ready to push. Run the tests?\"). \"Yes\" agrees to running tests, not to pushing. \"Ready to push\" is a statement, not an offer of the push step.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "sure",
+    "reply": "The message \"sure\" agrees to something, but no agent question is shown, so I can't tell which step it would agree to. With no visible offer of a step, none can be treated as asked for now.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) merge it",
+    "reply": "The message \"(not yet) merge it\" is ambiguous, but the parenthetical \"(not yet)\" postpones the merge. That makes the merge declined for now, not requested.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "don’t merge it",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it when its done",
+    "reply": "{\"steps\":{\"merge\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "don't merge 130",
+    "reply": "{\"steps\":{\"merge\":{\"now\":false,\"condition\":false,\"declined\":true}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "(not yet) merge 130",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130 when its done",
+    "reply": "{\"steps\":{\"merge\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[130],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "(not yet) push it",
+    "reply": "The message is ambiguous: \"(not yet)\" followed by \"push it\". The parenthetical \"(not yet)\" postpones, and \"push it\" requests. Read as a whole, \"(not yet) push it\" most plausibly means \"not yet — push it\", i.e. hold off. The parenthetical sits at the front and qualifies the push, so I'll treat the push as postponed, not requested now.\n\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) release it",
+    "reply": "Ambiguous: \"(not yet) release it\". The parenthetical \"not yet\" postpones, and \"release it\" is the request. Together the person is saying not yet, so I read this as a postponement of the release.\n\nThe \"(not yet)\" is most plausibly attached to \"release it\", so the release is declined or postponed and not asked for now.\n\n{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) open a PR",
+    "reply": "The message is ambiguous: \"(not yet)\" in parentheses before \"open a PR\". It reads as a postponement of opening the PR, so the pr step is not asked for now.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR if CI fails",
+    "reply": "{\"steps\":{\"pr\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "open a PR, but hold off",
+    "reply": "The message is ambiguous: \"open a PR, but hold off\". The most natural reading is that \"hold off\" postpones the PR itself, so the PR is not requested now. The alternative reading, open a PR but hold off on something else such as merging, is possible, but nothing else is named. Because \"hold off\" has no other target, it most likely attaches to the PR step.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) approve it",
+    "reply": "The message \"(not yet) approve it\" is ambiguous. The \"(not yet)\" is parenthetical, but it most plausibly postpones the approval. The phrase \"approve it\" is a direct request, but \"not yet\" modifies it, so the approval is declined or postponed for now.\n\n{\"steps\": {\"approve\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "   - dropping the wrapper table.\n   Doing them now costs another review round. Deferring them makes a clean follow-up PR.\n5. **Commit and PR.** Four commits per the plan, which takes some care because the changes are interleaved. Then CI, where `claude plugin test` gets its first run on a real runner. Also needs your OK to close the six sentinel beads as won't-fix.\n6. **Housekeeping I'll just do:** retire the stale sentinel memory, sync the plan file with the later amendments, and drop the leftover `$HOME/.claude` line in the test helpers.\n7. **After merge:** install the new version, then remove `~/.claude/.disable-review-gate`. No release until you say so.\nI'd start 2, 3 and 6 now, since none of them needs you, while you decide on 1 and 4. Go?",
+    "reply": "The agent asked \"Go?\" about starting items 2, 3 and 6 now. Those are not push, PR, merge, or any other listed step. Item 5 (commit and PR) is described in the plan but is not part of what the agent offers to start now. The \"Ok, lets do that\" agrees to starting 2, 3 and 6 only.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that. But I think if I say ship or ship it it should just do it all review, commit, push,  and create the PR.",
+    "offer": "2. **Consent:** the gate wants your message to ask for the commit or push, and shows the popup when it can't tell. That's where the interruptions come from.\nConsent is worth different amounts for the two actions:\n- **Commits** are local. A commit you didn't want costs one `git reset`, and the coverage check already guarantees it was reviewed. Asking you about every commit adds friction and protects very little.\n- **Pushes**, including deleting a remote branch, leave your machine. Other people see them, CI runs on them, and undoing one isn't always clean. That's where asking you pays for itself.\n**My recommendation:** keep the review-coverage check, drop consent for commits, and keep it for pushes. The agent can then commit reviewed work on its own, which also changes the \"only when you say `commit it`\" rule in your AGENTS.md. You'd only see a popup for a push, and I'd also teach the parser \"delete the branch\" so your ui case wouldn't have asked.\nShould I make that change, or would you rather keep commit consent and just widen the parser?",
+    "reply": "The person agrees to the change (which is about gate configuration, not itself a push). Then they state a rule: \"if I say ship or ship it it should just do it all review, commit, push, and create the PR.\" This is a description of a future rule for the gate, not a request to push now. The message does not say \"ship it\" as a command; it mentions it as a trigger phrase. So no step is asked for now.\n\nAgreeing to the agent's question offers a config change, not a push or PR step.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}, \"pr\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "- the lockfile entry that fixes CI's frozen install;\n- the close button's space and missing brackets, and the gap above the band.\nNothing else is needed:\n- **Release note:** no new bump file. The existing `pr-watch: minor` covers these changes, since 0.1.0 hasn't released yet.\n- **Checks:** everything passes locally, including the frozen install that failed in CI.\nI'd push and update the description together. Should I go ahead?",
+    "reply": "The agent asked \"I'd push and update the description together. Should I go ahead?\" The person agreed with \"Ok, lets do that\". That means push is requested now. Updating the description likely means editing the PR body (`gh pr edit`), which is not one of the listed steps. It could arguably be a comment, but a description edit is not `gh pr comment`.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Ok, lets do that\"}"
+  },
+  {
+    "prompt": "Push the branch delete",
+    "offer": "`feat/reference-components` is still on `origin`. The commit gate blocked the delete because it only recognizes a request that says \"push\", and \"Lets delete it\" doesn't. I won't route around the gate with another command.\nEither of these works:\n- Reply \"push the branch delete\", and I'll run it.\n- Run it yourself: `! git push origin --delete feat/reference-components`",
+    "reply": "{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Push the branch delete\"}"
+  },
+  {
+    "prompt": "merge it as soon as I say so, then release it",
+    "reply": "{\"steps\":{\"merge\":{\"now\":false,\"condition\":true,\"declined\":false},\"release\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "merge it unless CI passes",
+    "reply": "The message \"merge it unless CI passes\" is oddly phrased. It reads as a conditional on something the agent can't see come true, and the condition is literally inverted (\"unless CI passes\" means merge if CI fails). Either way the request depends on CI, so it is conditional rather than an unconditional request to merge now.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"merge it unless CI passes\"}"
+  },
+  {
+    "prompt": "merge it until CI passes",
+    "reply": "The message \"merge it until CI passes\" is ambiguous. It most likely means \"merge it once CI passes\", which makes the merge conditional on something the agent cannot see come true. So the merge is not asked for now, and the condition flag is true.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it when its ready and then start the next one",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"merge it when its ready\"}"
+  },
+  {
+    "prompt": "once it's ready, merge it and push",
+    "reply": "The message asks for merge and push, but \"once it's ready\" ties both to a condition the agent can't see come true. Neither step counts as requested now, so `now` is false for both and `condition` is true. No pull request number is named. Since the condition is a postponement rather than a refusal, `declined` is false.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}, \"push\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge main into it when its ready",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge this into the PR",
+    "reply": "Ambiguous: \"merge this into the PR\" likely means merging a branch or changes into the PR's branch, probably a local git merge, not `gh pr merge`. It names no PR number and doesn't ask to merge the pull request itself on GitHub. The phrasing \"into the PR\" suggests merging a branch into the PR branch, which is a local git merge, so the merge step is not asked for.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it into the branch",
+    "reply": "Ambiguous: \"merge it into the branch\" probably refers to a local git merge of one branch into another, which is not the PR merge step. No PR number is named and no mention of a pull request or GitHub, so I treat it as a local merge.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge it from main",
+    "reply": "The message \"merge it from main\" is ambiguous. It most likely means a local `git merge main` into the current branch, which is not the PR merge step. It names no PR number and does not mention GitHub, so I read it as a local merge and no listed step is asked for.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Good, push on.",
+    "reply": "\"Push on\" is ambiguous: it could mean \"continue\" rather than `git push`. In coding-agent contexts, \"push on\" usually means carry on with the work. It is not a clear request to run `git push`, and with no agent question shown offering a push, I read it as \"continue\".\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release branch into main",
+    "reply": "The message asks for merging the release branch into main. That sounds like a local `git merge` of one branch into another, which is explicitly not the \"merge\" step (that is `gh pr merge` on a pull request). No pull request number is named, and no push or other step is requested.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release-please branch",
+    "reply": "The message asks to merge the release-please branch. Release-please typically opens a release pull request, and merging that PR counts as a release step. \"Branch\" is a little ambiguous, but the release-please branch corresponds to the release PR. So release is now, and merge via `gh pr merge` is likely too. No PR number is named.\n\n{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}, \"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the release-please branch\"}"
+  },
+  {
+    "prompt": "merge the release fixes",
+    "reply": "The message \"merge the release fixes\" is ambiguous. It could mean a local git merge of a branch, or merging a pull request. It names no PR number and does not say \"PR\" or \"pull request\". \"Release fixes\" probably refers to a branch or a PR, and the wording is too uncertain to count as a `gh pr merge`.\n\nA direct \"merge X\" request usually means a merge, but a local `git merge` is explicitly not this step. With no PR cue and no number, I'll lean toward not flagging it. The release step is also not requested, since the message only says \"release fixes\" as a name and does not ask for a release.\n\nI'll mark merge as not now.\n\n{\"steps\": {\"merge\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge the release #3 fixes",
+    "reply": "The message \"merge the release #3 fixes\" is ambiguous, but it reads as a request to merge a pull request (#3) containing release fixes. \"merge ... #3\" names PR 3. It could also be a request to merge the release pull request, so release may apply, but the phrase \"the release #3 fixes\" more likely describes the fixes, with the PR being #3. I'll mark merge as requested and leave release unmarked.\n\n{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [3], \"quote\": \"merge the release #3 fixes\"}"
+  },
+  {
+    "prompt": "merge the release 3.5",
+    "reply": "The message \"merge the release 3.5\" most plausibly asks to merge the release pull request, which is the release step. It could also be read as a `gh pr merge`, but 3.5 is a version, not a PR number. Since merging the release PR counts as the release step, I mark release as now, and mark merge as now too because it is a PR merge on GitHub. No PR number is named, because 3.5 is a version.\n\n{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}, \"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"merge the release 3.5\"}"
+  },
+  {
+    "prompt": "publish to it",
+    "reply": "The message \"publish to it\" is ambiguous, but it most plausibly asks for a package publish (`npm publish`), which falls under release. It could also mean pushing to a remote (\"publish to it\" being a branch or remote), and no earlier context is available to settle which. \"Publish\" most directly maps to the release step, so I'm marking that one as requested.\n\n{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"publish to it\"}"
+  },
+  {
+    "prompt": "publish to the",
+    "reply": "The message \"publish to the\" is truncated and incomplete. \"Publish\" could mean a package publish (release), but the target is missing, so it is unclear. It is likely a release request, but the sentence is cut off and names no destination such as npm. The word \"publish\" is the command verb, and \"publish to the\" most plausibly points to something like \"npm registry\". The ask appears to be a request to publish, so I'll mark release as now, though with some uncertainty.\n\n{\"steps\": {\"release\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"publish to the\"}"
+  },
+  {
+    "prompt": "Should I ship it from fix/x?",
+    "reply": "The message asks whether the person should ship it. It is a question, not a request for the agent to push, so no step is asked for now.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "create a test for the PR",
+    "reply": "\"Create a test for the PR\" asks for a test to be written, not for opening a pull request. No listed step is requested.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "force push it. never mind",
+    "reply": "The message says \"force push it. never mind\". \"Never mind\" cancels the request, so the push is withdrawn, which makes it declined and not asked for now.\n\n{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "delete it from the branch",
+    "reply": "The message says \"delete it from the branch\". This asks to remove something from a branch, which is probably a code or file change, not deleting a remote branch. None of the listed steps is clearly requested, so I return no steps.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "delete the branch comments",
+    "reply": "The message \"delete the branch comments\" is ambiguous. It most likely means deleting code comments in the branch, or comments about the branch. It does not clearly request any of the listed steps: it isn't a `gh pr comment` request, and it doesn't ask to delete a remote branch or push.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "push it to \"later\"",
+    "reply": "Ambiguous: \"push it to 'later'\" could mean pushing to a remote or branch named \"later\", or could mean postponing. The quoted \"later\" in quotes suggests a remote/branch name. As a command, \"push it to X\" requests git push.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"push it to \\\"later\\\"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Can we push to main, or is it protected?",
+    "reply": "The agent's question asks whether pushing to main is allowed, which is a question about permission, not an offer to push. The person's \"yes\" answers that question, so it does not clearly agree to an offer. The question is \"Can we push to main, or is it protected?\", and \"yes\" most plausibly means \"yes, we can push\". That reads as permission, which is ambiguous, and arguably agrees to the push. The agent is evidently looking to push, and \"Can we push\" works as a proposal. I will treat it as a request to push now.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"yes\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Should I delete it?",
+    "reply": "The agent's question \"Should I delete it?\" doesn't say what \"it\" is. Deleting a remote branch would count as a push, but nothing in the question names a remote branch. \"Yes\" agrees to an offer that may be a local file, a local branch, or something else entirely, so I can't tie it to any listed step.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "yes",
+    "offer": "Ready to push. Run the tests?",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "sure",
+    "reply": "The message \"sure\" agrees to something, but no agent question is shown, so I can't tell which step it was offering. With nothing visible to say what \"sure\" accepts, no step can be treated as asked for now.\n\n{\"steps\": {}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "merge 130 if CI fails",
+    "reply": "{\"steps\": {\"merge\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [130], \"quote\": \"merge 130 if CI fails\"}"
+  },
+  {
+    "prompt": "(not yet) push it",
+    "reply": "The message is ambiguous. \"(not yet)\" is a parenthetical postponement, and \"push it\" is a direct request. Read as a whole, \"(not yet) push it\" most likely means \"don't do the other thing yet, but push it.\" The parenthetical could attach to something earlier, since it sits before \"push it\" and seems to qualify a previous topic, such as a PR or merge. \"push it\" itself is an imperative, so I treat push as requested now.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"push it\"}"
+  },
+  {
+    "prompt": "push it once its fixed",
+    "reply": "{\"steps\":{\"push\":{\"now\":false,\"condition\":true,\"declined\":false}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "push it, but hold off",
+    "reply": "{\"steps\":{\"push\":{\"now\":false,\"condition\":false,\"declined\":true}},\"prs\":[],\"quote\":\"\"}"
+  },
+  {
+    "prompt": "(not yet) release it",
+    "reply": "The message \"(not yet) release it\" is ambiguous. \"Not yet\" is a postponement, and it comes first and in parentheses, qualifying \"release it\". The sensible reading is that the person is postponing the release, so I treat it as declined.\n\n{\"steps\": {\"release\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) open a PR",
+    "reply": "The message is ambiguous: \"(not yet)\" is a parenthetical that postpones, and \"open a PR\" is the request. Read together, \"(not yet) open a PR\" most naturally means \"don't open a PR yet\", so the step is postponed rather than requested.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR when its done",
+    "reply": "{\"steps\": {\"pr\": {\"now\": false, \"condition\": true, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "open a PR, but hold off",
+    "reply": "The message is ambiguous: \"open a PR, but hold off\" asks for a PR, then says to hold off. \"Hold off\" most plausibly postpones or declines the PR itself, so I'm treating the step as declined and not asked for now.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "(not yet) approve it",
+    "reply": "The message is ambiguous: \"(not yet)\" is parenthetical and could postpone the approval, while \"approve it\" is a direct request. The parenthetical sits right before \"approve it\" and most naturally modifies it, so the approval is postponed.\n\nRead as \"not yet, approve it\", the parenthetical is a declination of something, and the only action named is approve. So approve is declined and not now.\n\n{\"steps\": {\"approve\": {\"now\": false, \"condition\": false, \"declined\": true}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "finish the rebase for me",
+    "reply": "{\"steps\":{\"finish\":{\"now\":true,\"condition\":false,\"declined\":false}},\"prs\":[],\"quote\":\"finish the rebase for me\"}"
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "   - dropping the wrapper table.\n   Doing them now costs another review round. Deferring them makes a clean follow-up PR.\n5. **Commit and PR.** Four commits per the plan, which takes some care because the changes are interleaved. Then CI, where `claude plugin test` gets its first run on a real runner. Also needs your OK to close the six sentinel beads as won't-fix.\n6. **Housekeeping I'll just do:** retire the stale sentinel memory, sync the plan file with the later amendments, and drop the leftover `$HOME/.claude` line in the test helpers.\n7. **After merge:** install the new version, then remove `~/.claude/.disable-review-gate`. No release until you say so.\nI'd start 2, 3 and 6 now, since none of them needs you, while you decide on 1 and 4. Go?",
+    "reply": "The agent asks \"Go?\" for starting items 2, 3 and 6 only. Those are not push, PR, merge, or any listed step. Item 5 (commit and PR) is not included in \"start 2, 3 and 6 now\", so no step is asked for now.\n\n{\"steps\": {\"pr\": {\"now\": false, \"condition\": false, \"declined\": false}, \"release\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that. But I think if I say ship or ship it it should just do it all review, commit, push,  and create the PR.",
+    "offer": "2. **Consent:** the gate wants your message to ask for the commit or push, and shows the popup when it can't tell. That's where the interruptions come from.\nConsent is worth different amounts for the two actions:\n- **Commits** are local. A commit you didn't want costs one `git reset`, and the coverage check already guarantees it was reviewed. Asking you about every commit adds friction and protects very little.\n- **Pushes**, including deleting a remote branch, leave your machine. Other people see them, CI runs on them, and undoing one isn't always clean. That's where asking you pays for itself.\n**My recommendation:** keep the review-coverage check, drop consent for commits, and keep it for pushes. The agent can then commit reviewed work on its own, which also changes the \"only when you say `commit it`\" rule in your AGENTS.md. You'd only see a popup for a push, and I'd also teach the parser \"delete the branch\" so your ui case wouldn't have asked.\nShould I make that change, or would you rather keep commit consent and just widen the parser?",
+    "reply": "{\"steps\": {\"push\": {\"now\": false, \"condition\": false, \"declined\": false}, \"pr\": {\"now\": false, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"\"}"
+  },
+  {
+    "prompt": "Ok, lets do that",
+    "offer": "- the lockfile entry that fixes CI's frozen install;\n- the close button's space and missing brackets, and the gap above the band.\nNothing else is needed:\n- **Release note:** no new bump file. The existing `pr-watch: minor` covers these changes, since 0.1.0 hasn't released yet.\n- **Checks:** everything passes locally, including the frozen install that failed in CI.\nI'd push and update the description together. Should I go ahead?",
+    "reply": "The agent offered to push and update the description together, and the person agreed. Push is clearly asked for now. \"Update the description\" is probably a PR description edit, which is not `gh pr comment`, so I leave comment out. No other listed step is in play.\n\n{\"steps\": {\"push\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Ok, lets do that\"}"
+  }
+]

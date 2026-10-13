@@ -51,18 +51,28 @@ function read(r: Lookup, what: string): Lookup {
   return out === '' ? { asks: `looking up ${what} printed nothing` } : { out };
 }
 
-// What may run: what the user asked for, and what the ladder lets through.
-// A hold stops every step but a commit.
+// Steps the model check read the user's latest message as asking for. They
+// let a step through as the ladder does, so every always-ask check still
+// applies, and a hold raised by mention does not stop them.
+export type ModelSteps = Readonly<Partial<Record<Step, true>>>;
+
+// What may run: what the user asked for, and what the ladder or the model
+// check lets through. A hold stops every step but a commit.
 type Allowed = Readonly<Record<Step, boolean>>;
-export function permitted(granted: Grant, ladder: Ladder, held: boolean): Allowed {
-  const free = (step: Step) => !asks(ladder, step);
+export function permitted(
+  granted: Grant,
+  ladder: Ladder,
+  held: boolean,
+  model: ModelSteps = {},
+): Allowed {
+  const free = (step: Step) => (!held && !asks(ladder, step)) || model[step] === true;
   return {
-    commit: granted.commit || free('commit'),
-    push: covers(granted, 'push') || (!held && free('push')),
-    pr: granted.pr || (!held && free('pr')),
-    merge: granted.merge || (!held && free('merge')),
-    approve: granted.approve || (!held && free('approve')),
-    release: granted.release || (!held && free('release')),
+    commit: granted.commit || !asks(ladder, 'commit'),
+    push: covers(granted, 'push') || free('push'),
+    pr: granted.pr || free('pr'),
+    merge: granted.merge || free('merge'),
+    approve: granted.approve || free('approve'),
+    release: granted.release || free('release'),
   };
 }
 
@@ -258,11 +268,14 @@ export async function judgeGh(
   granted: Grant,
   held: Hold,
   lookups: GhLookups,
+  model: ModelSteps = {},
 ): Promise<{ deny: string } | { ran: Unasked[] }> {
   const ran: Unasked[] = [];
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const may = permitted(granted, ladder, held !== null);
+  const may = permitted(granted, ladder, held !== null, model);
+  // Only a step the setting let through is noted as run unasked.
+  const bySetting = permitted(granted, ladder, held !== null);
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held),
   });
@@ -270,7 +283,7 @@ export async function judgeGh(
     switch (action.kind) {
       case 'pr': {
         if (!may.pr) return { deny: prRefusal(shown, ladder, held) };
-        if (!granted.pr) ran.push({ step: 'pr', ladder });
+        if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         break;
       }
       case 'unread': {
@@ -285,12 +298,12 @@ export async function judgeGh(
       }
       case 'approve': {
         if (!may.approve) return refuse('approve', null);
-        if (!granted.approve) ran.push({ step: 'approve', ladder });
+        if (!granted.approve && bySetting.approve) ran.push({ step: 'approve', ladder });
         break;
       }
       case 'release': {
         if (!may.release) return refuse('release', null);
-        if (!granted.release) ran.push({ step: 'release', ladder });
+        if (!granted.release && bySetting.release) ran.push({ step: 'release', ladder });
         break;
       }
       case 'push': {
@@ -299,7 +312,7 @@ export async function judgeGh(
         const outcome = await pushOutcome(covers(granted, needed) ? null : needed, may.push, () =>
           pushAsks(lookups, ref),
         );
-        if (outcome.kind === 'unasked') ran.push({ step: 'push', ladder });
+        if (outcome.kind === 'unasked' && bySetting.push) ran.push({ step: 'push', ladder });
         if (outcome.kind !== 'refused') break;
         if (outcome.missing === 'bare') {
           return {
@@ -356,7 +369,12 @@ export async function judgeGh(
             };
           }
           // `--auto` on oakum's version pull request is a release too.
-          const releases = permitted({ ...granted, merge: true }, ladder, held !== null).release;
+          const releases = permitted(
+            { ...granted, merge: true },
+            ladder,
+            held !== null,
+            model,
+          ).release;
           if ('asks' in now && !releases && !('cannot' in action.lookup)) {
             const which = await mergeStep(lookups, action.lookup);
             if ('step' in which && which.step === 'release') return refuse('release', null);
@@ -386,7 +404,8 @@ export async function judgeGh(
           }
         }
         const asked = { ...granted, merge: covers.now || covers.ready };
-        const mayHere = permitted(asked, ladder, held !== null);
+        const mayHere = permitted(asked, ladder, held !== null, model);
+        const setHere = permitted(asked, ladder, held !== null);
         // A merge the user asked for covers oakum's version pull request too:
         // merging it is the only way to release, so "merge it" asks for that,
         // unless the same message held off a release ("merge 131. don't release yet")
@@ -398,7 +417,9 @@ export async function judgeGh(
         // except one run now on readiness alone: a release there is noted.
         const readyOnly = target !== null && covers.ready && !covers.now;
         if (mayHere.merge && mayHere.release && !readyOnly) {
-          if (!asked.merge && !asked.release) ran.push({ step: 'merge', ladder });
+          if (!asked.merge && !asked.release && setHere.merge && setHere.release) {
+            ran.push({ step: 'merge', ladder });
+          }
           break;
         }
         const { lookup } = action;
@@ -418,7 +439,7 @@ export async function judgeGh(
         if ('asks' in which) return refuse('merge', which.asks);
         const step = which.step;
         if (!mayHere[step]) return refuse(step, null);
-        if (!asked[step]) ran.push({ step, ladder });
+        if (!asked[step] && setHere[step]) ran.push({ step, ladder });
         break;
       }
       default: {

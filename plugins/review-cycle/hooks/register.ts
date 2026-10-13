@@ -30,6 +30,7 @@ import {
   type Grant,
   type HoldStep,
 } from './consent';
+import { askOf, judge, offerOf, RULES, type Judged, type ModelGrant } from './consent-model';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -44,6 +45,7 @@ import {
   type Hold,
   type InForce,
   type Lookup,
+  type ModelSteps,
   type Unasked as GhUnasked,
 } from './gh-verdict';
 import {
@@ -136,7 +138,8 @@ type ConfigHook = MatchedHook<
       | 'review-cycle.enabled'
       | 'review-cycle.stopBefore'
       | 'review-cycle.nudge'
-      | 'review-cycle.unaskedNotice';
+      | 'review-cycle.unaskedNotice'
+      | 'review-cycle.modelCheck';
   }
 >;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
@@ -181,6 +184,9 @@ type Message = {
 
 type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
 
+type ModelRead = Judged | { kind: 'unanswered'; why: string };
+type ModelAsk = { message: number; text: string; before: string; read: Promise<ModelRead> };
+
 type GateState = {
   // undefined until resolved; null when the session is not in a repository.
   root: Repo | null | undefined;
@@ -190,8 +196,12 @@ type GateState = {
   // How many messages the user has typed, queued ones included.
   messages: number;
   lastAnswer: string;
-  // The user's latest message, and the answer it replied to.
-  said: { text: string; before: string };
+  // The user's latest message, the answer it replied to, and where it came from.
+  said: { text: string; before: string; origin: PromptOrigin['kind'] | null };
+  // The model check's reading of message number `message`, asked once.
+  model: ModelAsk | null;
+  // The user's /config value for asking a model when the grammar refuses.
+  modelCheck: boolean;
   // Refusals of a step the user's message or the offer it answered named:
   // candidate consent-grammar misses, kept in this session only.
   misses: Miss[];
@@ -235,7 +245,9 @@ const state: GateState = {
   message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
   messages: 0,
   lastAnswer: '',
-  said: { text: '', before: '' },
+  said: { text: '', before: '', origin: null },
+  model: null,
+  modelCheck: true,
   misses: [],
   shellAliases: new Map(),
   aliasError: null,
@@ -484,7 +496,7 @@ async function onPromptSubmit(
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
     // What a held message asks for still runs: "push it; don't open a PR yet".
-    state.said = { text: e.text, before: state.lastAnswer };
+    state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
     const grant = grantOf(e.text, state.lastAnswer);
     const hold = holdOf(e.text, state.lastAnswer);
     if (hold !== null) state.held = hold;
@@ -908,13 +920,18 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const gh = await judgeGh(shown, [action], state.message.grant, state.held, ghLookups($));
+  const granted = state.message.grant;
+  const first = await judgeGh(shown, [action], granted, state.held, ghLookups($));
+  const { gh, yes } =
+    'deny' in first
+      ? await ghWithModel($, shown, [action], granted, first)
+      : { gh: first, yes: null };
   if ('deny' in gh) return deny(gh.deny);
   const stale = overtaken(message, next.signal, 'call');
   if (stale !== null) return stale;
   const r = await next(e);
   if (r.deny !== undefined) return r;
-  const notes = unaskedNotes($, gh.ran);
+  const notes = [...(yes === null ? [] : [modelRan($, yes)]), ...unaskedNotes($, gh.ran)];
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
 }
 
@@ -1039,6 +1056,137 @@ async function onBashEdits(
   return note === null ? result : withNote(result, note);
 }
 
+// The model check's reading of the user's latest message, asked once per
+// message; one that got no answer is asked again by the next step. None where
+// it does not run: switched off, under -p or the Agent SDK, or while a message
+// that declined a step holds.
+function modelRead($: $): ModelAsk | null {
+  const { text, before, origin } = state.said;
+  if (!state.modelCheck || origin === 'sdk' || text.trim() === '') return null;
+  if (state.held?.how === 'declined') return null;
+  if (state.model?.message !== state.messages) {
+    const ask = { message: state.messages, text, before, read: askModel($, text, before) };
+    state.model = ask;
+    void ask.read.then((r) => {
+      if (r.kind === 'unanswered' && state.model === ask) state.model = null;
+    });
+  }
+  return state.model;
+}
+
+async function askModel($: $, text: string, before: string): Promise<ModelRead> {
+  try {
+    const r = await $.model.complete({
+      model: 'sonnet',
+      effort: 'low',
+      maxTokens: 300,
+      timeoutMs: 15_000,
+      system: [{ text: RULES, cache: true }],
+      prompt: askOf(text, offerOf(before)),
+    });
+    if (r.isAnswered) return judge(r.text, text);
+    const why =
+      r.reason === 'api-error'
+        ? `an API error, ${r.error}`
+        : r.reason === 'aborted'
+          ? 'it ran out of time or was interrupted'
+          : 'an empty reply';
+    return { kind: 'unanswered', why };
+  } catch (error) {
+    return { kind: 'unanswered', why: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// The model's yes, with the message it read.
+type ModelYes = Readonly<{
+  steps: ModelSteps;
+  added: ModelGrant;
+  quote: string;
+  text: string;
+  before: string;
+}>;
+
+// What a refused step gets from the model check: its yes, why it could not
+// judge the message, or nothing.
+async function secondRead($: $): Promise<ModelYes | { why: string } | null> {
+  const ask = modelRead($);
+  if (ask === null) return null;
+  const read = await ask.read;
+  if (read.kind === 'unanswered') return { why: read.why };
+  if (read.kind === 'refused') {
+    if (read.why === 'malformed') return { why: 'its reply could not be read' };
+    if (read.why === 'quote') return { why: 'its reply quoted words the message does not hold' };
+    return null;
+  }
+  const m = read.grant;
+  const steps: ModelSteps = {
+    ...(m.push === 'push' ? { push: true } : {}),
+    ...(m.pr ? { pr: true } : {}),
+    ...(m.approve ? { approve: true } : {}),
+    ...(m.release ? { release: true } : {}),
+  } as const;
+  return { steps, added: m, quote: read.quote, text: ask.text, before: ask.before };
+}
+
+// The typed grant with the model's yes, for reporting what ran, never for
+// deciding what may.
+function withModel(granted: Grant, m: ModelGrant): Grant {
+  return {
+    ...granted,
+    push: m.push === 'push' && !covers(granted, 'push') ? 'push' : granted.push,
+    pr: granted.pr || m.pr,
+    approve: granted.approve || m.approve,
+    release: granted.release || m.release,
+  };
+}
+
+const MODEL_STEPS = ['push', 'pr', 'approve', 'release'] as const;
+
+// Once the step ran: shown and told, and kept with the misses as a candidate
+// for the grammar.
+function modelRan($: $, yes: ModelYes): string {
+  const steps = MODEL_STEPS.filter((s) => yes.steps[s] === true);
+  const line = `review-cycle: the model check read "${yes.quote}" as asking for ${steps.map((s) => STEP_NAME[s]).join(' and ')}.`;
+  $.ui.log(line);
+  const miss = {
+    message: clip(yes.text),
+    offer: clip(offerOf(yes.before)),
+    steps: [...steps],
+    refusal: clip(`granted by the model check: "${yes.quote}"`),
+  };
+  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
+  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
+  return line;
+}
+
+async function ranByModel(
+  $: $,
+  result: Output<BashHook> | Promise<Output<BashHook>>,
+  yes: ModelYes,
+): Promise<Output<BashHook>> {
+  const r = await result;
+  if (r.deny !== undefined) return r;
+  return { ...r, context: [...(r.context ?? []), modelRan($, yes)] };
+}
+
+const couldNotJudge = (why: string) => ` The model check could not judge the message (${why}).`;
+
+// A refused GitHub step judged again with the model check's yes letting steps
+// through, as the stop-before setting would.
+async function ghWithModel(
+  $: $,
+  shown: string,
+  actions: Parameters<typeof judgeGh>[1],
+  granted: Grant,
+  first: { deny: string },
+): Promise<{ gh: Awaited<ReturnType<typeof judgeGh>>; yes: ModelYes | null }> {
+  const second = actions.length > 0 ? await secondRead($) : null;
+  if (second === null) return { gh: first, yes: null };
+  if ('why' in second) return { gh: { deny: first.deny + couldNotJudge(second.why) }, yes: null };
+  const gh = await judgeGh(shown, actions, granted, state.held, ghLookups($), second.steps);
+  return { gh, yes: 'deny' in gh ? null : second };
+}
+
 async function judgeBash(
   $: $,
   e: Input<BashHook>,
@@ -1055,7 +1203,11 @@ async function judgeBash(
   if (cls.kind === 'none') {
     const actions = ghActions(e.command, state.shellAliases);
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
-    const gh = await judgeGh(quote(e.command), actions, granted, state.held, ghLookups($));
+    const first = await judgeGh(quote(e.command), actions, granted, state.held, ghLookups($));
+    const { gh, yes } =
+      'deny' in first
+        ? await ghWithModel($, quote(e.command), actions, granted, first)
+        : { gh: first, yes: null };
     if ('deny' in gh) return deny(gh.deny);
     // Only a GitHub step is stopped by a newer message; other commands run.
     const since = actions.length > 0 ? message : null;
@@ -1080,7 +1232,9 @@ async function judgeBash(
         }
       }
     }
-    const r = await watch($, await ensureRoot($), e, next, 'unchecked', granted, since, gh.ran);
+    const grant = yes === null ? granted : withModel(granted, yes.added);
+    const watched = watch($, await ensureRoot($), e, next, 'unchecked', grant, since, gh.ran);
+    const r = yes === null ? await watched : await ranByModel($, watched, yes);
     if (state.aliasError === null || state.aliasErrorShown || r.deny !== undefined) return r;
     state.aliasErrorShown = true;
     return {
@@ -1117,10 +1271,18 @@ async function judgeBash(
     }
   }
   const ran: Unasked[] = [];
+  let yes: ModelYes | null = null;
   if (cls.push) {
     const commits = cls.commit !== null && finishes === null;
-    const verdict = await judgePush($, root.top, e.command, commits, cls.push, granted);
-    if ('deny' in verdict) return deny(verdict.deny);
+    let verdict = await judgePush($, root.top, e.command, commits, cls.push, granted);
+    if ('deny' in verdict) {
+      const second = await secondRead($);
+      if (second === null) return deny(verdict.deny);
+      if ('why' in second) return deny(verdict.deny + couldNotJudge(second.why));
+      verdict = await judgePush($, root.top, e.command, commits, cls.push, granted, second.steps);
+      if ('deny' in verdict) return deny(verdict.deny);
+      yes = second;
+    }
     if (verdict.ran !== null) ran.push(verdict.ran);
   }
   const checked: Checked =
@@ -1131,7 +1293,9 @@ async function judgeBash(
         : cls.history !== null
           ? 'history'
           : 'push';
-  return watch($, root, e, next, checked, granted, message, ran);
+  if (yes === null) return watch($, root, e, next, checked, granted, message, ran);
+  const watched = watch($, root, e, next, checked, withModel(granted, yes.added), message, ran);
+  return ranByModel($, watched, yes);
 }
 
 // The refusal when a reviewer has not seen all of what a real commit would
@@ -1272,19 +1436,28 @@ async function judgePush(
   commits: boolean,
   spec: PushSpec,
   granted: Grant,
+  model: ModelSteps = {},
 ): Promise<{ deny: string } | { ran: Unasked | null }> {
   const missing = unasked(spec, granted);
   if (missing === null) return { ran: null };
   const ladder = await ladderOf($);
   const forPr = granted.pr && state.held === null;
-  const letsThrough = forPr || permitted(granted, ladder, state.held !== null).push;
-  const outcome = await pushOutcome(missing, letsThrough, () => alwaysAsks($, top, spec));
+  const bySetting = forPr || permitted(granted, ladder, state.held !== null).push;
+  // The model's yes to a push, or to the pull request it needs, lets it through
+  // as the setting does, so the pushes that always ask still ask.
+  const byModel =
+    (model.pr === true && state.held?.step !== 'push') ||
+    permitted(granted, ladder, state.held !== null, model).push;
+  const outcome = await pushOutcome(missing, bySetting || byModel, () => alwaysAsks($, top, spec));
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
     return {
       deny: pushRefusal(command, commits, outcome.missing, granted, ladder, outcome.always),
     };
   }
+  // A push the model's yes to a pull request let through is that pull
+  // request's, as a typed request's is.
+  if (!bySetting) return { ran: model.pr === true ? { step: 'push', ladder, forPr: true } : null };
   return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
 }
 
@@ -1892,6 +2065,8 @@ export const register: Register = (on, options) => {
   state.stopBefore = stopBeforeOf(options.stopBefore);
   state.nudge = options.nudge !== false;
   state.unaskedNotice = options.unaskedNotice === true;
+  state.modelCheck = options.modelCheck !== false;
+  on('config.set', { key: 'review-cycle.modelCheck' }, onConfigSet);
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
   on('config.set', { key: 'review-cycle.stopBefore' }, onConfigSet);
   on('config.set', { key: 'review-cycle.nudge' }, onConfigSet);

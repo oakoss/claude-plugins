@@ -85,6 +85,12 @@ type World = {
   bashFails?: boolean;
   // Every line the plugin logged.
   logs?: string[];
+  // The model check's reply text; 'error', 'aborted' or 'throw' fail the call.
+  model?: string;
+  // Runs while the model check is asked.
+  onModel?: () => void;
+  // Each prompt the model check was sent.
+  modelPrompts?: string[];
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -379,8 +385,29 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     (w.logs ??= []).push(e.text);
     return { value: undefined };
   });
+  on('model.complete', ($: unknown, e: { prompt: string }) => {
+    (w.modelPrompts ??= []).push(e.prompt);
+    w.onModel?.();
+    const usage = { input_tokens: 0, output_tokens: 0 };
+    if (w.model === 'throw') return { deny: 'model blocked' };
+    if (w.model === 'aborted') return { value: { isAnswered: false, reason: 'aborted', usage } };
+    if (w.model === 'error') {
+      return {
+        value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage },
+      };
+    }
+    return { value: { isAnswered: true, text: w.model ?? NOTHING_ASKED, usage } };
+  });
   return w;
 }
+
+// The model check's answers: nothing asked, and a push asked for now.
+const NOTHING_ASKED = '{"steps": {}, "quote": ""}';
+const verdictFor = (step: string, quote: string, flags = {}) =>
+  JSON.stringify({
+    steps: { [step]: { now: true, condition: false, declined: false, ...flags } },
+    quote,
+  });
 
 const RECEIPT = 'execution: npm test - ok\nattempted-but-failed: none\n\nNo findings.';
 
@@ -4123,4 +4150,227 @@ describe('reviewer containment', () => {
       );
     });
   }
+});
+
+describe('the model check', () => {
+  const SHIP = 'Ok, lets ship the react aria update';
+  const LINE =
+    'review-cycle: the model check read "ship the react aria update" as asking for a push.';
+  const OFF = { options: { modelCheck: false } };
+
+  test('a push the grammar refuses runs on its yes, shown and kept with the misses', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
+    await say($, SHIP);
+    const r = await bash($, 'git push origin fix/x');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), LINE)).toBe(true);
+    expect(has(contextOf(r), 'without the user asking')).toBe(false);
+    expect(has(contextOf(r), 'without asking, since')).toBe(false);
+    expect(w.logs).toEqual([LINE]);
+    const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    expect(JSON.parse((misses as { result: string }).result).misses).toEqual([
+      {
+        message: SHIP,
+        offer: '',
+        steps: ['push'],
+        refusal: 'granted by the model check: "ship the react aria update"',
+      },
+    ]);
+  });
+  test('a newer message during the call stops the step, and nothing is shown or kept', async ($, on) => {
+    const w = fakeWorld(
+      on,
+      pushing({
+        model: verdictFor('push', 'ship the react aria update'),
+        onModel: () => void say($, 'wait, stop'),
+      }),
+    );
+    await say($, SHIP);
+    expect(denied(await bash($, 'git push origin fix/x'), 'sent a new message')).toBe(true);
+    expect(w.logs ?? []).toEqual([]);
+    const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    expect(JSON.parse((misses as { result: string }).result).misses).toEqual([]);
+  });
+  test('its yes covers neither a force push nor a step it did not grant', async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
+    await say($, SHIP);
+    expect(ran(await bash($, 'git push --force origin fix/x'))).toBe(false);
+    expect(ran(await bash($, 'gh pr review 116 -a'))).toBe(false);
+    expect(ran(await bash($, 'gh release create v1'))).toBe(false);
+  });
+  test('a gh push to the default branch it grants still asks', async ($, on) => {
+    const model = verdictFor('push', 'ship the react aria update');
+    fakeWorld(on, { git: github('fix/x'), model });
+    await say($, SHIP);
+    const r = await bash($, 'gh api repos/{owner}/{repo}/contents/a.md -X PUT -f branch=main');
+    expect(denied(r, 'it pushes to `main`, the default branch')).toBe(true);
+  });
+  test('its yes to a pull request lets the push it needs run', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
+    await say($, 'sure, send it up for review');
+    const r = await bash($, 'git push origin fix/x');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'without the user asking')).toBe(false);
+    expect(has(contextOf(r), 'without asking, since')).toBe(false);
+    expect(w.logs).toEqual([
+      'review-cycle: the model check read "send it up for review" as asking for a pull request.',
+    ]);
+  });
+  test('a push beside a pull request its yes allowed is still reported', async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
+    await say($, 'sure, send it up for review');
+    const r = await bash($, 'gh pr create --fill && ./release.sh');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'pushed to origin/fix/x without the user asking')).toBe(true);
+  });
+  test('its yes to a pull request leaves a push hold in place', async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
+    await say($, 'send it up for review, but keep my local commits off the push');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+  });
+  test('its yes to a push leaves a pull request held', async ($, on) => {
+    const model = verdictFor('push', 'ship the react aria update');
+    fakeWorld(on, { settings: { local: stops('never stop') }, model });
+    await say($, SHIP);
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(false);
+  });
+  test('an approval and a release run on its yes', async ($, on) => {
+    const w = fakeWorld(on, { model: verdictFor('approve', 'sign off on 116') });
+    await say($, 'go ahead and sign off on 116');
+    const approved = await bash($, 'gh pr review 116 -a');
+    expect(ran(approved)).toBe(true);
+    expect(has(contextOf(approved), 'without asking, since')).toBe(false);
+    w.model = verdictFor('release', 'cut it');
+    await say($, 'yep, cut it');
+    const released = await bash($, 'gh release create v1');
+    expect(ran(released)).toBe(true);
+    expect(has(contextOf(released), 'without asking, since')).toBe(false);
+  });
+  test('a GitHub tool runs on its yes, told and shown', async ($, on) => {
+    const w = fakeWorld(on, { model: verdictFor('pr', 'ship the react aria update') });
+    await say($, SHIP);
+    const r = await mcp($, 'mcp__github__create_pull_request', {});
+    const line =
+      'review-cycle: the model check read "ship the react aria update" as asking for a pull request.';
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), line)).toBe(true);
+    expect(w.logs).toEqual([line]);
+  });
+  test('a failed call is asked again by the next step', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: 'error' }));
+    await say($, SHIP);
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    w.model = verdictFor('push', 'ship the react aria update');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+    expect(w.modelPrompts).toHaveLength(2);
+  });
+  test('it is sent the message and the offer it answered', async ($, on) => {
+    const w = fakeWorld(on);
+    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
+    await say($, 'sure, send it up');
+    await bash($, 'git push origin fix/x');
+    expect(w.modelPrompts).toEqual([
+      "The agent's last question:\n<question>\nFixed.\nPush fix/x to origin?\n</question>\n\nThe person's latest message:\n<message>\nsure, send it up\n</message>",
+    ]);
+  });
+  test('a pull request the grammar refuses runs on its yes', async ($, on) => {
+    const w = fakeWorld(on, { model: verdictFor('pr', 'ship the react aria update') });
+    await say($, SHIP);
+    const r = await bash($, 'gh pr create --fill');
+    const line =
+      'review-cycle: the model check read "ship the react aria update" as asking for a pull request.';
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), line)).toBe(true);
+    expect(has(contextOf(r), 'without asking, since')).toBe(false);
+    expect(w.logs).toEqual([line]);
+  });
+  test('a no, or a step tied to a condition, leaves the refusal as it was', async ($, on) => {
+    const w = fakeWorld(on, {
+      model: verdictFor('push', 'ship the react aria update', { condition: true }),
+    });
+    await say($, SHIP);
+    const r = await bash($, 'git push origin fix/x');
+    expect(denied(r, 'so nothing ran.')).toBe(true);
+    expect(denied(r, 'model check')).toBe(false);
+    expect(w.logs ?? []).toEqual([]);
+  });
+  for (const [model, command, why] of [
+    ['error', 'git push origin fix/x', 'an API error, overloaded'],
+    ['error', 'gh pr create --fill', 'an API error, overloaded'],
+    ['aborted', 'git push origin fix/x', 'it ran out of time or was interrupted'],
+    ['throw', 'git push origin fix/x', ''],
+    [verdictFor('push', 'words never typed'), 'git push origin fix/x', 'its reply quoted words'],
+  ]) {
+    const label = why === '' ? model : why;
+    test(`a failed call (${label}) refuses ${command}, naming why`, async ($, on) => {
+      fakeWorld(on, { model });
+      await say($, SHIP);
+      const r = await bash($, command ?? '');
+      expect(denied(r, `The model check could not judge the message (${why}`)).toBe(true);
+    });
+  }
+  test('a reply it cannot read refuses, saying so', async ($, on) => {
+    fakeWorld(on, { model: 'it asks to push' });
+    await say($, SHIP);
+    const r = await bash($, 'git push origin fix/x');
+    expect(denied(r, 'could not judge the message (its reply could not be read)')).toBe(true);
+  });
+  test('a push to the default branch it grants still asks', async ($, on) => {
+    const main = { 'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'] };
+    const model = verdictFor('push', 'ship the react aria update');
+    fakeWorld(on, pushing({ git: remoteSide(main), model }));
+    await say($, SHIP);
+    const r = await bash($, 'git push origin main');
+    expect(denied(r, 'asks whatever the setting: it pushes to `main`, the default branch.')).toBe(
+      true,
+    );
+  });
+  test('it is asked once per message', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, SHIP);
+    await bash($, 'git push origin fix/x');
+    await bash($, 'gh pr create --fill');
+    expect(w.modelPrompts).toHaveLength(1);
+    await say($, 'and the docs?');
+    await bash($, 'git push origin fix/x');
+    expect(w.modelPrompts).toHaveLength(2);
+  });
+  test('a step the grammar grants is never sent to it', async ($, on) => {
+    const w = fakeWorld(on, pushing({}));
+    await say($, 'push it');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('after a message that declined a step, it is never asked', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'not yet') }));
+    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
+    await say($, 'not yet');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('switched off in /config, it is never asked', OFF, async ($, on) => {
+    const w = fakeWorld(on, { model: verdictFor('push', 'ship the react aria update') });
+    await say($, SHIP);
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('under claude -p it is never asked', async ($, on) => {
+    const w = fakeWorld(on, { model: verdictFor('push', 'ship the react aria update') });
+    await say($, SHIP, 'sdk');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('only the user switches it, in /config', async ($, on) => {
+    fakeWorld(on);
+    const change = {
+      key: 'review-cycle.modelCheck',
+      value: false,
+      previous: true,
+      provider: { plugin: 'review-cycle', tier: 'user' as const },
+    };
+    const byPlugin = await $.config.set({ ...change, origin: { kind: 'plugin', name: 'other' } });
+    expect(byPlugin).toEqual({ deny: expect.stringContaining('only by the user') });
+    const byUser = await $.config.set({ ...change, origin: { kind: 'composer' } });
+    expect(byUser).toEqual({ value: false });
+  });
 });
