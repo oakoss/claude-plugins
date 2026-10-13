@@ -233,10 +233,41 @@ function prPhrase(text: string): string {
       // Merging the version pull request is the release, but only where the noun
       // ends the clause: "merge the release fixes" names other work.
       .replaceAll(
-        /\b(?:(merge)|(merging))\s+(?:(?:the|this|that|our|new)\s+)*(?:release|version(?:[\s-]packages)?)(?:\s+(?:pr|pull[\s-]request))?(?:\s+#?\d+)?(?=\s*(?:$|[.,;:!?)](?!\d))|\s+(?:now|please|then|and|too|yet|first|next)\b)/gi,
+        /\b(?:(merge)|(merging))\s+(?:(?:the|this|that|our|new)\s+)*(?:release|version(?:[\s-]packages|\s+v?\d+(?:\.\d+)*)?)(?:\s+(?:pr|pull[\s-]request))?(?:\s+#?\d+)?(?=\s*(?:$|[.,;:!?)](?!\d))|(?:\s+(?:now|please|thanks|again|then|and|too|yet|first|next)\b)+(?!\s+(?:now|please|thanks|again|then|and|too|yet|first|next|into|to|against|onto)\b))/gi,
         (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
       )
+      // Publishing git work pushes it ("publish the branch", editors' first
+      // push), publishing a pull request is the PR step, and pushing a package
+      // publishes it ("push to npm"): only when the whole rest of the clause
+      // says so, so "publish the changes as a comment" is no push.
+      .replaceAll(
+        /\b(publish|publishing|push|pushing)\b(?=([^\n]*))/gi,
+        (m: string, verb: string, rest: string) => {
+          const said = words(clauseOf(rest))
+            .filter((x) => !COURTESY.has(x) && x !== 'first')
+            .join(' ');
+          const ing = /ing$/i.test(verb);
+          if (/^publish/i.test(verb)) {
+            if (GIT_PUBLISH.test(said)) return ing ? 'pushing' : 'push';
+            if (PR_PUBLISH.test(said)) return ing ? 'openingpr' : 'openpr';
+          } else if (PACKAGE_PUSH.test(said)) return ing ? 'publishing' : 'publish';
+          return m;
+        },
+      )
   );
+}
+
+const GIT_PUBLISH =
+  /^(?:(?:the|this|that|my|our) )?(?:branch|changes|commits)(?: to (?:github|origin))?$|^to (?:github|origin)$/;
+const PR_PUBLISH =
+  /^(?:(?:the|this|that|my|our|a) )?(?:pr|pull request|pull-request)(?: to github)?$/;
+const PACKAGE_PUSH =
+  /^(?:(?:the|this|that|my|our) )?(?:package|packages|crate|crates)$|^(?:it )?to (?:npm|crates|the registry)$/;
+
+// The rest of a clause: up to its punctuation, or the "and", "then" or "but"
+// that starts the next part. A period inside a word ("changes.md") is the word's.
+function clauseOf(rest: string): string {
+  return rest.split(/[!?;,:\n]|\.(?![a-z0-9])|\b(?:and|then|but)\b/i)[0] ?? '';
 }
 
 // A bare --force named apart from a lease ("`--force`", "bare force push",
@@ -472,8 +503,8 @@ const PULL_REQUEST = new Set([
   'away',
 ]);
 // A pull request first, then at most the base it goes into: "merge 116 into
-// main", but not "merge main into it" or "merge this into the PR", which
-// name branches to merge locally.
+// main" or "merge into main", but not "merge main into it" or "merge this
+// into the PR", which name branches to merge locally.
 const BASE = new Set(['main', 'master', 'base', 'default']);
 function namesPullRequest(tail: string[]): boolean {
   const into = tail.findIndex((x) => TOWARD.has(x) || x === 'on');
@@ -481,7 +512,9 @@ function namesPullRequest(tail: string[]): boolean {
   if (!named.every((x) => PULL_REQUEST.has(x) || /^\d+$/.test(x))) return false;
   if (into === -1) return true;
   const where = tail.slice(into + 1);
-  const pr = named.some((x) => /^\d+$/.test(x) || x === 'pr' || x === 'it' || x === 'this');
+  const pr =
+    named.every((x) => COURTESY.has(x)) ||
+    named.some((x) => /^\d+$/.test(x) || x === 'pr' || x === 'it' || x === 'this');
   return (
     pr &&
     /^(into|to|against)$/.test(tail[into] ?? '') &&
@@ -623,11 +656,13 @@ function unquote(text: string): string {
     .replaceAll(/“[^”]*”|‘[^’]*’/g, ' quoted ');
 }
 
+// A period inside a word stays in it, so "130.5" names no pull request and
+// "changes.md" is a file.
 function words(text: string): string[] {
   return text
     .toLowerCase()
     .replaceAll(/[’‘]/g, "'")
-    .split(/[^a-z0-9'-]+/)
+    .split(/(?:[^a-z0-9'.-]|(?<![a-z0-9])\.|\.(?![a-z0-9]))+/)
     .filter(Boolean);
 }
 
@@ -642,7 +677,10 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
   const tail = closing ? words.toSpliced(at, 1) : words;
   if (family.tail === 'pull-request') return namesPullRequest(tail);
   const publish = family.tail === 'publish';
+  const tagged = tail.includes('tag') || tail.includes('tags');
   for (const [i, word] of tail.entries()) {
+    // A tag's version: "push the v1 tag", "push tag 0.2.0".
+    if (tagged && /^v?\d+(?:\.\d+)*$/.test(word)) continue;
     // A publish goes to or on a registry: "publish to npm", not "publish to it".
     const where = word === 'to' || word === 'on';
     const after = tail.slice(i + 1).find((x) => !/^(the|a|my|our|your)$/.test(x)) ?? '';
@@ -848,8 +886,10 @@ function continues(clause: string): boolean {
 }
 
 // Sentences keep their closing mark, so a question can be told from a request.
+// A period before a digit is a number's: "push tag 0.2.0 but not yet". Before
+// a letter it still ends one, so "done.if CI passes, push it" waits.
 function sentences(text: string): string[] {
-  return text.match(/[^.!?;\n]+[.!?;]*/g) ?? [];
+  return text.match(/(?:[^.!?;\n]|(?<=[A-Za-z0-9])\.(?=\d))+[.!?;]*/g) ?? [];
 }
 
 // Clauses split on commas and "but", so "don't push, but commit it" withholds

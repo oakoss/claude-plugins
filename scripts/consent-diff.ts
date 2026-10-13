@@ -87,6 +87,34 @@ const VERBS = [
   'continue the merge',
   'carry on with the rebase',
   'continue merging',
+  // Destinations and nouns a push, publish, merge or pull request may name.
+  'publish the branch',
+  'publish the changes',
+  'publish to github',
+  'publish the docs to the wiki',
+  'publish it',
+  'publish the PR to github',
+  'publish the changes as a PR comment',
+  'push to npm',
+  'push the package',
+  'push the package.json change',
+  'push the v1 tag',
+  'push tag 0.2.0',
+  'merge version 2.0 now into main',
+  'merge version 2.0 now please into main',
+  'publish changes.md',
+  'publish the changes now as a PR comment',
+  'open a PR for tonight',
+  // A period inside a word: a version, a file, or a typo.
+  'merge 130.5',
+  'merge it.2',
+  'push it.2 more to go',
+  'push it to later',
+  'merge into main',
+  'merge into later',
+  'merge the version 2 PR',
+  'merge the release fixes',
+  'open a PR for the docs',
 ];
 const CONDITIONS = [
   '',
@@ -97,6 +125,13 @@ const CONDITIONS = [
   ' when its done',
   ' once its fixed',
   ' when you are done',
+  ' when you are finished',
+  ' when you are done with it',
+  ' when I am done',
+  ' as soon as you can',
+  ' as soon as CI passes',
+  ' before the checks pass',
+  ' before I say so',
 ];
 const TAILS = [
   '',
@@ -108,6 +143,9 @@ const TAILS = [
   ' first',
   ' first please',
   ' first then start on the docs',
+  ' not yet',
+  ' tonight',
+  ' in an hour',
 ];
 const generated = LEADS.flatMap((lead) =>
   VERBS.flatMap((verb) =>
@@ -152,6 +190,15 @@ const OFFERS = [
   'Should I merge #130 first? If the tests pass.',
   'If that looks right, should I push?',
   'Should I continue the rebase on `fix/x`?',
+  // Either/or hand-backs and how-questions a "yes" answers.
+  'Should I push, or would you rather do it?',
+  'Want me to push, or skip it?',
+  'Would you rather push it yourself?',
+  'Should I leave it, or push?',
+  'Do we commit, then push?',
+  'Do we push to main?',
+  'Can we push to main, or is it protected?',
+  'Do we merge #130 or close it?',
 ];
 
 const prompts = [...new Set([...quoted, ...generated, ...REPLIES])];

@@ -121,9 +121,12 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge 116 into main please', merging('116')],
     ['merge the PR into main', MERGE],
     ['merge it into the main branch', MERGE],
+    // A merge into the base with nothing named merges this branch's pull request.
+    ['merge into main', MERGE],
+    ['merge now into main', MERGE],
+    ['merge into later', NONE],
+    ['merge that into main', NONE],
     // A merge into anything but the base names a local merge.
-    ['merge into main', NONE],
-    ['merge now into main', NONE],
     ['merge 116 into feature-x', NONE],
     ['merge this into the PR', NONE],
     ['merge it into the branch', NONE],
@@ -152,8 +155,20 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge the version changes', NONE],
     ['merge the release fixes', NONE],
     ['merge the release #3 fixes', NONE],
-    ['merge the version 2 PR', NONE],
-    ['merge the version 2.0 PR', NONE],
+    ['merge the version 2 PR', RELEASE],
+    ['merge the version 2.0 PR', RELEASE],
+    ['merge the version v2 PR now', RELEASE],
+    // A destination after "now" names a local merge of a version branch.
+    ['merge version 2.0 now into main', NONE],
+    ['merge the version PR now into main', NONE],
+    ['merge version 2.0 now please into main', NONE],
+    ['merge version 2.0 now thanks into main', NONE],
+    ['merge the version PR now to main', NONE],
+    ['merge the release then to main', NONE],
+    ['merge the release now against main', NONE],
+    // A period inside a number keeps it one word, which names no pull request.
+    ['merge 130.5', NONE],
+    ['merge it.2', NONE],
     ['merge the release 3.5', NONE],
     ['ok, publish the new release', RELEASE],
     ['the release notes look good', NONE],
@@ -164,14 +179,34 @@ describe('merges, approvals, releases and review replies', () => {
     ['publish the docs to the wiki', NONE],
     ['publish the package to npm', RELEASE],
     ['release the package', RELEASE],
-    // Package words belong to a publish: "push to npm" asks for no git push.
-    ['push to npm', NONE],
-    ['push the package', NONE],
+    // Pushing a package publishes it, and asks for no git push.
+    ['push to npm', RELEASE],
+    ['push it to npm', RELEASE],
+    ['push the package', RELEASE],
+    ['push to crates', RELEASE],
+    ['pushing the package', NONE],
+    // A file or host that only starts with the noun is git work.
+    ['push the package.json change', NONE],
+    ['push the crates.io token', NONE],
     ['commit the package', NONE],
-    // "Publish branch" is an editor's first push, not a release.
-    ['publish the branch', NONE],
-    ['publish the PR to github', NONE],
-    ['publish the changes', NONE],
+    // Publishing git work pushes it: "Publish branch" is an editor's first push.
+    ['publish the branch', PUSH],
+    ['publish the PR to github', PR],
+    ['publish the PR', PR],
+    ['publish the PR description', NONE],
+    ['publish the changes', PUSH],
+    ['publish the branch to github and open a PR', PUSH_PR],
+    ['publish to origin', PUSH],
+    ['publishing the branch', NONE],
+    ['publish the docs to github', NONE],
+    ['publish the changes as a PR comment', NONE],
+    ['publish the changes now as a PR comment', NONE],
+    ['publish changes.md', NONE],
+    ['publish the PR.md', NONE],
+    ['publish the PR review', NONE],
+    ['publish the branch now', PUSH],
+    ['publish the branch, then open a PR', PUSH_PR],
+    ['publish to github pages', NONE],
     ['publish them', RELEASE],
     ['publish all packages', RELEASE],
     ['publish my package to npm', RELEASE],
@@ -183,7 +218,7 @@ describe('merges, approvals, releases and review replies', () => {
     ['publish to the npm registry', RELEASE],
     ['publish to it', NONE],
     ['publish to the', NONE],
-    ['publish to github', NONE],
+    ['publish to github', PUSH],
     ['mark it ready for review', PR],
     ['mark the PR as ready', PR],
     ['ok, ready for review', PR],
@@ -207,7 +242,8 @@ describe('merges, approvals, releases and review replies', () => {
   });
   test('a mention of publishing or of a ready pull request holds', () => {
     expect(holdsOf('did it publish?')).toBe(true);
-    expect(holdsOf('push to npm')).toBe(true);
+    expect(holdsOf('push to npm')).toBe(false);
+    expect(holdsOf('push to pypi')).toBe(true);
     expect(grantOf('yes', 'Should I publish #119?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I publish it to the npm registry?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Publish `x@1` to the registry?')).toEqual(RELEASE);
@@ -356,7 +392,17 @@ describe('grants on a request', () => {
     ['commit the code and open a PR', COMMIT_PR],
     ['open a PR, but not until CI passes', NONE],
     ['push the tag', PUSH],
-    ['push the v1 tag', NONE],
+    ['push the v1 tag', PUSH],
+    ['push tag 0.2.0', PUSH],
+    ['push the v1 tags', PUSH],
+    ['push v1', NONE],
+    ['push tag 0.2.0 but not yet', NONE],
+    ['push tag 0.2.0 when CI passes', NONE],
+    ['push tag v1.2.0', PUSH],
+    ['push it.2 more to go', NONE],
+    // A period before a letter still ends a sentence, so a condition after it counts.
+    ['done.if CI passes, push it', NONE],
+    ['fixed.not yet, push it', NONE],
     ['push it from main', NONE],
     ['open a pull request', PR],
     ['create a new draft PR', PR],
@@ -364,6 +410,8 @@ describe('grants on a request', () => {
     ['Please open the PR into main', PR],
     ['Please open the PR into `later`', NONE],
     ['open the file', NONE],
+    // What a pull request is "for" can be a time ("for tonight"), so the grammar
+    // leaves it to the agent to ask.
     ['open a PR for the docs', NONE],
     ['create a test for the PR', NONE],
     ["it's not committed yet, commit it", COMMIT],
