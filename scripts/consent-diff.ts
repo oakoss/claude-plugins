@@ -140,6 +140,13 @@ const CONDITIONS = [
   ' when you are done, then wait for my ok',
   ' if CI passes before the tests finish',
   ' as soon as you can review it',
+  ' when we can',
+  ' when you can',
+  ' whenever you can',
+  ' whenever we can',
+  ' as soon as we can',
+  ' when I can',
+  ' when we can review it',
 ];
 const TAILS = [
   '',

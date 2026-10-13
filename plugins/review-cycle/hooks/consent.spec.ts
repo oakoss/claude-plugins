@@ -74,6 +74,15 @@ describe('merges, approvals, releases and review replies', () => {
     ['commit it as soon as you can, then push it', NONE],
     ['push it as soon as possible', PUSH],
     ['push it as soon as you can review it', NONE],
+    // So do "when" or "whenever" with "we can" or "you can", and "as soon as we can".
+    ['Ok, lets merge PR 55 when we can', merging('55')],
+    ['push it when you can', PUSH],
+    ['commit it whenever you can', COMMIT],
+    ['push it whenever we can', PUSH],
+    ['push it as soon as we can', PUSH],
+    ['push it when I can', NONE],
+    ['push it when we can review it', NONE],
+    ['commit it when we can, then push it', NONE],
     ["merge it when it's ready, but I'll check first", NONE],
     ['squash and merge it when ready', NONE],
     ['merge it when I say its ready', NONE],
@@ -315,6 +324,7 @@ describe('merges, approvals, releases and review replies', () => {
     // In an offer, "when you are done" waits on the user.
     expect(grantOf('yes', 'Should I merge it when you are done?')).toEqual(NONE);
     expect(grantOf('yes', 'Shall I merge 130 as soon as you can?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I merge 130 when you can?')).toEqual(NONE);
     expect(grantOf('yes', 'Publish `review-cycle@0.25.0` to npm?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I mark #119 ready for review?')).toEqual(PR);
   });
