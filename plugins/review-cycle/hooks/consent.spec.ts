@@ -783,23 +783,69 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Committed on fix/x. Push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Done in src/a.ts. Want me to push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should I rename src/a.ts?')).toEqual(NONE);
-    expect(grantOf('yes', 'Do we push fix/x to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push fix/x to main?')).toEqual(PUSH);
   });
-  test('a slash joining hand-back words still hands the push back', () => {
-    expect(grantOf('yes', 'Should I push, or would you rather/prefer to do it?')).toEqual(NONE);
-    expect(grantOf('yes', 'Want me to push, or skip/defer it?')).toEqual(NONE);
-  });
-  test('quoting a hand-back word still hands the push back', () => {
-    expect(grantOf('yes', 'Should I push, or would you `rather/prefer` do it?')).toEqual(NONE);
-    expect(grantOf('yes', 'Should I push, or would you `rather` do it?')).toEqual(NONE);
-    expect(grantOf('yes', 'Want me to push, or run it in your `terminal`?')).toEqual(NONE);
-    expect(grantOf('yes', "Should I push, or can't we `skip` it as 'deferred'?")).toEqual(NONE);
+  test('a yes to an either/or question takes the first alternative', () => {
+    expect(grantOf('yes', 'Should I push, or would you rather/prefer to do it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Want me to push, or skip/defer it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I push, or would you `rather/prefer` do it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I push, or would you `rather` do it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Want me to push, or run it in your `terminal`?')).toEqual(PUSH);
+    expect(grantOf('yes', "Should I push, or can't we `skip` it as 'deferred'?")).toEqual(PUSH);
     expect(grantOf('yes', "I'd rather not force-push. Should I push, or you'd do it?")).toEqual(
-      NONE,
+      PUSH,
     );
-    expect(grantOf('yes', "That's rather slow. Should I push, or you'd prefer to?")).toEqual(NONE);
+    expect(grantOf('yes', "That's rather slow. Should I push, or you'd prefer to?")).toEqual(PUSH);
     expect(grantOf('yes', "I've committed it. Should I push?")).toEqual(PUSH);
     expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
+  });
+  test('a first alternative that hands the step back still grants nothing', () => {
+    expect(grantOf('yes', 'Would you rather push it yourself, or should I?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I leave it to you, or push it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do you want to push it from your `terminal`, or should I?')).toEqual(
+      NONE,
+    );
+    // Without a comma, "or" lists what the question offers.
+    expect(grantOf('yes', 'Should I merge #130 or #131?')).toEqual(NONE);
+    // The first alternative is the user's, so the yes takes nothing.
+    expect(grantOf('yes', 'Do you want to push it, or should I instead?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do you want to merge #130, or should I instead?')).toEqual(NONE);
+    expect(grantOf('yes', 'Rather than wait, should I push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Instead of merging, should I push?')).toEqual(NONE);
+    // Only the first ", or" splits, and only a question offers.
+    expect(grantOf('yes', 'Should I commit, or commit and push, or wait?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'Push it, or not.')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I push, or not.')).toEqual(NONE);
+    // The agent has to be the one doing the first alternative's steps.
+    expect(
+      grantOf('yes', 'Should I commit, and you push it, or should I do both instead?'),
+    ).toEqual(NONE);
+    expect(
+      grantOf(
+        'yes',
+        'Do you want to push it, and have me open a PR, or should I do it all instead?',
+      ),
+    ).toEqual(NONE);
+    // A line without a closing mark stays its own sentence.
+    expect(grantOf('merge it', 'Merged #134\nMerge #130?')).toEqual(merging('130'));
+    expect(grantOf('merge it', '#134 merged\nMerge the version PR?')).toEqual(MERGE);
+    expect(
+      grantOf('yes', 'PR #131 is ready.\nPR #130 is the version PR\nShould I merge it?'),
+    ).toEqual(merging(NAMED_ELSEWHERE));
+    expect(
+      grantOf('merge it', 'Should I merge it, or leave #130 for later? Anything else?'),
+    ).toEqual(MERGE);
+    // A statement's alternatives name nothing, and a semicolon "or" splits as a comma does.
+    expect(grantOf('yes', 'I can merge #130, or #131. Should I merge it?')).toEqual(
+      merging(NAMED_ELSEWHERE),
+    );
+    expect(grantOf('merge it', 'Should I merge #131; or leave #130 for later?')).toEqual(
+      merging('131'),
+    );
+    // The pull request merged is the one the kept alternative offers.
+    expect(grantOf('yes', 'PR #131 is ready. Should I merge it, or leave #130 for later?')).toEqual(
+      merging('131'),
+    );
   });
   test('a quoted destination in a user message is not a push target', () => {
     expect(grantOf('push this to `next sprint`', '')).toEqual(NONE);
@@ -817,16 +863,53 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Should we commit and push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should we commit, then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should I fix it, then push?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Do we commit, then push?')).toEqual(NONE);
-    expect(grantOf('yes', 'Do we commit; then push?')).toEqual(NONE);
+    // A question about how the work goes offers it too: a yes agrees to it.
+    expect(grantOf('yes', 'Do we commit, then push?')).toEqual(BOTH);
+    expect(grantOf('yes', 'Do we commit; then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should we commit; then push?')).toEqual(BOTH);
     expect(grantOf('yes', "I'll leave the docs alone; should I push?")).toEqual(PUSH);
-    expect(grantOf('yes', 'Should I commit and push; or wait?')).toEqual(NONE);
-    expect(grantOf('yes', 'Can we commit, then push?')).toEqual(NONE);
-    expect(grantOf('yes', 'We commit, then push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I commit and push; or wait?')).toEqual(BOTH);
+    expect(grantOf('yes', 'Can we commit, then push?')).toEqual(BOTH);
+    expect(grantOf('yes', 'We commit, then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should we push?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Do we push to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push to main?')).toEqual(PUSH);
+    // Whether main is protected is unchecked, so a yes doesn't answer it.
     expect(grantOf('yes', 'Can we push to main, or is it protected?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push to main?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Did we push it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Why do we push to main?')).toEqual(NONE);
+    // Only a commit or push, and only "do we", "can we" or "we": other "we"
+    // questions about a merge, release or PR still need "should we".
+    expect(grantOf('yes', 'Do we merge to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we merge #130?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we release?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we open a PR?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should we merge #130?')).toEqual(merging('130'));
+    expect(grantOf('yes', 'Do we like force-pushing?')).toEqual(NONE);
+    expect(grantOf('yes', 'Would we push to main?')).toEqual(NONE);
+    // Only the whole question in one of those shapes: anything more asks something else.
+    expect(grantOf('yes', 'We push to main, right?')).toEqual(NONE);
+    expect(grantOf('yes', 'We merge #130, right?')).toEqual(NONE);
+    expect(grantOf('yes', "We push to main, don't we?")).toEqual(NONE);
+    expect(grantOf('yes', 'We push to main right?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit and open a PR?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit, then merge #130?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push and merge?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push --force?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push to main, or does it require a PR?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push to main, or to a branch?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we always push to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'We commit?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'Can we push to tomorrow?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit or push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Could we push?')).toEqual(NONE);
+    // Read in the agent's own words: a backticked option is not "it", and a quoted example is no offer.
+    expect(grantOf('yes', 'Can we push `--dry-run` to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Here is the template:\n"\nDo we commit, then push?\n"')).toEqual(NONE);
+    // An agent's own offer with a question beside it still offers.
+    expect(grantOf('yes', 'Should I push, or is CI still running?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we push, or would you rather do it?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I delete it?')).toEqual(NONE);
   });
   test('yes after a statement, not a question, grants nothing', () => {
@@ -1103,7 +1186,7 @@ describe('each cue word counts on its own', () => {
   test.each(['yourself', "you'd", 'rather', 'skip', 'leave', 'instead', 'terminal'])(
     'yes after an offer naming %s: hands back',
     (cue) => {
-      expect(grantOf('yes', `Should I push it, or ${cue}?`)).toEqual(NONE);
+      expect(grantOf('yes', `Should I push it ${cue}?`)).toEqual(NONE);
     },
   );
 });

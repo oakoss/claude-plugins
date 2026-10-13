@@ -716,13 +716,18 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
       /^(can|could)$/.test(lead[we + 1] ?? '');
     if (we !== -1 && !agreeing && !/^(can|could|let'?s?)$/.test(lead[we - 1] ?? '')) return false;
   }
-  // "Should we push?" offers; "Do we push to main?" asks how the repo works.
+  // "Should we push?" offers; other "we" questions only as HOW_WE's whole sentences.
   if (allowed === OFFER_LEAD) {
     const we = lead.indexOf('we');
     if (we !== -1 && !/^(should|shall)$/.test(lead[we - 1] ?? '')) return false;
   }
   return true;
 }
+
+// A question about how a commit or push goes, which a yes agrees to: only these
+// whole sentences ("Do we commit, then push?", "Can we push to main?").
+const HOW_WE =
+  /^\s*(?:(?:do|can)\s+)?we\s+(?:(commit)(?:\s+it)?(?:\s*,?\s*(?:and\s+then|and|then)\s+(push)(?:\s+it)?)?|(push)(?:\s+(?:it|[\w.-]+\/[\w./-]*[\w-]))?(?:\s+to\s+(?:main|master|origin))?)\s*\?\s*$/i;
 
 // A condition GitHub's auto-merge waits on itself: "when it's ready", "once
 // CI passes", "after the checks are green".
@@ -956,10 +961,30 @@ function asksBeyondPush(g: Grant): boolean {
   return g.pr || g.merge || g.autoMerge || g.approve || g.release || g.comment;
 }
 
+// A yes takes the first alternative only when the agent offers it ("Should I
+// push, or would you rather do it?"), never one the user would do.
+function chosen(question: string): string {
+  const first = /^([\s\S]*?),\s*or\s/i.exec(question)?.[1];
+  if (first === undefined) return question;
+  const w = words(first);
+  const at = w.findIndex((x) => Object.hasOwn(OFFERED, x));
+  const agents =
+    at !== -1 && w.slice(0, at).some((x) => x === 'i' || x === 'me') && !w.includes('you');
+  return agents ? `${first}?` : question;
+}
+
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string, heard?: Set<Family>): Grant {
   const g = fresh();
-  // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
+  const closing = answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  // Matched on the agent's own words, before a backticked name reads as "it":
+  // "Can we push `--dry-run` to main?" is no HOW_WE question.
+  for (const s of sentences(unquote(closing).replaceAll(/;(?=\s*(and|then)\b)/gi, ','))) {
+    const how = HOW_WE.exec(s);
+    if (how?.[1]) g.commit = true;
+    if (how?.[2] || how?.[3]) raise(g, 'push');
+  }
+  // A semicolon before "then", "and" or "or" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
   // object or destination a push may take; after "delete" it is the branch.
@@ -999,10 +1024,11 @@ function asked(answer: string, heard?: Set<Family>): Grant {
     .replaceAll(/[\w.-]+\/[\w./-]*[\w-]/g, (m) =>
       words(m).some((x) => HANDBACK.has(x)) ? m.replaceAll('/', ' ') : 'it',
     )
-    .replaceAll(/;(?=\s*(and|then)\b)/gi, ',');
-  for (const q of sentences(tail)) {
-    if (!q.trim().endsWith('?') || words(q).some((x) => HANDBACK.has(x))) continue;
-    // "Do we commit, then push?" asks how work goes; its "then push" offers nothing.
+    .replaceAll(/;(?=\s*(and|then|or)\b)/gi, ',');
+  for (const asked of sentences(tail)) {
+    if (!asked.trim().endsWith('?')) continue;
+    const q = chosen(asked);
+    if (words(q).some((x) => HANDBACK.has(x))) continue;
     let carry: Carry = 'none';
     for (const part of clauses(q)) {
       const c = part.replace(CONTRAST, '');
@@ -1229,7 +1255,17 @@ function unnamedMerge(typed: string, previousAnswer: string): readonly string[] 
   if (/#?\b\d+\b/.test(text) || /\b(version|release)\s+(pr|pull\s+request)\b/i.test(text)) {
     return [NAMED_ELSEWHERE];
   }
-  const closing = previousAnswer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  const closing = sentences(
+    previousAnswer
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .slice(-3)
+      .join('\n')
+      .replaceAll(/;(?=\s*or\b)/gi, ','),
+  )
+    .map((q) => (q.trim().endsWith('?') ? chosen(q) : q))
+    .join('\n');
   // The question it answers decides first: "Release by merging #130?" after a
   // summary that names #134 too.
   const questions = sentences(closing)

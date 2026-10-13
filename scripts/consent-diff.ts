@@ -211,6 +211,17 @@ const OFFERS = [
   'Can we push to main, or is it protected?',
   'Do we merge #130 or close it?',
   'Should I merge #130 when you are done?',
+  'Should I merge #130 or #131?',
+  'Would you rather push it yourself, or should I?',
+  'Did we push it?',
+  'Do we push and merge?',
+  'We push to main, right?',
+  'Should I push, or is CI still running?',
+  'I can merge #131 next, or leave it. Merge the version PR?',
+  '#134 merged\nMerge the version PR?',
+  'Merged #134\nMerge #130?',
+  'Can we push `--dry-run` to main?',
+  'Why do we merge #130 first?',
 ];
 
 const prompts = [...new Set([...quoted, ...generated, ...REPLIES])];
