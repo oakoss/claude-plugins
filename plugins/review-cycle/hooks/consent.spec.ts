@@ -1022,6 +1022,21 @@ describe('a yes does not meet the condition an offer sets', () => {
     expect(grantOf('yes', 'Should I push? After that, CI will run.')).toEqual(NONE);
     expect(grantOf('yes', 'Should I push and, after that, open the PR?')).toEqual(NONE);
   });
+  test.each(['continue', 'keep going', 'go on'])(
+    '"%s" finishes nothing a conditional offer would finish',
+    (reply) => {
+      expect(grantOf(reply, 'Should I continue the rebase? Only once CI passes.')).toEqual(NONE);
+      expect(grantOf(reply, 'Should I finish the rebase, provided CI passes?')).toEqual(NONE);
+    },
+  );
+  test('"delete it" names no branch a conditional offer would delete', () => {
+    const offer =
+      'Merged #12.\nShould I delete the branch `fix/x` from origin, provided CI passes?';
+    expect(grantOf('delete it', offer)).toEqual(NONE);
+    expect(
+      grantOf('delete it', 'Merged #12.\nShould I delete the branch `fix/x` from origin?'),
+    ).toEqual(PUSH);
+  });
   test('a decline still holds what a conditional offer named', () => {
     expect(holdOf('not yet', 'Should I merge #130, provided CI passes?')).toEqual({
       step: 'merge',
