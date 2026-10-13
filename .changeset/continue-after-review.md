@@ -1,5 +1,0 @@
----
-review-cycle: patch
----
-
-The commit gate now lets the agent run `git rebase --continue`, `git merge --continue`, `git cherry-pick --continue` and `git revert --continue` once a reviewer has seen the resolution. Before, it refused every `--continue`, even right after a clean review, so you had to finish the rebase from your own terminal. A `--continue` is now judged like a commit: everything the staged index changes against HEAD must be reviewed (for a merge, that is everything the merge brings in), and your stop-before setting applies, with a refusal that asks to finish the rebase, merge, cherry-pick or revert rather than to commit. `git add … && git rebase --continue` works as one command. An unreviewed resolution is still refused, and the refusal tells the agent to review it; a conflict still unresolved is refused by name rather than as a gate failure. After the command, the resolution commit is checked as a commit is, so a pre-commit hook that changed it is reported; the picks a rebase or cherry-pick replays after it are not.

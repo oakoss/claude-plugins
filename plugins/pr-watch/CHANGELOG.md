@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.4.1 (2026-10-13)
+
+### Fixed
+
+Each read of a pull request costs one point of GitHub's GraphQL quota instead of two: an open pull request is read for its head commit's runs and a merged one for its merge commit's, where every read asked for both. The 5,000 points an hour are shared with every `gh` call you and Claude make, so pr-watch now reads the quota left from each answer, and while fewer than a tenth remain it reads every watch on that host once a minute, after a push or merge too, until the quota recovers.
+
+pr-watch pauses when GitHub rate-limits it, and stops polls that would never end. A rate-limited read pauses every watch on that host, whose lines say `rate limited until HH:MM` and are read again as the pause ends. When the last read left no quota, the pause waits for its reset; any other limit waits a minute, doubling each time it is hit again, up to 15 minutes. Other read failures are retried after 10 seconds, doubling up to 5 minutes. After 8 failed reads in a row, about 15 minutes, pr-watch stops watching, toasts why, and tells Claude, so nothing claims to be watching what it cannot read. A line that has shown the same state for half an hour while it waits on a person, such as a pull request waiting on review, conflicts or failed checks, or a failed merge, is read every 5 minutes instead of every minute. Comments and re-runs on it can therefore take up to 5 minutes to reach you.
+
+What is running now shows in blue instead of yellow: the running workflow's name, its progress bar, and the ● beside any other workflow still running. Green still means passed or ready, red failed, and yellow is kept for a pull request that is blocked, such as one with conflicts or requested changes.
+
+pr-watch no longer tells Claude a pull request is ready to merge after it has merged. A message pr-watch submits runs only once Claude's turn ends, so "#46 ready to merge" read mid-turn arrived after Claude had merged #46 in that same turn. News about a pull request's checks, reviews and comments that arrives during a turn is now held until the turn ends, each line once, and survives a reload of the plugin meanwhile. A pull request it calls ready is read from GitHub again first: if it merged or closed meanwhile, or a later read found it no longer ready, the "ready" line is dropped and the rest is sent; a read that fails counts as still open. Those reads run side by side, so several ready pull requests do not wait on each other. A message that says a pull request is ready to merge now says so first, ahead of failures and comments. pr-watch also no longer wakes Claude with "merged, and the merge commit's checks passed" for a merge Claude made itself: Claude already knows it merged, and a failure on the merge commit still wakes it. A merge GitHub makes later on `--auto` still wakes it either way. The toast and the status line still show both.
+
 ## 0.4.0 (2026-10-08)
 
 ### Added
