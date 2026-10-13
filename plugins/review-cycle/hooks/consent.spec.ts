@@ -69,14 +69,78 @@ describe('merges, approvals, releases and review replies', () => {
     ["merge 132 when it's ready, but don't do it yet", NONE],
     // "as soon as" withholds what follows like any other condition word.
     ['merge it as soon as I say so, then release it', NONE],
+    // "As soon as you can" means now, where it ends the sentence.
+    ['commit it as soon as you can', COMMIT],
     ['commit it as soon as you can, then push it', NONE],
+    ['push it as soon as possible', PUSH],
+    ['push it as soon as you can review it', NONE],
     ["merge it when it's ready, but I'll check first", NONE],
     ['squash and merge it when ready', NONE],
     ['merge it when I say its ready', NONE],
     ['merge it once Bob says the PR is ready', NONE],
     ['merge it unless CI passes', NONE],
     ['merge it until CI passes', NONE],
-    ['merge it before the checks pass', NONE],
+    // Merging before the checks pass is merging now.
+    ['merge it before the checks pass', MERGE],
+    ['merge it before CI finishes', MERGE],
+    ['merge it before I say so', NONE],
+    ['merge it before the checks fail', NONE],
+    // The agent finishing its own work is a condition it sees come true.
+    ['merge it when you are done', MERGE],
+    ['merge 130 when you are done', merging('130')],
+    ["push it when you're done", PUSH],
+    ['open a PR once you are finished', PR],
+    ['release it when you are done with it', RELEASE],
+    ['approve it when you are done', APPROVE],
+    // Only where it ends the sentence: before another clause it may lead that one.
+    ['push it when you are done, then merge it', NONE],
+    ['push it when you are done, merge it', NONE],
+    ['merge it when you are done, and release is approved', NONE],
+    ['push it -- when you are done, merge it', NONE],
+    ['push it / when you are done, merge it', NONE],
+    ['merge #130 when you are done', merging('130')],
+    ['push it when I am done', NONE],
+    ['push it when you are done with the tests', NONE],
+    ['when you are done, push it', NONE],
+    ['commit it. When you are done, push it.', COMMIT],
+    // Another condition beside it still withholds the step.
+    ['merge it when you are done and I say so', NONE],
+    ['merge it when you are done, and I say so', NONE],
+    ['push it when you are done and the tests pass', NONE],
+    ['release it when you are done, then wait for my ok', NONE],
+    ['merge 130 if CI passes before the tests finish', NONE],
+    ['push it as soon as I can', NONE],
+    ['merge it before the review completes', NONE],
+    ['push it when you are done with review', NONE],
+    // Only a comma or a sentence's end closes the condition.
+    ['push it when you are done then merge it', NONE],
+    ['push it when you are done and merge it', NONE],
+    ['merge it when you are done and release is approved', NONE],
+    ['only when you are done, merge it', NONE],
+    ['please when you are done, push it', NONE],
+    ['commit it and when you are done push it', NONE],
+    ['looks good\nwhen you are done, merge it', NONE],
+    ['looks good: when you are done, merge it', NONE],
+    ["push it when you're done.", PUSH],
+    ['push it: when you are done, merge it', NONE],
+    ['push it - when you are done, merge it', NONE],
+    ['push it (when you are done, merge it)', NONE],
+    ['commit it: when you are done, merge 130', NONE],
+    ['push it and when you are done, merge it', NONE],
+    ['push it [when you are done, merge it]', NONE],
+    ['push it and only when you are done, merge 130', NONE],
+    ['fix the test and push it when you are done', PUSH],
+    // What follows must itself be a request.
+    ['merge it when you are done, I want to merge it myself', NONE],
+    ['merge 130 when you are done, and I commit the changes', NONE],
+    ['merge it when you are done, then wait for Bob to merge it', NONE],
+    ['push it when you are done, and the reviewer may merge it', NONE],
+    ['commit it when you are done, then please push it', NONE],
+    ['commit it when you are done but push it', NONE],
+    ['push it as soon as possible tomorrow', NONE],
+    ['merge it as soon as CI passes when you are done', NONE],
+    ['push it when you are done, and merge 130', NONE],
+    ['push it after you are done', PUSH],
     // Any other condition is one the gate cannot see come true.
     ['merge it when I say so', NONE],
     ['merge it after I review it', NONE],
@@ -102,8 +166,19 @@ describe('merges, approvals, releases and review replies', () => {
     ['when it is ready to merge. merge it when I say so', NONE],
     ["once it's ready, release it, merge it", NONE],
     ["once it's ready, push it, merge it", NONE],
-    ["once it's ready, do not merge it. Push it.", NONE],
-    ["commit it. once it's ready, do not merge it", NONE],
+    // Declining the merge it waits for asks for nothing; the rest still counts.
+    ["once it's ready, do not merge it. Push it.", PUSH],
+    ["commit it. once it's ready, do not merge it", COMMIT],
+    ["once it's ready, don’t merge it. Push it.", PUSH],
+    ['merge 130 when its ready. once its ready, do not merge it', NONE],
+    ["merge it. once it's ready, don't merge it. Push it.", PUSH],
+    ["merge 130. once it's ready, don't merge it", NONE],
+    // A semicolon's "then" continues the declined sentence and waits with it.
+    ['once its ready, do not merge it; then push it', NONE],
+    ["release it. once it's ready, do not merge it", NONE],
+    ["once it's ready, don't merge it? push it", NONE],
+    ["once it's ready, merge it. Push it.", { ...PUSH, autoMerge: true }],
+    ["once it's ready, should I merge it? Push it.", NONE],
     // A condition naming a pull request names the one merged.
     ['once PR 133 is ready, merge 134', NONE],
     ['merge 134 once PR 133 is ready', NONE],
@@ -121,9 +196,12 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge 116 into main please', merging('116')],
     ['merge the PR into main', MERGE],
     ['merge it into the main branch', MERGE],
+    // A merge into the base with nothing named merges this branch's pull request.
+    ['merge into main', MERGE],
+    ['merge now into main', MERGE],
+    ['merge into later', NONE],
+    ['merge that into main', NONE],
     // A merge into anything but the base names a local merge.
-    ['merge into main', NONE],
-    ['merge now into main', NONE],
     ['merge 116 into feature-x', NONE],
     ['merge this into the PR', NONE],
     ['merge it into the branch', NONE],
@@ -152,8 +230,20 @@ describe('merges, approvals, releases and review replies', () => {
     ['merge the version changes', NONE],
     ['merge the release fixes', NONE],
     ['merge the release #3 fixes', NONE],
-    ['merge the version 2 PR', NONE],
-    ['merge the version 2.0 PR', NONE],
+    ['merge the version 2 PR', RELEASE],
+    ['merge the version 2.0 PR', RELEASE],
+    ['merge the version v2 PR now', RELEASE],
+    // A destination after "now" names a local merge of a version branch.
+    ['merge version 2.0 now into main', NONE],
+    ['merge the version PR now into main', NONE],
+    ['merge version 2.0 now please into main', NONE],
+    ['merge version 2.0 now thanks into main', NONE],
+    ['merge the version PR now to main', NONE],
+    ['merge the release then to main', NONE],
+    ['merge the release now against main', NONE],
+    // A period inside a number keeps it one word, which names no pull request.
+    ['merge 130.5', NONE],
+    ['merge it.2', NONE],
     ['merge the release 3.5', NONE],
     ['ok, publish the new release', RELEASE],
     ['the release notes look good', NONE],
@@ -164,14 +254,34 @@ describe('merges, approvals, releases and review replies', () => {
     ['publish the docs to the wiki', NONE],
     ['publish the package to npm', RELEASE],
     ['release the package', RELEASE],
-    // Package words belong to a publish: "push to npm" asks for no git push.
-    ['push to npm', NONE],
-    ['push the package', NONE],
+    // Pushing a package publishes it, and asks for no git push.
+    ['push to npm', RELEASE],
+    ['push it to npm', RELEASE],
+    ['push the package', RELEASE],
+    ['push to crates', RELEASE],
+    ['pushing the package', NONE],
+    // A file or host that only starts with the noun is git work.
+    ['push the package.json change', NONE],
+    ['push the crates.io token', NONE],
     ['commit the package', NONE],
-    // "Publish branch" is an editor's first push, not a release.
-    ['publish the branch', NONE],
-    ['publish the PR to github', NONE],
-    ['publish the changes', NONE],
+    // Publishing git work pushes it: "Publish branch" is an editor's first push.
+    ['publish the branch', PUSH],
+    ['publish the PR to github', PR],
+    ['publish the PR', PR],
+    ['publish the PR description', NONE],
+    ['publish the changes', PUSH],
+    ['publish the branch to github and open a PR', PUSH_PR],
+    ['publish to origin', PUSH],
+    ['publishing the branch', NONE],
+    ['publish the docs to github', NONE],
+    ['publish the changes as a PR comment', NONE],
+    ['publish the changes now as a PR comment', NONE],
+    ['publish changes.md', NONE],
+    ['publish the PR.md', NONE],
+    ['publish the PR review', NONE],
+    ['publish the branch now', PUSH],
+    ['publish the branch, then open a PR', PUSH_PR],
+    ['publish to github pages', NONE],
     ['publish them', RELEASE],
     ['publish all packages', RELEASE],
     ['publish my package to npm', RELEASE],
@@ -183,7 +293,7 @@ describe('merges, approvals, releases and review replies', () => {
     ['publish to the npm registry', RELEASE],
     ['publish to it', NONE],
     ['publish to the', NONE],
-    ['publish to github', NONE],
+    ['publish to github', PUSH],
     ['mark it ready for review', PR],
     ['mark the PR as ready', PR],
     ['ok, ready for review', PR],
@@ -202,12 +312,16 @@ describe('merges, approvals, releases and review replies', () => {
     // An offer's closing "first" stays unread until offers read every condition (cpl-pakf).
     expect(grantOf('yes', 'Should I merge #168 first, but only if CI passes?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I cut the release?')).toEqual(RELEASE);
+    // In an offer, "when you are done" waits on the user.
+    expect(grantOf('yes', 'Should I merge it when you are done?')).toEqual(NONE);
+    expect(grantOf('yes', 'Shall I merge 130 as soon as you can?')).toEqual(NONE);
     expect(grantOf('yes', 'Publish `review-cycle@0.25.0` to npm?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I mark #119 ready for review?')).toEqual(PR);
   });
   test('a mention of publishing or of a ready pull request holds', () => {
     expect(holdsOf('did it publish?')).toBe(true);
-    expect(holdsOf('push to npm')).toBe(true);
+    expect(holdsOf('push to npm')).toBe(false);
+    expect(holdsOf('push to pypi')).toBe(true);
     expect(grantOf('yes', 'Should I publish #119?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I publish it to the npm registry?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Publish `x@1` to the registry?')).toEqual(RELEASE);
@@ -356,7 +470,17 @@ describe('grants on a request', () => {
     ['commit the code and open a PR', COMMIT_PR],
     ['open a PR, but not until CI passes', NONE],
     ['push the tag', PUSH],
-    ['push the v1 tag', NONE],
+    ['push the v1 tag', PUSH],
+    ['push tag 0.2.0', PUSH],
+    ['push the v1 tags', PUSH],
+    ['push v1', NONE],
+    ['push tag 0.2.0 but not yet', NONE],
+    ['push tag 0.2.0 when CI passes', NONE],
+    ['push tag v1.2.0', PUSH],
+    ['push it.2 more to go', NONE],
+    // A period before a letter still ends a sentence, so a condition after it counts.
+    ['done.if CI passes, push it', NONE],
+    ['fixed.not yet, push it', NONE],
     ['push it from main', NONE],
     ['open a pull request', PR],
     ['create a new draft PR', PR],
@@ -364,6 +488,8 @@ describe('grants on a request', () => {
     ['Please open the PR into main', PR],
     ['Please open the PR into `later`', NONE],
     ['open the file', NONE],
+    // What a pull request is "for" can be a time ("for tonight"), so the grammar
+    // leaves it to the agent to ask.
     ['open a PR for the docs', NONE],
     ['create a test for the PR', NONE],
     ["it's not committed yet, commit it", COMMIT],
@@ -657,23 +783,69 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Committed on fix/x. Push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Done in src/a.ts. Want me to push?')).toEqual(PUSH);
     expect(grantOf('yes', 'Should I rename src/a.ts?')).toEqual(NONE);
-    expect(grantOf('yes', 'Do we push fix/x to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push fix/x to main?')).toEqual(PUSH);
   });
-  test('a slash joining hand-back words still hands the push back', () => {
-    expect(grantOf('yes', 'Should I push, or would you rather/prefer to do it?')).toEqual(NONE);
-    expect(grantOf('yes', 'Want me to push, or skip/defer it?')).toEqual(NONE);
-  });
-  test('quoting a hand-back word still hands the push back', () => {
-    expect(grantOf('yes', 'Should I push, or would you `rather/prefer` do it?')).toEqual(NONE);
-    expect(grantOf('yes', 'Should I push, or would you `rather` do it?')).toEqual(NONE);
-    expect(grantOf('yes', 'Want me to push, or run it in your `terminal`?')).toEqual(NONE);
-    expect(grantOf('yes', "Should I push, or can't we `skip` it as 'deferred'?")).toEqual(NONE);
+  test('a yes to an either/or question takes the first alternative', () => {
+    expect(grantOf('yes', 'Should I push, or would you rather/prefer to do it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Want me to push, or skip/defer it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I push, or would you `rather/prefer` do it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should I push, or would you `rather` do it?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Want me to push, or run it in your `terminal`?')).toEqual(PUSH);
+    expect(grantOf('yes', "Should I push, or can't we `skip` it as 'deferred'?")).toEqual(PUSH);
     expect(grantOf('yes', "I'd rather not force-push. Should I push, or you'd do it?")).toEqual(
-      NONE,
+      PUSH,
     );
-    expect(grantOf('yes', "That's rather slow. Should I push, or you'd prefer to?")).toEqual(NONE);
+    expect(grantOf('yes', "That's rather slow. Should I push, or you'd prefer to?")).toEqual(PUSH);
     expect(grantOf('yes', "I've committed it. Should I push?")).toEqual(PUSH);
     expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
+  });
+  test('a first alternative that hands the step back still grants nothing', () => {
+    expect(grantOf('yes', 'Would you rather push it yourself, or should I?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I leave it to you, or push it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do you want to push it from your `terminal`, or should I?')).toEqual(
+      NONE,
+    );
+    // Without a comma, "or" lists what the question offers.
+    expect(grantOf('yes', 'Should I merge #130 or #131?')).toEqual(NONE);
+    // The first alternative is the user's, so the yes takes nothing.
+    expect(grantOf('yes', 'Do you want to push it, or should I instead?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do you want to merge #130, or should I instead?')).toEqual(NONE);
+    expect(grantOf('yes', 'Rather than wait, should I push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Instead of merging, should I push?')).toEqual(NONE);
+    // Only the first ", or" splits, and only a question offers.
+    expect(grantOf('yes', 'Should I commit, or commit and push, or wait?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'Push it, or not.')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I push, or not.')).toEqual(NONE);
+    // The agent has to be the one doing the first alternative's steps.
+    expect(
+      grantOf('yes', 'Should I commit, and you push it, or should I do both instead?'),
+    ).toEqual(NONE);
+    expect(
+      grantOf(
+        'yes',
+        'Do you want to push it, and have me open a PR, or should I do it all instead?',
+      ),
+    ).toEqual(NONE);
+    // A line without a closing mark stays its own sentence.
+    expect(grantOf('merge it', 'Merged #134\nMerge #130?')).toEqual(merging('130'));
+    expect(grantOf('merge it', '#134 merged\nMerge the version PR?')).toEqual(MERGE);
+    expect(
+      grantOf('yes', 'PR #131 is ready.\nPR #130 is the version PR\nShould I merge it?'),
+    ).toEqual(merging(NAMED_ELSEWHERE));
+    expect(
+      grantOf('merge it', 'Should I merge it, or leave #130 for later? Anything else?'),
+    ).toEqual(MERGE);
+    // A statement's alternatives name nothing, and a semicolon "or" splits as a comma does.
+    expect(grantOf('yes', 'I can merge #130, or #131. Should I merge it?')).toEqual(
+      merging(NAMED_ELSEWHERE),
+    );
+    expect(grantOf('merge it', 'Should I merge #131; or leave #130 for later?')).toEqual(
+      merging('131'),
+    );
+    // The pull request merged is the one the kept alternative offers.
+    expect(grantOf('yes', 'PR #131 is ready. Should I merge it, or leave #130 for later?')).toEqual(
+      merging('131'),
+    );
   });
   test('a quoted destination in a user message is not a push target', () => {
     expect(grantOf('push this to `next sprint`', '')).toEqual(NONE);
@@ -691,16 +863,53 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', 'Should we commit and push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should we commit, then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should I fix it, then push?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Do we commit, then push?')).toEqual(NONE);
-    expect(grantOf('yes', 'Do we commit; then push?')).toEqual(NONE);
+    // A question about how the work goes offers it too: a yes agrees to it.
+    expect(grantOf('yes', 'Do we commit, then push?')).toEqual(BOTH);
+    expect(grantOf('yes', 'Do we commit; then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should we commit; then push?')).toEqual(BOTH);
     expect(grantOf('yes', "I'll leave the docs alone; should I push?")).toEqual(PUSH);
-    expect(grantOf('yes', 'Should I commit and push; or wait?')).toEqual(NONE);
-    expect(grantOf('yes', 'Can we commit, then push?')).toEqual(NONE);
-    expect(grantOf('yes', 'We commit, then push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I commit and push; or wait?')).toEqual(BOTH);
+    expect(grantOf('yes', 'Can we commit, then push?')).toEqual(BOTH);
+    expect(grantOf('yes', 'We commit, then push?')).toEqual(BOTH);
     expect(grantOf('yes', 'Should we push?')).toEqual(PUSH);
-    expect(grantOf('yes', 'Do we push to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push to main?')).toEqual(PUSH);
+    // Whether main is protected is unchecked, so a yes doesn't answer it.
     expect(grantOf('yes', 'Can we push to main, or is it protected?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push to main?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Did we push it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Why do we push to main?')).toEqual(NONE);
+    // Only a commit or push, and only "do we", "can we" or "we": other "we"
+    // questions about a merge, release or PR still need "should we".
+    expect(grantOf('yes', 'Do we merge to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we merge #130?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we release?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we open a PR?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should we merge #130?')).toEqual(merging('130'));
+    expect(grantOf('yes', 'Do we like force-pushing?')).toEqual(NONE);
+    expect(grantOf('yes', 'Would we push to main?')).toEqual(NONE);
+    // Only the whole question in one of those shapes: anything more asks something else.
+    expect(grantOf('yes', 'We push to main, right?')).toEqual(NONE);
+    expect(grantOf('yes', 'We merge #130, right?')).toEqual(NONE);
+    expect(grantOf('yes', "We push to main, don't we?")).toEqual(NONE);
+    expect(grantOf('yes', 'We push to main right?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit and open a PR?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit, then merge #130?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push and merge?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push --force?')).toEqual(NONE);
+    expect(grantOf('yes', 'Can we push to main, or does it require a PR?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we push to main, or to a branch?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we always push to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'We commit?')).toEqual(COMMIT);
+    expect(grantOf('yes', 'Can we push to tomorrow?')).toEqual(NONE);
+    expect(grantOf('yes', 'Do we commit or push?')).toEqual(NONE);
+    expect(grantOf('yes', 'Could we push?')).toEqual(NONE);
+    // Read in the agent's own words: a backticked option is not "it", and a quoted example is no offer.
+    expect(grantOf('yes', 'Can we push `--dry-run` to main?')).toEqual(NONE);
+    expect(grantOf('yes', 'Here is the template:\n"\nDo we commit, then push?\n"')).toEqual(NONE);
+    // An agent's own offer with a question beside it still offers.
+    expect(grantOf('yes', 'Should I push, or is CI still running?')).toEqual(PUSH);
+    expect(grantOf('yes', 'Should we push, or would you rather do it?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I delete it?')).toEqual(NONE);
   });
   test('yes after a statement, not a question, grants nothing', () => {
@@ -977,7 +1186,7 @@ describe('each cue word counts on its own', () => {
   test.each(['yourself', "you'd", 'rather', 'skip', 'leave', 'instead', 'terminal'])(
     'yes after an offer naming %s: hands back',
     (cue) => {
-      expect(grantOf('yes', `Should I push it, or ${cue}?`)).toEqual(NONE);
+      expect(grantOf('yes', `Should I push it ${cue}?`)).toEqual(NONE);
     },
   );
 });

@@ -233,10 +233,41 @@ function prPhrase(text: string): string {
       // Merging the version pull request is the release, but only where the noun
       // ends the clause: "merge the release fixes" names other work.
       .replaceAll(
-        /\b(?:(merge)|(merging))\s+(?:(?:the|this|that|our|new)\s+)*(?:release|version(?:[\s-]packages)?)(?:\s+(?:pr|pull[\s-]request))?(?:\s+#?\d+)?(?=\s*(?:$|[.,;:!?)](?!\d))|\s+(?:now|please|then|and|too|yet|first|next)\b)/gi,
+        /\b(?:(merge)|(merging))\s+(?:(?:the|this|that|our|new)\s+)*(?:release|version(?:[\s-]packages|\s+v?\d+(?:\.\d+)*)?)(?:\s+(?:pr|pull[\s-]request))?(?:\s+#?\d+)?(?=\s*(?:$|[.,;:!?)](?!\d))|(?:\s+(?:now|please|thanks|again|then|and|too|yet|first|next)\b)+(?!\s+(?:now|please|thanks|again|then|and|too|yet|first|next|into|to|against|onto)\b))/gi,
         (_m: string, verb?: string) => (verb ? 'cutrelease' : 'cuttingrelease'),
       )
+      // Publishing git work pushes it ("publish the branch", editors' first
+      // push), publishing a pull request is the PR step, and pushing a package
+      // publishes it ("push to npm"): only when the whole rest of the clause
+      // says so, so "publish the changes as a comment" is no push.
+      .replaceAll(
+        /\b(publish|publishing|push|pushing)\b(?=([^\n]*))/gi,
+        (m: string, verb: string, rest: string) => {
+          const said = words(clauseOf(rest))
+            .filter((x) => !COURTESY.has(x) && x !== 'first')
+            .join(' ');
+          const ing = /ing$/i.test(verb);
+          if (/^publish/i.test(verb)) {
+            if (GIT_PUBLISH.test(said)) return ing ? 'pushing' : 'push';
+            if (PR_PUBLISH.test(said)) return ing ? 'openingpr' : 'openpr';
+          } else if (PACKAGE_PUSH.test(said)) return ing ? 'publishing' : 'publish';
+          return m;
+        },
+      )
   );
+}
+
+const GIT_PUBLISH =
+  /^(?:(?:the|this|that|my|our) )?(?:branch|changes|commits)(?: to (?:github|origin))?$|^to (?:github|origin)$/;
+const PR_PUBLISH =
+  /^(?:(?:the|this|that|my|our|a) )?(?:pr|pull request|pull-request)(?: to github)?$/;
+const PACKAGE_PUSH =
+  /^(?:(?:the|this|that|my|our) )?(?:package|packages|crate|crates)$|^(?:it )?to (?:npm|crates|the registry)$/;
+
+// The rest of a clause: up to its punctuation, or the "and", "then" or "but"
+// that starts the next part. A period inside a word ("changes.md") is the word's.
+function clauseOf(rest: string): string {
+  return rest.split(/[!?;,:\n]|\.(?![a-z0-9])|\b(?:and|then|but)\b/i)[0] ?? '';
 }
 
 // A bare --force named apart from a lease ("`--force`", "bare force push",
@@ -472,8 +503,8 @@ const PULL_REQUEST = new Set([
   'away',
 ]);
 // A pull request first, then at most the base it goes into: "merge 116 into
-// main", but not "merge main into it" or "merge this into the PR", which
-// name branches to merge locally.
+// main" or "merge into main", but not "merge main into it" or "merge this
+// into the PR", which name branches to merge locally.
 const BASE = new Set(['main', 'master', 'base', 'default']);
 function namesPullRequest(tail: string[]): boolean {
   const into = tail.findIndex((x) => TOWARD.has(x) || x === 'on');
@@ -481,7 +512,9 @@ function namesPullRequest(tail: string[]): boolean {
   if (!named.every((x) => PULL_REQUEST.has(x) || /^\d+$/.test(x))) return false;
   if (into === -1) return true;
   const where = tail.slice(into + 1);
-  const pr = named.some((x) => /^\d+$/.test(x) || x === 'pr' || x === 'it' || x === 'this');
+  const pr =
+    named.every((x) => COURTESY.has(x)) ||
+    named.some((x) => /^\d+$/.test(x) || x === 'pr' || x === 'it' || x === 'this');
   return (
     pr &&
     /^(into|to|against)$/.test(tail[into] ?? '') &&
@@ -572,6 +605,8 @@ const AGREE_WORD = new Set([
 // A clause with no verb that holds off: "not yet, commit later".
 const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const RETRACT = /^\s*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don'?t))\b/i;
+const DECLINED =
+  /^\s*(?:(?:ok|okay|yes|yeah|sure|alright|great|cool|perfect)[\s,]+)*(?:do\s+not|don['’]?t|never)\s+merge\b/i;
 // A clause opening with one of these makes the whole prompt conditional.
 const CONDITION = /^\s*(if|when|once|after|unless|until|as soon as)\b/i;
 // A sentence opening with one of these asks something rather than asking for it.
@@ -623,11 +658,13 @@ function unquote(text: string): string {
     .replaceAll(/“[^”]*”|‘[^’]*’/g, ' quoted ');
 }
 
+// A period inside a word stays in it, so "130.5" names no pull request and
+// "changes.md" is a file.
 function words(text: string): string[] {
   return text
     .toLowerCase()
     .replaceAll(/[’‘]/g, "'")
-    .split(/[^a-z0-9'-]+/)
+    .split(/(?:[^a-z0-9'.-]|(?<![a-z0-9])\.|\.(?![a-z0-9]))+/)
     .filter(Boolean);
 }
 
@@ -642,7 +679,10 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
   const tail = closing ? words.toSpliced(at, 1) : words;
   if (family.tail === 'pull-request') return namesPullRequest(tail);
   const publish = family.tail === 'publish';
+  const tagged = tail.includes('tag') || tail.includes('tags');
   for (const [i, word] of tail.entries()) {
+    // A tag's version: "push the v1 tag", "push tag 0.2.0".
+    if (tagged && /^v?\d+(?:\.\d+)*$/.test(word)) continue;
     // A publish goes to or on a registry: "publish to npm", not "publish to it".
     const where = word === 'to' || word === 'on';
     const after = tail.slice(i + 1).find((x) => !/^(the|a|my|our|your)$/.test(x)) ?? '';
@@ -676,13 +716,18 @@ function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean 
       /^(can|could)$/.test(lead[we + 1] ?? '');
     if (we !== -1 && !agreeing && !/^(can|could|let'?s?)$/.test(lead[we - 1] ?? '')) return false;
   }
-  // "Should we push?" offers; "Do we push to main?" asks how the repo works.
+  // "Should we push?" offers; other "we" questions only as HOW_WE's whole sentences.
   if (allowed === OFFER_LEAD) {
     const we = lead.indexOf('we');
     if (we !== -1 && !/^(should|shall)$/.test(lead[we - 1] ?? '')) return false;
   }
   return true;
 }
+
+// A question about how a commit or push goes, which a yes agrees to: only these
+// whole sentences ("Do we commit, then push?", "Can we push to main?").
+const HOW_WE =
+  /^\s*(?:(?:do|can)\s+)?we\s+(?:(commit)(?:\s+it)?(?:\s*,?\s*(?:and\s+then|and|then)\s+(push)(?:\s+it)?)?|(push)(?:\s+(?:it|[\w.-]+\/[\w./-]*[\w-]))?(?:\s+to\s+(?:main|master|origin))?)\s*\?\s*$/i;
 
 // A condition GitHub's auto-merge waits on itself: "when it's ready", "once
 // CI passes", "after the checks are green".
@@ -767,6 +812,30 @@ function onlyAutoMerge(g: MutableGrant): boolean {
 // "then". `ready` withholds the rest, which may wait on its condition too.
 type Carry = 'none' | 'mood' | 'described' | 'ready';
 
+const MEANS_NOW =
+  / (?:(?:when|once|after) (?:you are|you're) (?:done|finished)(?: with (?:it|that|this|them))?|as soon as (?:you can|possible)|before (?:the )?(?:checks|ci|tests) (?:pass|passes|finish|finishes|complete|completes))$/;
+
+// Never in an offer, where "you" is the user. Outside its own request's part,
+// or after punctuation, it may lead the next request ("push it -- when you are
+// done, merge it").
+function withoutNow(
+  w: string[],
+  verbs: Readonly<Record<string, Family>>,
+  clause: string,
+): string[] {
+  const now = MEANS_NOW.exec(` ${w.join(' ')}`);
+  if (now === null || !/^[\w\s'’#]*$/.test(clause.trim().replace(/[.!?;]+$/, ''))) return w;
+  const rest = w.slice(0, w.length - now[0].trim().split(' ').length);
+  const part = rest.slice(rest.findLastIndex((x) => x === 'and' || x === 'then') + 1);
+  const at = part.findIndex((x) => Object.hasOwn(verbs, x));
+  const asks =
+    at !== -1 &&
+    isLead(part.slice(0, at), REQUEST_LEAD, false) &&
+    !rest.some((x) => SUBORDINATE.has(x)) &&
+    asSoonAs(rest) === -1;
+  return asks ? rest : w;
+}
+
 // The verbs a clause asks for, reading each part joined by "and" or "then" as
 // its own request: "fix the parser and commit it".
 function grammarGrant(
@@ -776,8 +845,9 @@ function grammarGrant(
   into: MutableGrant,
   agreed = false,
   heard?: Set<Family>,
+  now = false,
 ): Carry {
-  const w = words(clause);
+  const w = now ? withoutNow(words(clause), verbs, clause) : words(clause);
   if (isReadyMerge(w, verbs, lead, agreed)) {
     into.autoMerge = true;
     into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
@@ -848,8 +918,10 @@ function continues(clause: string): boolean {
 }
 
 // Sentences keep their closing mark, so a question can be told from a request.
+// A period before a digit is a number's: "push tag 0.2.0 but not yet". Before
+// a letter it still ends one, so "done.if CI passes, push it" waits.
 function sentences(text: string): string[] {
-  return text.match(/[^.!?;\n]+[.!?;]*/g) ?? [];
+  return text.match(/(?:[^.!?;\n]|(?<=[A-Za-z0-9])\.(?=\d))+[.!?;]*/g) ?? [];
 }
 
 // Clauses split on commas and "but", so "don't push, but commit it" withholds
@@ -889,10 +961,30 @@ function asksBeyondPush(g: Grant): boolean {
   return g.pr || g.merge || g.autoMerge || g.approve || g.release || g.comment;
 }
 
+// A yes takes the first alternative only when the agent offers it ("Should I
+// push, or would you rather do it?"), never one the user would do.
+function chosen(question: string): string {
+  const first = /^([\s\S]*?),\s*or\s/i.exec(question)?.[1];
+  if (first === undefined) return question;
+  const w = words(first);
+  const at = w.findIndex((x) => Object.hasOwn(OFFERED, x));
+  const agents =
+    at !== -1 && w.slice(0, at).some((x) => x === 'i' || x === 'me') && !w.includes('you');
+  return agents ? `${first}?` : question;
+}
+
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string, heard?: Set<Family>): Grant {
   const g = fresh();
-  // A semicolon before "then" or "and" joins clauses as a comma does: "Do we commit; then push?".
+  const closing = answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  // Matched on the agent's own words, before a backticked name reads as "it":
+  // "Can we push `--dry-run` to main?" is no HOW_WE question.
+  for (const s of sentences(unquote(closing).replaceAll(/;(?=\s*(and|then)\b)/gi, ','))) {
+    const how = HOW_WE.exec(s);
+    if (how?.[1]) g.commit = true;
+    if (how?.[2] || how?.[3]) raise(g, 'push');
+  }
+  // A semicolon before "then", "and" or "or" joins clauses as a comma does: "Do we commit; then push?".
   // Elsewhere it ends a sentence: "I'll leave the docs alone; should I push?".
   // A name the offer gives, as in "Push fix/x to `origin`?", reads as "it": an
   // object or destination a push may take; after "delete" it is the branch.
@@ -932,10 +1024,11 @@ function asked(answer: string, heard?: Set<Family>): Grant {
     .replaceAll(/[\w.-]+\/[\w./-]*[\w-]/g, (m) =>
       words(m).some((x) => HANDBACK.has(x)) ? m.replaceAll('/', ' ') : 'it',
     )
-    .replaceAll(/;(?=\s*(and|then)\b)/gi, ',');
-  for (const q of sentences(tail)) {
-    if (!q.trim().endsWith('?') || words(q).some((x) => HANDBACK.has(x))) continue;
-    // "Do we commit, then push?" asks how work goes; its "then push" offers nothing.
+    .replaceAll(/;(?=\s*(and|then|or)\b)/gi, ',');
+  for (const asked of sentences(tail)) {
+    if (!asked.trim().endsWith('?')) continue;
+    const q = chosen(asked);
+    if (words(q).some((x) => HANDBACK.has(x))) continue;
     let carry: Carry = 'none';
     for (const part of clauses(q)) {
       const c = part.replace(CONTRAST, '');
@@ -1057,10 +1150,18 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // What the previous sentence left: "we commit; then push" describes across
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
+  let declined = false;
   for (const raw of sentences(prPhrase(unquote(forcePhrase(typed))))) {
     const flipped = leadingReady(raw);
     const sentence = flipped ?? raw;
-    // "once it's ready, do not merge it" reads as a question once reordered.
+    // "once it's ready, do not merge it" declines the merge, so the message
+    // merges nothing while the sentences beside it still count.
+    if (flipped !== null && DECLINED.test(sentence) && !sentence.trim().endsWith('?')) {
+      declined = true;
+      // "; then push it" continues it, and waits on the same condition.
+      prev = sentence.trim().endsWith(';') ? 'mood' : 'none';
+      continue;
+    }
     if (flipped !== null && (RETRACT.test(sentence) || isQuestion(sentence))) return NO_GRANT;
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
@@ -1082,7 +1183,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
-    for (const part of clauses(sentence)) {
+    const parts = clauses(sentence);
+    for (const [i, part] of parts.entries()) {
       const c = part.replace(CONTRAST, '');
       if (CONDITION.test(c)) return NO_GRANT;
       if (HOLD.test(c)) withheld = true;
@@ -1090,7 +1192,9 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (carry === 'described' && continues(c)) continue;
       // After a ready-merge a clause can still withhold, but grants nothing.
       const into = carry === 'ready' ? fresh() : mine;
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed);
+      // A condition that means now counts only where it ends the sentence.
+      const now = i === parts.length - 1;
+      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed, undefined, now);
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
       else if (left !== 'none' && carry !== 'ready') carry = left;
@@ -1103,6 +1207,16 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     const tied =
       sentence.trim().endsWith(';') && words(sentence).some((x) => Object.hasOwn(REQUESTED, x));
     prev = tied ? (withheld ? 'mood' : carry) : 'none';
+  }
+  // Merging the version pull request is the release, so a declined merge holds it too.
+  if (declined) {
+    Object.assign(g, {
+      merge: false,
+      mergeNamed: [],
+      autoMerge: false,
+      readyNamed: [],
+      release: false,
+    });
   }
   return settled({ ...g, ...namedFrom(g, typed, previousAnswer) });
 }
@@ -1141,7 +1255,17 @@ function unnamedMerge(typed: string, previousAnswer: string): readonly string[] 
   if (/#?\b\d+\b/.test(text) || /\b(version|release)\s+(pr|pull\s+request)\b/i.test(text)) {
     return [NAMED_ELSEWHERE];
   }
-  const closing = previousAnswer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  const closing = sentences(
+    previousAnswer
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .slice(-3)
+      .join('\n')
+      .replaceAll(/;(?=\s*or\b)/gi, ','),
+  )
+    .map((q) => (q.trim().endsWith('?') ? chosen(q) : q))
+    .join('\n');
   // The question it answers decides first: "Release by merging #130?" after a
   // summary that names #134 too.
   const questions = sentences(closing)
