@@ -69,14 +69,78 @@ describe('merges, approvals, releases and review replies', () => {
     ["merge 132 when it's ready, but don't do it yet", NONE],
     // "as soon as" withholds what follows like any other condition word.
     ['merge it as soon as I say so, then release it', NONE],
+    // "As soon as you can" means now, where it ends the sentence.
+    ['commit it as soon as you can', COMMIT],
     ['commit it as soon as you can, then push it', NONE],
+    ['push it as soon as possible', PUSH],
+    ['push it as soon as you can review it', NONE],
     ["merge it when it's ready, but I'll check first", NONE],
     ['squash and merge it when ready', NONE],
     ['merge it when I say its ready', NONE],
     ['merge it once Bob says the PR is ready', NONE],
     ['merge it unless CI passes', NONE],
     ['merge it until CI passes', NONE],
-    ['merge it before the checks pass', NONE],
+    // Merging before the checks pass is merging now.
+    ['merge it before the checks pass', MERGE],
+    ['merge it before CI finishes', MERGE],
+    ['merge it before I say so', NONE],
+    ['merge it before the checks fail', NONE],
+    // The agent finishing its own work is a condition it sees come true.
+    ['merge it when you are done', MERGE],
+    ['merge 130 when you are done', merging('130')],
+    ["push it when you're done", PUSH],
+    ['open a PR once you are finished', PR],
+    ['release it when you are done with it', RELEASE],
+    ['approve it when you are done', APPROVE],
+    // Only where it ends the sentence: before another clause it may lead that one.
+    ['push it when you are done, then merge it', NONE],
+    ['push it when you are done, merge it', NONE],
+    ['merge it when you are done, and release is approved', NONE],
+    ['push it -- when you are done, merge it', NONE],
+    ['push it / when you are done, merge it', NONE],
+    ['merge #130 when you are done', merging('130')],
+    ['push it when I am done', NONE],
+    ['push it when you are done with the tests', NONE],
+    ['when you are done, push it', NONE],
+    ['commit it. When you are done, push it.', COMMIT],
+    // Another condition beside it still withholds the step.
+    ['merge it when you are done and I say so', NONE],
+    ['merge it when you are done, and I say so', NONE],
+    ['push it when you are done and the tests pass', NONE],
+    ['release it when you are done, then wait for my ok', NONE],
+    ['merge 130 if CI passes before the tests finish', NONE],
+    ['push it as soon as I can', NONE],
+    ['merge it before the review completes', NONE],
+    ['push it when you are done with review', NONE],
+    // Only a comma or a sentence's end closes the condition.
+    ['push it when you are done then merge it', NONE],
+    ['push it when you are done and merge it', NONE],
+    ['merge it when you are done and release is approved', NONE],
+    ['only when you are done, merge it', NONE],
+    ['please when you are done, push it', NONE],
+    ['commit it and when you are done push it', NONE],
+    ['looks good\nwhen you are done, merge it', NONE],
+    ['looks good: when you are done, merge it', NONE],
+    ["push it when you're done.", PUSH],
+    ['push it: when you are done, merge it', NONE],
+    ['push it - when you are done, merge it', NONE],
+    ['push it (when you are done, merge it)', NONE],
+    ['commit it: when you are done, merge 130', NONE],
+    ['push it and when you are done, merge it', NONE],
+    ['push it [when you are done, merge it]', NONE],
+    ['push it and only when you are done, merge 130', NONE],
+    ['fix the test and push it when you are done', PUSH],
+    // What follows must itself be a request.
+    ['merge it when you are done, I want to merge it myself', NONE],
+    ['merge 130 when you are done, and I commit the changes', NONE],
+    ['merge it when you are done, then wait for Bob to merge it', NONE],
+    ['push it when you are done, and the reviewer may merge it', NONE],
+    ['commit it when you are done, then please push it', NONE],
+    ['commit it when you are done but push it', NONE],
+    ['push it as soon as possible tomorrow', NONE],
+    ['merge it as soon as CI passes when you are done', NONE],
+    ['push it when you are done, and merge 130', NONE],
+    ['push it after you are done', PUSH],
     // Any other condition is one the gate cannot see come true.
     ['merge it when I say so', NONE],
     ['merge it after I review it', NONE],
@@ -102,8 +166,19 @@ describe('merges, approvals, releases and review replies', () => {
     ['when it is ready to merge. merge it when I say so', NONE],
     ["once it's ready, release it, merge it", NONE],
     ["once it's ready, push it, merge it", NONE],
-    ["once it's ready, do not merge it. Push it.", NONE],
-    ["commit it. once it's ready, do not merge it", NONE],
+    // Declining the merge it waits for asks for nothing; the rest still counts.
+    ["once it's ready, do not merge it. Push it.", PUSH],
+    ["commit it. once it's ready, do not merge it", COMMIT],
+    ["once it's ready, don’t merge it. Push it.", PUSH],
+    ['merge 130 when its ready. once its ready, do not merge it', NONE],
+    ["merge it. once it's ready, don't merge it. Push it.", PUSH],
+    ["merge 130. once it's ready, don't merge it", NONE],
+    // A semicolon's "then" continues the declined sentence and waits with it.
+    ['once its ready, do not merge it; then push it', NONE],
+    ["release it. once it's ready, do not merge it", NONE],
+    ["once it's ready, don't merge it? push it", NONE],
+    ["once it's ready, merge it. Push it.", { ...PUSH, autoMerge: true }],
+    ["once it's ready, should I merge it? Push it.", NONE],
     // A condition naming a pull request names the one merged.
     ['once PR 133 is ready, merge 134', NONE],
     ['merge 134 once PR 133 is ready', NONE],
@@ -237,6 +312,9 @@ describe('merges, approvals, releases and review replies', () => {
     // An offer's closing "first" stays unread until offers read every condition (cpl-pakf).
     expect(grantOf('yes', 'Should I merge #168 first, but only if CI passes?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I cut the release?')).toEqual(RELEASE);
+    // In an offer, "when you are done" waits on the user.
+    expect(grantOf('yes', 'Should I merge it when you are done?')).toEqual(NONE);
+    expect(grantOf('yes', 'Shall I merge 130 as soon as you can?')).toEqual(NONE);
     expect(grantOf('yes', 'Publish `review-cycle@0.25.0` to npm?')).toEqual(RELEASE);
     expect(grantOf('yes', 'Should I mark #119 ready for review?')).toEqual(PR);
   });

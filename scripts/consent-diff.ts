@@ -131,7 +131,15 @@ const CONDITIONS = [
   ' as soon as you can',
   ' as soon as CI passes',
   ' before the checks pass',
+  ' before the checks fail',
   ' before I say so',
+  ' when you are done with the tests',
+  ' when you are done and I say so',
+  ' when you are done, and I say so',
+  ' when you are done and release is approved',
+  ' when you are done, then wait for my ok',
+  ' if CI passes before the tests finish',
+  ' as soon as you can review it',
 ];
 const TAILS = [
   '',
@@ -144,8 +152,11 @@ const TAILS = [
   ' first please',
   ' first then start on the docs',
   ' not yet',
+  '. once its ready, do not merge it',
   ' tonight',
   ' in an hour',
+  '\nwhen you are done, merge it',
+  ': when you are done, merge it',
 ];
 const generated = LEADS.flatMap((lead) =>
   VERBS.flatMap((verb) =>
@@ -199,6 +210,7 @@ const OFFERS = [
   'Do we push to main?',
   'Can we push to main, or is it protected?',
   'Do we merge #130 or close it?',
+  'Should I merge #130 when you are done?',
 ];
 
 const prompts = [...new Set([...quoted, ...generated, ...REPLIES])];

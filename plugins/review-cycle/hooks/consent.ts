@@ -605,6 +605,8 @@ const AGREE_WORD = new Set([
 // A clause with no verb that holds off: "not yet, commit later".
 const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const RETRACT = /^\s*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don'?t))\b/i;
+const DECLINED =
+  /^\s*(?:(?:ok|okay|yes|yeah|sure|alright|great|cool|perfect)[\s,]+)*(?:do\s+not|don['’]?t|never)\s+merge\b/i;
 // A clause opening with one of these makes the whole prompt conditional.
 const CONDITION = /^\s*(if|when|once|after|unless|until|as soon as)\b/i;
 // A sentence opening with one of these asks something rather than asking for it.
@@ -805,6 +807,30 @@ function onlyAutoMerge(g: MutableGrant): boolean {
 // "then". `ready` withholds the rest, which may wait on its condition too.
 type Carry = 'none' | 'mood' | 'described' | 'ready';
 
+const MEANS_NOW =
+  / (?:(?:when|once|after) (?:you are|you're) (?:done|finished)(?: with (?:it|that|this|them))?|as soon as (?:you can|possible)|before (?:the )?(?:checks|ci|tests) (?:pass|passes|finish|finishes|complete|completes))$/;
+
+// Never in an offer, where "you" is the user. Outside its own request's part,
+// or after punctuation, it may lead the next request ("push it -- when you are
+// done, merge it").
+function withoutNow(
+  w: string[],
+  verbs: Readonly<Record<string, Family>>,
+  clause: string,
+): string[] {
+  const now = MEANS_NOW.exec(` ${w.join(' ')}`);
+  if (now === null || !/^[\w\s'’#]*$/.test(clause.trim().replace(/[.!?;]+$/, ''))) return w;
+  const rest = w.slice(0, w.length - now[0].trim().split(' ').length);
+  const part = rest.slice(rest.findLastIndex((x) => x === 'and' || x === 'then') + 1);
+  const at = part.findIndex((x) => Object.hasOwn(verbs, x));
+  const asks =
+    at !== -1 &&
+    isLead(part.slice(0, at), REQUEST_LEAD, false) &&
+    !rest.some((x) => SUBORDINATE.has(x)) &&
+    asSoonAs(rest) === -1;
+  return asks ? rest : w;
+}
+
 // The verbs a clause asks for, reading each part joined by "and" or "then" as
 // its own request: "fix the parser and commit it".
 function grammarGrant(
@@ -814,8 +840,9 @@ function grammarGrant(
   into: MutableGrant,
   agreed = false,
   heard?: Set<Family>,
+  now = false,
 ): Carry {
-  const w = words(clause);
+  const w = now ? withoutNow(words(clause), verbs, clause) : words(clause);
   if (isReadyMerge(w, verbs, lead, agreed)) {
     into.autoMerge = true;
     into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
@@ -1097,10 +1124,18 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // What the previous sentence left: "we commit; then push" describes across
   // the semicolon as "we commit, then push" does across the comma.
   let prev: Carry = 'none';
+  let declined = false;
   for (const raw of sentences(prPhrase(unquote(forcePhrase(typed))))) {
     const flipped = leadingReady(raw);
     const sentence = flipped ?? raw;
-    // "once it's ready, do not merge it" reads as a question once reordered.
+    // "once it's ready, do not merge it" declines the merge, so the message
+    // merges nothing while the sentences beside it still count.
+    if (flipped !== null && DECLINED.test(sentence) && !sentence.trim().endsWith('?')) {
+      declined = true;
+      // "; then push it" continues it, and waits on the same condition.
+      prev = sentence.trim().endsWith(';') ? 'mood' : 'none';
+      continue;
+    }
     if (flipped !== null && (RETRACT.test(sentence) || isQuestion(sentence))) return NO_GRANT;
     // A retraction ("no wait", "never mind") cancels what came before it.
     if (RETRACT.test(sentence)) {
@@ -1122,7 +1157,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
-    for (const part of clauses(sentence)) {
+    const parts = clauses(sentence);
+    for (const [i, part] of parts.entries()) {
       const c = part.replace(CONTRAST, '');
       if (CONDITION.test(c)) return NO_GRANT;
       if (HOLD.test(c)) withheld = true;
@@ -1130,7 +1166,9 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (carry === 'described' && continues(c)) continue;
       // After a ready-merge a clause can still withhold, but grants nothing.
       const into = carry === 'ready' ? fresh() : mine;
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed);
+      // A condition that means now counts only where it ends the sentence.
+      const now = i === parts.length - 1;
+      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed, undefined, now);
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
       else if (left !== 'none' && carry !== 'ready') carry = left;
@@ -1143,6 +1181,16 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     const tied =
       sentence.trim().endsWith(';') && words(sentence).some((x) => Object.hasOwn(REQUESTED, x));
     prev = tied ? (withheld ? 'mood' : carry) : 'none';
+  }
+  // Merging the version pull request is the release, so a declined merge holds it too.
+  if (declined) {
+    Object.assign(g, {
+      merge: false,
+      mergeNamed: [],
+      autoMerge: false,
+      readyNamed: [],
+      release: false,
+    });
   }
   return settled({ ...g, ...namedFrom(g, typed, previousAnswer) });
 }
