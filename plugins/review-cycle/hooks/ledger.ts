@@ -321,6 +321,50 @@ export function select(entries: Entry[], paths?: readonly string[]): Entry[] {
   return entries.filter((e) => want.has(e.path));
 }
 
+// The most one read returns, in characters of JSON; a file reviewed often holds
+// dozens of entries, and a read loads every one into the reviewing session.
+export const MAX_READ = 8000;
+
+// The entries whose finding or reason holds any of the query's words of three
+// characters or more, those holding the most words first, then the newest, then
+// the last recorded. A reader stops paging once entries stop bearing on the
+// change, so the order has to put the closest first. No words keeps every entry.
+export function ranked(entries: readonly Entry[], query = ''): Entry[] {
+  const words = query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_.#/-]+/u)
+    .map((w) => w.replaceAll(/^[.-]+|[.-]+$/g, ''))
+    .filter((w) => w.length >= 3);
+  return entries
+    .map((e, at) => {
+      const text = `${e.finding} ${e.reason}`.toLowerCase();
+      return { e, at, score: words.filter((w) => text.includes(w)).length };
+    })
+    .filter((r) => words.length === 0 || r.score > 0)
+    .toSorted((a, b) => b.score - a.score || b.e.date.localeCompare(a.e.date) || b.at - a.at)
+    .map((r) => r.e);
+}
+
+// The rows from `offset` whose JSON array fits in `max`, always at least one;
+// `next` is where the following read starts, null when none remain.
+export function paged<T>(
+  rows: readonly T[],
+  offset: number,
+  max = MAX_READ,
+): { rows: T[]; next: number | null } {
+  const out: T[] = [];
+  // The brackets, then each row and its comma (the last comma is the closing bracket).
+  let size = 1;
+  for (const [i, row] of rows.entries()) {
+    if (i < offset) continue;
+    const n = JSON.stringify(row).length + 1;
+    if (out.length > 0 && size + n > max) return { rows: out, next: i };
+    out.push(row);
+    size += n;
+  }
+  return { rows: out, next: null };
+}
+
 // `git ls-tree -r -z` output as path to blob id.
 export function blobsOf(lsTree: string): Map<string, string> {
   const blobs = new Map<string, string>();

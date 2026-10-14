@@ -85,6 +85,7 @@ import {
 import {
   KINDS,
   MAX_LEDGER_BYTES,
+  MAX_READ,
   MAX_REPOS,
   MAX_TEXT,
   parseRecord,
@@ -1866,11 +1867,22 @@ async function registerLedger($: $): Promise<void> {
   try {
     await $.tool.register({
       name: 'ledger',
-      description:
-        'Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, `date` (when a cycle last settled it), `blob` (the file as the last cycle to carry it reviewed it), `current` (the file now), `changed` (whether the two differ; null when the working tree could not be read), and `stale` (settled more than 90 days ago). `unreadable` counts stored entries this version cannot read; the next record drops them. Pass `paths` to get only the entries for those repository-relative paths. Read-only.',
+      description: `Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, \`date\` (when a cycle last settled it), \`changed\` (whether its file differs from what the last cycle to carry it reviewed; null when the working tree could not be read), and \`stale\` (settled more than 90 days ago); unless \`changed\` is false it also has \`blob\` and \`current\`, short ids for \`git diff <blob> <current>\`. Entries come ranked, those holding the most \`query\` words first and then the newest, in an answer of at most ${MAX_READ} characters unless its first entry and the answer's header together are longer: \`matched\` counts every match and \`next\`, when present, is the \`offset\` that reads on. \`unreadable\` counts stored entries this version cannot read; the next record drops them. Read-only.`,
       inputSchema: {
         type: 'object',
-        properties: { paths: { type: 'array', items: { type: 'string' } } },
+        properties: {
+          paths: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Only the entries for these repository-relative paths.',
+          },
+          query: {
+            type: 'string',
+            description:
+              'Only the entries whose finding or reason holds any of these words (three characters or more).',
+          },
+          offset: { type: 'integer', minimum: 0, description: 'Where to start: a `next` value.' },
+        },
       },
     });
     await $.tool.register({
@@ -1930,18 +1942,25 @@ async function onLedger(
   e: Input<LedgerHook>,
   _next: NextOf<LedgerHook>,
 ): Promise<Output<LedgerHook>> {
-  const paths = (e as { paths?: unknown }).paths;
+  const { paths, query, offset } = e as { paths?: unknown; query?: unknown; offset?: unknown };
   if (paths !== undefined && !(Array.isArray(paths) && paths.every((p) => typeof p === 'string'))) {
     return {
       result: 'review-cycle ledger: `paths` must be an array of repository-relative paths.',
     };
   }
+  if (query !== undefined && typeof query !== 'string') {
+    return { result: 'review-cycle ledger: `query` must be a string.' };
+  }
+  if (offset !== undefined && !(Number.isInteger(offset) && (offset as number) >= 0)) {
+    return { result: 'review-cycle ledger: `offset` must be a whole number, 0 or more.' };
+  }
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'review-cycle ledger: not in a git repository.' };
     const blobs = (ps: string[]) => blobsAt(gitOf($), root.top, ps);
-    const status = await readLedger(storeOf($), blobs, root.common, paths, await $.clock.now());
-    return { result: JSON.stringify(status, null, 2) };
+    const read = { paths, query, offset: offset as number | undefined };
+    const status = await readLedger(storeOf($), blobs, root.common, read, await $.clock.now());
+    return { result: JSON.stringify(status) };
   } catch (error) {
     return {
       result: `review-cycle ledger: could not be read: ${error instanceof Error ? error.message : String(error)}`,

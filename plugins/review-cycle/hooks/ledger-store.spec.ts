@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { entryId, EXPIRY_DAYS, MAX_REPOS, type Recording } from './ledger';
+import { entryId, EXPIRY_DAYS, MAX_READ, MAX_REPOS, type Recording } from './ledger';
 import { readLedger, recordInto, type Blobs, type Store } from './ledger-store';
 
 const COMMON = '/repo/.git';
@@ -63,7 +63,7 @@ async function record(store: Store, blobs: Blobs, r: Recording, now = NOW) {
 }
 
 async function read(store: Store, blobs: Blobs, now = NOW) {
-  return readLedger(store, blobs, COMMON, undefined, now);
+  return readLedger(store, blobs, COMMON, {}, now);
 }
 
 describe('recordInto', () => {
@@ -175,14 +175,17 @@ describe('readLedger', () => {
     const { store } = fakeStore();
     await record(store, tree({ 'a.ts': A }), rec({ add: [DEFERRED] }));
     const same = await read(store, tree({ 'a.ts': A }));
-    expect((same.entries as object[])[0]).toMatchObject({
-      blob: A,
-      current: A,
-      changed: false,
-      stale: false,
-    });
+    const [unchanged] = same.entries as object[];
+    expect(unchanged).toMatchObject({ changed: false, stale: false });
+    // Nothing to diff, so no ids.
+    expect(unchanged).not.toHaveProperty('blob');
+    expect(unchanged).not.toHaveProperty('current');
     const edited = await read(store, tree({ 'a.ts': B }));
-    expect((edited.entries as object[])[0]).toMatchObject({ current: B, changed: true });
+    expect((edited.entries as object[])[0]).toMatchObject({
+      blob: A.slice(0, 12),
+      current: B.slice(0, 12),
+      changed: true,
+    });
     const gone = await read(store, tree({}));
     expect((gone.entries as object[])[0]).toMatchObject({ current: null, changed: true });
     const old = await read(store, tree({ 'a.ts': A }), NOW + (EXPIRY_DAYS + 1) * DAY);
@@ -197,8 +200,58 @@ describe('readLedger', () => {
     );
     expect((r.entries as object[])[0]).toMatchObject({ current: null, changed: null });
   });
+  test('reads the matches newest first, a page at a time', async () => {
+    const { store } = fakeStore();
+    const add = Array.from({ length: 60 }, (_, i) => ({ ...DEFERRED, finding: `retry ${i}` }));
+    await record(store, tree({ 'a.ts': A }), rec({ add: add.slice(0, 30) }), NOW - DAY);
+    await record(store, tree({ 'a.ts': A }), rec({ add: add.slice(30) }));
+    const blobs = tree({ 'a.ts': A });
+    const first = await readLedger(store, blobs, COMMON, { query: 'retry' }, NOW);
+    const rows = first.entries as { finding: string; date: string }[];
+    expect(first.matched).toBe(60);
+    expect(rows[0]?.date).toBe('2026-09-26');
+    expect(JSON.stringify(first).length).toBeLessThanOrEqual(MAX_READ);
+    expect(first.next).toBe(rows.length);
+    const rest = await readLedger(
+      store,
+      blobs,
+      COMMON,
+      { query: 'retry', offset: rows.length },
+      NOW,
+    );
+    const older = rest.entries as { date: string }[];
+    expect(older.length).toBe(60 - rows.length);
+    expect(older.at(-1)?.date).toBe('2026-09-25');
+    expect(rest).not.toHaveProperty('next');
+    const none = await readLedger(store, blobs, COMMON, { query: 'parser' }, NOW);
+    expect(none).toMatchObject({ total: 60, matched: 0, entries: [] });
+  });
+  test('keeps every whole answer within MAX_READ, whatever the row size', async () => {
+    const over: number[] = [];
+    for (let len = 0; len < 150; len += 3) {
+      const { store } = fakeStore();
+      const reason = `r${'x'.repeat(len)}`;
+      const add = Array.from({ length: 60 }, (_, i) => ({
+        ...DEFERRED,
+        finding: `f ${i}`,
+        reason,
+      }));
+      await record(store, tree({ 'a.ts': A }), rec({ add }));
+      for (let offset: number | undefined = 0; offset !== undefined;) {
+        const answer = await readLedger(store, tree({ 'a.ts': B }), COMMON, { offset }, NOW);
+        if (JSON.stringify(answer).length > MAX_READ) over.push(len);
+        offset = answer.next as number | undefined;
+      }
+    }
+    expect(over).toEqual([]);
+  });
   test('counts what it cannot read', async () => {
     const { store } = fakeStore({ [KEY]: 'garbage' });
-    expect(await read(store, tree({}))).toEqual({ total: 0, unreadable: 1, entries: [] });
+    expect(await read(store, tree({}))).toEqual({
+      total: 0,
+      matched: 0,
+      unreadable: 1,
+      entries: [],
+    });
   });
 });

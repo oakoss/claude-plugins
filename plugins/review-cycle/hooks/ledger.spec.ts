@@ -9,11 +9,14 @@ import {
   MAX_KEY,
   MAX_LEDGER_BYTES,
   MAX_PATH,
+  MAX_READ,
   MAX_REPOS,
   MAX_TEXT,
   merge,
+  paged,
   parseRecord,
   PREFIX,
+  ranked,
   select,
   staleKeys,
   storedOf,
@@ -276,6 +279,56 @@ describe('select', () => {
   });
   test('returns everything when no paths are given', () => {
     expect(select([a, b])).toEqual([a, b]);
+  });
+});
+
+const settledOn = (date: string, over: Partial<NewEntry>): Entry => ({
+  ...recorded(finding(over)),
+  date,
+});
+
+describe('ranked', () => {
+  const retry = settledOn(DATE, {});
+  const comma = settledOn(DATE, { finding: 'a comma lets the offer grant', reason: 'fixed later' });
+  const codex = settledOn(DATE, { finding: 'probe', reason: 'same on main', source: 'codex' });
+  test('keeps the entries whose finding or reason holds any word, not the source', () => {
+    expect(ranked([retry, comma, codex], 'COMMA dependency')).toEqual([comma, retry]);
+    expect(ranked([retry, comma, codex], 'codex')).toEqual([]);
+  });
+  test('reads only words of three characters or more, without edge punctuation', () => {
+    // "of" would match only "offer"; "fix" matches "fixed" only.
+    expect(ranked([retry, comma], 'of')).toEqual([comma, retry]);
+    expect(ranked([retry, comma], 'fix')).toEqual([comma]);
+    expect(ranked([retry, comma], 'comma.')).toEqual([comma]);
+    expect(ranked([retry, comma])).toEqual([comma, retry]);
+  });
+  test('puts the most words first, then the newest, then the last recorded', () => {
+    const one = settledOn('2026-10-01', { finding: 'merge withheld' });
+    const two = settledOn('2026-09-01', { finding: 'merge withheld on a condition' });
+    const newer = settledOn('2026-10-02', { finding: 'merge withheld again' });
+    const later = settledOn('2026-10-02', { finding: 'merge withheld once more' });
+    // A kept entry moves to the end of the store with its old date, so store
+    // order alone does not put the newest first.
+    expect(ranked([newer, later, one, two], 'merge condition')).toEqual([two, later, newer, one]);
+  });
+});
+
+describe('paged', () => {
+  const rows = [{ t: 'x'.repeat(40) }, { t: 'y'.repeat(40) }, { t: 'z'.repeat(40) }];
+  const two = JSON.stringify(rows.slice(0, 2)).length;
+  test('returns the rows whose array fits and where the next read starts', () => {
+    expect(paged(rows, 0, two)).toEqual({ rows: rows.slice(0, 2), next: 2 });
+    expect(paged(rows, 0, two - 1)).toEqual({ rows: rows.slice(0, 1), next: 1 });
+    expect(paged(rows, 2, two)).toEqual({ rows: rows.slice(2), next: null });
+  });
+  test('returns one row even when it alone is over the limit', () => {
+    expect(paged(rows, 1, 1)).toEqual({ rows: [rows[1]], next: 2 });
+  });
+  test('holds the default read under MAX_READ', () => {
+    const many = Array.from({ length: 200 }, (_, i) => recorded(numbered(i)));
+    const page = paged(many, 0);
+    expect(JSON.stringify(page.rows).length).toBeLessThanOrEqual(MAX_READ);
+    expect(page.next).toBe(page.rows.length);
   });
 });
 

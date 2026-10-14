@@ -7,8 +7,11 @@ import {
   blobsOf,
   isStale,
   keyOf,
+  MAX_READ,
   merge,
+  paged,
   PREFIX,
+  ranked,
   select,
   staleKeys,
   storedOf,
@@ -48,36 +51,54 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// The entries for `paths`, each with the file as it stands now and whether it
+export type Read = { paths?: readonly string[]; query?: string; offset?: number };
+
+// Blob ids as `git diff` takes them, short enough not to dominate a row.
+const SHORT = 12;
+
+// The entries for `paths` matching `query`, in ranked order from `offset`, the
+// whole answer at most MAX_READ characters of JSON; each says whether its file
 // changed or went stale since a cycle settled it.
 export async function readLedger(
   store: Store,
   blobs: Blobs,
   common: string,
-  paths: readonly string[] | undefined,
+  read: Read,
   now: number,
 ): Promise<Record<string, unknown>> {
   const stored = storedOf(await store.get(keyOf(common)));
-  const shown = select(stored.entries, paths);
+  const shown = ranked(select(stored.entries, read.paths), read.query);
   const status: Record<string, unknown> = {
     total: stored.entries.length,
+    matched: shown.length,
     unreadable: stored.unreadable,
   };
   let current: Map<string, string> | null = null;
   try {
     current = await blobs([...new Set(shown.map((e) => e.path))]);
   } catch (error) {
-    status.note = `changed is null: the working tree could not be read (${messageOf(error)})`;
+    // Clipped to 300 characters before JSON escaping, so a long git diagnostic stays small.
+    status.note = `changed is null: the working tree could not be read (${messageOf(error).slice(0, 300)})`;
   }
-  status.entries = shown.map((e) => {
+  const rows = shown.map((e) => {
     const file = current ? (current.get(e.path) ?? null) : null;
+    const changed = current ? file !== e.blob : null;
+    const { blob, ...row } = e;
     return {
-      ...e,
-      current: file,
-      changed: current ? file !== e.blob : null,
+      ...row,
+      changed,
       stale: isStale(e.date, now),
+      // Only where a reader may diff the file since: `git diff <blob> <current>`.
+      ...(changed !== false && {
+        blob: blob.slice(0, SHORT),
+        current: file?.slice(0, SHORT) ?? null,
+      }),
     };
   });
+  const envelope = JSON.stringify({ ...status, next: rows.length, entries: [] }).length;
+  const page = paged(rows, read.offset ?? 0, MAX_READ - envelope);
+  if (page.next !== null) status.next = page.next;
+  status.entries = page.rows;
   return status;
 }
 

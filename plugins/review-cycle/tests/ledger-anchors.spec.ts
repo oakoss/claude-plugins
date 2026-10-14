@@ -10,6 +10,13 @@ test('every brief carries the ledger, and changed code reopens an entry', () => 
   const text = skillText('review');
   expect(text).toContain('**Every brief carries what earlier cycles settled.**');
   expect(text).toContain('call the `mcp__review-cycle__ledger` tool with the changed-file list');
+  // A busy file holds dozens of entries; the read is capped, so the skill narrows it.
+  expect(text).toContain('as `query`, a few words naming what the change touches');
+  expect(text).toContain(
+    'read on with it as `offset` only while the entries still bear on the change',
+  );
+  expect(text).toContain('and drop `query` when it matched nothing');
+  expect(text).toContain('Append the entries that bear on this change');
   expect(text).toContain('a `settled in earlier cycles` block to every leg');
   expect(text).toContain('the test, type and spec legs as much as code-reviewer and Codex');
   expect(text).toContain('each entry by its substance');
