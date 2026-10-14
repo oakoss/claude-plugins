@@ -30,9 +30,8 @@ import path from 'node:path';
 
 import { afterEach, expect, test } from 'vitest';
 
-import { AGENTS_DIR, expectAnchors, listAgents, phase, REPO_ROOT, skillText } from './agents';
+import { AGENTS_DIR, expectAnchors, listAgents, phase, skillText } from './agents';
 
-const REVIEW_SKILL = path.join(REPO_ROOT, 'plugins/review-cycle/skills/review/SKILL.md');
 const CLEANUP_AGENT = path.join(AGENTS_DIR, 'cleanup.md');
 
 const PRIVATE_DIR_ANCHOR = 'mktemp -d';
@@ -165,7 +164,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
 // whole paragraph header, and the marker is required exactly once.
 test("the review skill's Phase 7 containment sentence stands on its own", () => {
   const line = markedLine(
-    phase(readFileSync(REVIEW_SKILL, 'utf8'), 7, 'review'),
+    phase(skillText('review'), 7, 'review'),
     'The report-only spawn carries the containment sentence',
     'review: Phase 7 containment paragraph expected exactly once in Phase 7',
   );
@@ -199,7 +198,7 @@ test('both skills carry the effort-argument contract', () => {
       ],
     ]);
   }
-  expectAnchors(readFileSync(REVIEW_SKILL, 'utf8'), 'review', [
+  expectAnchors(skillText('review'), 'review', [
     ['for reading, not measurement', 'reading-shaped Codex question rule lost'],
   ]);
 });
@@ -210,7 +209,7 @@ test('the scan fails instead of passing when enumeration reaches too few files',
 
 test('Phase 3 tells later iterations what earlier ones settled', () => {
   const line = markedLine(
-    phase(readFileSync(REVIEW_SKILL, 'utf8'), 3, 'review'),
+    phase(skillText('review'), 3, 'review'),
     'already settled this cycle',
     'review: settled-findings block expected exactly once in Phase 3',
   );
@@ -243,7 +242,7 @@ test('Phase 3 tells later iterations what earlier ones settled', () => {
 });
 
 test('Phase 7 checks release-note files against the diff, and cleanup may not fake the check', () => {
-  const skillBody = readFileSync(REVIEW_SKILL, 'utf8');
+  const skillBody = skillText('review');
   const section = phase(skillBody, 7, 'review');
   const line = markedLine(
     section,
