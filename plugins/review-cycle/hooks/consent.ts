@@ -606,6 +606,9 @@ const AGREE_WORD = new Set([
 ]);
 // A clause with no verb that holds off: "not yet, commit later".
 const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
+const STOP = /^\s*(stop|cancel|abort|halt)\b/i;
+// Words that open a sentence ahead of what it says: "ok, wait", "please stop".
+const FILLER = /^(\s*(ok|okay|oh|hmm|actually|please|um|uh)\b[\s,.!]*)+/i;
 const RETRACT = /^\s*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don'?t))\b/i;
 const BARE_RETRACT =
   /^(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t)\b[\s,.!;:…—-]*)+$/i;
@@ -1169,6 +1172,29 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
               ? 'comment'
               : null;
   return step === null ? null : { step, how: 'declined' };
+}
+
+// Whether a message typed into the running turn replaces the turn's grant
+// rather than adding to it: a sentence holds, retracts or stops, or it names a
+// step it does not ask for. Anything else the agent reads before its next step.
+export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
+  if (holdOf(prompt, previousAnswer) !== null) return true;
+  const typed = unquote(prompt).replaceAll(/\bno (problem|worries)\b/gi, 'ok');
+  return sentences(typed).some((raw) => {
+    const s = raw.replace(FILLER, '');
+    return RETRACT.test(s) || HOLD.test(s) || STOP.test(s);
+  });
+}
+
+// A merge with no pull request named covers any, so adding a named one must not
+// narrow it. readyNamed stays whole: it also keeps those pull requests out of an
+// open merge-now.
+export function combine(a: Grant, b: Grant): Grant {
+  const into: MutableGrant = { ...a };
+  merged(into, { ...b });
+  const open = (g: Grant) => g.merge && g.mergeNamed.length === 0;
+  if (open(a) || open(b)) into.mergeNamed = [];
+  return settled(into);
 }
 
 export function holdsOf(prompt: string, previousAnswer = ''): boolean {
