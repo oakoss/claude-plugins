@@ -609,9 +609,19 @@ const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const STOP = /^\s*(stop|cancel|abort|halt)\b/i;
 // Words that open a sentence ahead of what it says: "ok, wait", "please stop".
 const FILLER = /^(\s*(ok|okay|oh|hmm|actually|please|um|uh)\b[\s,.!]*)+/i;
-const RETRACT = /^\s*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don'?t))\b/i;
+// "oh wait", "sorry, never mind": a filler word may open the retraction.
+const RETRACT =
+  /^\s*(?:(?:ok|okay|please|oh|sorry|hmm|um|uh|actually)\b[\s,]*)*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don['’]?t))\b/i;
 const BARE_RETRACT =
-  /^(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t)\b[\s,.!;:…—-]*)+$/i;
+  /^(?:\s*(?:ok|okay|please|oh|sorry|hmm|um|uh)\b[\s,]*)*(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t)\b[\s,.!;:…—-]*)+$/i;
+
+// "No problem" and "no worries" agree, and retract nothing; an "nvm" that stands
+// alone is "never mind", while "nvm use 20" runs the Node version manager.
+function spoken(text: string): string {
+  return text
+    .replaceAll(/\bno (problem|worries)\b/gi, 'ok')
+    .replaceAll(/(?<![\w./~-])nvm\b(?=\s*(?:[,.!?;:…](?!\w)|$))/gim, 'never mind');
+}
 const DECLINED =
   /^\s*(?:(?:ok|okay|yes|yeah|sure|alright|great|cool|perfect)[\s,]+)*(?:do\s+not|don['’]?t|never)\s+merge\b/i;
 // Opening any clause of a typed sentence, these make the whole prompt conditional.
@@ -1133,7 +1143,7 @@ const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
 // A message that is a yes or a go-ahead and nothing more, as the grammar
 // reads one: it answers the offer before it.
 export function isReply(text: string): boolean {
-  return AFFIRMATIVE.test(text.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok'));
+  return AFFIRMATIVE.test(spoken(text.trim()));
 }
 
 // The steps a message names by their verbs, asked for or not.
@@ -1179,10 +1189,10 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
 // step it does not ask for. Anything else the agent reads before its next step.
 export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
   if (holdOf(prompt, previousAnswer) !== null) return true;
-  const typed = unquote(prompt).replaceAll(/\bno (problem|worries)\b/gi, 'ok');
+  const typed = spoken(unquote(prompt));
   return sentences(typed).some((raw) => {
     const s = raw.replace(FILLER, '');
-    return RETRACT.test(s) || HOLD.test(s) || STOP.test(s);
+    return RETRACT.test(raw) || RETRACT.test(s) || HOLD.test(s) || STOP.test(s);
   });
 }
 
@@ -1208,8 +1218,7 @@ export function liftsHold(grant: Grant): boolean {
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
-  // "No problem" and "no worries" agree; they retract nothing.
-  const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
+  const text = spoken(prompt.trim());
   if (AFFIRMATIVE.test(text)) {
     const offer = accepted(previousAnswer);
     return settled({ ...offer, ...namedFrom(offer, '', previousAnswer) });
