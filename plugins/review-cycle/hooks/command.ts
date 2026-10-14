@@ -137,6 +137,13 @@ const DATA = new Set([
   'gh',
   'bd',
   'column',
+  // A lookup and a test name programs without running them.
+  'which',
+  'type',
+  'whereis',
+  'test',
+  '[',
+  '[[',
 ]);
 // A committing verb as a word of its own, as in `$GIT commit`, not `commit-gate`.
 const WORD_VERB = /(^|[\s'"`])(commit|push|merge|cherry-pick|revert|am|pull|rebase)([\s'"`]|$)/;
@@ -1272,6 +1279,8 @@ function ghAt(
   return null;
 }
 
+const LEADS = new Set(['!', '{', 'if', 'then', 'else', 'elif', 'do', 'while', 'until']);
+
 // Commands that hand their input to the command they run.
 const FROM_INPUT = new Set(['xargs', 'parallel']);
 
@@ -1279,9 +1288,17 @@ const FROM_INPUT = new Set(['xargs', 'parallel']);
 // `timeout 60 gh pr create`, `sudo -u bot gh …`. Quoted text is not read, so
 // `bash -c "gh pr create"` goes unseen: a well-meaning agent writes it plainly.
 function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
-  const first = basename(st.words[0]?.text ?? '');
+  // `if [ -x gh ]; then` tests as surely as `[ -x gh ]` does.
+  const at = Math.max(
+    0,
+    st.words.findIndex((w) => !LEADS.has(w.text)),
+  );
+  const first = basename(st.words[at]?.text ?? '');
   // `gh` is a data command to the git check: what it is given never runs git.
   if (first !== 'gh' && DATA.has(first)) return [];
+  // `for x in a gh b` lists words to the statement's end; zsh's `for x (a b)
+  // gh pr merge 5` has no `in` and runs what follows.
+  if ((first === 'for' || first === 'select') && st.words[at + 2]?.text === 'in') return [];
   const found: GhAction[] = [];
   const published = publishActionsOf(st.words);
   for (const [at, word] of st.words.entries()) {
