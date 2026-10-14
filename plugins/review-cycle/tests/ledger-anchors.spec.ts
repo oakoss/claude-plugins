@@ -16,7 +16,7 @@ test('every brief carries the ledger, and changed code reopens an entry', () => 
     'First read on, passing each `next` as `offset`, until you have every reopened entry.',
   );
   expect(text).toContain(
-    'if `matched` is 0, read again without `query` starting at offset `reopened`, whether or not a `next` was given',
+    'if `matched` is 0, read again, once, without `query` starting at offset `reopened`, whether or not a `next` was given',
   );
   expect(text).toContain(
     'Either way, keep reading on only while the entries still bear on the change.',
