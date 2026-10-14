@@ -15,6 +15,16 @@ inputs:
   repositories:
     description: Repository name under the oakoss org (or space-separated list)
     required: true
+  # Without a permission input the token gets everything the App is granted.
+  # The App grants only contents, pull-requests and metadata.
+  permission-contents:
+    description: Contents access for the token, read or write
+    required: false
+    default: read
+  permission-pull-requests:
+    description: Pull-request access for the token, read or write
+    required: false
+    default: read
   resolve-identity:
     description: When true, output user and email for git commit authorship
     required: false
@@ -45,6 +55,8 @@ runs:
         private-key: ${{ inputs.private-key }}
         owner: oakoss
         repositories: ${{ inputs.repositories }}
+        permission-contents: ${{ inputs.permission-contents }}
+        permission-pull-requests: ${{ inputs.permission-pull-requests }}
 
     - name: Resolve the App commit identity
       id: identity

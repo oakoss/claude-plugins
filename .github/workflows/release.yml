@@ -54,13 +54,16 @@ jobs:
           client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: claude-plugins
+          permission-contents: write
+          permission-pull-requests: write
 
       # Nothing is pushed from this job — oakum writes the version PR through
-      # the GitHub API — so the default credential is sufficient here.
+      # the GitHub API — so no credential is left in the git config.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # dependencies in one step; `require-lockfile` is `--frozen-lockfile`.
@@ -99,6 +102,7 @@ jobs:
           client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: claude-plugins
+          permission-contents: write
           resolve-identity: true
 
       # Persists the app credential, because the tag push is a plain `git push`
