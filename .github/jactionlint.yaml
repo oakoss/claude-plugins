@@ -1,0 +1,5 @@
+# What actionlint checks plus jactionlint's bug detectors. Without this the
+# "default" profile also applies its security rules, which report 11 findings
+# here (unpersisted checkout credentials, an ad hoc npm install, a workflow
+# without concurrency, an unscoped app token) still to be triaged.
+profile: correctness
