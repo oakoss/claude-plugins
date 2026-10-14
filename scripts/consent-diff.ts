@@ -1,7 +1,8 @@
 // Compares how review-cycle's consent grammar reads messages at a git ref
 // (default main) and in the working tree, and prints how many verdicts
 // changed, grouped by what changed. A grammar change moves verdicts on
-// purpose; this shows all of them, including the ones nobody wrote a spec for.
+// purpose; this shows them, including the ones nobody wrote a spec for, over
+// the messages and offers listed below.
 //
 //   node scripts/consent-diff.ts [ref]
 
@@ -16,6 +17,9 @@ import { pathToFileURL } from 'node:url';
 type Grammar = {
   grantOf: (prompt: string, previousAnswer?: string) => Record<string, unknown>;
   holdsOf: (prompt: string, previousAnswer?: string) => boolean;
+  // Whether a message typed into a running turn replaces its grant; absent
+  // before #182.
+  dropsGrant?: (prompt: string, previousAnswer?: string) => boolean;
 };
 
 const CONSENT = 'plugins/review-cycle/hooks/consent.ts';
@@ -184,11 +188,6 @@ const TAILS = [
   '. If CI passes.',
   '. If CI fails, fix it.',
 ];
-const generated = LEADS.flatMap((lead) =>
-  VERBS.flatMap((verb) =>
-    CONDITIONS.flatMap((when) => TAILS.map((tail) => `${lead}${verb}${when}${tail}`)),
-  ),
-);
 const REPLIES = [
   'yes',
   'ok',
@@ -268,11 +267,41 @@ const OFFERS = [
   'If that looks right and CI passes, should I push?',
 ];
 
-const prompts = [...new Set([...quoted, ...generated, ...REPLIES])];
+// Which offers each message is read against. Crossing every generated message
+// with every offer multiplies with each list a grammar change grows (31M cases
+// at #177), so: the quoted strings and replies meet every offer; a generated
+// message meets no offer, plus every offer when it has no lead, plus two offers
+// picked by its place in the product. Replaying #168-#177 this way showed every
+// verdict group the full product did but two in #173 (87 of 89).
+const offered = new Map<string, Set<string>>();
+const spread = (i: number, salt: number): number => Math.imul(i ^ salt, 0x9e_37_79_b1) >>> 0;
+const meet = (prompt: string, offers: readonly string[]) => {
+  const set = offered.get(prompt) ?? new Set<string>();
+  for (const offer of offers) set.add(offer);
+  offered.set(prompt, set);
+};
+const asked = [...new Set(OFFERS.filter((o) => o !== ''))];
+for (const prompt of [...quoted, ...REPLIES]) meet(prompt, ['', ...asked]);
+let at = 0;
+for (const lead of LEADS) {
+  for (const verb of VERBS) {
+    for (const when of CONDITIONS) {
+      for (const tail of TAILS) {
+        const i = at++;
+        // Hashed, so no stride shares a factor with the offer count; the second
+        // always differs from the first.
+        const first = spread(i, 0) % asked.length;
+        const second = (first + 1 + (spread(i, 1) % (asked.length - 1))) % asked.length;
+        const rotated = [asked[first], asked[second]];
+        meet(`${lead}${verb}${when}${tail}`, lead === '' ? ['', ...asked] : ['', ...rotated]);
+      }
+    }
+  }
+}
 
 // A verdict as one comparable line: the grant's non-default fields in key
 // order, and whether it holds (the reason a hold gives is wording, not a verdict).
-function verdict(g: Grammar, prompt: string, offer: string): string {
+function verdict(g: Grammar, prompt: string, offer: string, queued: boolean): string {
   const out: string[] = [];
   const fields = Object.entries(g.grantOf(prompt, offer)).toSorted(([a], [b]) =>
     a.localeCompare(b),
@@ -285,51 +314,66 @@ function verdict(g: Grammar, prompt: string, offer: string): string {
     else out.push(`${key}=${Array.isArray(value) ? value.join('+') : String(value)}`);
   }
   if (g.holdsOf(prompt, offer)) out.push('held');
+  if (queued && g.dropsGrant?.(prompt, offer)) out.push('drops a queued grant');
   return out.join(', ') || 'nothing';
 }
 
-const base = atRef(CONSENT);
-// Copied to .mts so Node reads both versions as ES modules, without warnings.
-const dir = mkdtempSync(join(tmpdir(), 'consent-diff-'));
-const groups = new Map<string, string[]>();
-let cases = 0;
-try {
-  const load = async (name: string, source: string): Promise<Grammar> => {
-    const file = join(dir, `${name}.mts`);
-    writeFileSync(file, source);
-    const module = (await import(pathToFileURL(file).href)) as Partial<Grammar>;
-    if (typeof module.grantOf !== 'function' || typeof module.holdsOf !== 'function') {
-      throw new TypeError(`${CONSENT} (${name}) exports no grantOf and holdsOf to compare`);
+async function compare(base: string, current: string): Promise<void> {
+  // Copied to .mts so Node reads both versions as ES modules, without warnings.
+  const dir = mkdtempSync(join(tmpdir(), 'consent-diff-'));
+  const groups = new Map<string, string[]>();
+  let cases = 0;
+  try {
+    const load = async (name: string, source: string): Promise<Grammar> => {
+      const file = join(dir, `${name}.mts`);
+      writeFileSync(file, source);
+      const module = (await import(pathToFileURL(file).href)) as Partial<Grammar>;
+      if (typeof module.grantOf !== 'function' || typeof module.holdsOf !== 'function') {
+        throw new TypeError(`${CONSENT} (${name}) exports no grantOf and holdsOf to compare`);
+      }
+      return module as Grammar;
+    };
+    const before = await load('before', base);
+    const after = await load('after', current);
+    // Compared only where both versions read queued messages, so an older ref
+    // does not report every message as newly dropping.
+    const queued = before.dropsGrant !== undefined && after.dropsGrant !== undefined;
+    if (!queued)
+      console.log(`dropsGrant is missing at ${ref} or here: queued messages not compared`);
+    for (const [prompt, offers] of offered) {
+      for (const offer of offers) {
+        cases++;
+        const was = verdict(before, prompt, offer, queued);
+        const now = verdict(after, prompt, offer, queued);
+        if (was === now) continue;
+        const key = `${was}  →  ${now}`;
+        const examples = groups.get(key) ?? [];
+        examples.push(
+          offer === ''
+            ? JSON.stringify(prompt)
+            : `${JSON.stringify(prompt)} after ${JSON.stringify(offer)}`,
+        );
+        groups.set(key, examples);
+      }
     }
-    return module as Grammar;
-  };
-  const before = await load('before', base);
-  const after = await load('after', readFileSync(CONSENT, 'utf8'));
-  for (const offer of OFFERS) {
-    for (const prompt of prompts) {
-      cases++;
-      const was = verdict(before, prompt, offer);
-      const now = verdict(after, prompt, offer);
-      if (was === now) continue;
-      const key = `${was}  →  ${now}`;
-      const examples = groups.get(key) ?? [];
-      examples.push(
-        offer === ''
-          ? JSON.stringify(prompt)
-          : `${JSON.stringify(prompt)} after ${JSON.stringify(offer)}`,
-      );
-      groups.set(key, examples);
-    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-} finally {
-  rmSync(dir, { recursive: true, force: true });
+
+  const changed = [...groups.values()].reduce((n, e) => n + e.length, 0);
+  console.log(
+    `${cases} cases (${offered.size} messages, ${asked.length + 1} offers) against ${ref}: ${changed} changed\n`,
+  );
+  for (const [key, examples] of [...groups].toSorted((a, b) => b[1].length - a[1].length)) {
+    console.log(`${examples.length.toString().padStart(6)}  ${key}`);
+    for (const example of examples.slice(0, 3)) console.log(`          ${example}`);
+  }
 }
 
-const changed = [...groups.values()].reduce((n, e) => n + e.length, 0);
-console.log(
-  `${cases} cases (${prompts.length} messages × ${OFFERS.length} offers) against ${ref}: ${changed} changed\n`,
-);
-for (const [key, examples] of [...groups].toSorted((a, b) => b[1].length - a[1].length)) {
-  console.log(`${examples.length.toString().padStart(6)}  ${key}`);
-  for (const example of examples.slice(0, 3)) console.log(`          ${example}`);
+const base = atRef(CONSENT);
+const current = readFileSync(CONSENT, 'utf8');
+if (base === current) {
+  console.log(`${CONSENT} is the same at ${ref} and in the working tree: 0 changed`);
+} else {
+  await compare(base, current);
 }
