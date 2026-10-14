@@ -3602,6 +3602,16 @@ describe('the stop-before setting', () => {
     await say($, 'mark it ready for review');
     expect(ran(await bash($, 'gh pr ready 119'))).toBe(true);
   });
+  test('a subagent naming gh as data runs', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'fix the parser');
+    const sub = { agentId: 'sub-1' };
+    expect(ran(await bash($, 'for c in none gh docs; do echo "$c"; done', sub))).toBe(true);
+    expect(ran(await bash($, 'which gh go', sub))).toBe(true);
+    expect(ran(await bash($, 'select x in a gh b; do break; done', sub))).toBe(true);
+    const merge = await bash($, '[ -x /usr/local/bin/gh ] && gh pr merge 5', sub);
+    expect(denied(merge, 'subagents do not commit, push, open, merge')).toBe(true);
+  });
   test('a GitHub MCP write from a subagent is refused', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') } });
     await say($, 'ship it');
