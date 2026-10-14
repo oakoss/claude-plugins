@@ -17,7 +17,7 @@ minimumReleaseAge: 1440
 # release, so no update reaches the 1.7.1 security patch. Remove this once
 # markdownlint-cli2 bumps its own pin, or it will hold smol-toml back.
 overrides:
-  smol-toml: '1.9.0'
+  smol-toml: '1.9.1'
 
 # Our own scope, exempted deliberately and permanently. The gate buys time for
 # someone to notice a bad third-party publish; for packages we publish we have
