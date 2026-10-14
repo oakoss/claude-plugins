@@ -415,6 +415,11 @@ async function say($: any, text: string, kind = 'composer') {
   await $.prompt.submit({ text, origin: { kind }, wait: false });
 }
 
+// A message typed while the agent's turn is still running.
+async function queue($: any, text: string) {
+  await $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false, turnId: 't' });
+}
+
 let spawns = 0;
 
 // Spawns a leg and completes it; `during` runs while the leg is running.
@@ -2559,6 +2564,38 @@ describe('a push the user did not ask for', () => {
     });
     expect(ran(await bash($, 'git push'))).toBe(true);
   });
+  test('a request typed into the running turn keeps its push and adds to it', async ($, on) => {
+    fakeWorld(on);
+    await say($, 'push it');
+    await queue($, 'Lets file the beads');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    await queue($, 'also open a PR');
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+    expect(ran(await bash($, 'git push'))).toBe(true);
+  });
+  for (const text of ['wait, rename the helper first', "wait, don't push", 'stop', 'please stop']) {
+    test(`a hold typed into the running turn drops the push: ${text}`, async ($, on) => {
+      fakeWorld(on);
+      await say($, 'ship it');
+      await queue($, text);
+      expect(ran(await bash($, 'git push'))).toBe(false);
+    });
+  }
+  test('a request typed in while the gate checks a push stops it once; the retry runs', async ($, on) => {
+    let typed = false;
+    fakeWorld(on, {
+      git: (a) => {
+        if (!typed && a.startsWith('git for-each-ref')) {
+          typed = true;
+          void queue($, 'Lets file the beads');
+        }
+        return null;
+      },
+    });
+    await say($, 'ship it');
+    expect(denied(await bash($, 'git push'), 'sent a new message')).toBe(true);
+    expect(ran(await bash($, 'git push'))).toBe(true);
+  });
   test('a shell alias that runs another program for git is refused first', async ($, on) => {
     fakeWorld(on, { shellAliases: "alias -- git='hub'\n" });
     await say($, 'fix the parser');
@@ -4240,6 +4277,23 @@ describe('the model check', () => {
     expect(w.logs ?? []).toEqual([]);
     const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
     expect(JSON.parse((misses as { result: string }).result).misses).toEqual([]);
+  });
+  test('a request typed in during the call stops a step only its yes allowed', async ($, on) => {
+    fakeWorld(
+      on,
+      pushing({
+        model: verdictFor('push', 'ship the react aria update'),
+        onModel: () =>
+          void ($ as any).prompt.submit({
+            text: 'Lets file the beads',
+            origin: { kind: 'composer' },
+            wait: false,
+            turnId: 't',
+          }),
+      }),
+    );
+    await say($, SHIP);
+    expect(denied(await bash($, 'git push origin fix/x'), 'sent a new message')).toBe(true);
   });
   test('its yes covers neither a force push nor a step it did not grant', async ($, on) => {
     fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));

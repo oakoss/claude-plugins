@@ -21,7 +21,9 @@ import {
 } from './command';
 import {
   closingOf,
+  combine,
   covers,
+  dropsGrant,
   grantOf,
   holdOf,
   liftsHold,
@@ -173,7 +175,7 @@ type Leg = {
 const LEG_BUDGET_MS = 30 * 60_000;
 
 // What the user's latest message settled: a fresh message replaces it, a
-// prompt queued into the running turn updates it.
+// prompt queued into the running turn adds to its grant (dropsGrant).
 type Message = {
   grant: Grant;
   // The working tree when it arrived; null when unreadable.
@@ -501,7 +503,8 @@ async function onPromptSubmit(
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
       // Updated in place: a pending nudge's rollback holds this record.
-      state.message.grant = grant;
+      const drops = dropsGrant(e.text, state.lastAnswer);
+      state.message.grant = drops ? grant : combine(state.message.grant, grant);
       state.message.nudged = false;
     } else {
       let tree: string | null = null;

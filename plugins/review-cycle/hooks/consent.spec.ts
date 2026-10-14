@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  combine,
+  dropsGrant,
   grantOf,
   holdOf,
   holdsOf,
@@ -1152,6 +1154,64 @@ describe('holds', () => {
     expect(holdsOf('not yet, rename the helper first', 'Push `fix/x` to `origin`?')).toBe(true);
     expect(holdsOf('not yet', 'Open a PR from `fix/x` into `main`?')).toBe(true);
     expect(holdsOf('not yet', 'Should I rename the helper?')).toBe(false);
+  });
+});
+
+describe('a message typed into the running turn', () => {
+  test.each([
+    'Lets file the beads',
+    'also fix the typo in the README',
+    'thanks',
+    'ok',
+    'and open a PR too',
+    'push it',
+    'No problem',
+    'no worries, file the beads',
+    'add a stopwatch to the timer test',
+    'also add the cancellation tests',
+    'update the changelog too',
+    'commit it with a message "Fix the timer. Please stop double-counting"',
+  ])('%s keeps the turn’s grant', (prompt) => {
+    expect(dropsGrant(prompt)).toBe(false);
+  });
+  test.each([
+    'wait',
+    'wait, rename the helper first',
+    'hold on',
+    'not yet',
+    'never mind',
+    'no, scratch that',
+    'stop',
+    'cancel that',
+    'abort the ship',
+    "don't push it",
+    'should we push?',
+    'fix the typo. Actually, no, leave it',
+    'not yet, let me look at the diff',
+    'ok, stop',
+    'please stop',
+    'actually, wait',
+    'oh wait, never mind',
+    'scratch that',
+    'Ok, not yet',
+  ])('%s replaces it', (prompt) => {
+    expect(dropsGrant(prompt)).toBe(true);
+  });
+  test('not yet to the offer before the turn replaces it', () => {
+    expect(dropsGrant('not yet', 'Push `fix/x` to `origin`?')).toBe(true);
+  });
+  test('a kept grant gains what the message asks for', () => {
+    expect(combine(grantOf('ship it'), grantOf('Lets file the beads'))).toEqual(SHIP);
+    expect(combine(grantOf('push it'), grantOf('and open a PR too'))).toEqual(PUSH_PR);
+    expect(combine(grantOf('merge 116'), grantOf('merge 117'))).toEqual(merging('116', '117'));
+    expect(combine(grantOf('force push it'), grantOf('push it'))).toEqual(LEASE);
+    expect(combine(grantOf('merge it'), grantOf('merge 117'))).toEqual(MERGE);
+    expect(combine(grantOf('merge 117'), grantOf('merge it'))).toEqual(MERGE);
+  });
+  test('a kept grant never loses the pull requests to merge only once ready', () => {
+    const later = grantOf('merge it, and merge 62 once CI passes');
+    expect(combine(grantOf('merge it when CI passes'), later).readyNamed).toEqual(['62']);
+    expect(combine(later, grantOf('merge it when CI passes')).readyNamed).toEqual(['62']);
   });
 });
 
