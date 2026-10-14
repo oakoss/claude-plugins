@@ -39,6 +39,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Push builds run everything; PR builds skip ShellCheck when the diff
       # touches no shell script, and the summary job counts that skip as satisfied.
@@ -78,6 +79,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # dependencies in one step; `require-lockfile` is `--frozen-lockfile`.
@@ -100,6 +102,7 @@ jobs:
           client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_PRIVATE_KEY }}
           repositories: claude-plugins
+          permission-pull-requests: write
 
       # The only bump-file gate there is. A local PreToolUse hook used to run
       # a looser version of this check and was retired: it offered a hand bump
@@ -149,6 +152,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # dependencies in one step; `require-lockfile` is `--frozen-lockfile`.
@@ -175,6 +180,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # validate is a static manifest check and needs no Anthropic credentials
       # (verified against an empty HOME and config dir). Installed unpinned:
@@ -186,6 +193,7 @@ jobs:
       # pnpm/setup, `npm` would run on pnpm's npm-less Node, whose real path is
       # in pnpm's store, and would put `claude` in a global folder off PATH
       # (measured on macOS).
+      # jactionlint ignore=adhoc-packages
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
@@ -254,6 +262,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The eval scaffolds are the repository's only shell; nothing else
       # exercises them outside an eval run.
@@ -267,7 +277,7 @@ jobs:
 
   # jactionlint, a maintained fork of actionlint: it reads `$/` action
   # references (and checks their inputs) and lints the composite actions in
-  # `.github/actions/` too. `.github/jactionlint.yaml` sets the profile.
+  # `.github/actions/` too. It runs the default profile, security rules included.
   jactionlint:
     name: Workflows
     runs-on: ubuntu-latest
@@ -282,6 +292,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # A pinned release binary checked against its published checksum rather
       # than a third-party action. Renovate does not watch it: its `github-actions`
