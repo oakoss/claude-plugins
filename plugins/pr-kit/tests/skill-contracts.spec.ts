@@ -222,6 +222,183 @@ describe('fix-merge-conflicts: markers and sides', () => {
   });
 });
 
+describe('ship: what it may do unasked', () => {
+  const text = skillText('pr-kit', 'ship');
+
+  test('each write runs alone, and a refusal is reported, not reshaped', () => {
+    expect(text).toContain(
+      'Run every command that writes, pushes, or closes as its own Bash call.',
+    );
+    expect(text).toContain('a refusal is never retried in another shape: report it and stop.');
+  });
+
+  test('merge, auto-merge, ready and draft wait for the user', () => {
+    expect(text).toContain(
+      'Nothing here merges, arms auto-merge, or marks a draft ready unless the user asked for that in so many words.',
+    );
+    expect(text).toContain('Add `--draft` only when the user asked for a draft.');
+    expect(text).toContain('When the user asked for auto-merge, arm it after creating');
+  });
+
+  // Every fence of any tag or indent, plus inline code, so an unasked step
+  // cannot hide outside a bash fence.
+  const anyFenceLines = [...text.matchAll(/^[ \t]*```[\w-]*\n([\s\S]*?)^[ \t]*```$/gm)]
+    .flatMap((m) => m[1].split('\n'))
+    .map((line) => line.trim());
+  const inlineCode = [...prose(text).matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
+  const shellLines = fenceLines(shellFences(text, 'ship')).map((line) => line.trim());
+
+  test('no command merges, readies, forces, rebases, skips hooks or closes an issue', () => {
+    const forbidden =
+      /gh pr (merge|ready)\b|gh issue close\b|--auto\b|--no-verify\b|--force\b|(?<!no-)\brebase\b/;
+    for (const line of [...anyFenceLines, ...inlineCode]) expect(line).not.toMatch(forbidden);
+    for (const line of anyFenceLines) expect(line).not.toMatch(/--draft\b/);
+  });
+
+  test('it pushes the branch, never the default branch', () => {
+    const pushes = [...anyFenceLines, ...inlineCode].filter((l) => /\bgit push\b/.test(l));
+    expect(pushes).toEqual(['git push -u origin <branch>']);
+  });
+
+  test('every body goes through a file, on both paths', () => {
+    const writes = anyFenceLines.filter(
+      (l) => /^gh pr create\b/.test(l) || (/^gh pr edit\b/.test(l) && l.includes('--body')),
+    );
+    expect(writes.some((l) => l.startsWith('gh pr create'))).toBe(true);
+    expect(writes.some((l) => l.startsWith('gh pr edit'))).toBe(true);
+    for (const line of writes) expect(line).toContain('--body-file <file>');
+  });
+
+  test('orientation fetches every field the stops read', () => {
+    const fields = jsonFields(shellFences(text, 'ship'));
+    for (const field of ['owner', 'viewerPermission', 'defaultBranchRef', 'isFork', 'state']) {
+      expect(fields.has(field), field).toBe(true);
+    }
+  });
+
+  test('it stops on branches and repositories that are not its to ship', () => {
+    expect(text).toContain('stop when the current branch is the default branch');
+    expect(text).toContain(
+      '(`*/version-packages`, `renovate/*`, `dependabot/*`), or the work is a `chore(release)` change.',
+    );
+    expect(text).toContain(
+      "proceed when the owner is the user's own login or `viewerPermission` is `ADMIN` or `MAINTAIN`, and `isFork` is false, since a fork's pull request goes to someone else's project. Otherwise stop before pushing",
+    );
+    expect(text).toContain('It may be `main`, `master`, or anything else; use what it says.');
+  });
+
+  test('the path follows the request and the pull request state', () => {
+    expect(text).toContain(
+      'the **publish** path on "ship it". On "push it" there is nothing to update, so ask whether to publish.',
+    );
+    expect(text).toContain('A merged or closed one: stop and ask.');
+    expect(text).toContain('Any other failure of `gh pr view`: stop and show it.');
+  });
+
+  test('leftover work is reviewed before it is committed, then checked', () => {
+    expect(text).toContain(
+      'review them before committing: invoke `/review-cycle:review` via the Skill tool',
+    );
+    expect(text).toContain('otherwise show the user the diff and wait for their OK.');
+    expect(text).toContain('Never bypass hooks.');
+    expect(text.indexOf('## 2. Commit leftover work')).toBeLessThan(text.indexOf('## 3. Check'));
+  });
+
+  test('the branch is brought current by merging, never rebasing', () => {
+    expect(text).toContain('by merging, since rebasing a pushed branch would force a force-push');
+    expect(shellLines).toContain('git merge origin/<default>');
+    expect(text).toContain(
+      'offer `/pr-kit:fix-merge-conflicts`, or `git merge --abort` to back out.',
+    );
+  });
+
+  test('checks gate the ship, and Verification comes from their output', () => {
+    expect(text).toContain("Then run the project's full checks");
+    expect(text).toContain("Read each check's exit code.");
+    expect(text).toContain('On any failure, stop and show its output; shipping waits for a fix.');
+    expect(text).toContain(
+      "the body's Verification section is written from these, not from memory.",
+    );
+    expect(text).toContain("Verification comes from this run's checks");
+  });
+
+  test('only finished items close, and only beads close here', () => {
+    expect(text).toContain(
+      'a `Refs` item only when this branch completes it, such as the bead the work was started for. Every other `Refs` item stays a `Refs` line, open.',
+    );
+    expect(text).toContain(
+      'Close only beads here, and on the update path only items the publish did not close:',
+    );
+    expect([...anyFenceLines, ...inlineCode].filter((l) => /\bclose\b/.test(l))).toEqual([
+      'bd close <id> --reason "<one line: what shipped>"',
+    ]);
+  });
+
+  test('the task graph is pushed only when a remote exists', () => {
+    expect(text).toMatch(/bd dolt remote list\nbd dolt push/);
+    expect(text).toContain(
+      'When `bd dolt remote list` lists nothing, skip the push and say so in the report',
+    );
+    expect(text).toContain('When a push was refused after items were closed, name those items');
+  });
+
+  test('the body follows the repository template, then the reference, without attribution', () => {
+    expect(text).toContain('/reference/pr-body.md` and write the title and body by it.');
+    expect(text).toContain(
+      "sets the headings. Fill its headings by the reference's rules and remove its comment prompts.",
+    );
+    expect(text).toContain('and ask when none clearly fits.');
+    expect(text).toContain('read the last 20 merged titles');
+    expect(text).toContain('run its linter on the title before using it');
+    expect(text).toContain('`mcp__review-cycle__ledger`');
+    expect(text).toContain("entries dated on or after the branch's first commit");
+    expect(text).toContain(
+      "**Attribution:** none, unless the repository's template or contribution guide asks for disclosure, or the user does.",
+    );
+    expect(text).toContain('rewrite the body for the whole branch, not an appended note');
+  });
+
+  test('the description names the phrases that ship', () => {
+    const front = text.split('\n---\n', 1)[0];
+    for (const phrase of ['"ship it"', '"let\'s ship"', '"ship"', '"push it"']) {
+      expect(front).toContain(phrase);
+    }
+  });
+});
+
+describe('ship: the pull request body reference', () => {
+  const body = readFileSync(path.join(PR_KIT, 'reference', 'pr-body.md'), 'utf8');
+  const rules = section(body, 'Rules', 'pr-body.md');
+  // The template's own fenced headings would end section() early.
+  const template = body.slice(body.indexOf('\n## Template\n'), body.indexOf('\n## Rules\n'));
+
+  test('a repository template takes priority', () => {
+    expect(body).toContain("A repository's own `PULL_REQUEST_TEMPLATE.md` takes priority");
+  });
+
+  test('the template carries the sections a reader relies on', () => {
+    for (const heading of ['## Changes', '## Verification', '## Known issues', 'Closes <id>']) {
+      expect(template).toContain(heading);
+    }
+  });
+
+  test('the rules that keep the squash commit honest and short', () => {
+    expect(rules).toContain(
+      '**Verification:** the checks that ran for this pull request and what they printed. Never a check that was only configured',
+    );
+    expect(rules).toContain(
+      '**Leave out:** review rounds, conversation history, screenshots, and agent attribution.',
+    );
+    expect(rules).toContain('**Lines:** one line per bullet.');
+    expect(rules).toContain(
+      "**Closes:** one line per work item the branch finishes, in the tracker's own format",
+    );
+    expect(rules).toContain('A related item the branch leaves open gets a `Refs` line instead.');
+    expect(rules).toContain('or a question stays open');
+    expect(rules).toContain("**Title:** the repository's convention");
+  });
+});
+
 describe('every skill', () => {
   test('no skill tells the model to invoke a disable-model-invocation skill', () => {
     let resolved = 0;
