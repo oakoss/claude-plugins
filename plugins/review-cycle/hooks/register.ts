@@ -1867,7 +1867,7 @@ async function registerLedger($: $): Promise<void> {
   try {
     await $.tool.register({
       name: 'ledger',
-      description: `Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, \`date\` (when a cycle last settled it), \`changed\` (whether its file differs from what the last cycle to carry it reviewed; null when the working tree could not be read), and \`stale\` (settled more than 90 days ago); unless \`changed\` is false it also has \`blob\` and \`current\`, short ids for \`git diff <blob> <current>\`. Entries come ranked, those holding the most \`query\` words first and then the newest, in an answer of at most ${MAX_READ} characters unless its first entry and the answer's header together are longer: \`matched\` counts every match and \`next\`, when present, is the \`offset\` that reads on. \`unreadable\` counts stored entries this version cannot read; the next record drops them. Read-only.`,
+      description: `Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, \`date\` (when a cycle last settled it), \`changed\` (whether its file differs from what the last cycle to carry it reviewed; null when the working tree could not be read), and \`stale\` (settled more than 90 days ago); unless \`changed\` is false it also has \`blob\` and \`current\`, short ids for \`git diff <blob> <current>\`. Entries come ranked, in an answer of at most ${MAX_READ} characters unless its first entry and the answer's header together are longer: first every stale entry, query or not, since it is open again, then those holding the most \`query\` words, then the newest. \`reopened\` counts the stale entries, \`matched\` the rest, and \`next\`, when present, is the \`offset\` that reads on. \`unreadable\` counts stored entries this version cannot read; the next record drops them. Read-only.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -1879,7 +1879,7 @@ async function registerLedger($: $): Promise<void> {
           query: {
             type: 'string',
             description:
-              'Only the entries whose finding or reason holds any of these words (three characters or more).',
+              'Only the entries whose finding or reason holds any of these words (three characters or more), plus every stale one, ranked first.',
           },
           offset: { type: 'integer', minimum: 0, description: 'Where to start: a `next` value.' },
         },

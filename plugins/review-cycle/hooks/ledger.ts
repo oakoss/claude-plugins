@@ -325,24 +325,40 @@ export function select(entries: Entry[], paths?: readonly string[]): Entry[] {
 // dozens of entries, and a read loads every one into the reviewing session.
 export const MAX_READ = 8000;
 
+export type Ranked = { entries: Entry[]; matched: number; reopened: number };
+
 // The entries whose finding or reason holds any of the query's words of three
 // characters or more, those holding the most words first, then the newest, then
 // the last recorded. A reader stops paging once entries stop bearing on the
 // change, so the order has to put the closest first. No words keeps every entry.
-export function ranked(entries: readonly Entry[], query = ''): Entry[] {
+// Every entry `reopen` holds comes back, query or not, ahead of all others so a
+// reader that stops early still sees it, and counts as `reopened`, not `matched`.
+export function ranked(
+  entries: readonly Entry[],
+  query = '',
+  reopen: (e: Entry) => boolean = () => false,
+): Ranked {
   const words = query
     .toLowerCase()
     .split(/[^\p{L}\p{N}_.#/-]+/u)
     .map((w) => w.replaceAll(/^[.-]+|[.-]+$/g, ''))
     .filter((w) => w.length >= 3);
-  return entries
-    .map((e, at) => {
-      const text = `${e.finding} ${e.reason}`.toLowerCase();
-      return { e, at, score: words.filter((w) => text.includes(w)).length };
-    })
-    .filter((r) => words.length === 0 || r.score > 0)
-    .toSorted((a, b) => b.score - a.score || b.e.date.localeCompare(a.e.date) || b.at - a.at)
-    .map((r) => r.e);
+  const rows = entries.map((e, at) => {
+    const text = `${e.finding} ${e.reason}`.toLowerCase();
+    const score = words.filter((w) => text.includes(w)).length;
+    return { e, at, score, open: reopen(e) };
+  });
+  const kept = rows
+    .filter((r) => r.open || words.length === 0 || r.score > 0)
+    .toSorted(
+      (a, b) =>
+        Number(b.open) - Number(a.open) ||
+        b.score - a.score ||
+        b.e.date.localeCompare(a.e.date) ||
+        b.at - a.at,
+    );
+  const reopened = kept.filter((r) => r.open).length;
+  return { entries: kept.map((r) => r.e), matched: kept.length - reopened, reopened };
 }
 
 // The rows from `offset` whose JSON array fits in `max`, always at least one;

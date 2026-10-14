@@ -1577,6 +1577,7 @@ describe('the findings ledger', () => {
     expect(read).toEqual({
       total: 1,
       matched: 1,
+      reopened: 0,
       unreadable: 0,
       entries: [
         {
@@ -1600,6 +1601,7 @@ describe('the findings ledger', () => {
     expect(JSON.parse(await ledger($, { paths: ['b.ts'] }))).toEqual({
       total: 1,
       matched: 0,
+      reopened: 0,
       unreadable: 0,
       entries: [],
     });

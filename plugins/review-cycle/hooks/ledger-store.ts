@@ -67,10 +67,13 @@ export async function readLedger(
   now: number,
 ): Promise<Record<string, unknown>> {
   const stored = storedOf(await store.get(keyOf(common)));
-  const shown = ranked(select(stored.entries, read.paths), read.query);
+  // A stale entry is open again whatever the query, so the cycle must see it.
+  const found = ranked(select(stored.entries, read.paths), read.query, (e) => isStale(e.date, now));
+  const shown = found.entries;
   const status: Record<string, unknown> = {
     total: stored.entries.length,
-    matched: shown.length,
+    matched: found.matched,
+    reopened: found.reopened,
     unreadable: stored.unreadable,
   };
   let current: Map<string, string> | null = null;

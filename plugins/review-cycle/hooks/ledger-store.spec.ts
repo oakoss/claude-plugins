@@ -226,6 +226,19 @@ describe('readLedger', () => {
     const none = await readLedger(store, blobs, COMMON, { query: 'parser' }, NOW);
     expect(none).toMatchObject({ total: 60, matched: 0, entries: [] });
   });
+  test('returns a stale entry the query misses first, counted as reopened', async () => {
+    const { store } = fakeStore();
+    const old = { ...DEFERRED, finding: 'parser drops a field' };
+    await record(store, tree({ 'a.ts': A }), rec({ add: [old] }), NOW - (EXPIRY_DAYS + 1) * DAY);
+    await record(store, tree({ 'a.ts': A }), rec({ add: [{ ...DEFERRED, finding: 'retry 1' }] }));
+    const read = await readLedger(store, tree({ 'a.ts': A }), COMMON, { query: 'retry' }, NOW);
+    const rows = read.entries as { finding: string; stale: boolean }[];
+    expect(rows.map((r) => r.finding)).toEqual(['parser drops a field', 'retry 1']);
+    expect(rows[0]?.stale).toBe(true);
+    expect(read).toMatchObject({ matched: 1, reopened: 1 });
+    const none = await readLedger(store, tree({ 'a.ts': A }), COMMON, { query: 'nomatch' }, NOW);
+    expect(none).toMatchObject({ matched: 0, reopened: 1 });
+  });
   test('keeps every whole answer within MAX_READ, whatever the row size', async () => {
     const over: number[] = [];
     for (let len = 0; len < 150; len += 3) {
@@ -250,6 +263,7 @@ describe('readLedger', () => {
     expect(await read(store, tree({}))).toEqual({
       total: 0,
       matched: 0,
+      reopened: 0,
       unreadable: 1,
       entries: [],
     });

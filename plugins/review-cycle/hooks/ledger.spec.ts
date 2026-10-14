@@ -286,21 +286,23 @@ const settledOn = (date: string, over: Partial<NewEntry>): Entry => ({
   ...recorded(finding(over)),
   date,
 });
+const order = (entries: Entry[], query?: string) => ranked(entries, query).entries;
+const old = (e: Entry) => e.date < '2026-06-01';
 
 describe('ranked', () => {
   const retry = settledOn(DATE, {});
   const comma = settledOn(DATE, { finding: 'a comma lets the offer grant', reason: 'fixed later' });
   const codex = settledOn(DATE, { finding: 'probe', reason: 'same on main', source: 'codex' });
   test('keeps the entries whose finding or reason holds any word, not the source', () => {
-    expect(ranked([retry, comma, codex], 'COMMA dependency')).toEqual([comma, retry]);
-    expect(ranked([retry, comma, codex], 'codex')).toEqual([]);
+    expect(order([retry, comma, codex], 'COMMA dependency')).toEqual([comma, retry]);
+    expect(order([retry, comma, codex], 'codex')).toEqual([]);
   });
   test('reads only words of three characters or more, without edge punctuation', () => {
     // "of" would match only "offer"; "fix" matches "fixed" only.
-    expect(ranked([retry, comma], 'of')).toEqual([comma, retry]);
-    expect(ranked([retry, comma], 'fix')).toEqual([comma]);
-    expect(ranked([retry, comma], 'comma.')).toEqual([comma]);
-    expect(ranked([retry, comma])).toEqual([comma, retry]);
+    expect(order([retry, comma], 'of')).toEqual([comma, retry]);
+    expect(order([retry, comma], 'fix')).toEqual([comma]);
+    expect(order([retry, comma], 'comma.')).toEqual([comma]);
+    expect(order([retry, comma])).toEqual([comma, retry]);
   });
   test('puts the most words first, then the newest, then the last recorded', () => {
     const one = settledOn('2026-10-01', { finding: 'merge withheld' });
@@ -309,7 +311,30 @@ describe('ranked', () => {
     const later = settledOn('2026-10-02', { finding: 'merge withheld once more' });
     // A kept entry moves to the end of the store with its old date, so store
     // order alone does not put the newest first.
-    expect(ranked([newer, later, one, two], 'merge condition')).toEqual([two, later, newer, one]);
+    expect(order([newer, later, one, two], 'merge condition')).toEqual([two, later, newer, one]);
+  });
+  test('puts every reopened entry first, query or not, counted apart from the matches', () => {
+    const staleMatch = settledOn('2026-01-01', { finding: 'merge withheld' });
+    const staleMiss = settledOn('2026-03-01', { finding: 'parser drops a field' });
+    const freshMatch = settledOn('2026-10-01', { finding: 'merge again' });
+    const freshMiss = settledOn('2026-10-02', { finding: 'parser again' });
+    const all = [freshMatch, freshMiss, staleMatch, staleMiss];
+    expect(ranked(all, 'merge', old)).toEqual({
+      entries: [staleMatch, staleMiss, freshMatch],
+      matched: 1,
+      reopened: 2,
+    });
+    expect(ranked(all, 'nomatch', old)).toEqual({
+      entries: [staleMiss, staleMatch],
+      matched: 0,
+      reopened: 2,
+    });
+    // With no query the newer fresh entries would otherwise sort first.
+    expect(ranked(all, '', old)).toEqual({
+      entries: [staleMiss, staleMatch, freshMiss, freshMatch],
+      matched: 2,
+      reopened: 2,
+    });
   });
 });
 

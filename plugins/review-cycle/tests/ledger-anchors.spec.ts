@@ -13,9 +13,14 @@ test('every brief carries the ledger, and changed code reopens an entry', () => 
   // A busy file holds dozens of entries; the read is capped, so the skill narrows it.
   expect(text).toContain('as `query`, a few words naming what the change touches');
   expect(text).toContain(
-    'read on with it as `offset` only while the entries still bear on the change',
+    'First read on, passing each `next` as `offset`, until you have every reopened entry.',
   );
-  expect(text).toContain('and drop `query` when it matched nothing');
+  expect(text).toContain(
+    'if `matched` is 0, read again without `query` starting at offset `reopened`, whether or not a `next` was given',
+  );
+  expect(text).toContain(
+    'Either way, keep reading on only while the entries still bear on the change.',
+  );
   expect(text).toContain('Append the entries that bear on this change');
   expect(text).toContain('a `settled in earlier cycles` block to every leg');
   expect(text).toContain('the test, type and spec legs as much as code-reviewer and Codex');
