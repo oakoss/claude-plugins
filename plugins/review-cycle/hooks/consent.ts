@@ -585,6 +585,8 @@ const SUBORDINATE = new Set([
   'after',
   'without',
 ]);
+// In a request only: an offer that names one still names its step for a decline to hold.
+const PROVISO = / (?:provided|assuming|as long as) /;
 
 // A clause that only agrees: "ok", "sounds good".
 const AGREE =
@@ -609,8 +611,22 @@ const BARE_RETRACT =
   /^(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t)\b[\s,.!;:…—-]*)+$/i;
 const DECLINED =
   /^\s*(?:(?:ok|okay|yes|yeah|sure|alright|great|cool|perfect)[\s,]+)*(?:do\s+not|don['’]?t|never)\s+merge\b/i;
-// A clause opening with one of these makes the whole prompt conditional.
-const CONDITION = /^\s*(if|when|once|after|unless|until|as soon as)\b/i;
+// Opening any clause of a typed sentence, these make the whole prompt conditional.
+const CLAUSE_CONDITION = /^\s*(if|when|once|after|unless|until|as soon as)\b/i;
+// These do only where they open the sentence ("Only if CI passes."): later in
+// one ("force push it, but not until CI passes") they withhold that sentence alone.
+const SENTENCE_CONDITION =
+  /^\s*(?:(?:and|then|but)\s+)*(?:only\s+)?(?:if|when|once|after|unless|until|as soon as|provided|assuming|as long as|not (?:before|until))\b/i;
+// Anywhere in an offer's question or after it, a condition a yes does not meet.
+const OFFER_CONDITION =
+  /\b(?:if|when|whenever|once|until|unless|after|before|provided|assuming|as long as|as soon as)\b/i;
+// A condition the yes itself meets: "If that looks right", "When you're ready", "If you're happy with it".
+// Not "when it's ready" or "once that works", which wait on the work.
+const APPROVAL =
+  /\b(?:(?:if|when|once|assuming|provided|as long as)\s+(?:so|yes|you(?:['’](?:re|d)|\s+are)?\s+(?:ready|happy|ok|okay|fine|agree|approve|want|like))|(?:if|assuming|provided|as long as)\s+(?:that|it|this|everything)(?:['’]s|\s+is)?\s+(?:ok|okay|fine|good|right|looks?\s+(?:good|right|ok|okay|fine)|sounds?\s+(?:good|right|ok|okay|fine)|works?\s+for\s+you))(?:\s+(?:with|for|to)\s+(?:it|that|this|you|them))?(?=\s*(?:[,.?!;]|$))(?![\s,]*(?:and|or|but)\b)/gi;
+// "merge #168 when CI passes" asks for a merge once ready, which waits on the condition itself.
+const READY_MERGE =
+  /(\bmerge\b[^,;?.!]*?)\s(?:when|once|after|if|as soon as)\s+(?:(?:it|it['’]s|its|this|that|(?:the\s+)?pr(?:\s+#?\d+)?|#\d+|(?:the\s+)?ci|everything|(?:(?:the|its|all)\s+)?(?:checks|tests))(?:\s+(?:is|are))?\s+)?(?:ready(?:\s+to\s+merge)?|green|passing|passes|pass|succeeds|succeed|goes\s+green|turns\s+green)\b(?![\s,]*(?:and|or|but)\b)/gi;
 // A sentence opening with one of these asks something rather than asking for it.
 const QUESTION = new Set([
   'why',
@@ -855,7 +871,13 @@ function grammarGrant(
     into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
     return 'ready';
   }
-  if (w.some((x) => SUBORDINATE.has(x)) || asSoonAs(w) !== -1) return 'mood';
+  if (
+    w.some((x) => SUBORDINATE.has(x)) ||
+    asSoonAs(w) !== -1 ||
+    (verbs === REQUESTED && PROVISO.test(` ${w.join(' ')} `))
+  ) {
+    return 'mood';
+  }
   const parts: string[][] = [[]];
   for (const word of w) {
     if (word === 'and' || word === 'then') parts.push([]);
@@ -979,10 +1001,36 @@ function chosen(question: string): string {
   return agents ? `${first}?` : question;
 }
 
+// Read on the raw words, before a rewrite can split a condition from its question.
+function conditional(closing: string): boolean {
+  const said = sentences(closing.replaceAll(/`[^`\n]*`/g, 'it').replaceAll('\n', ' '));
+  const first = said.findIndex((s) => s.trim().endsWith('?'));
+  return (
+    first !== -1 &&
+    said
+      .slice(first)
+      // Only the question itself asks for a merge once ready; a condition after it waits on the work.
+      .some((s) =>
+        OFFER_CONDITION.test(
+          (s.trim().endsWith('?') ? s.replace(READY_MERGE, '$1') : s).replace(APPROVAL, ''),
+        ),
+      )
+  );
+}
+
+// The answer's last three lines, which an offer is read from.
+export const closingOf = (answer: string): string =>
+  answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+
+// What a yes grants: what the offer named, unless it set a condition a yes does not meet.
+function accepted(answer: string, heard?: Set<Family>): Grant {
+  return conditional(closingOf(answer)) ? settled(fresh()) : asked(answer, heard);
+}
+
 // The verbs the previous answer's closing questions offered to do.
 function asked(answer: string, heard?: Set<Family>): Grant {
   const g = fresh();
-  const closing = answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  const closing = closingOf(answer);
   // Matched on the agent's own words, before a backticked name reads as "it":
   // "Can we push `--dry-run` to main?" is no HOW_WE question.
   for (const s of sentences(unquote(closing).replaceAll(/;(?=\s*(and|then)\b)/gi, ','))) {
@@ -997,7 +1045,7 @@ function asked(answer: string, heard?: Set<Family>): Grant {
   // Only here, in the agent's offer: a user's "push it to `later`" defers. A
   // ref ends on a word character, so a sentence's closing period stays, and
   // one joining hand-back words ("rather/prefer") stays words.
-  const named = forcePhrase(answer.trim().split('\n').filter(Boolean).slice(-3).join('\n'))
+  const named = forcePhrase(closing)
     // A path is deleted too, so a backticked or slashed name is a branch only
     // beside "branch" or a remote; a plain word is never read as one.
     .replaceAll(
@@ -1054,7 +1102,7 @@ const DELETE_IT = new RegExp(
 
 function offersDelete(answer: string): boolean {
   const heard = new Set<Family>();
-  asked(answer, heard);
+  accepted(answer, heard);
   return [...heard].some((f) => f.forms[0] === 'delete');
 }
 
@@ -1137,11 +1185,11 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   // "No problem" and "no worries" agree; they retract nothing.
   const text = prompt.trim().replaceAll(/\bno (problem|worries)\b/gi, 'ok');
   if (AFFIRMATIVE.test(text)) {
-    const offer = asked(previousAnswer);
+    const offer = accepted(previousAnswer);
     return settled({ ...offer, ...namedFrom(offer, '', previousAnswer) });
   }
   if (CONTINUE_REPLY.test(text))
-    return settled({ ...fresh(), finish: asked(previousAnswer).finish });
+    return settled({ ...fresh(), finish: accepted(previousAnswer).finish });
   // "delete it", answering an offer to delete a branch, names that branch;
   // only as the whole reply, since "delete it, meaning the TODO" names another.
   const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
@@ -1201,10 +1249,11 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
-    const parts = clauses(sentence);
+    // Trimmed, so "But only if CI passes." opens its own sentence rather than a second clause.
+    const parts = clauses(sentence.trim());
     for (const [i, part] of parts.entries()) {
       const c = part.replace(CONTRAST, '');
-      if (CONDITION.test(c)) return NO_GRANT;
+      if (CLAUSE_CONDITION.test(c) || (i === 0 && SENTENCE_CONDITION.test(c))) return NO_GRANT;
       if (HOLD.test(c)) withheld = true;
       if (withheld) break;
       if (carry === 'described' && continues(c)) continue;
@@ -1286,15 +1335,7 @@ function unnamedMerge(typed: string, previousAnswer: string): readonly string[] 
   if (/#?\b\d+\b/.test(text) || /\b(version|release)\s+(pr|pull\s+request)\b/i.test(text)) {
     return [NAMED_ELSEWHERE];
   }
-  const closing = sentences(
-    previousAnswer
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .slice(-3)
-      .join('\n')
-      .replaceAll(/;(?=\s*or\b)/gi, ','),
-  )
+  const closing = sentences(closingOf(previousAnswer).replaceAll(/;(?=\s*or\b)/gi, ','))
     .map((q) => (q.trim().endsWith('?') ? chosen(q) : q))
     .join('\n');
   // The question it answers decides first: "Release by merging #130?" after a

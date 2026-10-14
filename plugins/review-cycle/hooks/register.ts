@@ -20,6 +20,7 @@ import {
   type Classification,
 } from './command';
 import {
+  closingOf,
   covers,
   grantOf,
   holdOf,
@@ -399,14 +400,8 @@ const MAX_MISSES = 20;
 const MISS_TEXT = 300;
 const clip = (s: string) => s.slice(0, MISS_TEXT);
 
-// The question the answer ended on, which a reply like "yes" answers.
-// The answer's last three lines, which the grammar reads an offer from.
-function closingOf(answer: string): string {
-  return answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
-}
-
-// The question those lines end on. Sentences split at a mark before a space,
-// so a version in backticks ("Release `v0.25.0`?") stays whole.
+// The question the answer's closing lines end on, which a reply like "yes" answers.
+// Sentences split at a mark before a space, so "Release `v0.25.0`?" stays whole.
 function questionOf(closing: string): string {
   const sentences = closing.split(/(?<=[.!?])\s+/);
   return sentences.findLast((s) => s.trim().endsWith('?'))?.trim() ?? '';
