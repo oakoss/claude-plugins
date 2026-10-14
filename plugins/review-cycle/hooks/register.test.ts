@@ -1557,7 +1557,7 @@ describe('the findings ledger', () => {
     await ($ as any).session.start({ source: 'startup' });
     expect(w.registered).toContain('status');
   });
-  test('an entry recorded is read back with its blob, unchanged until the file is', async ($, on) => {
+  test('an entry recorded is read back unchanged until the file is, then with ids to diff', async ($, on) => {
     const w = fakeWorld(on);
     const store = fakeStore(on);
     expect(JSON.parse(await record($, { entries: [DEFERRED] }))).toEqual({
@@ -1576,14 +1576,14 @@ describe('the findings ledger', () => {
     const blob = blobOf('one');
     expect(read).toEqual({
       total: 1,
+      matched: 1,
+      reopened: 0,
       unreadable: 0,
       entries: [
         {
           ...DEFERRED,
           id: expect.stringMatching(/^[0-9a-f]{8}$/),
-          blob,
           date: '2026-09-26',
-          current: blob,
           changed: false,
           stale: false,
         },
@@ -1591,14 +1591,54 @@ describe('the findings ledger', () => {
     });
     w.work['a.ts'] = 'two';
     const after = JSON.parse(await ledger($)).entries[0];
-    expect(after).toMatchObject({ blob, current: blobOf('two'), changed: true });
+    expect(after).toMatchObject({
+      blob: blob.slice(0, 12),
+      current: blobOf('two').slice(0, 12),
+      changed: true,
+    });
     delete w.work['a.ts'];
     expect(JSON.parse(await ledger($)).entries[0]).toMatchObject({ current: null, changed: true });
     expect(JSON.parse(await ledger($, { paths: ['b.ts'] }))).toEqual({
       total: 1,
+      matched: 0,
+      reopened: 0,
       unreadable: 0,
       entries: [],
     });
+    expect(JSON.parse(await ledger($, { query: 'parser' })).matched).toBe(0);
+    expect(await ledger($, { query: 3 })).toBe('review-cycle ledger: `query` must be a string.');
+    expect(await ledger($, { offset: -1 })).toBe(
+      'review-cycle ledger: `offset` must be a whole number, 0 or more.',
+    );
+    expect(await ledger($, { offset: 1.5 })).toBe(
+      'review-cycle ledger: `offset` must be a whole number, 0 or more.',
+    );
+    expect(JSON.parse(await ledger($, { offset: 0 })).total).toBe(1);
+  });
+  test('a long ledger is read a page at a time, as one line of JSON', async ($, on) => {
+    fakeWorld(on);
+    fakeStore(on);
+    const reason = 'r'.repeat(300);
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      ...DEFERRED,
+      finding: `retry ${i}`,
+      reason,
+    }));
+    await record($, { entries });
+    const raw = await ledger($, { query: 'retry' });
+    expect(raw).not.toContain('\n');
+    const first = JSON.parse(raw);
+    expect(raw.length).toBeLessThanOrEqual(8000);
+    expect(first.matched).toBe(40);
+    expect(first.next).toBe(first.entries.length);
+    const seen: string[] = first.entries.map((e: { id: string }) => e.id);
+    for (let next = first.next; next !== undefined;) {
+      const page = JSON.parse(await ledger($, { query: 'retry', offset: next }));
+      seen.push(...page.entries.map((e: { id: string }) => e.id));
+      next = page.next;
+    }
+    expect(new Set(seen).size).toBe(40);
+    expect(seen).toHaveLength(40);
   });
   test('a working tree git cannot list is said on read, and records nothing', async ($, on) => {
     const w = fakeWorld(on);
