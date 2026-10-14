@@ -37,7 +37,7 @@ jobs:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -68,7 +68,7 @@ jobs:
       # Installs pnpm (version from `packageManager`), Node, and the
       # dependencies in one step; `require-lockfile` is `--frozen-lockfile`.
       - name: Setup pnpm and Node
-        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         with:
           cache: true
           require-lockfile: true
@@ -91,7 +91,7 @@ jobs:
       contents: write
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
@@ -118,7 +118,7 @@ jobs:
           persist-credentials: true
 
       - name: Setup pnpm and Node
-        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         with:
           cache: true
           require-lockfile: true
