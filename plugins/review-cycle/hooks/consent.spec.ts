@@ -1163,6 +1163,8 @@ describe('a message typed into the running turn', () => {
     'also fix the typo in the README',
     'thanks',
     'ok',
+    'nvm use 20 first',
+    'nvm.sh, then push it',
     'and open a PR too',
     'push it',
     'No problem',
@@ -1194,6 +1196,10 @@ describe('a message typed into the running turn', () => {
     'oh wait, never mind',
     'scratch that',
     'Ok, not yet',
+    'nvm',
+    'sorry, never mind',
+    'merge it, nvm',
+    'actually, don’t',
   ])('%s replaces it', (prompt) => {
     expect(dropsGrant(prompt)).toBe(true);
   });
@@ -1255,6 +1261,31 @@ describe('a retraction cancels the sentence it retracts', () => {
     ['open a PR. push it. never mind, merge it', NONE],
     ['open a PR. never mind. push it. never mind', NONE],
     ['open a PR. never mind. push it', PUSH],
+    // Other words for it, and a filler word before one.
+    ['Commit it. Merge it. nvm.', NONE],
+    ['open a PR. push it. nvm. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. oh wait, never mind. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. sorry, never mind. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. actually never mind', NONE],
+    ['open a PR. push it. actually, don’t', NONE],
+    ['open a PR. push it. hmm, no wait. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. um, nope. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. uh, wait. merge it', { ...PR, merge: true }],
+    ['push it. ok, never mind', NONE],
+    ['push it. please, never mind', NONE],
+    ['open a PR. push it. ok nvm. merge it', { ...PR, merge: true }],
+    ['open a PR. push it. okay, no wait. merge it', { ...PR, merge: true }],
+    ['merge it, nvm', NONE],
+    ['merge it\nnvm\npush it', PUSH],
+    ['merge it, never mind', NONE],
+    // The Node version manager, not a retraction.
+    ['nvm use 20, then push it', PUSH],
+    ['push it. nvm use 20 first', PUSH],
+    ['push it. ~/.nvm', PUSH],
+    ['nvm.sh, then push it', PUSH],
+    ['push it. nvm.sh', PUSH],
+    // A filler word after the cue makes it say more, so everything is retracted.
+    ['push it. commit it. no, sorry. open a PR', PR],
   ])('%s', (prompt, grant) => {
     expect(grantOf(prompt)).toEqual(grant);
   });

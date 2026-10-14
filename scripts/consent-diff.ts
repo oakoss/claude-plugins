@@ -182,6 +182,16 @@ const TAILS = [
   '. push it. never mind. thanks',
   '. thanks. never mind. push it',
   '. never mind. merge it. never mind',
+  // Retractions in other words, and opened by a filler word.
+  '. nvm',
+  '. nvm, push it',
+  '. oh wait, never mind',
+  '. sorry, never mind. push it',
+  '. actually never mind',
+  '. actually, don’t',
+  '. hmm, no wait. merge it',
+  '. ok, never mind',
+  '. please, no wait. push it',
   // A condition in a sentence of its own.
   '. Only if CI passes.',
   '. Not before CI passes.',
