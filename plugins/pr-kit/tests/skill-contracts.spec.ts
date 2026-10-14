@@ -345,10 +345,14 @@ describe('ship: what it may do unasked', () => {
   test('the body follows the repository template, then the reference, without attribution', () => {
     expect(text).toContain('/reference/pr-body.md` and write the title and body by it.');
     expect(text).toContain(
-      "sets the headings. Fill its headings by the reference's rules and remove its comment prompts.",
+      "read every file or directory the `find` lists; it sets the headings. Fill its headings by the reference's rules and remove its comment prompts.",
     );
     expect(text).toContain('and ask when none clearly fits.');
-    expect(text).toContain('read the last 20 merged titles');
+    // Fenced, because a model runs fenced commands but skipped the same step as a bullet.
+    expect(shellLines).toContain(
+      "find .github . docs -maxdepth 1 -iname 'pull_request_template*' 2>/dev/null || true",
+    );
+    expect(shellLines).toContain('gh pr list --state merged --limit 20 --json title');
     expect(text).toContain('run its linter on the title before using it');
     expect(text).toContain('`mcp__review-cycle__ledger`');
     expect(text).toContain("entries dated on or after the branch's first commit");

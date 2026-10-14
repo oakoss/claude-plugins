@@ -79,10 +79,15 @@ git push -u origin <branch>
 
 ## 6. Write the pull request
 
-Read `${CLAUDE_PLUGIN_ROOT}/reference/pr-body.md` and write the title and body by it.
+Read `${CLAUDE_PLUGIN_ROOT}/reference/pr-body.md` and write the title and body by it. Then look up the repository's own template and recent titles, from the repository root. The listing is the result: `find` exits 1 when `.github` or `docs` is missing.
 
-- **Repository template first:** a `PULL_REQUEST_TEMPLATE.md` in `.github/`, the repository root or `docs/` (any letter case), or a `PULL_REQUEST_TEMPLATE/` directory, sets the headings. Fill its headings by the reference's rules and remove its comment prompts. From a directory of templates, use the one named for the change (`bug.md`, `feature.md`), and ask when none clearly fits.
-- **Title convention:** read the last 20 merged titles (`gh pr list --state merged --limit 20 --json title`) and match their form.
+```bash
+find .github . docs -maxdepth 1 -iname 'pull_request_template*' 2>/dev/null || true
+gh pr list --state merged --limit 20 --json title
+```
+
+- **Repository template first:** read every file or directory the `find` lists; it sets the headings. Fill its headings by the reference's rules and remove its comment prompts. From a directory of templates, use the one named for the change (`bug.md`, `feature.md`), and ask when none clearly fits.
+- **Title convention:** match the form of the merged titles.
 - **Title check:** when the repository lints commit messages (a `commitlint` config), run its linter on the title before using it; the title becomes the squash commit's subject.
 - **Known issues:** when the `mcp__review-cycle__ledger` tool exists, read it for the branch's changed files (`git diff --name-only origin/<default>...HEAD`) and list the entries dated on or after the branch's first commit. Add what this conversation deferred that the ledger lacks.
 - **Attribution:** none, unless the repository's template or contribution guide asks for disclosure, or the user does. Then disclose in the slot the repository names.
