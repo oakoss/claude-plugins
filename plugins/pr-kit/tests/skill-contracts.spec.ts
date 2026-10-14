@@ -314,7 +314,7 @@ describe('ship: what it may do unasked', () => {
 
   test('checks gate the ship, and Verification comes from their output', () => {
     expect(text).toContain("Then run the project's full checks");
-    expect(text).toContain("Read each check's exit code.");
+    expect(text).toContain('Run each check unpiped and read its exit code');
     expect(text).toContain('On any failure, stop and show its output; shipping waits for a fix.');
     expect(text).toContain(
       "the body's Verification section is written from these, not from memory.",

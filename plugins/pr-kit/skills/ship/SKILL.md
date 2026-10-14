@@ -44,7 +44,7 @@ git merge origin/<default>
 
 Run only the merge when the count is above zero. On a conflict, stop with the merge in progress and offer `/pr-kit:fix-merge-conflicts`, or `git merge --abort` to back out.
 
-Then run the project's full checks: the commands its `AGENTS.md` or `CLAUDE.md` names for "done", else its pre-commit and CI configuration, else `package.json` scripts. Typically: the test suite, typecheck, lint, format check, and any validator or bump-file check the repository uses. Read each check's exit code. On any failure, stop and show its output; shipping waits for a fix. Keep each command and the line it printed (counts, exit status): the body's Verification section is written from these, not from memory.
+Then run the project's full checks: the commands its `AGENTS.md` or `CLAUDE.md` names for "done", else its pre-commit and CI configuration, else `package.json` scripts. Typically: the test suite, typecheck, lint, format check, and any validator or bump-file check the repository uses. Run each check unpiped and read its exit code: piped into `tail` or `head`, `$?` is that command's status, not the check's. For a long log, send it to a file (`<check> >| <log> 2>&1; echo $?`, where `>|` overwrites under `noclobber`) and read the file's end. On any failure, stop and show its output; shipping waits for a fix. Keep each command and the line it printed (counts, exit status): the body's Verification section is written from these, not from memory.
 
 ## 4. Close finished tracker items
 
