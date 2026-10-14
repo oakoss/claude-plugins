@@ -4,6 +4,28 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.30.0 (2026-10-14)
+
+### Added
+
+A message you type while the agent is still working no longer cancels the push, pull request or merge your earlier message asked for. "Lets file the beads" sent during a ship used to replace "ship it", so the gate refused the push halfway through. Now a queued message adds what it asks for to the turn's grant. It still replaces the grant when a sentence holds, retracts or stops ("ok, wait", "not yet", "never mind", "scratch that", "please stop"), or when it names a step without asking for it ("should we push?"). Any new message still stops a step the gate is checking at that moment, so the agent reads it first; a push stopped that way runs when the agent tries it again.
+
+### Fixed
+
+A yes no longer grants a step the agent offered only on a condition. "Should I merge #168, if the tests pass?", "When CI passes, should I merge #168?", "Should I merge #168? Only if CI passes, though." and "Can we push? Not until CI is green." used to let a plain "yes" run the step at once; now that yes grants nothing. The gate reads the agent's last three lines from their first question on, before rewriting any of it, and any of these words there withholds the offer: "if", "when", "whenever", "once", "until", "unless", "after", "before", "provided", "assuming", "as long as" or "as soon as". A push, pull request, approval or release then goes to the model check, which reads the offer's last six lines; a merge waits until you ask for it outright. This also withholds some offers where the word only orders the steps, such as "Should I push? After that, CI will run.". A condition set before the question, or in other words ("wait for CI, then merge"), is not read.
+
+Two kinds of condition count as met by the yes. An approval phrase that ends its clause: "If that looks right, should I push?", "When you're ready", "If so", "If it looks good", "If you're happy with it", "If that works for you"; "when it's ready" and "once that works" wait on the work and withhold. And a merge once ready, in the question itself: "Should I merge #168 when CI passes?" still grants it with `--auto`. A "not yet" or "hold off" after a conditional offer still holds the step it named.
+
+Typed requests read more of the same words: "merge 168, provided CI passes", "merge 168, assuming CI passes", "merge 168, as long as the tests pass", "merge 168. Only if CI passes." and "push it. But only if CI passes." grant nothing.
+
+A read of the findings ledger now returns at most 8,000 characters, unless its first entry and the answer's header together are longer, where it used to return every entry for the files named: a file reviewed often held dozens, and one read of `consent.ts` loaded 52,835 characters into the reviewing session. The tool takes a `query`, words matched against each entry's finding and reason, and ranks the matches, those holding the most query words first and then the newest. Every entry settled more than 90 days ago comes back whatever the query, ahead of every other entry, since it is open again. `reopened` counts those stale entries, `matched` the rest, and `next` is the `offset` that reads on. Rows are written as compact JSON, and carry `blob` and `current`, as short ids for `git diff`, unless the file is known unchanged. The review skill now passes a `query` naming what the change touches and carries the entries that bear on it, instead of every entry for the changed files.
+
+"nvm", "oh wait, never mind", "sorry, never mind", "actually never mind", "actually, don’t" and "hmm, no wait" now retract what came before them, as "never mind" does. "Commit it. Merge it. nvm." and "merge it, nvm" used to grant the merge. An "nvm" that stands alone reads as "never mind", while "nvm use 20" is left as the Node version manager. A filler word (ok, okay, please, oh, sorry, hmm, um, uh, actually) may open a retraction, so "ok, never mind" and "please, never mind" now retract, and "oh no" and "um, no" retract as "no" does. A message typed while the agent is working that says "nvm" or "actually, don’t" now replaces the turn's grant.
+
+The review skill loads less into the session: its file is 60,353 characters where the last release's was 75,831, and its description, which every session's skill listing carries, is less than half as long. The cut removes measurement history (which CLI version showed what, which cycle measured it), rationale, and rules stated twice; every instruction stays, and so does every phrase the plugin's prose anchors pin. How a review runs does not change.
+
+A subagent command that names `gh` without running it is no longer refused as a pull request step. The gate read `gh` followed by any word as a gh call, so `for c in none gh docs`, `which gh go` and `[ -x /usr/local/bin/gh ]` stopped review subagents with "subagents do not commit, push, open, merge…". Now `which`, `type`, `whereis`, `test` and `[` count as data for both the gh check and the commit check, so `type git commit` is no longer refused either. For the gh check, `[[` and a `for` or `select` loop's `in` list count as data too, and so does any of them after `if`, `while`, `!` or `do`, as in `if [ -x /usr/local/bin/gh ]; then`. A gh call in a loop's body, in zsh's `for x (a b) gh …` short form, or after `&&` is still judged.
+
 ## 0.29.0 (2026-10-13)
 
 ### Added
