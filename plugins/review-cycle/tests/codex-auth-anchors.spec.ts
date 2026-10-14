@@ -25,7 +25,7 @@ import path from 'node:path';
 
 import { expect, test } from 'vitest';
 
-import { expectAnchors, REPO_ROOT, skillText } from './agents';
+import { expectAnchors, REPO_ROOT } from './agents';
 
 const REVIEW = 'plugins/review-cycle/skills/review/SKILL.md';
 const REVIEW_PR = 'plugins/review-cycle/skills/review-pr/SKILL.md';
@@ -44,8 +44,7 @@ function read(rel: string): string {
   const file = path.join(REPO_ROOT, rel);
   if (!statSync(file, { throwIfNoEntry: false })?.isFile())
     throw new Error(`${rel} — missing or not a regular file`);
-  // The review skill with the files it points at, as an agent reads it.
-  return rel === REVIEW ? skillText('review') : readFileSync(file, 'utf8');
+  return readFileSync(file, 'utf8');
 }
 
 // Soft, so every banned phrase present is reported on its own.

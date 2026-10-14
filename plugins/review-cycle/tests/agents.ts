@@ -7,16 +7,10 @@ import { expect } from 'vitest';
 export const REPO_ROOT = path.resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 export const AGENTS_DIR = path.join(REPO_ROOT, 'plugins/review-cycle/agents');
 
-// A line naming `${CLAUDE_PLUGIN_ROOT}/skills/<skill>/<file>.md` to read is
-// replaced by that file, so anchors see the text an agent following the skill reads.
-const POINTER = /^.*Read `\$\{CLAUDE_PLUGIN_ROOT\}\/skills\/([\w-]+)\/([\w-]+\.md)`.*\n/gm;
-
 export function skillText(skill: string): string {
-  const dir = path.join(REPO_ROOT, 'plugins/review-cycle/skills', skill);
-  return readFileSync(path.join(dir, 'SKILL.md'), 'utf8').replaceAll(
-    POINTER,
-    (_line: string, owner: string, file: string) =>
-      readFileSync(path.join(REPO_ROOT, 'plugins/review-cycle/skills', owner, file), 'utf8'),
+  return readFileSync(
+    path.join(REPO_ROOT, 'plugins/review-cycle/skills', skill, 'SKILL.md'),
+    'utf8',
   );
 }
 
