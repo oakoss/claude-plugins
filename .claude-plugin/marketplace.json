@@ -11,7 +11,7 @@
     {
       "name": "review-cycle",
       "description": "Automated multi-agent code review cycle. Spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push, pull request, merge or release you did not request, unless you let it go further.",
-      "version": "0.29.0",
+      "version": "0.30.0",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
@@ -25,7 +25,7 @@
     {
       "name": "pr-kit",
       "description": "Pull-request workflow toolkit: ship a branch as a pull request, summarize review feedback, resolve merge conflicts, make diffs reviewable, and drive CI to green — gate-aware, with no unreviewed commits.",
-      "version": "0.1.4",
+      "version": "0.2.0",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
