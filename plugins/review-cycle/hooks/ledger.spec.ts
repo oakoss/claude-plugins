@@ -302,6 +302,10 @@ describe('ranked', () => {
     expect(order([retry, comma], 'of')).toEqual([comma, retry]);
     expect(order([retry, comma], 'fix')).toEqual([comma]);
     expect(order([retry, comma], 'comma.')).toEqual([comma]);
+    expect(order([retry, comma], '.comma')).toEqual([comma]);
+    expect(order([retry, comma], '--comma')).toEqual([comma]);
+    // ".of" trims to "of", too short, so the query has no words and keeps every entry.
+    expect(order([retry, comma], '.of')).toEqual([comma, retry]);
     expect(order([retry, comma])).toEqual([comma, retry]);
   });
   test('puts the most words first, then the newest, then the last recorded', () => {
