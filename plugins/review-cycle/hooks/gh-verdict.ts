@@ -20,8 +20,11 @@ export type InForce = Ladder & { unreadable?: string };
 // `ready` says why a merge asked for once the pull request is ready ran now.
 export type Unasked = { step: Step; ladder: Ladder; ready?: string };
 
-// What a gh read printed, or why the step asks instead.
-export type Lookup = { out: string; asks?: never } | { asks: string; out?: never };
+// What a gh read printed, or why the step asks instead; `slow` when gh never
+// answered, so running the step again may get through.
+export type Lookup =
+  | { out: string; asks?: never; slow?: never }
+  | { asks: string; out?: never; slow?: true };
 
 export type PullRequest = { cross: boolean; repo: string; branch: string };
 
@@ -155,6 +158,11 @@ const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy:
   unnamed: { asks: 'it does not name the pull request', remedy: 'Name it by number.' },
 };
 
+// A merge the user asked for whose lookup GitHub was too slow to answer is
+// retried, not put back to them.
+const SLOW =
+  'GitHub did not answer in time. Run the same command again, and the gate checks it once GitHub answers; ask the user only if it fails the same way again.';
+
 // The pull request a merge reaches in this repository, as GitHub resolves its
 // selector (a number, branch or URL), or why the gate cannot tell and the fix
 // (null: retry, or ask the user).
@@ -164,7 +172,7 @@ async function targetOf(
 ): Promise<Target | { asks: string; remedy: string | null }> {
   if ('cannot' in lookup) return UNTOLD[lookup.cannot];
   const r = read(await lookups.mergeTarget(lookup), 'the pull request it merges');
-  if (r.asks !== undefined) return { asks: r.asks, remedy: null };
+  if (r.asks !== undefined) return { asks: r.asks, remedy: r.slow ? SLOW : null };
   const m = /^(https?:\/\/\S+)\/pull\/(\d+) ([A-Z]+) ([A-Z_]+)$/.exec(r.out);
   if (m === null) {
     return {
@@ -174,7 +182,7 @@ async function targetOf(
   }
   const [, repo = '', number = '', state = '', mergeState = ''] = m;
   const home = read(await lookups.repoUrl(), 'the current repository');
-  if (home.asks !== undefined) return { asks: home.asks, remedy: null };
+  if (home.asks !== undefined) return { asks: home.asks, remedy: home.slow ? SLOW : null };
   if (home.out.toLowerCase() !== repo.toLowerCase()) {
     // The grammar names no repository, so asking again grants the same.
     return {

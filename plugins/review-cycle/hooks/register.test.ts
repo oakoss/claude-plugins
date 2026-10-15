@@ -16,8 +16,10 @@ type World = {
   }[];
   aliases: string;
   fail: (argv: string) => boolean;
-  // Makes $.process.run itself reject, as a timeout does.
+  // Makes $.process.run itself reject, as a timeout does, or with
+  // `rejectWith`'s message, as a command that cannot start does.
   reject?: (argv: string) => boolean;
+  rejectWith?: string;
   // Answers a git call itself, ahead of the scripted git.
   git?: (argv: string) => Partial<Run> | null | undefined;
   // Answers an Edit or Write itself, after it wrote `files`; null keeps the
@@ -170,7 +172,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
         return { value: { stderr: r.exitCode === 0 ? '' : 'zsh: not found', ...r, stdout } };
       }
       const a = e.argv.join(' ');
-      if (w.reject?.(a)) return { deny: 'timed out' };
+      if (w.reject?.(a)) return { deny: w.rejectWith ?? 'timed out' };
       if (w.fail(a)) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: injected' } };
       const own = w.git?.(a);
       if (own) return { value: { exitCode: 0, stdout: '', stderr: '', ...own } };
@@ -3754,16 +3756,63 @@ describe('the stop-before setting', () => {
     await say($, 'merge it and release it');
     expect(ran(await bash($, 'gh pr merge'))).toBe(true);
   });
-  test('a lookup that throws asks', async ($, on) => {
+  test('a lookup that never answers is tried again for longer, then says to run it again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      reject: (a) => a.startsWith('gh pr view'),
+    });
+    await say($, 'merge 62');
+    const r = await bash($, 'gh pr merge 62');
+    expect(denied(r, 'looking up the pull request it merges failed')).toBe(true);
+    expect(denied(r, 'GitHub did not answer in time')).toBe(true);
+    expect(denied(r, 'Run the same command again')).toBe(true);
+    const views = w.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(views.map((c) => c.init?.timeoutMs)).toEqual([5000, 10_000]);
+  });
+  test('a lookup that answers on its second try lets the merge run', async ($, on) => {
+    let tries = 0;
     fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      reject: (a) => a.startsWith('gh pr view') && tries++ === 0,
+    });
+    await say($, 'merge 62');
+    expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
+  });
+  test('a slow lookup on a merge the user did not ask for still asks them', async ($, on) => {
+    const w = fakeWorld(on, {
       settings: { local: stops('release') },
       git: github('fix/x'),
       reject: (a) => a.startsWith('gh pr view'),
     });
     await say($, 'fix the parser');
-    expect(
-      denied(await bash($, 'gh pr merge 62'), 'looking up the pull request it merges failed'),
-    ).toBe(true);
+    const r = await bash($, 'gh pr merge 62');
+    expect(denied(r, 'looking up the pull request it merges failed')).toBe(true);
+    expect(denied(r, 'GitHub did not answer in time')).toBe(false);
+    const views = w.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(views.map((c) => c.init?.timeoutMs)).toEqual([5000]);
+  });
+  test('a lookup that cannot start is not retried or taken as slow', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      reject: (a) => a.startsWith('gh pr view'),
+      rejectWith: 'spawn gh ENOENT',
+    });
+    await say($, 'merge 62');
+    const r = await bash($, 'gh pr merge 62');
+    expect(denied(r, 'looking up the pull request it merges failed')).toBe(true);
+    expect(denied(r, 'GitHub did not answer in time')).toBe(false);
+    const views = w.calls.filter((c) => c.argv.slice(0, 3).join(' ') === 'gh pr view');
+    expect(views).toHaveLength(1);
+  });
+  test('a lookup that fails outright asks the user, not to run it again', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
+    await say($, 'merge 62');
+    const r = await bash($, 'gh pr merge 62');
+    expect(denied(r, 'looking up the pull request it merges failed')).toBe(true);
+    expect(denied(r, 'GitHub did not answer in time')).toBe(false);
   });
   test('--admin is handed to the user, even when the merge was asked for', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
