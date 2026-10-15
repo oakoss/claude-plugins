@@ -40,7 +40,7 @@ pr-watch also tells Claude, so you do not have to prompt it. For news Claude can
 
 News Claude has nothing to do about waits for your next message instead, which carries it to Claude unseen:
 
-- GitHub reports a pull request ready to merge. Merging needs your ask, so this waits, unless [review-cycle](../review-cycle)'s stop-before setting is `release` or `never stop`, which lets Claude merge unasked; then it wakes Claude like the news above. pr-watch reads that setting where review-cycle does: `.claude/settings.local.json`, else your own or managed settings, made earlier by `.claude/settings.json`. Without it, a ready pull request waits.
+- GitHub reports a pull request ready to merge. Merging needs your ask, so this waits, unless [review-cycle](../review-cycle)'s stop-before setting is `release` or `never stop`, which lets Claude merge unasked; then it wakes Claude like the news above. pr-watch reads that setting where review-cycle does: `.claude/settings.local.json`, else the value review-cycle shows in `/config`, made earlier by `.claude/settings.json`. Without review-cycle loaded, or with its commit gate off, a ready pull request waits; so it does in a headless `claude -p` session, where `/config` lists no plugin's settings.
 - A merge's or a push's checks pass, once its 90 seconds are up, unless Claude made the merge itself (a failure on the merge commit is still told, at once).
 
 A pull request ready to merge also puts `merge #<number>` in the empty prompt box as a suggestion, Tab to take, unless `promptSuggestionEnabled` is `false` in your settings. A ready pull request and a failed run also send a notification through your notification channel, beside the toast, for when you are away from the terminal.

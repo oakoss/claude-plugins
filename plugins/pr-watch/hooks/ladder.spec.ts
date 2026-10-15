@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { configured, mergesUnasked } from './ladder';
+import { configured, loadedRung, mergesUnasked } from './ladder';
 
 describe('configured', () => {
   test('reads review-cycle under its bare or qualified name, the earliest rung of two', () => {
@@ -21,8 +21,30 @@ describe('configured', () => {
   });
 });
 
+const rows = (enabled: unknown, stopBefore?: unknown) => [
+  { key: 'pr-watch.wake', value: 'off' },
+  { key: 'review-cycle.enabled', value: enabled },
+  ...(stopBefore === undefined ? [] : [{ key: 'review-cycle.stopBefore', value: stopBefore }]),
+];
+
+describe('loadedRung', () => {
+  test('reads the loaded review-cycle rung, its default when unset or unknown', () => {
+    expect(loadedRung(rows(true, 'release'))).toBe('release');
+    expect(loadedRung(rows(true))).toBe('push');
+    expect(loadedRung(rows(true, 'releases'))).toBe('push');
+  });
+
+  test('is null when review-cycle is not loaded or its gate is off', () => {
+    expect(loadedRung([{ key: 'pr-watch.wake', value: 'off' }])).toBeNull();
+    expect(loadedRung(rows(false, 'release'))).toBeNull();
+    expect(loadedRung(rows('true', 'release'))).toBeNull();
+    expect(loadedRung(rows(undefined, 'release'))).toBeNull();
+    expect(loadedRung([{ key: 'review-cycles.enabled', value: true }])).toBeNull();
+  });
+});
+
 describe('mergesUnasked', () => {
-  const none = { user: null, project: null, local: null };
+  const none = { user: 'push', project: null, local: null } as const;
 
   test('only a rung past merge lets Claude merge unasked', () => {
     expect(mergesUnasked(none)).toBe(false);

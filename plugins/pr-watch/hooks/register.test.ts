@@ -45,7 +45,10 @@ type Gh = {
   wakeRejects?: boolean;
   // review-cycle's stop-before, by settings source; unset, none is.
   stopBefore?: Partial<Record<'policy' | 'user' | 'project' | 'local', string>>;
+  // review-cycle is not loaded, or its commit gate is switched off.
+  reviewCycle?: 'absent' | 'off';
   settingsFail?: boolean;
+  configFails?: boolean;
   suggestions?: boolean;
   // A hook beneath pr-watch drops the person's prompts; writes of kept news are refused.
   dropPerson?: boolean;
@@ -168,10 +171,25 @@ function world(
         value: gh.suggestions === undefined ? {} : { promptSuggestionEnabled: gh.suggestions },
       };
     }
+    // The user's rung comes from review-cycle's /config row, never these files.
+    if (e.source === 'policy' || e.source === 'user') return { deny: 'not read' };
     // A ready pull request wakes Claude unless a test asks for the merge to be asked.
-    const stopBefore = (gh.stopBefore ?? { user: 'release' })[e.source as 'user'];
+    const stopBefore = (gh.stopBefore ?? { user: 'release' })[e.source as 'project'];
     if (stopBefore === undefined) return { value: {} };
     return { value: { pluginConfigs: { 'review-cycle@oakoss': { options: { stopBefore } } } } };
+  });
+  // review-cycle's rows show the options it loaded with: a managed value over the user's.
+  on('config.list', () => {
+    if (gh.configFails) return { deny: 'menu unreadable' };
+    if (gh.reviewCycle === 'absent') return { value: [] };
+    const { policy, user } = gh.stopBefore ?? { user: 'release' };
+    const stopBefore = policy ?? user ?? 'push';
+    return {
+      value: [
+        { key: 'review-cycle.enabled', value: gh.reviewCycle !== 'off' },
+        { key: 'review-cycle.stopBefore', value: stopBefore },
+      ],
+    };
   });
   // The store refuses a value of undefined.
   if (gh.quietFails !== undefined) {
@@ -844,7 +862,7 @@ describe('ready to merge, while merges need asking', () => {
 
   for (const [what, stopBefore] of [
     ['the project file stops earlier than the user', { user: 'release', project: 'merge' }],
-    ['a managed value', { policy: 'push', user: 'release' }],
+    ['a managed value, as its /config row shows it', { policy: 'push', user: 'release' }],
     ['a value outside the options', { user: 'releases' }],
   ] as const) {
     test(`keeps it from Claude under ${what}`, async ($, on) => {
@@ -857,6 +875,21 @@ describe('ready to merge, while merges need asking', () => {
     const stopBefore = { project: 'merge', local: 'release' };
     const { seen } = await readyIn($, on, { pr: prJson(), stopBefore });
     expect(seen.wakes).toHaveLength(1);
+  });
+
+  for (const reviewCycle of ['absent', 'off'] as const) {
+    test(`keeps it from Claude with review-cycle ${reviewCycle}, whatever its setting says`, async ($, on) => {
+      const stopBefore = { user: 'release', local: 'release' };
+      const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore, reviewCycle });
+      expect(seen.wakes).toEqual([]);
+      expect(seen.suggested).toEqual(['merge #128']);
+    });
+  }
+
+  test('keeps it from Claude, and says so, when the /config rows cannot be read', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, configFails: true });
+    expect(seen.wakes).toEqual([]);
+    expect(seen.toasts.filter((t) => t.includes("could not read review-cycle's"))).toHaveLength(1);
   });
 
   test('keeps it from Claude when the settings cannot be read', async ($, on) => {
