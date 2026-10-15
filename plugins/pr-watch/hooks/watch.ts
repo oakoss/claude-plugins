@@ -404,6 +404,14 @@ function mergedVerdict(
   return { kind: 'merged-passed' };
 }
 
+// What stops a merge on the pull request itself; a draft's line says it too.
+function blockerOf(pull: Pull): string | null {
+  if (pull.merge === 'DIRTY') return 'conflicts';
+  if (pull.review === 'CHANGES_REQUESTED') return 'changes requested';
+  if (pull.merge === 'BEHIND') return 'behind base';
+  return null;
+}
+
 export function verdictOf(
   pull: Pull,
   estimates: Record<string, number>,
@@ -415,9 +423,8 @@ export function verdictOf(
   const runs = runsVerdict(pull, estimates, host);
   if (runs) return runs;
   if (pull.isDraft) return { kind: 'waiting', reason: 'draft' };
-  if (pull.merge === 'DIRTY') return { kind: 'blocked', reason: 'conflicts' };
-  if (pull.review === 'CHANGES_REQUESTED') return { kind: 'blocked', reason: 'changes requested' };
-  if (pull.merge === 'BEHIND') return { kind: 'blocked', reason: 'behind base' };
+  const blocker = blockerOf(pull);
+  if (blocker !== null) return { kind: 'blocked', reason: blocker };
   if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(pull.merge)) return { kind: 'ready' };
   if (pull.merge === 'BLOCKED') {
     if (pull.review === 'REVIEW_REQUIRED') return { kind: 'waiting', reason: 'review' };
@@ -466,6 +473,28 @@ export function delayOf(verdict: Verdict, pull: Pull, now: number, shownAt = now
     return 10_000;
   }
   return slow;
+}
+
+// An open pull request takes the row of the push line of its head branch,
+// with what Claude was told of that push, so the two lines do not stack. Only
+// within one repository: a fork's push is handed over by its own read, which
+// knows the fork's parent. One unwatched during its read takes nothing over.
+export function takeOverPush(all: readonly Watch[], pr: Watch): Watch[] {
+  const head = pr.pull?.head;
+  if (pr.push || pr.pull?.state !== 'OPEN' || !head || !all.includes(pr)) return [...all];
+  const repo = pr.repo.toLowerCase();
+  const at = all.findIndex(
+    (w) =>
+      w.push?.branch === head.branch &&
+      w.host === pr.host &&
+      w.repo.toLowerCase() === repo &&
+      head.repo.toLowerCase() === repo,
+  );
+  const push = all[at];
+  if (!push) return [...all];
+  const told = [...new Set([...(pr.told ?? []), ...(push.told ?? [])])];
+  const moved = told.length === 0 ? pr : { ...pr, told };
+  return all.flatMap((w, i) => (i === at ? [moved] : w === pr ? [] : [w]));
 }
 
 // What the line says, as a key: a new failure differs from an old one.
@@ -894,7 +923,9 @@ export function lineOf(
   const runs = isMerged ? (pull.mergeRuns ?? none) : pull;
   // The branch is named up front, so a running line is not read as the PR's own CI.
   const after = { text: isPush ? ' ·' : ` merged into ${pull.base} ·`, isDim: true };
-  const lead: Segment[] = isMerged ? [label, after] : [label];
+  // A draft is marked up front so its checks still show.
+  const draft = { text: ' draft ·', isDim: true };
+  const lead: Segment[] = isMerged ? [label, after] : pull.isDraft ? [label, draft] : [label];
   const tail: Segment[] = [];
   if (runs.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
   if (problem !== undefined) tail.push({ text: ` · ${problem}`, color: 'red' });
@@ -922,6 +953,18 @@ export function lineOf(
   if (v.kind === 'blocked') {
     const blocked = [icon(' ⚠', 'yellow'), { text: ` ${v.reason}` }];
     return [...lead, ...blocked, ...others(null), ...tail];
+  }
+  if (v.kind === 'waiting' && v.reason === 'draft') {
+    // Not ready to merge while a draft, whatever its checks say.
+    if (runs.workflows.length === 0) return [label, { text: ' ○ draft', isDim: true }, ...tail];
+    // A required GitHub App check outside the workflows may still be running.
+    const checks: Segment[] = pull.isRequiredPending
+      ? [{ text: ' ○ waiting on checks', isDim: true }]
+      : [icon(' ✓', 'green'), { text: ' checks passed' }];
+    const blocker = blockerOf(pull);
+    const blocked =
+      blocker === null ? [] : [{ text: ' ·' }, icon(' ⚠', 'yellow'), { text: ` ${blocker}` }];
+    return [...lead, ...checks, ...blocked, ...others(null), ...tail];
   }
   if (v.kind === 'waiting') {
     return [...lead, { text: ` ○ waiting on ${v.reason}`, isDim: true }, ...others(null), ...tail];

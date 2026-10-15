@@ -2203,6 +2203,65 @@ async function pushLineIn(ui: any): Promise<string | undefined> {
   return row?.text.replace(/ ×$/, '');
 }
 
+describe('a push, then the pull request it heads', () => {
+  test('the pull request’s first read takes over the push line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const head = { headRefName: 'feat/x', headRepository: { nameWithOwner: 'o/r' } };
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED', ...head }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ● Release 0m11s');
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    expect(await pushLineIn(ui)).toBeUndefined();
+    expect(await lineIn(ui)).toMatch(/^#128 ● CI /);
+    expect(await tool($, 'watches')).not.toContain('feat/x');
+  });
+
+  test('a failure told on the push is not told again once its pull request takes over', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('COMPLETED', 'FAILURE') };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1000);
+    expect(seen.wakes).toHaveLength(1);
+    const tip = JSON.parse(pushJson('COMPLETED', 'FAILURE')).data.repository.ref.target;
+    const head = { headRefName: 'feat/x', headRepository: { nameWithOwner: 'o/r' } };
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED', ...head }, tip.checkSuites.nodes);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    await clock.advance(70_000);
+    expect(await lineIn(await band($))).toBe('#128 ✗ Release: Publish failed');
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('a pull request from another branch leaves the push line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const head = { headRefName: 'feat/y', headRepository: { nameWithOwner: 'o/r' } };
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED', ...head }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ● Release 0m12s');
+    expect(await lineIn(ui)).toMatch(/^#128 ● CI /);
+  });
+});
+
 describe('a push to a branch with no pull request', () => {
   test('follows the branch’s runs, says once they pass, and leaves 5 s later', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });

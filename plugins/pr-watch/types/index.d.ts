@@ -51,6 +51,8 @@ export type Pull = {
   isTruncated: boolean;
   // The branch merged into, and once merged, when and the merge commit's runs.
   base: string;
+  // The branch and repository it merges from, which a push line of it matches.
+  head?: { branch: string; repo: string };
   mergedAt: string | null;
   mergeRuns: { workflows: Workflow[]; isTruncated: boolean } | null;
   // The latest comments and reviews by others, oldest first; null when the

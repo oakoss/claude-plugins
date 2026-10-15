@@ -91,6 +91,14 @@ const read = (author: string, minute: number, url: string, did: string, isBot = 
 });
 
 describe('parsePull', () => {
+  test('reads the branch and repository it merges from, when GitHub says both', () => {
+    const head = { headRefName: 'feat/x', headRepository: { nameWithOwner: 'me/r' } };
+    expect(parsePull(prOutput([], head)).head).toEqual({ branch: 'feat/x', repo: 'me/r' });
+    const gone = { headRefName: 'feat/x', headRepository: null };
+    expect(parsePull(prOutput([], gone))).not.toHaveProperty('head');
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('headRefName headRepository');
+  });
+
   test('reads a re-run’s attempt, which keeps the run’s URL', () => {
     const [w] = parsePull(prOutput([suite({ runAttempt: 2 })])).workflows;
     expect(w).toMatchObject({ attempt: 2, isRerun: true });

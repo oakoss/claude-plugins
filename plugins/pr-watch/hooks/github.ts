@@ -24,6 +24,7 @@ const pullQuery = (isMerged: boolean) => `query($o: String!, $r: String!, $n: In
   viewer { login }
   repository(owner: $o, name: $r) { pullRequest(number: $n) {
     number title url state isDraft mergeStateStatus reviewDecision baseRefName mergedAt
+    headRefName headRepository { nameWithOwner }
     ${
       isMerged
         ? `mergeCommit { ${suites('')} }`
@@ -283,8 +284,13 @@ export function parsePull(stdout: string): Pull {
   }
   const number = id(pr.number);
   if (number === null) throw new Error('pull request has no number');
+  const headBranch = str(pr.headRefName);
+  const headRepo = str(pr.headRepository?.nameWithOwner);
   return {
     number,
+    ...(headBranch === null || headRepo === null
+      ? {}
+      : { head: { branch: headBranch, repo: headRepo } }),
     title: str(pr.title) ?? '',
     url: str(pr.url) ?? '',
     state: pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN',

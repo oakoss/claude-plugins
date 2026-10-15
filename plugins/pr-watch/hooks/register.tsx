@@ -50,6 +50,7 @@ import {
   isSettled,
   labelOf,
   shownOf,
+  takeOverPush,
   settingsOf,
   tellsOf,
   toastOf,
@@ -619,7 +620,10 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         next.told = toldAfter(woke.told, target.told, config.isAwake);
         next.heard = woke.heard;
       }
-      return all.map((w) => (isSame(w, target) ? next : w));
+      return takeOverPush(
+        all.map((w) => (isSame(w, target) ? next : w)),
+        next,
+      );
     });
     isSaveFailing = false;
     // Only once the line says it, so a lost save does not toast or wake again.
