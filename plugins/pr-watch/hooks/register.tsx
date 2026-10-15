@@ -1,4 +1,13 @@
-import { atom, read, update, type EngineInterface, type Register, type Timer } from 'claude-code';
+import {
+  atom,
+  read,
+  update,
+  type EngineInterface,
+  type PromptOrigin,
+  type PromptSubmitInput,
+  type Register,
+  type Timer,
+} from 'claude-code';
 
 import type { Held, Pull, Watch } from '../types';
 import {
@@ -12,6 +21,7 @@ import {
   viewArgs,
   type Quota,
 } from './github';
+import { configured, mergesUnasked } from './ladder';
 import {
   createdPull,
   mergedPullOf,
@@ -46,6 +56,8 @@ import {
   noticeOf,
   heldWith,
   isToldReady,
+  contextOf,
+  suggestionOf,
   type Merging,
   type Memory,
   type Pause,
@@ -64,10 +76,17 @@ const clock = atom({ plugin: 'pr-watch', key: 'now' } as const, 0);
 const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, { isTurning: false, held: [] });
 // Merges Claude ran, whose passed checks are no news to it.
 const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
+// A ready pull request Claude would need asking to merge, and a merge's passed
+// checks, wait for the person's next prompt rather than waking Claude.
+const quiet = atom({ plugin: 'pr-watch', key: 'quiet' } as const, []);
 
 const TICK_MS = 1000;
 const ESTIMATE_RETRY_MS = 60_000;
 const VIEW_TIMEOUT_MS = 10_000;
+// A prompt waits on this read, so it is kept short.
+const PROMPT_VIEW_TIMEOUT_MS = 3000;
+// The prompts the person sent, whose turn may carry kept news.
+const PERSON = new Set<PromptOrigin['kind']>(['composer', 'bridge', 'sdk']);
 const busy = new Set<string>();
 // When each watch was last read, kept here too so a read whose result could
 // not be saved still waits out its delay.
@@ -91,6 +110,7 @@ let burstUntil = 0;
 let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
+let isSettingsFailing = false;
 // From /config; a change there reloads the module with the new values.
 let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
 
@@ -119,7 +139,143 @@ function wake($: $, text: string, label: string): void {
 
 async function tell($: $, h: Held): Promise<void> {
   if (h.news.length === 0 && h.ready === null) return;
-  if (!(await hold($, h))) wake($, noticeOf(h.news, h.ready, h.url), h.label);
+  if (!(await hold($, h))) await deliver($, h);
+}
+
+// Ready wakes Claude only where review-cycle lets it merge unasked; otherwise
+// it waits with the passed checks for the person's next prompt. Decided as it
+// is sent, so a held line follows /config as it is then.
+async function deliver($: $, h: Held): Promise<void> {
+  let { ready } = h;
+  if (ready !== null) {
+    if (await isMergeUnasked($)) {
+      await forgetReady($, h.id).catch((error) =>
+        $.ui.toast(`pr-watch could not clear ${h.label}'s kept ready line: ${errorText(error)}`),
+      );
+    }
+    // A ready line that cannot be kept wakes Claude instead of being lost.
+    else if (await keep($, { ...h, news: [] })) ready = null;
+  }
+  if (h.news.length === 0 && ready === null) return;
+  // A turn that started while the settings were read holds it like any other.
+  if (!(await hold($, { ...h, ready }))) wake($, noticeOf(h.news, ready, h.url), h.label);
+}
+
+// Settings that cannot be read leave the merge asked, as no setting does.
+async function isMergeUnasked($: $): Promise<boolean> {
+  try {
+    const of = async (source: 'policy' | 'user' | 'project' | 'local') => {
+      const settings = await $.settings.read({ source });
+      return configured(settings.pluginConfigs);
+    };
+    const user = (await of('policy')) ?? (await of('user'));
+    const asked = mergesUnasked({ user, project: await of('project'), local: await of('local') });
+    isSettingsFailing = false;
+    return asked;
+  } catch (error) {
+    if (!isSettingsFailing) {
+      $.ui.toast(
+        `pr-watch could not read review-cycle's stop-before, so a ready pull request waits for your next message: ${errorText(error)}`,
+      );
+    }
+    isSettingsFailing = true;
+    return false;
+  }
+}
+
+// Whether the news is kept; a failure is said, so the caller can send it instead.
+async function keep($: $, h: Held): Promise<boolean> {
+  if (h.news.length === 0 && h.ready === null) return true;
+  try {
+    await update($, quiet, (all) => {
+      const was = all.find((x) => x.id === h.id);
+      return [...all.filter((x) => x.id !== h.id), was ? heldWith(was, h) : h];
+    });
+  } catch (error) {
+    $.ui.toast(
+      `pr-watch could not keep ${h.label}'s news for your next message: ${errorText(error)}`,
+    );
+    return false;
+  }
+  if (h.ready !== null) {
+    await suggest($).catch((error) =>
+      $.ui.toast(`pr-watch could not suggest merging ${h.label}: ${errorText(error)}`),
+    );
+  }
+  return true;
+}
+
+// A ready line Claude is woken for is not told again with the next message.
+async function forgetReady($: $, id: string): Promise<void> {
+  await update($, quiet, (all) =>
+    all.flatMap((x) => {
+      if (x.id !== id) return [x];
+      return x.news.length > 0 ? [{ ...x, ready: null }] : [];
+    }),
+  );
+}
+
+// Shows only between turns; a ready line held through one is kept as it ends.
+async function suggest($: $): Promise<void> {
+  const { isTurning } = await read($, turn);
+  if (isTurning) return;
+  const text = suggestionOf(await read($, quiet));
+  if (text === null) return;
+  // A suggestion is a convenience: one with nowhere to show is let go.
+  try {
+    const settings: { promptSuggestionEnabled?: unknown } = await $.settings.read();
+    if (settings.promptSuggestionEnabled === false) return;
+    await $.prompt.suggest({ text });
+  } catch {
+    // Headless, or the settings unreadable.
+  }
+}
+
+// The ready line stands while GitHub still has the pull request open and the
+// watch is still watched and its latest read found it ready. The saved watch is
+// read after GitHub, so a read during it counts.
+async function isStillReady($: $, id: string, url: string, timeoutMs: number): Promise<boolean> {
+  const isStillOpen = await isOpen($, url, timeoutMs);
+  const all = await read($, watches);
+  const w = all.find((x) => idOf(x) === id);
+  return isStillOpen && w !== undefined && isToldReady(w);
+}
+
+// The kept news a person's prompt carries to Claude, taken in one write so two
+// prompts cannot both carry it, and how to put it back if the prompt is dropped.
+async function quietContext(
+  $: $,
+  e: Pick<PromptSubmitInput, 'origin' | 'command'>,
+): Promise<{ text: string | null; restore: () => Promise<void> } | null> {
+  if (!PERSON.has(e.origin.kind) || e.command !== undefined || !config.isAwake) return null;
+  let taken: readonly Held[] = [];
+  await update($, quiet, (all) => {
+    taken = all;
+    return all.length === 0 ? all : [];
+  });
+  if (taken.length === 0) return null;
+  const restore = async () => {
+    await update($, quiet, (all) => [
+      ...taken.filter((q) => !all.some((x) => x.id === q.id)),
+      ...all.map((x) => {
+        const was = taken.find((q) => q.id === x.id);
+        return was ? heldWith(was, x) : x;
+      }),
+    ]);
+  };
+  try {
+    const current = await Promise.all(
+      taken.map(async (q) =>
+        q.ready === null || (await isStillReady($, q.id, q.url, PROMPT_VIEW_TIMEOUT_MS))
+          ? q
+          : { ...q, ready: null },
+      ),
+    );
+    return { text: contextOf(current), restore };
+  } catch (error) {
+    await restore();
+    throw error;
+  }
 }
 
 // Decided in the same write, so a turn ending meanwhile cannot strand it.
@@ -135,9 +291,9 @@ async function hold($: $, h: Held): Promise<boolean> {
 }
 
 // A failed read leaves the pull request as last read: open, so still ready.
-async function isOpen($: $, url: string): Promise<boolean> {
+async function isOpen($: $, url: string, timeoutMs = VIEW_TIMEOUT_MS): Promise<boolean> {
   try {
-    const r = await $.process.run(viewArgs(url, null), { timeoutMs: VIEW_TIMEOUT_MS });
+    const r = await $.process.run(viewArgs(url, null), { timeoutMs });
     const state = r.exitCode === 0 ? viewedPull(r.stdout)?.body?.state : undefined;
     return state === undefined || state === 'OPEN';
   } catch {
@@ -158,20 +314,11 @@ async function release($: $): Promise<void> {
   await Promise.all(held.map(({ id }) => releaseOne($, id)));
 }
 
-// A ready line stands while the watch's latest read still found it ready and
-// GitHub still has the pull request open.
 async function releaseOne($: $, id: string): Promise<void> {
   const { held } = await read($, turn);
   const seen = held.find((x) => x.id === id);
   if (!seen) return;
-  let isStale = false;
-  if (seen.ready !== null) {
-    // The saved watch is read after GitHub, so a read during it counts.
-    const isStillOpen = await isOpen($, seen.url);
-    const all = await read($, watches);
-    const w = all.find((x) => idOf(x) === id);
-    isStale = !isStillOpen || !w || !isToldReady(w);
-  }
+  const isStale = seen.ready !== null && !(await isStillReady($, id, seen.url, VIEW_TIMEOUT_MS));
   // Taken only now: a reload during the read leaves it held, news held for it
   // meanwhile joins this notice, and a turn started meanwhile keeps it.
   let h: Held | undefined;
@@ -180,8 +327,7 @@ async function releaseOne($: $, id: string): Promise<void> {
     return h ? { ...t, held: t.held.filter((x) => x.id !== id) } : t;
   });
   if (!h) return;
-  const ready = isStale ? null : h.ready;
-  if (h.news.length > 0 || ready !== null) wake($, noticeOf(h.news, ready, h.url), h.label);
+  await deliver($, { ...h, ready: isStale ? null : h.ready });
 }
 
 // An unknown length that cannot be learned or kept is asked again after the
@@ -358,6 +504,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     // Only a read that answered is judged; a limited one keeps the last good state.
     const isFresh = !isLimited && next.error === undefined;
     let toast: string | null = null;
+    let isUrgent = false;
     let news: string | null = null;
     let woke = null as Wake | null;
     let wakeFor: ((last: Memory) => Wake) | null = null;
@@ -379,6 +526,8 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         // A ready pull request read as checking is not ready again afterwards.
         if (!isEarly && !isChecking(verdict)) {
           toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
+          // What someone away from the terminal comes back for; a passed merge is not.
+          isUrgent = ['ready', 'failing', 'merged-failing'].includes(verdict.kind);
           next.shown = shownOf(verdict);
           if (next.shown !== shown || next.shownAt === undefined) next.shownAt = now;
         }
@@ -411,7 +560,10 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     });
     isSaveFailing = false;
     // Only once the line says it, so a lost save does not toast or wake again.
-    if (toast && isSaved) $.ui.toast(toast);
+    if (toast && isSaved) {
+      $.ui.toast(toast);
+      if (isUrgent) void $.ui.notify(toast).catch(() => null);
+    }
     if (isGivenUp && isSaved) {
       $.ui.toast(`pr-watch stopped watching ${labelOf(next)}: ${next.error}`);
       news = [
@@ -425,8 +577,10 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       if (kept) kept.news = news;
       else if (isGivenUp || !woke) wake($, news, labelOf(next));
       else {
-        const { news: lines, ready } = woke;
-        await tell($, { id: idOf(next), label: labelOf(next), url: next.url, news: lines, ready });
+        const { news: lines, ready, passed } = woke;
+        const h = { id: idOf(next), label: labelOf(next), url: next.url };
+        await tell($, { ...h, news: lines, ready });
+        await keep($, { ...h, news: passed, ready: null });
       }
     }
     if (!isClosed && isFresh) await learnEstimates($, next, now);
@@ -637,7 +791,7 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
       return { result: `${head}\npr-watch could not finish its first read: ${kept.error}` };
     }
     const closing = config.isAwake
-      ? 'pr-watch tells you in this conversation when that changes, so there is no need to poll gh.'
+      ? 'pr-watch tells you when that changes, at once or with the next message, so there is no need to poll gh.'
       : 'Waking Claude is off in /config: changes show on the line, and the watches tool reads them.';
     return { result: [head, kept.news, closing].filter(Boolean).join('\n') };
   } catch (error) {
@@ -711,7 +865,7 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when it turns ready to merge, a check fails, it has conflicts or requested changes, someone comments or reviews, or its merge's checks finish. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; use this for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless review-cycle lets you merge unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; use this for any other you are waiting on, instead of polling gh pr checks or sleeping.",
     inputSchema: PULL_INPUT,
   },
   {
@@ -762,6 +916,27 @@ export const register: Register = (on, options) => {
     }
   });
 
+  on('prompt.submit', async ($, e, next) => {
+    let kept: Awaited<ReturnType<typeof quietContext>> = null;
+    try {
+      kept = await quietContext($, e);
+    } catch (error) {
+      $.ui.toast(`pr-watch could not add its news to your prompt: ${errorText(error)}`);
+    }
+    if (!kept?.text) return next(e);
+    const { restore } = kept;
+    const putBack = (why: string) =>
+      restore().catch((error) => $.ui.toast(`pr-watch lost the news ${why}: ${errorText(error)}`));
+    try {
+      const r = await next({ ...e, context: [...(e.context ?? []), kept.text] });
+      if ('drop' in r && r.drop !== undefined) await putBack('a dropped prompt carried');
+      return r;
+    } catch (error) {
+      await putBack('a failed prompt carried');
+      throw error;
+    }
+  });
+
   on('session.start', async ($, e, next) => {
     // Registered before next, so the tools are listed by the first turn.
     await registerTools($);
@@ -771,6 +946,8 @@ export const register: Register = (on, options) => {
     poller = $.clock.every(TICK_MS, () => void safeTick($));
     // A reload between turns finds news a turn held; no turn is left to end it.
     releaseHeld($);
+    // With waking off, news kept before is let go, so turning it on tells no history.
+    if (!config.isAwake) await update($, quiet, () => []);
     return r;
   });
 

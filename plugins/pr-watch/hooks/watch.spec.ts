@@ -31,6 +31,8 @@ import {
   wakeOf,
   heldWith,
   noticeOf,
+  contextOf,
+  suggestionOf,
   type BotSetting,
   type Memory,
   type WakeSetting,
@@ -790,6 +792,10 @@ describe('wakeOf', () => {
     const passed = merged([green()]);
     const first = after(passed);
     expect(first.text).toContain("o/r#128 merged into main, and the merge commit's checks passed.");
+    expect(first.passed).toEqual([
+      "o/r#128 merged into main, and the merge commit's checks passed.",
+    ]);
+    expect(first.news).toEqual([]);
     expect(after(passed, first).text).toBeNull();
     expect(after(passed, {}, push).text).toContain(
       'The checks on the push to feat/x on o/r passed.',
@@ -799,6 +805,7 @@ describe('wakeOf', () => {
       text: null,
       news: [],
       ready: null,
+      passed: [],
       told: [],
       heard: { since: null, keys: [] },
     });
@@ -963,7 +970,14 @@ describe('wakeOf', () => {
 
   test('hears nothing from a read that cannot tell whose comments are whose', () => {
     const p = pull([ci([job('Test', null)])], { activity: null });
-    expect(after(p)).toEqual({ text: null, news: [], ready: null, told: [], heard: undefined });
+    expect(after(p)).toEqual({
+      text: null,
+      news: [],
+      ready: null,
+      passed: [],
+      told: [],
+      heard: undefined,
+    });
     const heard = { since: null, keys: ['https://x/alice'] };
     expect(after(p, { heard }).heard).toEqual(heard);
     const known = pull([ci([job('Test', null)])], {
@@ -978,6 +992,38 @@ describe('wakeOf', () => {
       activity: [said('alice', '2026-10-03T21:00:00Z')],
     });
     expect(after(p, first).text).toContain('@alice commented on o/r#128');
+  });
+});
+
+const held = (id: string, ready: string | null, news: string[] = []) => ({
+  id,
+  label: `#${id}`,
+  url: `u/${id}`,
+  news,
+  ready,
+});
+
+describe('contextOf and suggestionOf', () => {
+  test('carries every line, ready first, and says merging needs asking only for a ready one', () => {
+    const passed = held('1', null, ['o/r#1 merged into main, and the checks passed.']);
+    expect(contextOf([passed])).toBe(
+      'pr-watch, since your last turn: o/r#1 merged into main, and the checks passed.',
+    );
+    expect(contextOf([passed, held('2', 'GitHub reports o/r#2 ready to merge.', ['x.'])])).toBe(
+      [
+        'pr-watch, since your last turn: o/r#1 merged into main, and the checks passed. GitHub reports o/r#2 ready to merge. x.',
+        'Merging needs the user to ask for it; offer it if it fits.',
+      ].join('\n'),
+    );
+    expect(contextOf([])).toBeNull();
+    expect(contextOf([held('3', null)])).toBeNull();
+  });
+
+  test('suggests merging the latest ready pull request', () => {
+    expect(suggestionOf([held('1', 'r1'), held('2', null, ['n']), held('3', 'r3')])).toBe(
+      'merge #3',
+    );
+    expect(suggestionOf([held('2', null, ['n'])])).toBeNull();
   });
 });
 

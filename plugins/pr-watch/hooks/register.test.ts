@@ -43,6 +43,14 @@ type Gh = {
   holdView?: boolean;
   // pr-watch's prompts are refused: the hook throws, so the kit finds nothing beneath.
   wakeRejects?: boolean;
+  // review-cycle's stop-before, by settings source; unset, none is.
+  stopBefore?: Partial<Record<'policy' | 'user' | 'project' | 'local', string>>;
+  settingsFail?: boolean;
+  suggestions?: boolean;
+  // A hook beneath pr-watch drops the person's prompts; writes of kept news are refused.
+  dropPerson?: boolean;
+  throwPerson?: boolean;
+  quietFails?: boolean;
   release?: () => void;
 };
 
@@ -119,26 +127,63 @@ function world(
 ) {
   // `wakes`: the prompts pr-watch submitted to the session, to tell Claude.
   // `order`: each gh pr view and Bash command, as they ran.
+  // `contexts`: what pr-watch attached to each prompt the person sent.
   const seen = {
     toasts: [] as string[],
     runs: [] as string[],
     wakes: [] as string[],
     order: [] as string[],
     registered: [] as string[],
+    contexts: [] as (readonly string[] | undefined)[],
+    notified: [] as string[],
+    suggested: [] as string[],
   };
   on('session.start', () => ({ cwd: '/repo' }));
+  on('settings.read', ($: unknown, e: { source?: string }) => {
+    if (gh.settingsFail) return { deny: 'settings unreadable' };
+    if (e.source === undefined) {
+      return {
+        value: gh.suggestions === undefined ? {} : { promptSuggestionEnabled: gh.suggestions },
+      };
+    }
+    // A ready pull request wakes Claude unless a test asks for the merge to be asked.
+    const stopBefore = (gh.stopBefore ?? { user: 'release' })[e.source as 'user'];
+    if (stopBefore === undefined) return { value: {} };
+    return { value: { pluginConfigs: { 'review-cycle@oakoss': { options: { stopBefore } } } } };
+  });
+  // The store refuses a value of undefined.
+  if (gh.quietFails !== undefined) {
+    on('state.set', ($: unknown, e: { key: string }, next: (e: unknown) => unknown) =>
+      gh.quietFails && e.key === 'quiet' ? next({ ...e, value: undefined }) : next(e),
+    );
+  }
+  on('ui.notify', ($: unknown, e: { text: string }) => {
+    seen.notified.push(e.text);
+    return { value: { isSent: true, channel: 'iterm2' } };
+  });
+  on('prompt.suggest', ($: unknown, e: { text: string }) => {
+    seen.suggested.push(e.text);
+    return { isShown: true };
+  });
   // What another plugin, or the engine, draws in the band beneath pr-watch.
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: unknown) => {
     const { Text } = $.ui.resolve(e);
     return h(Text, { key: 'beneath' }, 'beneath');
   });
-  on('prompt.submit', ($: unknown, e: { text: string; origin?: { kind: string } }) => {
-    if (e.origin?.kind === 'plugin') {
-      if (gh.wakeRejects) throw new Error('refused');
-      seen.wakes.push(e.text);
-    }
-    return { text: e.text };
-  });
+  on(
+    'prompt.submit',
+    ($: unknown, e: { text: string; origin?: { kind: string }; context?: readonly string[] }) => {
+      if (e.origin?.kind === 'plugin') {
+        if (gh.wakeRejects) throw new Error('refused');
+        seen.wakes.push(e.text);
+      } else {
+        seen.contexts.push(e.context);
+        if (gh.dropPerson) return { drop: 'blocked' };
+        if (gh.throwPerson) throw new Error('beneath');
+      }
+      return { text: e.text };
+    },
+  );
   on('ui.toast', ($: unknown, e: { text: string }) => {
     seen.toasts.push(e.text);
     return { value: undefined };
@@ -733,6 +778,243 @@ describe('news held through a turn', () => {
   });
 });
 
+// A prompt the person sent.
+const person = (text = 'next', over: Record<string, unknown> = {}) =>
+  ({ text, origin: { kind: 'composer' }, wait: false, ...over }) as any;
+
+// A pull request Claude opened, read once.
+async function readyIn($: any, on: any, gh: Gh) {
+  const clock = mock.clock(on, { now: T0 });
+  const seen = world(on, gh);
+  await start($);
+  await create($);
+  await clock.advance(1000);
+  return { clock, seen };
+}
+
+describe('ready to merge, while merges need asking', () => {
+  const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+  const MERGED = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-10-03T22:01:00Z' });
+  const ASKED = {};
+
+  test('wakes nothing, suggests the merge, and tells the next prompt once', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    expect(seen.wakes).toEqual([]);
+    expect(seen.toasts).toEqual(['#128 is ready to merge']);
+    expect(seen.notified).toEqual(['#128 is ready to merge']);
+    expect(seen.suggested).toEqual(['merge #128']);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toEqual([
+      'pr-watch, since your last turn: GitHub reports o/r#128 ready to merge.\nMerging needs the user to ask for it; offer it if it fits.',
+    ]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[1]).toBeUndefined();
+  });
+
+  test('wakes Claude as before where review-cycle lets it merge unasked', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), stopBefore: { user: 'release' } });
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.suggested).toEqual([]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toBeUndefined();
+  });
+
+  for (const [what, stopBefore] of [
+    ['the project file stops earlier than the user', { user: 'release', project: 'merge' }],
+    ['a managed value', { policy: 'push', user: 'release' }],
+    ['a value outside the options', { user: 'releases' }],
+  ] as const) {
+    test(`keeps it from Claude under ${what}`, async ($, on) => {
+      const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore });
+      expect(seen.wakes).toEqual([]);
+    });
+  }
+
+  test("the local file's value stands over the project's", async ($, on) => {
+    const stopBefore = { project: 'merge', local: 'release' };
+    const { seen } = await readyIn($, on, { pr: prJson(), stopBefore });
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('keeps it from Claude when the settings cannot be read', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, settingsFail: true });
+    expect(seen.wakes).toEqual([]);
+    expect(seen.suggested).toEqual([]);
+  });
+
+  test('suggests nothing with prompt suggestions off', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, suggestions: false };
+    const { seen } = await readyIn($, on, gh);
+    expect(seen.suggested).toEqual([]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]?.[0]).toContain('ready to merge');
+  });
+
+  test('drops the ready line once the pull request has merged', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED };
+    const { seen } = await readyIn($, on, gh);
+    gh.view = MERGED;
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toBeUndefined();
+  });
+
+  test('a prompt pr-watch did not get from the person neither carries nor spends it', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    await $.prompt.submit(person('done', { origin: { kind: 'task-notification' } }));
+    await $.prompt.submit(person('/clear', { command: { name: 'clear', kind: 'local' } }));
+    expect(seen.contexts.slice(0, 2)).toEqual([undefined, undefined]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[2]?.[0]).toContain('ready to merge');
+  });
+
+  test('held through a turn, it is kept at the turn end and suggested then', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    on('turn.start', () => ({ turnId: 't1' }));
+    on('turn.complete', () => ({ text: '' }));
+    await start($);
+    await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+    await create($);
+    await clock.advance(1000);
+    expect(seen.suggested).toEqual([]);
+    await ($ as any).turn.complete({
+      answer: '',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'answer',
+    });
+    await clock.advance(1);
+    expect(seen.wakes).toEqual([]);
+    expect(seen.suggested).toEqual(['merge #128']);
+  });
+
+  test('a prompt from the bridge carries it after the context already there', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    await $.prompt.submit(person('next', { origin: { kind: 'bridge' }, context: ['other'] }));
+    expect(seen.contexts[0]).toHaveLength(2);
+    expect(seen.contexts[0]?.[0]).toBe('other');
+    expect(seen.contexts[0]?.[1]).toContain('ready to merge');
+  });
+
+  test('a prompt dropped beneath pr-watch leaves it for the next one', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, dropPerson: true };
+    const { seen } = await readyIn($, on, gh);
+    await $.prompt.submit(person());
+    gh.dropPerson = false;
+    await $.prompt.submit(person());
+    expect(seen.contexts[1]?.[0]).toContain('ready to merge');
+  });
+
+  test('a prompt that fails beneath pr-watch leaves it for the next one', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, throwPerson: true };
+    const { seen } = await readyIn($, on, gh);
+    await $.prompt.submit(person()).catch(() => null);
+    gh.throwPerson = false;
+    await $.prompt.submit(person());
+    expect(seen.contexts.at(-1)?.[0]).toContain('ready to merge');
+  });
+
+  test('a ready wake survives a kept ready line that cannot be cleared', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, quietFails: false };
+    const { clock, seen } = await readyIn($, on, gh);
+    expect(seen.suggested).toEqual(['merge #128']);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    await clock.advance(61_000);
+    gh.stopBefore = { user: 'release' };
+    gh.quietFails = true;
+    gh.pr = prJson();
+    await clock.advance(11_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.toasts.some((t) => t.includes("could not clear #128's kept ready line"))).toBe(
+      true,
+    );
+  });
+
+  test('a ready line that cannot be kept wakes Claude instead, and says so', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, quietFails: true };
+    const { seen } = await readyIn($, on, gh);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.toasts.some((t) => t.startsWith("pr-watch could not keep #128's news"))).toBe(true);
+  });
+
+  test('held with a comment through a turn, the comment wakes and the ready line waits', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const alice = { author: { login: 'alice' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
+    const gh: Gh = { pr: commentedJson([], [], []), view: OPEN, stopBefore: ASKED };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: 't1' }));
+    on('turn.complete', () => ({ text: '' }));
+    await start($);
+    await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+    await create($);
+    await clock.advance(1000);
+    gh.pr = commentedJson([alice], [], []);
+    await clock.advance(61_000);
+    await ($ as any).turn.complete({
+      answer: '',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'answer',
+    });
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('@alice commented on o/r#128');
+    expect(seen.wakes[0]).not.toContain('ready to merge');
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]?.[0]).toContain('ready to merge');
+    expect(seen.contexts[0]?.[0]).not.toContain('@alice');
+  });
+
+  test('a ready line for a pull request no longer watched is dropped', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    await tool($, 'unwatch', { pull: '128' });
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toBeUndefined();
+  });
+
+  test('once ready wakes Claude, the line kept before is not told again', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED };
+    const { clock, seen } = await readyIn($, on, gh);
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    await clock.advance(61_000);
+    gh.stopBefore = { user: 'release' };
+    gh.pr = prJson();
+    await clock.advance(11_000);
+    expect(seen.wakes).toHaveLength(1);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toBeUndefined();
+  });
+
+  test(
+    'with waking off, keeps nothing for the next prompt',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+      expect(seen.suggested).toEqual([]);
+      await $.prompt.submit(person());
+      expect(seen.contexts[0]).toBeUndefined();
+    },
+  );
+
+  test('says once that the settings could not be read', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, settingsFail: true });
+    expect(seen.toasts.filter((t) => t.includes("could not read review-cycle's"))).toHaveLength(1);
+  });
+
+  test('a failed check still wakes Claude, and notifies', async ($, on) => {
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [FAILING_CI]), stopBefore: ASKED };
+    const { seen } = await readyIn($, on, gh);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('CI: Typecheck failed');
+    expect(seen.notified).toEqual(['#128 CI: Typecheck failed']);
+  });
+});
+
 describe('telling Claude', () => {
   test('wakes it once when the pull request becomes ready to merge', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
@@ -1135,13 +1417,15 @@ describe('a merged pull request', () => {
     // at T0 + 81 s, is the first past the grace.
     await clock.advance(72_000);
     expect(seen.toasts).toEqual(['#128 merged: its checks passed']);
-    expect(seen.wakes).toHaveLength(1);
-    expect(seen.wakes[0]).toContain(
-      "o/r#128 merged into main, and the merge commit's checks passed.",
-    );
+    // Nothing for Claude to do, so it waits for the person's next prompt.
+    expect(seen.wakes).toEqual([]);
+    expect(seen.notified).toEqual([]);
     const settled = reads(seen.runs);
     // A message does not clear it early.
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(seen.contexts.at(-1)?.[0]).toContain(
+      "o/r#128 merged into main, and the merge commit's checks passed.",
+    );
     expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed');
     await clock.advance(5000);
     expect(await lineIn(ui)).toBeUndefined();
@@ -1189,8 +1473,9 @@ describe('a merged pull request', () => {
     await clock.advance(1000);
     gh.pr = mergedJson('COMPLETED', 'SUCCESS');
     await clock.advance(92_000);
-    expect(seen.wakes).toHaveLength(1);
-    expect(seen.wakes[0]).toContain("merge commit's checks passed");
+    expect(seen.wakes).toEqual([]);
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(seen.contexts.at(-1)?.[0]).toContain("merge commit's checks passed");
   });
 
   test('a merge names its repository to gh, and a bare merge runs nothing more', async ($, on) => {
@@ -1262,6 +1547,7 @@ describe('a merged pull request', () => {
     await clock.advance(90_000);
     const ui = await band($);
     expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
+    expect(seen.notified).toEqual(['#128 merged: Release: Publish failed']);
     const r = await $.prompt.submit({
       text: 'next',
       origin: { kind: 'composer' },
@@ -1540,8 +1826,9 @@ describe('a push to a branch with no pull request', () => {
     expect(seen.toasts).toEqual([]);
     await clock.advance(1000);
     expect(seen.toasts).toEqual(['push feat/x: its checks passed']);
-    expect(seen.wakes).toHaveLength(1);
-    expect(seen.wakes[0]).toContain('The checks on the push to feat/x on o/r passed.');
+    expect(seen.wakes).toEqual([]);
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(seen.contexts.at(-1)?.[0]).toContain('The checks on the push to feat/x on o/r passed.');
     expect(await pushLineIn(ui)).toBe('⟳ push feat/x · ✓ checks passed');
     await clock.advance(5000);
     expect(await pushLineIn(ui)).toBeUndefined();
@@ -2228,7 +2515,7 @@ describe('the tools', () => {
     await create($);
     await clock.advance(1000);
     expect(await tool($, 'watch', { pull: '128' })).toBe(
-      'pr-watch was already watching o/r#128: #128 loading…\npr-watch tells you in this conversation when that changes, so there is no need to poll gh.',
+      'pr-watch was already watching o/r#128: #128 loading…\npr-watch tells you when that changes, at once or with the next message, so there is no need to poll gh.',
     );
     expect(reads(seen.runs)).toBe(1);
     gh.release!();

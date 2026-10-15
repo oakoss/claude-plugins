@@ -100,6 +100,8 @@ declare module 'claude-code' {
       turn: { isTurning: boolean; held: Held[] };
       // Watch ids, kept apart from the watch so a read in flight cannot drop one.
       ownMerges: string[];
+      // News kept from Claude until the person's next prompt carries it.
+      quiet: Held[];
     };
   }
 }

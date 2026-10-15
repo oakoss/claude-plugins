@@ -468,8 +468,9 @@ export function toastOf(
   return null;
 }
 
-// Something Claude is told of once, for as long as it lasts.
-type Condition = { key: string; text: string };
+// Something Claude is told of once, for as long as it lasts. A passed one is
+// news Claude cannot act on, so it never wakes Claude.
+type Condition = { key: string; text: string; isPassed?: true };
 
 type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
 
@@ -504,7 +505,7 @@ function conditionsOf(
     const text = watch.push
       ? `The checks on ${name} passed.`
       : `${name} merged into ${pull.base}, and the merge commit's checks passed.`;
-    found.push({ key: keyOf(watch, 'passed'), text });
+    found.push({ key: keyOf(watch, 'passed'), text, isPassed: true });
   }
   if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
     const text = `${name} has merge conflicts with ${pull.base}.`;
@@ -531,11 +532,13 @@ function conditionsOf(
 
 export type Memory = Pick<Watch, 'told' | 'heard'>;
 // `ready` is kept apart from the rest of the news, so a notice held past a
-// merge can leave it out.
+// merge can leave it out, and so can one whose merge would need asking; `passed`
+// is news for the next prompt, never a wake. `text` is all of it, for a tool's answer.
 export type Wake = {
   text: string | null;
   news: string[];
   ready: string | null;
+  passed: string[];
   told: string[];
   heard: Watch['heard'];
 };
@@ -639,12 +642,14 @@ export function wakeOf(
     : `${watch.repo}#${watch.number}`;
   const told = last.told ?? [];
   const news: string[] = [];
+  const passed: string[] = [];
   const kept: string[] = [];
   let ready: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
-    const isQuiet = isOwnMerge && c.key === keyOf(watch, 'passed');
+    const isQuiet = isOwnMerge && c.isPassed;
     const isNew = !told.includes(c.key) && !isQuiet;
     if (isNew && c.key === keyOf(watch, 'ready')) ready = c.text;
+    else if (isNew && c.isPassed) passed.push(c.text);
     else if (isNew) news.push(c.text);
     kept.push(c.key);
   }
@@ -660,7 +665,7 @@ export function wakeOf(
   // So a chatty bot or thread cannot keep waking Claude, comments and reviews
   // stop after QUIET_CAP wakes in a row of nothing else, until other news comes.
   const before = last.heard?.streak ?? 0;
-  const isOther = news.length > 0 || ready !== null;
+  const isOther = news.length > 0 || ready !== null || passed.length > 0;
   const streak = isOther ? 0 : lines.length > 0 ? before + 1 : before;
   if (streak <= QUIET_CAP) news.push(...lines);
   if (lines.length > 0 && streak === QUIET_CAP) {
@@ -669,8 +674,27 @@ export function wakeOf(
     );
   }
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
-  if (news.length === 0 && ready === null) return { text: null, news, ready, told: kept, heard };
-  return { text: noticeOf(news, ready, watch.url), news, ready, told: kept, heard };
+  const all = [...news, ...passed];
+  const text = all.length === 0 && ready === null ? null : noticeOf(all, ready, watch.url);
+  return { text, news, ready, passed, told: kept, heard };
+}
+
+// What the person's next prompt carries of the news held back from waking
+// Claude: each line once, with what it may do about a ready pull request.
+export function contextOf(quiet: readonly Held[]): string | null {
+  const lines = quiet.flatMap((q) => [...(q.ready === null ? [] : [q.ready]), ...q.news]);
+  if (lines.length === 0) return null;
+  const isReady = quiet.some((q) => q.ready !== null);
+  return [
+    `pr-watch, since your last turn: ${lines.join(' ')}`,
+    ...(isReady ? ['Merging needs the user to ask for it; offer it if it fits.'] : []),
+  ].join('\n');
+}
+
+// The prompt-box suggestion for the latest pull request held ready.
+export function suggestionOf(quiet: readonly Held[]): string | null {
+  const ready = quiet.findLast((q) => q.ready !== null);
+  return ready ? `merge ${ready.label}` : null;
 }
 
 export function clockText(ms: number): string {
