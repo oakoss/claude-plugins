@@ -9,9 +9,11 @@ import {
   type Timer,
 } from 'claude-code';
 
-import type { Held, Pull, Watch } from '../types';
+import type { Held, Pull, Watch, Workflow } from '../types';
 import {
+  attemptArgs,
   estimateArgs,
+  parseAttemptStart,
   parseEstimate,
   parsePull,
   parsePush,
@@ -32,6 +34,7 @@ import {
   delayOf,
   errorLine,
   estimateKey,
+  rerunKey,
   lineOf,
   movesPulls,
   isGone,
@@ -362,6 +365,10 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
   } catch {
     return;
   }
+  // Only the workflow the line draws shows a re-run's clock.
+  const v = w.pull ? verdictOf(w.pull, known, w.host, now) : null;
+  const drawn = v?.kind === 'running' || v?.kind === 'merged-running' ? v.gate : null;
+  if (drawn?.isRerun) await learnRerunStart($, w, drawn, known, now);
   for (const flow of [...(w.pull?.workflows ?? []), ...(w.pull?.mergeRuns?.workflows ?? [])]) {
     const key = estimateKey(w.host, flow.id);
     const run = flow.status === 'done' ? JSON.stringify([key, flow.url, flow.attempt]) : null;
@@ -374,7 +381,9 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
     }
     asked.set(key, now);
     try {
-      const r = await $.process.run(estimateArgs(w.host, w.repo, flow.id));
+      const r = await $.process.run(estimateArgs(w.host, w.repo, flow.id), {
+        timeoutMs: VIEW_TIMEOUT_MS,
+      });
       const ms = r.exitCode === 0 ? parseEstimate(r.stdout) : null;
       if (ms === null || (ms === 0 && isKnown)) continue;
       await update($, estimates, (all) => ({ ...all, [key]: ms }));
@@ -383,6 +392,38 @@ async function learnEstimates($: $, w: Watch, now: number): Promise<void> {
     } catch {
       continue;
     }
+  }
+}
+
+// Asked once per attempt, and again after the retry delay when that fails,
+// until GitHub refuses it; the line says `re-run` without a clock meanwhile.
+async function learnRerunStart(
+  $: $,
+  w: Watch,
+  flow: Workflow,
+  known: Record<string, number>,
+  now: number,
+): Promise<void> {
+  if (flow.runId === undefined) return;
+  const key = rerunKey(w.host, flow.runId, flow.attempt);
+  if (known[key] !== undefined || now - (asked.get(key) ?? -Infinity) < ESTIMATE_RETRY_MS) return;
+  asked.set(key, now);
+  try {
+    const r = await $.process.run(attemptArgs(w.host, w.repo, flow.runId, flow.attempt), {
+      timeoutMs: VIEW_TIMEOUT_MS,
+    });
+    // The run is gone, or the token cannot read Actions: asking again will not
+    // help. A rate limit is a 403 too, but it lifts.
+    if (r.exitCode !== 0 && /HTTP 40[34]\b/.test(r.stderr) && !isRateLimited(r.stdout, r.stderr)) {
+      asked.set(key, Infinity);
+      return;
+    }
+    const start = r.exitCode === 0 ? parseAttemptStart(r.stdout) : null;
+    if (start === null) return;
+    await update($, estimates, (all) => ({ ...all, [key]: start }));
+    asked.delete(key);
+  } catch {
+    // Left for the retry delay, as an estimate is.
   }
 }
 

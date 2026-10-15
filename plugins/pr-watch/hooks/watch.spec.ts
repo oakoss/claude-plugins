@@ -16,6 +16,7 @@ import {
   untilText,
   isSettled,
   lineOf,
+  rerunKey,
   mergedPullOf,
   mergingPull,
   movesPulls,
@@ -1184,6 +1185,9 @@ function textOf(w: Watch, estimates = {}, columns = 80): string {
 }
 
 const runningCi = () => ci([job('CI Summary', null, true)]);
+// The line of a pull request whose CI holds these jobs.
+const left = (...jobs: Job[]) => textOf(watched(pull([ci(jobs)])));
+const queued = (name: string): Job => ({ ...job(name, null), status: 'queued' });
 const KNOWN = { 'github.com/1': 140_000 };
 
 // How many cells the running bar takes in a band `columns` wide.
@@ -1359,9 +1363,87 @@ describe('lineOf', () => {
     expect(textOf(watched(pull([runningCi()])))).toBe('#128 ● CI 1m10s');
   });
 
-  test('a re-run shows no clock, since GitHub keeps the first attempt’s start', () => {
-    const rerun = { ...runningCi(), isRerun: true };
+  test('a re-run shows no clock until its attempt’s start is known', () => {
+    const rerun = { ...runningCi(), isRerun: true, attempt: 2, runId: 9 };
     expect(textOf(watched(pull([rerun])), KNOWN)).toBe('#128 ● CI re-run');
+    expect(textOf(watched(pull([{ ...rerun, runId: undefined }])), KNOWN)).toBe('#128 ● CI re-run');
+  });
+
+  test('a re-run counts from its attempt’s start, with no bar', () => {
+    const rerun = { ...runningCi(), isRerun: true, attempt: 2, runId: 9 };
+    const known = { ...KNOWN, [rerunKey('github.com', 9, 2)]: at - 72_000 };
+    expect(textOf(watched(pull([rerun])), known)).toBe('#128 ● CI re-run 1m12s');
+    const other = { ...KNOWN, [rerunKey('github.com', 9, 1)]: at - 72_000 };
+    expect(textOf(watched(pull([rerun])), other)).toBe('#128 ● CI re-run');
+  });
+
+  test('names the jobs a running gate still waits on, once some are done', () => {
+    expect(left(job('Lint', 'SUCCESS'), job('Windows', null))).toBe('#128 ● CI: Windows 1m10s');
+    expect(left(job('Lint', 'SUCCESS'), job('Windows', null), job('Mac', null))).toBe(
+      '#128 ● CI: Windows, Mac 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), job('A', null), job('B', null), job('C', null))).toBe(
+      '#128 ● CI: 3 jobs 1m10s',
+    );
+    expect(left(job('Lint', null), job('Tests', null))).toBe('#128 ● CI 1m10s');
+  });
+
+  test('says queued where no job left has started, and clips long names', () => {
+    expect(left(job('Lint', 'SUCCESS'), queued('Windows'))).toBe('#128 ● CI: Windows queued 1m10s');
+    expect(left(queued('Lint'), queued('Tests'))).toBe('#128 ● CI queued 1m10s');
+    expect(left(job('Lint', 'SUCCESS'), queued('Windows'), job('Mac', null))).toBe(
+      '#128 ● CI: Windows queued, Mac 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), queued('A'), queued('B'), job('C', null))).toBe(
+      '#128 ● CI: 3 jobs 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), queued('A'), queued('B'), queued('C'))).toBe(
+      '#128 ● CI: 3 jobs queued 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), job('Analyze (javascript-typescript)', null))).toBe(
+      '#128 ● CI: Analyze (javascript-typ… 1m10s',
+    );
+  });
+
+  test('reads only this attempt’s start, and names a re-run’s jobs after it', () => {
+    const third = { ...runningCi(), isRerun: true, attempt: 3, runId: 9 };
+    const second = { ...KNOWN, [rerunKey('github.com', 9, 2)]: at - 72_000 };
+    expect(textOf(watched(pull([third])), second)).toBe('#128 ● CI re-run');
+    const jobs = [job('Lint', 'SUCCESS'), queued('Tests')];
+    const rerun = { ...ci(jobs), isRerun: true, attempt: 2, runId: 9 };
+    const started = { [rerunKey('github.com', 9, 2)]: at - 4000 };
+    expect(textOf(watched(pull([rerun])), started)).toBe('#128 ● CI re-run: Tests queued 0m04s');
+  });
+
+  test('names nothing, and says no queued, when every job of a running gate is done', () => {
+    const done = flow(1, 'CI', [job('Lint', 'SUCCESS')], 'running');
+    expect(textOf(watched(pull([done])))).toBe('#128 ● CI 1m10s');
+  });
+
+  test('keeps a job name of exactly 24 characters whole', () => {
+    const name = 'abcdefghijklmnopqrstuvwx';
+    expect(left(job('Lint', 'SUCCESS'), job(name, null))).toBe(`#128 ● CI: ${name} 1m10s`);
+  });
+
+  test('names the jobs left, and a re-run’s clock, on a merged line too', () => {
+    const release = flow(9, 'Release', [job('Build', 'SUCCESS'), job('Publish', null)]);
+    expect(textOf(watched(merged([release])))).toBe(
+      '#128 merged into main · ● Release: Publish 1m10s',
+    );
+    const rerun = { ...release, isRerun: true, attempt: 2, runId: 4 };
+    const started = { [rerunKey('github.com', 4, 2)]: at - 5000 };
+    expect(textOf(watched(merged([rerun])), started)).toBe(
+      '#128 merged into main · ● Release re-run: Publish 0m05s',
+    );
+  });
+
+  test('names the jobs left inside the width the bar is sized from', () => {
+    const p = pull([ci([job('Lint', 'SUCCESS'), job('Windows', null)])]);
+    const segs = lineOf(watched(p), at, { 'github.com/1': 140_000 }, 40);
+    const used = '#128 ● CI: Windows '.length + ' 1m10s / ~2m20s'.length;
+    expect((segs[2]?.text.length ?? 0) + (segs[3]?.text.length ?? 0)).toBe(
+      Math.max(8, 40 - used - 2),
+    );
   });
 
   test('a waiting, blocked or failing PR still shows optional workflows that fail or run', () => {

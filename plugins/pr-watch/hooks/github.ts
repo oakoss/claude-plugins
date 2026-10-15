@@ -8,7 +8,7 @@ const suites = (required: string) => `checkSuites(first: 100) {
       pageInfo { hasNextPage }
       nodes {
         status conclusion
-        workflowRun { runAttempt createdAt url workflow { databaseId name } }
+        workflowRun { databaseId runAttempt createdAt url workflow { databaseId name } }
         checkRuns(first: 100) { nodes { name status conclusion detailsUrl ${required} } }
       }
     }`;
@@ -111,6 +111,17 @@ export function estimateArgs(host: string, repo: string, workflowId: number): st
   ];
 }
 
+// GraphQL has no start time for a re-run: its run keeps the first attempt's.
+export function attemptArgs(host: string, repo: string, runId: number, attempt: number): string[] {
+  return ['gh', 'api', ...onHost(host), `repos/${repo}/actions/runs/${runId}/attempts/${attempt}`];
+}
+
+// When the attempt started, in ms; null when the answer has no such time.
+export function parseAttemptStart(stdout: string): number | null {
+  const start = (parse(stdout) as { run_started_at?: unknown } | null)?.run_started_at;
+  return isTime(start) ? Date.parse(start) : null;
+}
+
 function statusOf(status: unknown): RunStatus {
   if (status === 'COMPLETED') return 'done';
   if (status === 'IN_PROGRESS') return 'running';
@@ -161,6 +172,7 @@ function workflowOf(s: any): Workflow | null {
   const workflowId = id(run?.workflow?.databaseId);
   const name = str(run?.workflow?.name);
   if (workflowId === null || name === null || !isTime(run.createdAt)) return null;
+  const runId = id(run.databaseId);
   const jobs: Job[] = [];
   for (const node of list(s.checkRuns?.nodes)) {
     const j = jobOf(node);
@@ -172,9 +184,10 @@ function workflowOf(s: any): Workflow | null {
     status: statusOf(s.status),
     conclusion: str(s.conclusion),
     startedAt: run.createdAt,
-    // A re-run keeps the first attempt's creation time, so its clock is unknown.
+    // A re-run keeps the first attempt's creation time, so its clock is asked of REST.
     isRerun: typeof run.runAttempt === 'number' && run.runAttempt > 1,
     attempt: typeof run.runAttempt === 'number' ? run.runAttempt : 1,
+    ...(runId === null ? {} : { runId }),
     url: str(run.url) ?? '',
     jobs,
   };

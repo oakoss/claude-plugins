@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Held, Pull, Watch, Workflow } from '../types';
+import type { Activity, Held, Job, Pull, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -349,6 +349,30 @@ function gateOf(running: Workflow[], estimates: Record<string, number>, host: st
 
 export function estimateKey(host: string, workflowId: number): string {
   return `${host}/${workflowId}`;
+}
+
+export function rerunKey(host: string, runId: number, attempt: number): string {
+  return `${host}/run/${runId}/${attempt}`;
+}
+
+const JOB_NAME_MAX = 24;
+
+const isQueued = (j: Job) => j.status === 'queued';
+
+const clip = (name: string) =>
+  name.length > JOB_NAME_MAX ? `${name.slice(0, JOB_NAME_MAX - 1)}…` : name;
+
+// A running gate's name, with what it still waits on once some of its jobs
+// are done: up to two names, else a count. `queued` covers GitHub's queued,
+// waiting and pending alike, since none of them has started.
+function gateTextOf(gate: Workflow): string {
+  const name = gate.isRerun ? `${gate.name} re-run` : gate.name;
+  const left = gate.jobs.filter((j) => j.status !== 'done');
+  const allQueued = left.length > 0 && left.every((j) => isQueued(j)) ? ' queued' : '';
+  if (left.length === 0 || left.length === gate.jobs.length) return `${name}${allQueued}`;
+  if (left.length > 2) return `${name}: ${left.length} jobs${allQueued}`;
+  const names = left.map((j) => `${clip(j.name)}${isQueued(j) ? ' queued' : ''}`);
+  return `${name}: ${names.join(', ')}`;
 }
 
 // Null once every counted workflow has passed.
@@ -890,9 +914,19 @@ export function lineOf(
   const gate = v.gate;
   const elapsed = now - Date.parse(gate.startedAt);
   const estimate = estimates[estimateKey(watch.host, gate.id)] ?? 0;
-  const name = { text: ` ● ${gate.name} `, color: 'blue', url: gate.url || undefined };
+  const url = gate.url || undefined;
+  if (gate.isRerun) {
+    // The bar's length is the whole workflow's, which a re-run of failed jobs undercuts.
+    const start =
+      gate.runId === undefined
+        ? undefined
+        : estimates[rerunKey(watch.host, gate.runId, gate.attempt)];
+    const name = { text: ` ● ${gateTextOf(gate)}`, color: 'blue', url };
+    const clock = start === undefined ? [] : [{ text: ` ${clockText(now - start)}`, isDim: true }];
+    return [...lead, name, ...clock, ...others(gate.id), ...tail];
+  }
+  const name = { text: ` ● ${gateTextOf(gate)} `, color: 'blue', url };
   const head = [...lead, name];
-  if (gate.isRerun) return [...head, { text: 're-run', isDim: true }, ...others(gate.id), ...tail];
   if (estimate <= 0) {
     return [...head, { text: clockText(elapsed), isDim: true }, ...others(gate.id), ...tail];
   }
