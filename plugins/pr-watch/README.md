@@ -32,15 +32,20 @@ pr-watch draws above whatever other plugins draw in the same band, rather than r
 
 ## Telling Claude
 
-pr-watch also tells Claude, so you do not have to prompt it. It submits a message to the session, which runs once Claude is idle, when:
+pr-watch also tells Claude, so you do not have to prompt it. For news Claude can act on alone, it submits a message to the session, which runs once Claude is idle, when:
 
-- GitHub reports a pull request ready to merge;
 - a run fails, in any workflow, as soon as its first job does, naming the jobs failed by then with links to the first job's log and to the run;
 - a pull request has merge conflicts or a reviewer requests changes, whatever its checks say;
-- a merge's or a push's checks pass, once its 90 seconds are up, unless Claude made the merge itself (a failure on the merge commit is still told);
 - someone other than you comments on or reviews it.
 
-Each is told once while it lasts: a later job failing in a run already told, such as a summary job, is not told again, while a new run or a re-run that fails, or a pull request ready again after new checks, is. A watch's first read hears the comments and reviews already there without telling them. The message says it is news, not a request to merge. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason. A message that says a pull request is ready to merge says so first. News from these reads that arrives while Claude is working is held until the turn ends, each line once. A pull request it calls ready is then read again, and is not called ready if it has merged or closed meanwhile, or a later read found it no longer ready; a read that fails counts as still open.
+News Claude has nothing to do about waits for your next message instead, which carries it to Claude unseen:
+
+- GitHub reports a pull request ready to merge. Merging needs your ask, so this waits, unless [review-cycle](../review-cycle)'s stop-before setting is `release` or `never stop`, which lets Claude merge unasked; then it wakes Claude like the news above. pr-watch reads that setting where review-cycle does: `.claude/settings.local.json`, else your own or managed settings, made earlier by `.claude/settings.json`. Without it, a ready pull request waits.
+- A merge's or a push's checks pass, once its 90 seconds are up, unless Claude made the merge itself (a failure on the merge commit is still told, at once).
+
+A pull request ready to merge also puts `merge #<number>` in the empty prompt box as a suggestion, Tab to take, unless `promptSuggestionEnabled` is `false` in your settings. A ready pull request and a failed run also send a notification through your notification channel, beside the toast, for when you are away from the terminal.
+
+Each is told once while it lasts: a later job failing in a run already told, such as a summary job, is not told again, while a new run or a re-run that fails, or a pull request ready again after new checks, is. A watch's first read hears the comments and reviews already there without telling them. Each message says it is news, not a request to merge, and one that says a pull request is ready to merge says so first. If it cannot be submitted, a toast says so; a hook that refuses it shows its own reason. News from these reads that arrives while Claude is working is held until the turn ends, each line once. A pull request it calls ready is then read again, and is not called ready if it has merged or closed meanwhile, or a later read found it no longer ready; a read that fails counts as still open. Your next message reads a waiting ready pull request again the same way, for up to 3 seconds, so it is not called ready once it has merged or closed, is no longer watched, or a later read found it no longer ready. Only a message you send carries the news: a slash command, a background task's notification or another plugin's prompt leaves it waiting, as does a message a hook drops. A ready pull request that cannot be kept for your message wakes Claude instead; a toast says so, as it does for passed checks it could not keep.
 
 After ten reads in a row whose only news was comments and reviews, those stop waking Claude until other news comes, so a chatty bot or thread cannot keep it busy. The tenth message says so.
 
@@ -53,7 +58,7 @@ In `/config`:
 | Wake Claude      | `off`, `checks`, `checks and comments`     | `checks and comments` |
 | Bots wake Claude | `never`, `reviews`, `comments and reviews` | `never`               |
 
-`checks` tells everything above except comments and reviews. `off` leaves the line and its toasts as they are. The bot setting applies when Wake Claude includes comments: `reviews` lets a review bot's reviews through, such as CodeRabbit or Copilot, but not bot comments such as plans, coverage reports or previews. Changing a setting reports no history: comments heard while they were not told stay quiet, and whatever still lasts when waking is turned back on is told once.
+`checks` tells everything above except comments and reviews. `off` tells Claude nothing, at once or with your next message, and leaves the line, its toasts and notifications as they are. The bot setting applies when Wake Claude includes comments: `reviews` lets a review bot's reviews through, such as CodeRabbit or Copilot, but not bot comments such as plans, coverage reports or previews. Changing a setting reports no history: comments heard while they were not told stay quiet, and whatever still lasts when waking is turned back on is told once.
 
 ## Tools for Claude
 
