@@ -6,7 +6,7 @@ import { expect, test } from 'vitest';
 import { skillText } from './agents';
 
 test('canonicalizing covers every file type the pre-commit hook rewrites', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain(
     'Cover every file type the pre-commit hook rewrites, not only those a check script covers.',
   );

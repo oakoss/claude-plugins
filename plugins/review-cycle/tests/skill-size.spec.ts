@@ -6,7 +6,7 @@ import { expect, test } from 'vitest';
 import { skillText } from './agents';
 
 test('the review skill stays within its budget', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text.length).toBeLessThanOrEqual(62_000);
   expect(text.split('\n').length).toBeLessThanOrEqual(500);
 });

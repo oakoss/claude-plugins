@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 import { phase, skillText } from './agents';
 
 function section(n: number): string {
-  return phase(skillText('review'), n, 'review').join('\n');
+  return phase(skillText('review-cycle', 'review'), n, 'review').join('\n');
 }
 
 test('the review skill checks the spec in the first round, not after the loop', () => {

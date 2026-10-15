@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 import { skillText } from './agents';
 
 test('the review skill commits a clean result and pushes only on request', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain('commit the reviewed work now');
   expect(text).toContain('unless `mcp__review-cycle__status` reports `mayCommit` false');
   expect(text).toContain('held off a commit');

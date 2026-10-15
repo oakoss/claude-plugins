@@ -6,7 +6,7 @@ import { expect, test } from 'vitest';
 import { phase, skillText } from './agents';
 
 test("Phase 2 reads each project check's exit code", () => {
-  const two = phase(skillText('review'), 2, 'Canonicalize').join('\n');
+  const two = phase(skillText('review-cycle', 'review'), 2, 'Canonicalize').join('\n');
   expect(two).toContain("Read each check's exit code, or run it unpiped");
   expect(two).toContain('a nonzero exit is never a pass');
   expect(two).toContain('output cut short by `tail` or `head` is not a pass');

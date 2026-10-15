@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 import { phase, skillText } from './agents';
 
 test('the Codex leg runs with the repository read-only and is told why', () => {
-  const three = phase(skillText('review'), 3, 'Fan-out').join('\n');
+  const three = phase(skillText('review-cycle', 'review'), 3, 'Fan-out').join('\n');
   expect(three).toContain(
     `codex review --uncommitted -c 'default_permissions="review-cycle"' -c 'permissions.review-cycle.filesystem={":root"="read", ":workspace_roots"="read", "<SCRATCH>"="write"}'`,
   );

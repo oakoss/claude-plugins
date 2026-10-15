@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 import { phase, skillText } from './agents';
 
 test('the ceiling is 2 light and 3 full, and the last iteration holds its findings', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain('overriding the tier default (3 for the full tier, 2 for light;');
   expect(text).toContain('default iteration ceiling 2 (an explicit user `max` still wins)');
   expect(text).toContain('Full conditional fan-out, default ceiling 3,');

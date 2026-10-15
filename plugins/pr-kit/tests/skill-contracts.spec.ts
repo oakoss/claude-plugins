@@ -5,18 +5,14 @@
 // Every extraction throws when it comes back empty, so a renamed heading or a
 // moved fence fails here instead of passing with nothing checked.
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { describe, expect, test } from 'vitest';
 
-const PLUGINS = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
-const PR_KIT = path.join(PLUGINS, 'pr-kit');
+import { REPO_ROOT, section, skillText } from '../../../tests/skills';
 
-function skillText(plugin: string, skill: string): string {
-  return readFileSync(path.join(PLUGINS, plugin, 'skills', skill, 'SKILL.md'), 'utf8');
-}
+const PR_KIT = path.join(REPO_ROOT, 'plugins/pr-kit');
 
 function prKitSkills(): string[] {
   const names = readdirSync(path.join(PR_KIT, 'skills')).toSorted();
@@ -40,14 +36,6 @@ function fenceLines(fences: string[]): string[] {
 
 function prose(text: string): string {
   return text.replaceAll(/^```[\s\S]*?^```$/gm, '');
-}
-
-function section(text: string, heading: string, label: string): string {
-  const start = text.indexOf(`\n## ${heading}\n`);
-  if (start === -1) throw new Error(`${label}: no "## ${heading}" section`);
-  const body = text.slice(start + heading.length + 5);
-  const end = body.indexOf('\n## ');
-  return end === -1 ? body : body.slice(0, end);
 }
 
 function jsonFields(fences: string[]): Set<string> {
@@ -404,26 +392,6 @@ describe('ship: the pull request body reference', () => {
 });
 
 describe('every skill', () => {
-  test('no skill tells the model to invoke a disable-model-invocation skill', () => {
-    let resolved = 0;
-    for (const skill of prKitSkills()) {
-      const text = skillText('pr-kit', skill);
-      for (const [ref, plugin, target] of text.matchAll(
-        /(?<![\w/.])\/([a-z][a-z-]*):([a-z][a-z-]*)\b/g,
-      )) {
-        // A plugin outside this repository cannot be checked; one inside it
-        // must hold the skill, so a misspelled reference fails on the read.
-        if (!existsSync(path.join(PLUGINS, plugin))) continue;
-        const front = skillText(plugin, target).split('\n---\n', 1)[0];
-        resolved += 1;
-        expect(front, `${skill} → ${ref}`).not.toMatch(
-          /^disable-model-invocation:\s*["']?true["']?\s*(?:#.*)?$/m,
-        );
-      }
-    }
-    expect(resolved, 'skill references resolved in this repository').toBeGreaterThan(0);
-  });
-
   test('every <field> placeholder is fetched by a --json query in the same skill', () => {
     // A camelCase placeholder is a gh JSON field; filling one the skill never
     // fetched means the model invents the value.
