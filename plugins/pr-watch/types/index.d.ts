@@ -102,6 +102,8 @@ declare module 'claude-code' {
       ownMerges: string[];
       // News kept from Claude until the person's next prompt carries it.
       quiet: Held[];
+      // The session id whose saved watches were restored.
+      restored: string | null;
     };
   }
 }

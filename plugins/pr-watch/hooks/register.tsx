@@ -56,6 +56,11 @@ import {
   noticeOf,
   heldWith,
   isToldReady,
+  savedOf,
+  entryOf,
+  prunedOf,
+  SESSION_PREFIX,
+  SESSIONS_KEPT,
   contextOf,
   suggestionOf,
   type Merging,
@@ -79,6 +84,8 @@ const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
 // A ready pull request Claude would need asking to merge, and a merge's passed
 // checks, wait for the person's next prompt rather than waking Claude.
 const quiet = atom({ plugin: 'pr-watch', key: 'quiet' } as const, []);
+// The session id whose saved watches were restored; a resume starts it over.
+const restored = atom({ plugin: 'pr-watch', key: 'restored' } as const, null);
 
 const TICK_MS = 1000;
 const ESTIMATE_RETRY_MS = 60_000;
@@ -111,6 +118,13 @@ let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
 let isSettingsFailing = false;
+let isStoreFailing = false;
+// A store that failed is not tried again before this, so a broken one is not
+// read every second.
+const STORE_RETRY_MS = 30_000;
+let storeRetryAt = 0;
+// What `remember` last saved, so an unchanged list writes nothing.
+let lastRemembered: string | null = null;
 // From /config; a change there reloads the module with the new values.
 let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
 
@@ -617,6 +631,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
 
 async function tick($: $): Promise<void> {
   const saved = await read($, watches);
+  await remember($, saved);
   if (saved.length === 0) return;
   const now = await $.clock.now();
   const known = await read($, estimates);
@@ -667,6 +682,89 @@ async function tick($: $): Promise<void> {
     if (isDue) void refresh($, w, now);
   }
   if (isMoving) await update($, clock, () => now);
+}
+
+async function storeFailed($: $, what: string, error: unknown): Promise<void> {
+  if (!isStoreFailing) $.ui.toast(`pr-watch could not ${what}: ${errorText(error)}`);
+  isStoreFailing = true;
+  storeRetryAt = (await $.clock.now()) + STORE_RETRY_MS;
+}
+
+// The pull requests watched, saved under the session's id whenever they
+// change, so `claude --resume` can watch them again. Nothing is written for
+// the session until its own saved watches are restored, so a failed restore
+// does not overwrite them, and the list is saved from the next tick, which
+// holds what the restore added; a session that never watched one saves
+// nothing. A store that refuses is tried again after STORE_RETRY_MS.
+async function remember($: $, list: readonly Watch[]): Promise<void> {
+  try {
+    const now = await $.clock.now();
+    if (now < storeRetryAt) return;
+    const id = await $.session.id();
+    if ((await read($, restored)) !== id) {
+      await restore($, id);
+      return;
+    }
+    const { held } = await read($, turn);
+    const kept = await read($, quiet);
+    const pending = {
+      ready: new Set([...held, ...kept].filter((h) => h.ready !== null).map((h) => h.id)),
+      passed: new Set(kept.filter((h) => h.news.length > 0).map((h) => h.id)),
+    };
+    const pulls = savedOf(list, pending, idOf);
+    const text = JSON.stringify([id, pulls]);
+    if (text === lastRemembered) return;
+    const key = SESSION_PREFIX + id;
+    if (pulls.length > 0 || (await $.store.get(key)) !== undefined) {
+      await $.store.set(key, { at: now, pulls });
+      await prune($);
+    }
+    lastRemembered = text;
+    storeRecovered();
+  } catch (error) {
+    await storeFailed($, 'save its watches for a resume', error);
+  }
+}
+
+function storeRecovered(): void {
+  isStoreFailing = false;
+  storeRetryAt = 0;
+}
+
+async function prune($: $): Promise<void> {
+  const all = await $.store.keys();
+  const keys = all.filter((k) => k.startsWith(SESSION_PREFIX));
+  if (keys.length <= SESSIONS_KEPT) return;
+  const entries = await Promise.all(keys.map(async (k) => [k, await $.store.get(k)] as const));
+  for (const key of prunedOf(entries)) await $.store.delete(key);
+}
+
+// A resumed session keeps its id, so it finds what it watched; a new one, a
+// fork or a /clear does not. Each is read again at once, telling what changed
+// while the session was away. Done once per session: `restored` outlives a
+// reload of this module, so a reload brings back nothing the person unwatched.
+async function restore($: $, id: string): Promise<void> {
+  try {
+    const { pulls, skipped } = entryOf(await $.store.get(SESSION_PREFIX + id));
+    if (pulls.length > 0)
+      await update($, watches, (all) => {
+        const added: Watch[] = [];
+        for (const p of pulls) {
+          if (![...all, ...added].some((w) => idOf(w) === idOf(p)))
+            added.push({ ...p, checkedAt: 0 });
+        }
+        return added.length === 0 ? all : [...all, ...added];
+      });
+    await update($, restored, () => id);
+    storeRecovered();
+    if (skipped > 0) {
+      $.ui.toast(
+        `pr-watch restored the session's watches but skipped ${skipped} it could not read`,
+      );
+    }
+  } catch (error) {
+    await storeFailed($, "restore the session's watches", error);
+  }
 }
 
 // A poll that fails is said once, until one succeeds.
@@ -941,6 +1039,12 @@ export const register: Register = (on, options) => {
     // Registered before next, so the tools are listed by the first turn.
     await registerTools($);
     const r = await next(e);
+    try {
+      const id = await $.session.id();
+      if ((await read($, restored)) !== id) await restore($, id);
+    } catch (error) {
+      await storeFailed($, "restore the session's watches", error);
+    }
     poller?.cancel();
     // oxlint-disable-next-line unicorn/no-array-method-this-argument -- a timer, not Array#every
     poller = $.clock.every(TICK_MS, () => void safeTick($));

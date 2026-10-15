@@ -33,6 +33,11 @@ import {
   noticeOf,
   contextOf,
   suggestionOf,
+  savedOf,
+  savedFrom,
+  entryOf,
+  prunedOf,
+  SESSIONS_KEPT,
   type BotSetting,
   type Memory,
   type WakeSetting,
@@ -1001,6 +1006,107 @@ const held = (id: string, ready: string | null, news: string[] = []) => ({
   url: `u/${id}`,
   news,
   ready,
+});
+
+const watchId = (w: Watch) => `${w.repo}#${w.number}`;
+
+describe('savedOf, savedFrom, entryOf and prunedOf', () => {
+  const watched: Watch = {
+    host: 'github.com',
+    repo: 'o/r',
+    number: 7,
+    url: 'https://github.com/o/r/pull/7',
+    checkedAt: 1,
+    told: [
+      JSON.stringify(['o/r', 7, 'ready']),
+      JSON.stringify(['o/r', 7, 'passed']),
+      JSON.stringify(['o/r', 7, 'conflicts']),
+      'run',
+    ],
+    heard: { since: null, keys: ['c/1'] },
+  };
+
+  const none = { ready: new Set<string>(), passed: new Set<string>() };
+  const id = watchId;
+  const CONFLICTS = JSON.stringify(['o/r', 7, 'conflicts']);
+
+  test('keeps a pull request, not a push, and what Claude was told', () => {
+    const push: Watch = { ...watched, number: 0, push: { branch: 'x', pushedAt: 1 } };
+    expect(savedOf([watched, push], none, id)).toEqual([
+      {
+        host: 'github.com',
+        repo: 'o/r',
+        number: 7,
+        url: 'https://github.com/o/r/pull/7',
+        told: watched.told,
+        heard: { since: null, keys: ['c/1'] },
+      },
+    ]);
+  });
+
+  test('counts a ready or passed line still waiting to be delivered as untold', () => {
+    const ready = { ready: new Set(['o/r#7']), passed: new Set<string>() };
+    const passed = { ready: new Set<string>(), passed: new Set(['o/r#7']) };
+    expect(savedOf([watched], ready, id)[0]?.told).toEqual([
+      JSON.stringify(['o/r', 7, 'passed']),
+      CONFLICTS,
+      'run',
+    ]);
+    expect(savedOf([watched], passed, id)[0]?.told).toEqual([
+      JSON.stringify(['o/r', 7, 'ready']),
+      CONFLICTS,
+      'run',
+    ]);
+  });
+
+  test('rebuilds a saved pull request from the store, field by field', () => {
+    const good = savedOf([watched], none, id)[0];
+    expect(savedFrom(good)).toEqual(good);
+    expect(savedFrom({ ...good, url: 'https://evil/x/pull/1', extra: 1 })).toEqual(good);
+    expect(savedFrom({ ...good, told: 5, heard: { keys: 'abc', since: null } })).toEqual({
+      ...good,
+      told: [],
+      heard: undefined,
+    });
+    expect(
+      savedFrom({ ...good, told: ['a', 3], heard: { since: 's', keys: [1, 'k'], streak: 2 } }),
+    ).toEqual({ ...good, told: ['a'], heard: { since: 's', keys: ['k'], streak: 2 } });
+    for (const bad of [
+      { ...good, host: 1 },
+      { ...good, repo: undefined },
+      { ...good, number: 'x' },
+      { ...good, number: -1 },
+      { ...good, number: 1.5 },
+      null,
+    ]) {
+      expect(savedFrom(bad)).toBeNull();
+    }
+  });
+
+  test('reads an entry, counting what it could not', () => {
+    const good = savedOf([watched], none, id)[0];
+    expect(entryOf({ at: 1, pulls: [good, { host: 'h' }, null] })).toEqual({
+      pulls: [good],
+      skipped: 2,
+    });
+    // What the store answers for a key never set.
+    const unset = new Map<string, unknown>().get('session:x');
+    expect(entryOf(unset)).toEqual({ pulls: [], skipped: 0 });
+    expect(entryOf({ at: 1 })).toEqual({ pulls: [], skipped: 1 });
+  });
+
+  test('prunes the oldest sessions past the newest kept, unreadable ones first', () => {
+    const entries = Array.from(
+      { length: SESSIONS_KEPT + 2 },
+      (_, i) => [`session:s${i}`, { at: i }] as const,
+    );
+    expect(prunedOf([...entries, ['session:bad', null]])).toEqual([
+      'session:s1',
+      'session:s0',
+      'session:bad',
+    ]);
+    expect(prunedOf(entries.slice(0, SESSIONS_KEPT))).toEqual([]);
+  });
 });
 
 describe('contextOf and suggestionOf', () => {
