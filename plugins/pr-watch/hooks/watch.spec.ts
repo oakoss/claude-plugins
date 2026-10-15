@@ -1196,6 +1196,10 @@ function cells(columns: number): number {
   return barCells(lineOf(watched(pull([runningCi()])), at, KNOWN, columns));
 }
 
+const draftWith = (workflows: Workflow[], over: Partial<Pull> = {}) =>
+  watched(pull(workflows, { isDraft: true, ...over }));
+const draft = (workflows: Workflow[]) => draftWith(workflows);
+
 // The two segments after a line's label.
 const leadOf = (p: Pull) => lineOf(watched(p), at, KNOWN, 80).slice(1, 3);
 
@@ -1466,6 +1470,39 @@ describe('lineOf', () => {
     expect(textOf(watched(merged([rerun])), started)).toBe(
       '#128 merged into main · ● Release re-run: Publish 0m05s',
     );
+  });
+
+  test('a draft says so up front, and its checks still show', () => {
+    expect(textOf(draft([runningCi()]))).toBe('#128 draft · ● CI 1m10s');
+    expect(textOf(draft([ci([job('Lint', 'FAILURE'), job('CI Summary', null, true)])]))).toBe(
+      '#128 draft · ✗ CI: Lint failed',
+    );
+    expect(textOf(draft([green(), codeql('FAILURE')]))).toBe(
+      '#128 draft · ✓ checks passed · CodeQL ✗',
+    );
+    expect(textOf(draft([]))).toBe('#128 ○ draft');
+  });
+
+  test('a draft waits on a pending required check, and says what would block it', () => {
+    const passed = [green()];
+    expect(textOf(draftWith(passed, { isRequiredPending: true }))).toBe(
+      '#128 draft · ○ waiting on checks',
+    );
+    expect(textOf(draftWith(passed, { merge: 'DIRTY' }))).toBe(
+      '#128 draft · ✓ checks passed · ⚠ conflicts',
+    );
+    expect(textOf(draftWith(passed, { review: 'CHANGES_REQUESTED' }))).toBe(
+      '#128 draft · ✓ checks passed · ⚠ changes requested',
+    );
+    expect(textOf(draftWith(passed, { merge: 'BEHIND' }))).toBe(
+      '#128 draft · ✓ checks passed · ⚠ behind base',
+    );
+  });
+
+  test('a draft whose checks passed is not called ready', () => {
+    const p = pull([green()], { isDraft: true });
+    expect(verdictAt(p, {})).toEqual({ kind: 'waiting', reason: 'draft' });
+    expect(textOf(watched(p))).not.toContain('ready to merge');
   });
 
   test('names the jobs left inside the width the bar is sized from', () => {
