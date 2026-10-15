@@ -8,9 +8,22 @@ import type { Word } from './shell';
 export type GhContext = 'fixed' | 'elsewhere' | 'beside';
 
 // `asks` says why the push asks whatever the setting; a `force` one needs a
-// request for a bare force, since the API has no lease.
-export type Asking = { asks: string; force: boolean };
-export const asking = (asks: string, force: boolean): Asking => ({ asks, force });
+// request for a bare force, since the API has no lease. `toDefault`: no branch
+// named, so it lands on the default one; `unknown`: where it goes is decided at
+// run time; `branch`: the branch a forced update or delete names.
+export type Asking = {
+  asks: string;
+  force: boolean;
+  tag?: string;
+  toDefault?: true;
+  unknown?: true;
+  branch?: { name: string; repo: string | null; deletes: boolean };
+};
+export const asking = (
+  asks: string,
+  force: boolean,
+  also: Omit<Asking, 'asks' | 'force'> = {},
+): Asking => ({ asks, force, ...also });
 
 // `head` is a pull request's own branch, looked up by `gh pr view <head>`.
 export type PushRef =
@@ -142,16 +155,25 @@ function readApi(words: Word[]): ApiCall {
 
 // A branch as GitHub's ref APIs take it, or why the push it names asks: `null`
 // is a name read at run time, `undefined` none at all.
-function branchOf(name: string | null | undefined, missing: string): string | Asking {
+function branchOf(
+  name: string | null | undefined,
+  missing: string,
+  toDefault?: true,
+): string | Asking {
   if (name === null) {
-    return asking('the branch it names is built at run time or read from a file', false);
+    return asking('the branch it names is built at run time or read from a file', false, {
+      unknown: true,
+    });
   }
-  if (name?.startsWith('refs/tags/')) return asking('it pushes a tag', false);
+  if (name?.startsWith('refs/tags/')) {
+    return asking('it pushes a tag', false, { tag: name.slice('refs/tags/'.length) });
+  }
   if (name?.startsWith('refs/') && !name.startsWith('refs/heads/')) {
     return asking(`it writes \`${name}\`, which is no branch`, false);
   }
   const branch = name?.replace(/^refs\/heads\//, '');
-  return branch === undefined || branch === '' ? asking(missing, false) : branch;
+  if (branch !== undefined && branch !== '') return branch;
+  return asking(missing, false, toDefault ? { toDefault } : {});
 }
 
 function pushRef(
@@ -159,12 +181,17 @@ function pushRef(
   missing: string,
   repo: string | null,
   where: GhContext,
+  toDefault?: true,
 ): PushRef {
-  if (where === 'elsewhere') return asking('where it pushes is picked outside its words', false);
-  const branch = branchOf(name, missing);
+  if (where === 'elsewhere') {
+    return asking('where it pushes is picked outside its words', false, { unknown: true });
+  }
+  const branch = branchOf(name, missing, toDefault);
   if (typeof branch !== 'string') return branch;
   if (where === 'beside' && repo === null) {
-    return asking('another step in the command can change which repository it reaches', false);
+    return asking('another step in the command can change which repository it reaches', false, {
+      unknown: true,
+    });
   }
   return { branch, repo };
 }
@@ -179,9 +206,9 @@ function restAction(
 ): GhAction | null {
   const field = (key: string) => (call.unnamed || call.input ? null : call.fields.get(key));
   const unknown = (key: string) => call.input || call.unnamed || call.fields.get(key) === null;
-  const push = (name: string | null | undefined, missing: string): GhAction => ({
+  const push = (name: string | null | undefined, missing: string, toDefault?: true): GhAction => ({
     kind: 'push',
-    ref: pushRef(name, missing, repo, where),
+    ref: pushRef(name, missing, repo, where, toDefault),
   });
   if (path === 'pulls') return method === 'POST' ? { kind: 'pr' } : null;
   if (path === 'releases' || path.startsWith('releases/')) return { kind: 'release' };
@@ -221,7 +248,7 @@ function restAction(
     return { kind: 'comment' };
   }
   if (path.startsWith('contents/')) {
-    return push(field('branch'), 'it names no branch, so it commits to the default branch');
+    return push(field('branch'), 'it names no branch, so it commits to the default branch', true);
   }
   if (path === 'merges') return push(field('base'), 'its base branch is not written out');
   if (path === 'merge-upstream') {
@@ -238,11 +265,20 @@ function restAction(
   const ref = /^git\/refs\/(heads|tags)\/(.+)$/.exec(path);
   if (ref) {
     const name = ref[2] ?? '';
-    if (ref[1] === 'tags') return { kind: 'push', ref: asking('it pushes a tag', false) };
-    if (method === 'DELETE') return { kind: 'push', ref: asking(`it deletes \`${name}\``, false) };
+    if (ref[1] === 'tags') {
+      return { kind: 'push', ref: asking('it pushes a tag', false, { tag: name }) };
+    }
+    // A repository picked outside the words, or changed by another step, has
+    // a default branch the gate cannot look up.
+    const unsure = where === 'elsewhere' || (where === 'beside' && repo === null);
+    const named = (deletes: boolean) =>
+      unsure ? { unknown: true as const } : { branch: { name, repo, deletes } };
+    if (method === 'DELETE') {
+      return { kind: 'push', ref: asking(`it deletes \`${name}\``, false, named(true)) };
+    }
     const force = field('force');
     if (force === null || (force !== undefined && force !== 'false')) {
-      return { kind: 'push', ref: asking(`it force-updates \`${name}\``, true) };
+      return { kind: 'push', ref: asking(`it force-updates \`${name}\``, true, named(false)) };
     }
     return push(name, '');
   }
@@ -533,6 +569,6 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   if (MCP_COMMENT.has(name)) return { kind: 'comment' };
   // gh's lookup of the default branch needs the repository spelled out.
   if (repo === null) return { kind: 'push', ref: asking('it does not name its repository', false) };
-  const branch = branchOf(text(input.branch) ?? undefined, 'it names no branch');
+  const branch = branchOf(text(input.branch) ?? undefined, 'it names no branch', true);
   return { kind: 'push', ref: typeof branch === 'string' ? { branch, repo } : branch };
 }

@@ -21,7 +21,9 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 
 // What the user's message asked for. `push` is only what they asked to push:
 // the push a pull request needs is judged by the gate, which still asks
-// before a tag or default-branch push it would carry. `comment` is a reply on
+// before a tag or default-branch push it would carry. `pushNamed` holds where
+// a push request or the offer it answered said the push goes: a branch, a
+// tag as `tag:<name>`, or `tag:*` for any. `comment` is a reply on
 // a pull request, asked for by addressing its review. `autoMerge` is a merge
 // asked for once the pull request is ready ("merge it when CI passes"), which
 // only `gh pr merge --auto` leaves to GitHub. `mergeNamed` holds the pull
@@ -34,6 +36,7 @@ export type Grant = Readonly<{
   commit: boolean;
   finish: readonly Finishes[];
   push: PushLevel;
+  pushNamed: readonly string[];
   pr: boolean;
   merge: boolean;
   mergeNamed: readonly string[];
@@ -48,6 +51,7 @@ export const NO_GRANT: Grant = Object.freeze({
   commit: false,
   finish: [],
   push: 'none',
+  pushNamed: [],
   pr: false,
   merge: false,
   mergeNamed: [],
@@ -838,6 +842,63 @@ function onlyAutoMerge(g: MutableGrant): boolean {
   );
 }
 
+// Where a push goes is named only by a whole sentence of one exact form, so no
+// clause around it can reject, qualify or redirect the name.
+const TICK = '`';
+const NAME = `${TICK}?([^${TICK}\\s]+?)${TICK}?`;
+const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|sure|great|please|let'?s|go ahead and)[\s,]+)*`;
+const TAIL_WORDS = String.raw`(?:\s+(?:now|please|without a lease))*`;
+// "push to main", "push it to origin main", "push the main branch", "push main
+// to origin", "force push main".
+const TYPED_BRANCH = new RegExp(
+  String.raw`^${LEAD}(?:force\s+)?push(?:\s+(?:it|this))?(?:\s+to)?(?:\s+origin)?(?:\s+the)?\s+${TICK}?(main|master)${TICK}?(?:\s+branch)?(?:\s+to\s+origin)?${TAIL_WORDS}$`,
+  'i',
+);
+// "push the tag", "push the tags", "push the v1.2.0 tag", "push tag 0.2.0".
+const TYPED_TAG = new RegExp(
+  String.raw`^${LEAD}push\s+(?:the\s+)?(?:(tags?)|${NAME}\s+tags?|tags?\s+${NAME})${TAIL_WORDS}$`,
+  'i',
+);
+// The offers a refusal suggests: "Push to `develop`?", "Push the `v1.2.0` tag?".
+const OFFERED_BRANCH = new RegExp(
+  String.raw`^push(?: it)? to ${TICK}([^${TICK}\s]+)${TICK}\?$`,
+  'i',
+);
+const OFFERED_TAG = new RegExp(String.raw`^push the ${TICK}([^${TICK}\s]+)${TICK} tag\?$`, 'i');
+
+// Names count only when every sentence of the message is one of the exact
+// forms (or thanks), so a retraction, a quote or anything else beside them
+// names nothing.
+function typedTargets(typed: string): string[] {
+  const named: string[] = [];
+  for (const raw of sentences(typed)) {
+    const s = raw.trim().replace(/[.!;]+$/, '');
+    if (s === '' || /^(?:thanks|thank you|ty)$/i.test(s)) continue;
+    const branch = TYPED_BRANCH.exec(s);
+    const tag = TYPED_TAG.exec(s);
+    if (branch) named.push((branch[1] ?? '').toLowerCase());
+    else if (tag) {
+      named.push(tag[1] === undefined ? `tag:${(tag[2] ?? tag[3] ?? '').toLowerCase()}` : 'tag:*');
+    } else return [];
+  }
+  return named;
+}
+
+// The answer's last paragraph, whole, in the wording a refusal suggests:
+// nothing before it in the paragraph, and nothing after it.
+function offeredTargets(answer: string): string[] {
+  const asked =
+    answer
+      .trim()
+      .split(/\n[ \t]*\n/)
+      .at(-1)
+      ?.trim() ?? '';
+  const branch = OFFERED_BRANCH.exec(asked);
+  if (branch) return [(branch[1] ?? '').toLowerCase()];
+  const tag = OFFERED_TAG.exec(asked);
+  return tag ? [`tag:${(tag[1] ?? '').toLowerCase()}`] : [];
+}
+
 // What a clause leaves for the clauses after it in the sentence: a mood
 // withholds all of them, a description those that continue it with "and" or
 // "then". `ready` withholds the rest, which may wait on its condition too.
@@ -988,6 +1049,7 @@ const STEPS = ['commit', 'pr', 'merge', 'autoMerge', 'approve', 'release', 'comm
 function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
   into.finish = [...into.finish, ...from.finish];
+  into.pushNamed = [...new Set([...into.pushNamed, ...from.pushNamed])];
   into.mergeNamed = [...into.mergeNamed, ...from.mergeNamed];
   into.readyNamed = [...into.readyNamed, ...from.readyNamed];
   raise(into, from.push);
@@ -1221,7 +1283,9 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   const text = spoken(prompt.trim());
   if (AFFIRMATIVE.test(text)) {
     const offer = accepted(previousAnswer);
-    return settled({ ...offer, ...namedFrom(offer, '', previousAnswer) });
+    // Only a bare yes takes the offer's target; a request names its own.
+    const targets = offeredTargets(previousAnswer);
+    return settled({ ...offer, ...namedFrom(offer, '', previousAnswer, targets) });
   }
   if (CONTINUE_REPLY.test(text))
     return settled({ ...fresh(), finish: accepted(previousAnswer).finish });
@@ -1333,7 +1397,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       release: false,
     });
   }
-  return settled({ ...g, ...namedFrom(g, typed, previousAnswer) });
+  // Read from the message as typed, before quoted or listed lines are dropped.
+  return settled({ ...g, ...namedFrom(g, typed, previousAnswer, typedTargets(text)) });
 }
 
 // A merge, now or once ready, that named no pull request names the one the
@@ -1342,10 +1407,13 @@ function namedFrom(
   g: Grant,
   typed: string,
   previousAnswer: string,
-): Pick<Grant, 'mergeNamed' | 'readyNamed'> {
+  targets: readonly string[],
+): Pick<Grant, 'pushNamed' | 'mergeNamed' | 'readyNamed'> {
   const unnamed = (asked: boolean, named: readonly string[]) =>
     asked && named.length === 0 ? unnamedMerge(typed, previousAnswer) : named;
+  const pushed = g.push === 'none' ? [] : targets;
   return {
+    pushNamed: [...new Set([...g.pushNamed, ...pushed])],
     mergeNamed: unnamed(g.merge, g.mergeNamed),
     readyNamed: unnamed(g.autoMerge, g.readyNamed),
   };

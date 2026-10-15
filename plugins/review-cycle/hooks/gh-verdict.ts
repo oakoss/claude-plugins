@@ -5,7 +5,14 @@
 import { covers, NAMED_ELSEWHERE, type Grant, type HoldReason, type HoldStep } from './consent';
 import type { GhAction, PushRef } from './github';
 import { asks, type Ladder, type Step } from './ladder';
-import { askingReason, pushOutcome } from './push-verdict';
+import {
+  askingReason,
+  pushOutcome,
+  unnamedTarget,
+  type DefaultBranch,
+  type DryRunRef,
+  type Unnamed,
+} from './push-verdict';
 
 // `unreadable` names the settings file that could not be read, and why.
 export type InForce = Ladder & { unreadable?: string };
@@ -210,22 +217,64 @@ async function mergeStep(
 // Why a push the ladder lets through asks anyway, or null: one to the
 // default branch, or one whose branch the gate cannot tell.
 async function pushAsks(lookups: GhLookups, ref: PushRef): Promise<string | null> {
-  if ('asks' in ref) return ref.asks;
+  const t = await branchOf(lookups, ref);
+  if ('asks' in t) return t.asks;
+  return askingReason([t.ref], t.defaults);
+}
+
+// The branch a GitHub write updates and its repository's default branch.
+// `asks` keeps the branch when only the default branch could not be read.
+async function branchOf(
+  lookups: GhLookups,
+  ref: PushRef,
+): Promise<
+  { ref: DryRunRef; defaults: Map<string, DefaultBranch> } | { asks: string; ref?: DryRunRef }
+> {
+  if ('asks' in ref) return { asks: ref.asks };
   let target: { branch: string; repo: string | null } = { branch: '', repo: null };
   if ('head' in ref) {
     const head = await lookups.pullRequest(ref.head);
-    if ('asks' in head) return head.asks;
-    if (head.cross) return "it updates a branch in the pull request's fork";
-    if (head.branch === '') return 'the pull request it updates names no branch';
+    if ('asks' in head) return { asks: head.asks };
+    if (head.cross) return { asks: "it updates a branch in the pull request's fork" };
+    if (head.branch === '') return { asks: 'the pull request it updates names no branch' };
     target = head;
   } else target = ref;
-  const r = read(await lookups.defaultBranch(target.repo), 'the default branch');
-  if (r.asks !== undefined) return r.asks;
   const url = target.repo ?? '';
-  return askingReason(
-    [{ flag: ' ', to: `refs/heads/${target.branch}`, url }],
-    new Map([[url, { branch: r.out }]]),
-  );
+  const branch: DryRunRef = { flag: ' ', to: `refs/heads/${target.branch}`, url };
+  const r = read(await lookups.defaultBranch(target.repo), 'the default branch');
+  if (r.asks !== undefined) return { asks: r.asks, ref: branch };
+  return { ref: branch, defaults: new Map([[url, { branch: r.out }]]) };
+}
+
+const judged = (u: Unnamed | null) => (u === null ? null : { unnamed: u });
+
+// What a push the user asked for still needs: their naming of the default
+// branch or tag it writes, or a word to the agent that its target went
+// unchecked. A write that names no branch lands on the default one.
+async function coveredAsks(
+  lookups: GhLookups,
+  ref: PushRef,
+  named: readonly string[],
+): Promise<{ unnamed: Unnamed } | { asks: string } | { unchecked: string } | null> {
+  if ('asks' in ref && ref.tag !== undefined) {
+    const tag: DryRunRef = { flag: ' ', to: `refs/tags/${ref.tag}`, url: '' };
+    return judged(unnamedTarget([tag], new Map(), named, null));
+  }
+  if ('asks' in ref && (ref.toDefault || ref.unknown)) return { asks: ref.asks };
+  if ('asks' in ref && ref.branch !== undefined) {
+    const { name, repo, deletes } = ref.branch;
+    const r = read(await lookups.defaultBranch(repo), 'the default branch');
+    const url = repo ?? '';
+    const defaults = new Map(r.asks === undefined ? [[url, { branch: r.out }]] : []);
+    const to: DryRunRef = { flag: deletes ? '-' : '+', to: `refs/heads/${name}`, url };
+    const u = unnamedTarget([to], defaults, named, null);
+    if (u !== null) return { unnamed: u };
+    return r.asks === undefined ? null : { unchecked: r.asks };
+  }
+  const t = await branchOf(lookups, ref);
+  if ('defaults' in t) return judged(unnamedTarget([t.ref], t.defaults, named, null));
+  const u = t.ref === undefined ? null : unnamedTarget([t.ref], new Map(), named, null);
+  return u === null ? { unchecked: t.asks } : { unnamed: u };
 }
 
 // Each example is one the consent grammar grants on a yes (consent.spec.ts).
@@ -258,6 +307,12 @@ function ghRefusal(
   return `${notAsked(what, ladder, true, held)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
 }
 
+// A refusal no model reading can lift is `final`; `notes` tell the agent what
+// ran unchecked.
+export type GhVerdict =
+  | { deny: string; final?: true }
+  | { ran: Unasked[]; notes?: readonly string[] };
+
 // What the GitHub writes in a call may run, or the refusal of the first one
 // that may not. A comment is off the ladder: it needs the user's request. A
 // requested pull request lets no push through GitHub's API, which no review
@@ -269,8 +324,9 @@ export async function judgeGh(
   held: Hold,
   lookups: GhLookups,
   model: ModelSteps = {},
-): Promise<{ deny: string } | { ran: Unasked[] }> {
+): Promise<GhVerdict> {
   const ran: Unasked[] = [];
+  const notes: string[] = [];
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
   const may = permitted(granted, ladder, held !== null, model);
@@ -309,9 +365,29 @@ export async function judgeGh(
       case 'push': {
         const { ref } = action;
         const needed = 'asks' in ref && ref.force ? 'bare' : 'push';
-        const outcome = await pushOutcome(covers(granted, needed) ? null : needed, may.push, () =>
-          pushAsks(lookups, ref),
-        );
+        if (covers(granted, needed)) {
+          const c = await coveredAsks(lookups, ref, granted.pushNamed);
+          if (c === null) break;
+          if ('unchecked' in c) {
+            notes.push(
+              `review-cycle ran the push the user asked for without checking where it goes: ${c.unchecked}. If it may have reached the default branch or a tag they did not name, tell them.`,
+            );
+            break;
+          }
+          const asked = "the user's latest message asks for a push, but";
+          if ('asks' in c) {
+            return {
+              deny: `${asked} ${c.asks}, so nothing ran. Write the branch and repository out in the call, and the push is judged by where it goes.`,
+              final: true,
+            };
+          }
+          const then =
+            c.unnamed.offer === null
+              ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
+              : `To push there, ${askThem('where it pushes', c.unnamed.offer, shown)}`;
+          return { deny: `${asked} ${c.unnamed.why}, so nothing ran. ${then}`, final: true };
+        }
+        const outcome = await pushOutcome(needed, may.push, () => pushAsks(lookups, ref));
         if (outcome.kind === 'unasked' && bySetting.push) ran.push({ step: 'push', ladder });
         if (outcome.kind !== 'refused') break;
         if (outcome.missing === 'bare') {
@@ -448,5 +524,5 @@ export async function judgeGh(
       }
     }
   }
-  return { ran };
+  return notes.length === 0 ? { ran } : { ran, notes };
 }
