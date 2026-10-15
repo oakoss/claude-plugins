@@ -475,6 +475,28 @@ export function delayOf(verdict: Verdict, pull: Pull, now: number, shownAt = now
   return slow;
 }
 
+// An open pull request takes the row of the push line of its head branch,
+// with what Claude was told of that push, so the two lines do not stack. Only
+// within one repository: a fork's push is handed over by its own read, which
+// knows the fork's parent. One unwatched during its read takes nothing over.
+export function takeOverPush(all: readonly Watch[], pr: Watch): Watch[] {
+  const head = pr.pull?.head;
+  if (pr.push || pr.pull?.state !== 'OPEN' || !head || !all.includes(pr)) return [...all];
+  const repo = pr.repo.toLowerCase();
+  const at = all.findIndex(
+    (w) =>
+      w.push?.branch === head.branch &&
+      w.host === pr.host &&
+      w.repo.toLowerCase() === repo &&
+      head.repo.toLowerCase() === repo,
+  );
+  const push = all[at];
+  if (!push) return [...all];
+  const told = [...new Set([...(pr.told ?? []), ...(push.told ?? [])])];
+  const moved = told.length === 0 ? pr : { ...pr, told };
+  return all.flatMap((w, i) => (i === at ? [moved] : w === pr ? [] : [w]));
+}
+
 // What the line says, as a key: a new failure differs from an old one.
 export function shownOf(verdict: Verdict): string {
   if (verdict.kind === 'failing' || verdict.kind === 'merged-failing') {

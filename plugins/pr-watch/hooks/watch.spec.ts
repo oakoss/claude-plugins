@@ -17,6 +17,7 @@ import {
   isSettled,
   lineOf,
   rerunKey,
+  takeOverPush,
   type Segment,
   mergedPullOf,
   mergingPull,
@@ -1318,6 +1319,52 @@ describe('after a merge', () => {
     expect(verdictAt(pull([green()], { state: 'CLOSED' }), {}, 'github.com', at)).toEqual({
       kind: 'closed',
     });
+  });
+});
+
+describe('takeOverPush', () => {
+  const head = { branch: 'feat/x', repo: 'O/R' };
+  const pr = (over: Partial<Pull> = {}, told?: string[]) =>
+    watched(pull([green()], { head, ...over }), told ? { told } : {});
+
+  test('puts the pull request in its push line’s row, with what was told of either', () => {
+    const push = { ...pushed([release(null)]), told: ['push'] };
+    const other = watched(pull([green()]), { number: 7 });
+    const mine = pr({}, ['pr']);
+    expect(takeOverPush([push, other, mine], mine)).toEqual([
+      { ...mine, told: ['pr', 'push'] },
+      other,
+    ]);
+  });
+
+  test('leaves the lines alone for another branch or host, a merged pull request, or a push', () => {
+    const push = pushed([release(null)]);
+    const cases = [
+      pr({ head: { branch: 'feat/y', repo: 'o/r' } }),
+      { ...pr(), host: 'ghe.example.com' },
+      pr({ state: 'MERGED' }),
+      pr({ head: undefined }),
+    ];
+    for (const mine of cases) expect(takeOverPush([push, mine], mine)).toEqual([push, mine]);
+    expect(takeOverPush([push], push)).toEqual([push]);
+  });
+
+  test('takes nothing over for a pull request unwatched during its read', () => {
+    const push = pushed([release(null)]);
+    expect(takeOverPush([push], pr())).toEqual([push]);
+  });
+
+  test('leaves a fork’s push to its own read, which knows the fork’s parent', () => {
+    const fork = { ...pushed([release(null)]), repo: 'me/r' };
+    const upstream = pr({ head: { branch: 'feat/x', repo: 'me/r' } });
+    expect(takeOverPush([fork, upstream], upstream)).toEqual([fork, upstream]);
+    const own = pr({ head: { branch: 'feat/x', repo: 'o/r' } });
+    expect(takeOverPush([fork, own], own)).toEqual([fork, own]);
+    const stranger = { ...pr(), repo: 'them/r' };
+    const push = pushed([release(null)]);
+    expect(takeOverPush([push, stranger], stranger)).toEqual([push, stranger]);
+    const sameName = pr({ head: { branch: 'feat/x', repo: 'them/r' } });
+    expect(takeOverPush([push, sameName], sameName)).toEqual([push, sameName]);
   });
 });
 
