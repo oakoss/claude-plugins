@@ -486,6 +486,97 @@ const keyOf = (watch: Who, what: string) =>
 export const isToldReady = (watch: Who & Pick<Watch, 'told'>) =>
   (watch.told ?? []).includes(keyOf(watch, 'ready'));
 
+// A pull request a session watched, as saved for its resume.
+export type Saved = Pick<Watch, 'host' | 'repo' | 'number' | 'url' | 'heard'> & {
+  told: string[];
+};
+// One session's entry in the store, under its own key, so sessions never
+// write over each other.
+export type Entry = { at: number; pulls: Saved[] };
+
+export const SESSION_PREFIX = 'session:';
+// The sessions a store keeps watches for; more than this drops the oldest.
+export const SESSIONS_KEPT = 20;
+
+// The ids of watches whose ready line, or passed checks, wait undelivered.
+export type Pending = { ready: ReadonlySet<string>; passed: ReadonlySet<string> };
+
+// The pull requests to watch again on a resume. A push is not: its line lasts
+// only past its checks. A ready or passed line still waiting to be delivered
+// is lost with the exit, so it counts as untold and the first read after the
+// resume tells it again; one Claude was told stays told.
+export function savedOf(
+  watches: readonly Watch[],
+  pending: Pending,
+  idOf: (w: Watch) => string,
+): Saved[] {
+  return watches.flatMap((w) => {
+    if (w.push) return [];
+    const id = idOf(w);
+    const quiet = new Set([
+      ...(pending.ready.has(id) ? [keyOf(w, 'ready')] : []),
+      ...(pending.passed.has(id) ? [keyOf(w, 'passed')] : []),
+    ]);
+    const told = (w.told ?? []).filter((k) => !quiet.has(k));
+    const { host, repo, number, url, heard } = w;
+    return [{ host, repo, number, url, told, ...(heard && { heard }) }];
+  });
+}
+
+const strings = (xs: unknown): string[] =>
+  Array.isArray(xs) ? xs.filter((x): x is string => typeof x === 'string') : [];
+
+// One saved pull request rebuilt from what the store holds, or null when it
+// does not name one: the store is a file on disk, so nothing else is trusted.
+export function savedFrom(p: unknown): Saved | null {
+  const { host, repo, number, told, heard } = (p ?? {}) as Record<string, unknown>;
+  if (typeof host !== 'string' || typeof repo !== 'string') return null;
+  if (!Number.isSafeInteger(number) || (number as number) <= 0) return null;
+  const h: { since?: unknown; keys?: unknown; streak?: unknown } | null =
+    typeof heard === 'object' ? heard : null;
+  const isHeard =
+    h !== null && Array.isArray(h.keys) && (h.since === null || typeof h.since === 'string');
+  const streak = isHeard && Number.isSafeInteger(h.streak) && (h.streak as number) > 0;
+  return {
+    host,
+    repo,
+    number: number as number,
+    url: `https://${host}/${repo}/pull/${number}`,
+    told: strings(told),
+    ...(isHeard && {
+      heard: {
+        since: h.since as string | null,
+        keys: strings(h.keys),
+        ...(streak && { streak: h.streak as number }),
+      },
+    }),
+  };
+}
+
+// A session's entry as the store holds it: the pull requests it names, and
+// how many entries could not be read.
+export function entryOf(stored: unknown): { pulls: Saved[]; skipped: number } {
+  const pulls = (stored as { pulls?: unknown } | null)?.pulls;
+  if (!Array.isArray(pulls)) return { pulls: [], skipped: stored === undefined ? 0 : 1 };
+  const read = pulls.map((p) => savedFrom(p));
+  const found = read.filter((p): p is Saved => p !== null);
+  return { pulls: found, skipped: read.length - found.length };
+}
+
+const atOf = (v: unknown) => {
+  const t = (v as { at?: unknown } | null)?.at;
+  return typeof t === 'number' && Number.isFinite(t) ? t : -Infinity;
+};
+
+// The session keys past the newest SESSIONS_KEPT, oldest first; an entry with
+// no readable time counts as the oldest.
+export function prunedOf(entries: readonly (readonly [string, unknown])[]): string[] {
+  return entries
+    .toSorted(([, a], [, b]) => atOf(b) - atOf(a))
+    .slice(SESSIONS_KEPT)
+    .map(([key]) => key);
+}
+
 // A ready or passed state, conflicts and requested changes whatever the checks
 // say, and every failing run the line follows, gating or not, as soon as a job
 // in it fails. A run is told once, by its first failed jobs: later ones, a
