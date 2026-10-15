@@ -21,7 +21,7 @@ import {
   viewArgs,
   type Quota,
 } from './github';
-import { configured, mergesUnasked } from './ladder';
+import { configured, loadedRung, mergesUnasked } from './ladder';
 import {
   createdPull,
   mergedPullOf,
@@ -175,15 +175,17 @@ async function deliver($: $, h: Held): Promise<void> {
   if (!(await hold($, { ...h, ready }))) wake($, noticeOf(h.news, ready, h.url), h.label);
 }
 
-// Settings that cannot be read leave the merge asked, as no setting does.
+// Settings that cannot be read leave the merge asked, as no review-cycle does.
 async function isMergeUnasked($: $): Promise<boolean> {
   try {
-    const of = async (source: 'policy' | 'user' | 'project' | 'local') => {
+    const of = async (source: 'project' | 'local') => {
       const settings = await $.settings.read({ source });
       return configured(settings.pluginConfigs);
     };
-    const user = (await of('policy')) ?? (await of('user'));
-    const asked = mergesUnasked({ user, project: await of('project'), local: await of('local') });
+    const user = loadedRung(await $.config.list());
+    const asked =
+      user !== null &&
+      mergesUnasked({ user, project: await of('project'), local: await of('local') });
     isSettingsFailing = false;
     return asked;
   } catch (error) {
@@ -262,6 +264,9 @@ async function quietContext(
   e: Pick<PromptSubmitInput, 'origin' | 'command'>,
 ): Promise<{ text: string | null; restore: () => Promise<void> } | null> {
   if (!PERSON.has(e.origin.kind) || e.command !== undefined || !config.isAwake) return null;
+  // Read first, so a prompt with nothing kept writes nothing a refusing store would toast.
+  const waiting = await read($, quiet);
+  if (waiting.length === 0) return null;
   let taken: readonly Held[] = [];
   await update($, quiet, (all) => {
     taken = all;
@@ -287,7 +292,10 @@ async function quietContext(
     );
     return { text: contextOf(current), restore };
   } catch (error) {
-    await restore();
+    // Said apart, so the caller's toast keeps the error that stopped the prompt.
+    await restore().catch((restoreError) =>
+      $.ui.toast(`pr-watch lost the news it took for your prompt: ${errorText(restoreError)}`),
+    );
     throw error;
   }
 }

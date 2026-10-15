@@ -45,7 +45,12 @@ type Gh = {
   wakeRejects?: boolean;
   // review-cycle's stop-before, by settings source; unset, none is.
   stopBefore?: Partial<Record<'policy' | 'user' | 'project' | 'local', string>>;
+  // review-cycle is not loaded, or its commit gate is switched off.
+  reviewCycle?: 'absent' | 'off';
   settingsFail?: boolean;
+  configFails?: boolean;
+  // Runs once as review-cycle's /config rows are read, before they answer.
+  onConfigList?: () => Promise<void>;
   suggestions?: boolean;
   // A hook beneath pr-watch drops the person's prompts; writes of kept news are refused.
   dropPerson?: boolean;
@@ -168,10 +173,28 @@ function world(
         value: gh.suggestions === undefined ? {} : { promptSuggestionEnabled: gh.suggestions },
       };
     }
+    // The user's rung comes from review-cycle's /config row, never these files.
+    if (e.source === 'policy' || e.source === 'user') return { deny: 'not read' };
     // A ready pull request wakes Claude unless a test asks for the merge to be asked.
-    const stopBefore = (gh.stopBefore ?? { user: 'release' })[e.source as 'user'];
+    const stopBefore = (gh.stopBefore ?? { user: 'release' })[e.source as 'project'];
     if (stopBefore === undefined) return { value: {} };
     return { value: { pluginConfigs: { 'review-cycle@oakoss': { options: { stopBefore } } } } };
+  });
+  // review-cycle's rows show the options it loaded with: a managed value over the user's.
+  on('config.list', async () => {
+    const during = gh.onConfigList;
+    gh.onConfigList = undefined;
+    await during?.();
+    if (gh.configFails) return { deny: 'menu unreadable' };
+    if (gh.reviewCycle === 'absent') return { value: [] };
+    const { policy, user } = gh.stopBefore ?? { user: 'release' };
+    const stopBefore = policy ?? user ?? 'push';
+    return {
+      value: [
+        { key: 'review-cycle.enabled', value: gh.reviewCycle !== 'off' },
+        { key: 'review-cycle.stopBefore', value: stopBefore },
+      ],
+    };
   });
   // The store refuses a value of undefined.
   if (gh.quietFails !== undefined) {
@@ -814,6 +837,45 @@ async function readyIn($: any, on: any, gh: Gh) {
   return { clock, seen };
 }
 
+// News kept for the next prompt, standing in the host's state as a reload
+// leaves it, until pr-watch first writes it; `writes` records what it wrote.
+// `refuse` names why a read or write of a key is refused, if it is.
+function keptBefore(
+  on: any,
+  held: unknown[],
+  refuse: (op: 'get' | 'set', key: string) => string | null = () => null,
+) {
+  let seed: unknown[] | null = held;
+  const writes: unknown[] = [];
+  on('state.get', async ($: unknown, e: { key: string }, next: (e: unknown) => Promise<any>) => {
+    const deny = refuse('get', e.key);
+    if (deny) return { deny };
+    const r = await next(e);
+    return e.key === 'quiet' && seed !== null ? { value: { ...r.value, value: seed } } : r;
+  });
+  on(
+    'state.set',
+    ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+      const deny = refuse('set', e.key);
+      if (deny) return { deny };
+      if (e.key === 'quiet') {
+        seed = null;
+        writes.push(e.value);
+      }
+      return next(e);
+    },
+  );
+  return writes;
+}
+
+const kept = (news: string[], ready: string | null = null) => ({
+  id: ID,
+  label: '#128',
+  url: URL,
+  news,
+  ready,
+});
+
 describe('ready to merge, while merges need asking', () => {
   const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
   const MERGED = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-10-03T22:01:00Z' });
@@ -844,7 +906,7 @@ describe('ready to merge, while merges need asking', () => {
 
   for (const [what, stopBefore] of [
     ['the project file stops earlier than the user', { user: 'release', project: 'merge' }],
-    ['a managed value', { policy: 'push', user: 'release' }],
+    ['a managed value, as its /config row shows it', { policy: 'push', user: 'release' }],
     ['a value outside the options', { user: 'releases' }],
   ] as const) {
     test(`keeps it from Claude under ${what}`, async ($, on) => {
@@ -857,6 +919,21 @@ describe('ready to merge, while merges need asking', () => {
     const stopBefore = { project: 'merge', local: 'release' };
     const { seen } = await readyIn($, on, { pr: prJson(), stopBefore });
     expect(seen.wakes).toHaveLength(1);
+  });
+
+  for (const reviewCycle of ['absent', 'off'] as const) {
+    test(`keeps it from Claude with review-cycle ${reviewCycle}, whatever its setting says`, async ($, on) => {
+      const stopBefore = { user: 'release', local: 'release' };
+      const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore, reviewCycle });
+      expect(seen.wakes).toEqual([]);
+      expect(seen.suggested).toEqual(['merge #128']);
+    });
+  }
+
+  test('keeps it from Claude, and says so, when the /config rows cannot be read', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, configFails: true });
+    expect(seen.wakes).toEqual([]);
+    expect(seen.toasts.filter((t) => t.includes("could not read review-cycle's"))).toHaveLength(1);
   });
 
   test('keeps it from Claude when the settings cannot be read', async ($, on) => {
@@ -1023,9 +1100,154 @@ describe('ready to merge, while merges need asking', () => {
     },
   );
 
+  test(
+    'with waking off, news kept before is not told, and is let go at the start',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      mock.clock(on, { now: T0 });
+      const writes = keptBefore(on, [kept(['EARLIER'])]);
+      const seen = world(on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+      await $.prompt.submit(person());
+      expect(seen.contexts[0]).toBeUndefined();
+      await start($);
+      expect(writes).toContainEqual([]);
+    },
+  );
+
   test('says once that the settings could not be read', async ($, on) => {
     const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, settingsFail: true });
     expect(seen.toasts.filter((t) => t.includes("could not read review-cycle's"))).toHaveLength(1);
+  });
+
+  test('says it again only after a read that worked', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, configFails: true };
+    const { clock, seen } = await readyIn($, on, gh);
+    const again = async () => {
+      gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+      await clock.advance(61_000);
+      gh.pr = prJson();
+      await clock.advance(11_000);
+    };
+    const said = () => seen.toasts.filter((t) => t.includes("could not read review-cycle's"));
+    await again();
+    expect(said()).toHaveLength(1);
+    gh.configFails = false;
+    await again();
+    gh.configFails = true;
+    await again();
+    expect(said()).toHaveLength(2);
+  });
+
+  test('a turn that starts while the settings are read holds the ready line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: 't1' }));
+    on('turn.complete', () => ({ text: '' }));
+    gh.onConfigList = async () => {
+      await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+    };
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    await ($ as any).turn.complete({
+      answer: '',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'answer',
+    });
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('ready to merge');
+  });
+
+  test('a prompt with nothing kept writes nothing, so a refusing store says nothing', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN, quietFails: true });
+    await start($);
+    await $.prompt.submit(person());
+    expect(seen.toasts).toEqual([]);
+  });
+
+  test('a prompt that cannot read again or put back says both', async ($, on) => {
+    // The prompt's read of the watches fails, and from then on every write of kept news.
+    let isBroken = false;
+    let isWriteRefused = false;
+    keptBefore(on, [kept(['EARLIER'], 'OLD READY')], (op, key) => {
+      if (isBroken && op === 'get' && key === 'watches') {
+        isWriteRefused = true;
+        return 'watches unreadable';
+      }
+      return isWriteRefused && op === 'set' && key === 'quiet' ? 'store refused' : null;
+    });
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN });
+    await start($);
+    isBroken = true;
+    await $.prompt.submit(person());
+    const lost = seen.toasts.filter((t) => t.startsWith('pr-watch lost the news it took'));
+    expect(lost).toHaveLength(1);
+    expect(lost[0]).toContain('store refused');
+    expect(seen.toasts.find((t) => t.startsWith('pr-watch could not add'))).toContain(
+      'watches unreadable',
+    );
+  });
+
+  test('a prompt that cannot read again puts the news back for the next one', async ($, on) => {
+    let isBroken = false;
+    keptBefore(on, [kept(['EARLIER'], 'OLD READY')], (op, key) => {
+      if (!isBroken || op !== 'get' || key !== 'watches') return null;
+      isBroken = false;
+      return 'watches unreadable';
+    });
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN });
+    await start($);
+    isBroken = true;
+    await $.prompt.submit(person());
+    expect(seen.toasts).toEqual([
+      'pr-watch could not add its news to your prompt: pr-watch: $.state.get: watches unreadable',
+    ]);
+    await $.prompt.submit(person());
+    expect(seen.contexts.at(-1)?.[0]).toContain('EARLIER');
+  });
+
+  test('a prompt from the Agent SDK carries it', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    await $.prompt.submit(person('next', { origin: { kind: 'sdk' } }));
+    expect(seen.contexts[0]?.[0]).toContain('ready to merge');
+  });
+
+  test('a ready line Claude is woken for leaves the passed lines kept with it', async ($, on) => {
+    keptBefore(on, [kept(['PASSED'], 'OLD READY')]);
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN });
+    expect(seen.wakes).toHaveLength(1);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]?.[0]).toContain('PASSED');
+    expect(seen.contexts[0]?.[0]).not.toContain('OLD READY');
+  });
+
+  test('a dropped prompt puts back what it took under news kept since', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    keptBefore(on, [kept(['EARLIER'], 'OLD READY')]);
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, dropPerson: true };
+    const seen = world(on, gh);
+    await start($);
+    gh.holdView = true;
+    const dropped = $.prompt.submit(person());
+    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await create($);
+    await clock.advance(1000);
+    gh.release!();
+    await dropped;
+    gh.dropPerson = false;
+    await $.prompt.submit(person());
+    const text = seen.contexts.at(-1)?.[0];
+    expect(text).toContain('EARLIER');
+    expect(text).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(text).not.toContain('OLD READY');
   });
 
   test('a failed check still wakes Claude, and notifies', async ($, on) => {
