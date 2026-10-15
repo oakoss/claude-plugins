@@ -1332,14 +1332,16 @@ describe('lineOf', () => {
     const colorOf = (text: RegExp) => segs.find((s) => text.test(s.text))?.color;
     expect(colorOf(/^ ● CI $/)).toBe('blue');
     expect(colorOf(/█/)).toBe('blue');
-    expect(colorOf(/CodeQL ●/)).toBe('blue');
+    expect(segs.slice(-2)).toEqual([{ text: ' · CodeQL ' }, { text: '●', color: 'blue' }]);
     const blocked = lineOf(watched(pull([green()], { merge: 'DIRTY' })), at, KNOWN, 80);
     expect(blocked.find((s) => s.text.includes('⚠'))?.color).toBe('yellow');
   });
 
-  test('marks a failed other workflow red', () => {
-    const segs = lineOf(watched(pull([runningCi(), codeql('FAILURE')])), at, KNOWN, 80);
-    expect(segs.at(-1)).toEqual({ text: ' · CodeQL ✗', color: 'red', isDim: false });
+  test("colors only another workflow's mark: red failed, green passed", () => {
+    const failed = lineOf(watched(pull([runningCi(), codeql('FAILURE')])), at, KNOWN, 80);
+    expect(failed.slice(-2)).toEqual([{ text: ' · CodeQL ' }, { text: '✗', color: 'red' }]);
+    const passed = lineOf(watched(pull([runningCi(), codeql('SUCCESS')])), at, KNOWN, 80);
+    expect(passed.slice(-2)).toEqual([{ text: ' · CodeQL ' }, { text: '✓', color: 'green' }]);
   });
 
   test('sizes the bar to the band, between 8 and 24 cells', () => {

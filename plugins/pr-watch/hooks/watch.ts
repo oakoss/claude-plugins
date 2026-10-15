@@ -812,13 +812,11 @@ export type Segment = { text: string; color?: string; isDim?: boolean; url?: str
 const BAR_MAX = 24;
 const BAR_MIN = 8;
 
-function markSegment(w: Workflow): Segment {
+const MARK_COLOR: Record<string, string> = { '✓': 'green', '✗': 'red', '●': 'blue' };
+
+function markSegments(w: Workflow): Segment[] {
   const mark = markOf(w);
-  return {
-    text: ` · ${w.name} ${mark}`,
-    color: mark === '✗' ? 'red' : mark === '●' ? 'blue' : undefined,
-    isDim: mark === '✓',
-  };
+  return [{ text: ` · ${w.name} ` }, { text: mark, color: MARK_COLOR[mark] }];
 }
 
 // One line of the band. A running gate whose length is known draws a bar that
@@ -868,7 +866,7 @@ export function lineOf(
   const others = (skip: number | null) =>
     runs.workflows
       .filter((w) => w.id !== skip && (isRunning || markOf(w) !== '✓'))
-      .map((w) => markSegment(w));
+      .flatMap((w) => markSegments(w));
   if (v.kind === 'ready') {
     return [...lead, { text: ' ✓ ready to merge', color: 'green' }, ...others(null), ...tail];
   }
