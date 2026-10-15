@@ -75,6 +75,8 @@ type World = {
   registerFails?: string;
   // Each armed clock.after: its wait in ms, and what fires it.
   timers?: { ms: number; fire: () => void }[];
+  // What $.clock.now answers; NOW unless a test moves it.
+  now?: number;
   // Environment variables beyond SHELL and HOME.
   env?: Record<string, string>;
   // What $.settings.read answers, by source; 'throw' makes that read reject.
@@ -353,6 +355,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     },
   );
   on('agent.list', () => ({ value: w.agents ?? [] }));
+  on('clock.now', () => ({ value: w.now ?? NOW }));
   on(
     'clock.after',
     ($: unknown, e: { ms: number }) =>
@@ -1517,7 +1520,6 @@ function fakeStore(
     store.delete(e.key);
     return { value: undefined };
   });
-  on('clock.now', () => ({ value: NOW }));
   on('clock.sleep', () => (opts.hangFirstGet ? { value: undefined } : pending()));
   return store;
 }
@@ -1842,6 +1844,318 @@ describe('shell aliases', () => {
     expect((r.context ?? []).join(' ')).toContain('(the shell exited 1: no output)');
   });
 });
+
+describe('a reload of the module', () => {
+  test('keeps what reviewers saw in the host state', async ($, on) => {
+    fakeWorld(on);
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await review($);
+    await say($, 'push it');
+    await settle();
+    expect(kept?.shape).toBe('gate-1');
+    expect(kept?.value.reviews).toHaveLength(1);
+    expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
+    // What a message granted is not kept, so a reload makes the next step ask.
+    expect(kept?.value.message).toEqual({
+      tree: expect.any(String),
+      nudged: false,
+      prWindow: false,
+    });
+  });
+
+  test('keeps nothing before the session start has taken back what a reload left', async ($, on) => {
+    fakeWorld(on);
+    let writes = 0;
+    on('state.set', ($$: unknown, e: { key: string }, next: any) => {
+      if (e.key === 'gate') writes += 1;
+      return next(e);
+    });
+    await say($, 'fix the parser');
+    await settle();
+    expect(writes).toBe(0);
+  });
+
+  test('takes back a leg it was running, so its review still counts', async ($, on) => {
+    const w = fakeWorld(on);
+    reloadInto(on, keptRecord({ legs: [['leg-before', runningLeg(w, NOW)]] }));
+    await startSession($);
+    await finishLeg($, 'leg-before', false);
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git add -A && git commit -m x'))).toBe(true);
+  });
+
+  test('takes back a finished review, so the commit goes through', async ($, on) => {
+    const w = fakeWorld(on);
+    const tree = treeId(w, w.work);
+    const review = {
+      type: 'review-cycle:code-reviewer',
+      trees: [tree, tree],
+      reviewedPaths: ['a.ts'],
+    };
+    reloadInto(on, keptRecord({ reviews: [review] }));
+    await startSession($);
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git add -A && git commit -m x'))).toBe(true);
+  });
+
+  test('takes back a hold, so a push the user put off still waits', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
+    reloadInto(on, keptRecord({ held: { step: 'push', how: 'declined' } }));
+    await startSession($);
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
+  });
+
+  test('takes back a scratch directory, so the sweep still removes it', async ($, on) => {
+    const w = fakeWorld(on, { git: (a) => (a.startsWith('test -e') ? { exitCode: 1 } : null) });
+    reloadInto(on, keptRecord({ scratch: ['/tmp/review-cycle.abc123'] }));
+    await startSession($);
+    await $.tool.call({ tool: 'mcp__review-cycle__sweep' });
+    expect(w.calls.some((c) => c.argv.join(' ') === 'rm -rf -- /tmp/review-cycle.abc123')).toBe(
+      true,
+    );
+  });
+
+  test('gives a leg taken back the rest of its budget, and caps one past it', async ($, on) => {
+    const w = fakeWorld(on);
+    reloadInto(
+      on,
+      keptRecord({
+        legs: [
+          ['leg-young', runningLeg(w, NOW - 10 * 60_000)],
+          ['leg-old', runningLeg(w, NOW - 31 * 60_000)],
+          ['leg-done', { ...runningLeg(w, NOW - 40 * 60_000), done: true }],
+        ],
+      }),
+    );
+    await startSession($);
+    expect(
+      legTimers(w)
+        .map((t) => t.ms)
+        .toSorted((a, b) => a - b),
+    ).toEqual([0, 20 * 60_000]);
+    w.timers?.find((t) => t.ms === 0)?.fire();
+    await settle();
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([
+      'review-cycle:code-reviewer (agent leg-old): still running after 30 minutes',
+    ]);
+  });
+
+  test('sets aside a record it cannot read, and says so', async ($, on) => {
+    const w = fakeWorld(on);
+    const toasts: string[] = [];
+    on('ui.toast', ($$: unknown, e: { text: string }) => {
+      toasts.push(e.text);
+      return { value: undefined };
+    });
+    reloadInto(on, { ...keptRecord({}), legs: 'many' });
+    await startSession($);
+    expect(toasts).toEqual([
+      'review-cycle could not read the reviews it kept, so it starts this load with none',
+    ]);
+    expect(legTimers(w)).toEqual([]);
+  });
+
+  for (const [name, fields] of [
+    ['a review without its paths', { reviews: [{ type: 'code-reviewer', trees: ['a', 'b'] }] }],
+    ['a hold on no step', { held: { step: 'tag', how: 'declined' } }],
+    ['a message without its flags', { message: {} }],
+    ['a miss that is not one', { misses: [null] }],
+  ] as const) {
+    test(`sets aside a record holding ${name}`, async ($, on) => {
+      fakeWorld(on);
+      const toasts: string[] = [];
+      on('ui.toast', ($$: unknown, e: { text: string }) => {
+        toasts.push(e.text);
+        return { value: undefined };
+      });
+      reloadInto(on, { ...keptRecord({}), ...fields });
+      await startSession($);
+      expect(toasts.filter((t) => t.includes('could not read the reviews it kept'))).toHaveLength(
+        1,
+      );
+    });
+  }
+
+  test('a take-back that fails starts fresh, says so once, and keeps from then on', async ($, on) => {
+    fakeWorld(on);
+    const toasts: string[] = [];
+    on('ui.toast', ($$: unknown, e: { text: string }) => {
+      toasts.push(e.text);
+      return { value: undefined };
+    });
+    let writes = 0;
+    let isDenied = false;
+    on('state.get', ($$: unknown, e: { key: string }, next: any) => {
+      if (e.key !== 'gate' || isDenied) return next(e);
+      isDenied = true;
+      return { deny: 'store unreadable' };
+    });
+    on('state.set', ($$: unknown, e: { key: string }, next: any) => {
+      if (e.key === 'gate') writes += 1;
+      return next(e);
+    });
+    await startSession($);
+    await say($, 'fix the parser');
+    await settle();
+    expect(toasts.filter((t) => t.includes('could not take back its reviews'))).toHaveLength(1);
+    expect(writes).toBe(1);
+  });
+
+  test('a save that never answers times out, says so, and lets the next one through', async ($, on) => {
+    const w = fakeWorld(on);
+    const toasts: string[] = [];
+    on('ui.toast', ($$: unknown, e: { text: string }) => {
+      toasts.push(e.text);
+      return { value: undefined };
+    });
+    let writes = 0;
+    on('state.set', ($$: unknown, e: { key: string }, next: any) => {
+      if (e.key !== 'gate') return next(e);
+      writes += 1;
+      return writes === 1 ? pending() : next(e);
+    });
+    await startSession($);
+    await say($, 'fix the parser');
+    await settle();
+    for (const t of (w.timers ?? []).filter((t) => t.ms === 5000)) t.fire();
+    await settle();
+    expect(toasts.filter((t) => t.includes('could not keep its reviews'))).toHaveLength(1);
+    await say($, 'and the lexer');
+    await settle();
+    expect(writes).toBe(2);
+  });
+
+  test('a save that timed out and lands later leaves a newer one standing', async ($, on) => {
+    const w = fakeWorld(on);
+    const landed: number[] = [];
+    const held: (() => void)[] = [];
+    on('state.set', ($$: unknown, e: { key: string; value: any }, next: any) => {
+      if (e.key !== 'gate') return next(e);
+      const go = async () => {
+        const out = await next(e);
+        if (out?.value?.isSet) landed.push(e.value.value.messages);
+        return out;
+      };
+      if (held.length > 0 || landed.length > 0) return go();
+      return new Promise((resolve) => {
+        held.push(() => resolve(go()));
+      });
+    });
+    await startSession($);
+    await say($, 'fix the parser');
+    await settle();
+    for (const t of (w.timers ?? []).filter((t) => t.ms === 5000)) t.fire();
+    await settle();
+    await say($, 'and the lexer');
+    await settle();
+    for (const release of held) release();
+    await settle();
+    expect(landed.at(-1)).toBe(2);
+  });
+
+  test('saves land in order, the last one holding the latest record', async ($, on) => {
+    fakeWorld(on);
+    const saved: any[] = [];
+    const held: (() => void)[] = [];
+    on('state.set', ($$: unknown, e: { key: string; value: any }, next: any) => {
+      if (e.key !== 'gate') return next(e);
+      saved.push(e.value.value);
+      if (saved.length > 1) return next(e);
+      return new Promise((resolve) => {
+        held.push(() => resolve(next(e)));
+      });
+    });
+    await startSession($);
+    await say($, 'fix the parser');
+    await say($, 'and the lexer');
+    await settle();
+    for (const release of held) release();
+    await settle();
+    expect(saved.at(-1)?.messages).toBe(2);
+  });
+
+  test(
+    'a load with the gate off clears what it kept',
+    { options: { enabled: false } },
+    async ($, on) => {
+      fakeWorld(on);
+      reloadInto(on, keptRecord({ held: { step: 'push', how: 'declined' } }));
+      let cleared = false;
+      on('state.set', ($$: unknown, e: { key: string; value: any }, next: any) => {
+        if (e.key === 'gate' && e.value?.value === null) cleared = true;
+        return next(e);
+      });
+      await startSession($);
+      expect(cleared).toBe(true);
+    },
+  );
+
+  test('says once that it cannot keep its record', async ($, on) => {
+    fakeWorld(on);
+    const toasts: string[] = [];
+    on('ui.toast', ($$: unknown, e: { text: string }) => {
+      toasts.push(e.text);
+      return { value: undefined };
+    });
+    on('state.set', ($$: unknown, e: { key: string }, next: any) =>
+      e.key === 'gate' ? { deny: 'store full' } : next(e),
+    );
+    await startSession($);
+    await say($, 'fix the parser');
+    await say($, 'and the lexer');
+    await settle();
+    expect(toasts.filter((t) => t.includes('could not keep its reviews'))).toHaveLength(1);
+  });
+});
+
+// The timers a leg's budget arms, not the 5 s waits on a state call.
+const legTimers = (w: World) => (w.timers ?? []).filter((t) => t.ms !== 5000);
+
+// A running leg spawned at `at`, on the tree the world holds.
+function runningLeg(w: World, at: number) {
+  return {
+    type: 'review-cycle:code-reviewer',
+    counts: true,
+    spawnTree: treeId(w, w.work),
+    done: false,
+    capped: false,
+    counted: false,
+    spawnedAt: at,
+  };
+}
+
+function keptRecord(over: Record<string, unknown>) {
+  return {
+    reviews: [],
+    legs: [],
+    message: { tree: null, nudged: true, prWindow: false },
+    messages: 0,
+    lastAnswer: '',
+    misses: [],
+    dropped: [],
+    capped: [],
+    scratch: [],
+    reviewerChanges: [],
+    held: null,
+    ...over,
+  };
+}
+
+// What a reload finds: the host's copy of what the gate remembered, read once.
+function reloadInto(on: any, kept: unknown) {
+  let isRead = false;
+  on('state.get', ($$: unknown, e: { key: string }, next: any) => {
+    if (e.key !== 'gate' || isRead) return next(e);
+    isRead = true;
+    return { value: { value: { shape: 'gate-1', value: kept }, version: 1 } };
+  });
+}
 
 describe('what the gate reports', () => {
   test('a review that could not be counted is named in the refusal', async ($, on) => {
@@ -2791,6 +3105,10 @@ async function legUnderWay($: any, type = 'review-cycle:code-reviewer'): Promise
 async function reviewerChanges($: any): Promise<string[]> {
   const r = await $.tool.call({ tool: 'mcp__review-cycle__status' });
   return JSON.parse((r as { result: string }).result).reviewerChanges;
+}
+
+async function startSession($: any) {
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true });
 }
 
 async function settle() {

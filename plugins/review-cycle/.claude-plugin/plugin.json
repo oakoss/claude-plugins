@@ -11,6 +11,7 @@
   "repository": "https://github.com/oakoss/claude-plugins",
   "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/review-cycle",
   "keywords": ["code-review", "review-loop", "codex", "automation", "hooks", "pr-review"],
+  "types": "./types/index.d.ts",
   "userConfig": {
     "enabled": {
       "type": "boolean",

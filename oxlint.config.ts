@@ -289,7 +289,7 @@ export default defineConfig({
     {
       // A mod's state contract, types/index.d.ts, must be self-contained, so
       // its hooks import their state's types from there.
-      files: ['plugins/pr-watch/hooks/**'],
+      files: ['plugins/pr-watch/hooks/**', 'plugins/review-cycle/hooks/**'],
       rules: {
         'import/no-relative-parent-imports': 'off',
       },

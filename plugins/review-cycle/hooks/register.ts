@@ -1,15 +1,19 @@
-import type {
-  Caught,
-  CatchHandler,
-  EngineInterface,
-  HookFor,
-  MatchedHook,
-  PromptOrigin,
-  Register,
-  Timer,
-  ToolCallResult,
+import {
+  atom,
+  read,
+  update,
+  type Caught,
+  type CatchHandler,
+  type EngineInterface,
+  type HookFor,
+  type MatchedHook,
+  type PromptOrigin,
+  type Register,
+  type Timer,
+  type ToolCallResult,
 } from 'claude-code';
 
+import type { Kept, KeptStep } from '../types';
 import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
 import {
   aliasCommits,
@@ -165,6 +169,7 @@ type Leg = {
   done: boolean;
   // Fires once the leg outlives its budget; cancelled when it finishes.
   timer: Timer | null;
+  spawnedAt: number;
   capped: boolean;
   // A report of it counted, so a later answer without a receipt drops nothing.
   counted: boolean;
@@ -269,6 +274,338 @@ const state: GateState = {
   unaskedNotice: false,
   held: null,
 };
+
+// The gate's memory as the host keeps it: module variables start over when the
+// module reloads (a saved hooks file, a /config change), so what the gate
+// remembers is copied here after each change and read back at the start. What
+// the user's message granted is not kept: a reload makes the next step ask, so
+// a stale copy can never grant what a later message took back. Bump the shape
+// whenever Kept changes, so a reload into new code starts fresh.
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-1' });
+let keptText = '';
+let isKeepFailing = false;
+// Nothing is kept until what a reload left has been taken back, so an early
+// save cannot overwrite it.
+let isRecalled = false;
+let saving: Promise<void> = Promise.resolve();
+let saves = 0;
+let ticker: Timer | undefined;
+
+function keptOf(): Kept {
+  const { tree, nudged, prWindow } = state.message;
+  return {
+    reviews: state.reviews,
+    legs: [...state.legs].map(([id, { timer: _timer, ...leg }]) => [id, leg]),
+    message: { tree, nudged, prWindow },
+    messages: state.messages,
+    lastAnswer: state.lastAnswer,
+    misses: state.misses,
+    dropped: state.dropped,
+    capped: state.capped,
+    scratch: state.scratch,
+    reviewerChanges: state.reviewerChanges,
+    held: state.held,
+  };
+}
+
+// One write at a time, each taking what the gate holds as it runs, so an older
+// copy never lands after a newer one. Never throws: the gate's decisions do not
+// wait on it.
+function keep($: $): Promise<void> {
+  saving = saving.then(() => write($));
+  return saving;
+}
+
+// A state call that never answers counts as failed, so one cannot stall every
+// later save or the session's start.
+const STATE_WAIT_MS = 5000;
+
+async function within<T>($: $, call: Promise<T>, what: string): Promise<T> {
+  let timer: Timer | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = $.clock.after(STATE_WAIT_MS, () =>
+      reject(new Error(`${what} did not answer within ${STATE_WAIT_MS / 1000} s`)),
+    );
+  });
+  try {
+    return await Promise.race([call, late]);
+  } finally {
+    timer?.cancel();
+  }
+}
+
+async function write($: $): Promise<void> {
+  if (!isRecalled) return;
+  try {
+    const kept = keptOf();
+    const text = JSON.stringify(kept);
+    if (text === keptText) return;
+    // A save that timed out is not cancelled, and `update` retries it; once a
+    // newer save has started, it writes back what is stored rather than its own.
+    const save = ++saves;
+    await within(
+      $,
+      update($, gate, (stored) => (save === saves ? kept : stored)),
+      'saving the gate',
+    );
+    keptText = text;
+    isKeepFailing = false;
+  } catch (error) {
+    if (!isKeepFailing) {
+      $.ui.toast(
+        `review-cycle could not keep its reviews for a reload, so one would forget them: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    isKeepFailing = true;
+  }
+}
+
+// The hooks that change what the gate remembers keep it once they have answered.
+type Args<F extends (...args: never[]) => unknown> = Parameters<F>;
+
+async function keptScratch($: $, e: Args<typeof onScratch>[1], next: Args<typeof onScratch>[2]) {
+  try {
+    return await onScratch($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptSweep($: $, e: Args<typeof onSweep>[1], next: Args<typeof onSweep>[2]) {
+  try {
+    return await onSweep($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptPromptSubmit(
+  $: $,
+  e: Args<typeof onPromptSubmit>[1],
+  next: Args<typeof onPromptSubmit>[2],
+) {
+  try {
+    return await onPromptSubmit($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptAgentSpawn(
+  $: $,
+  e: Args<typeof onAgentSpawn>[1],
+  next: Args<typeof onAgentSpawn>[2],
+) {
+  try {
+    return await onAgentSpawn($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptTurnComplete(
+  $: $,
+  e: Args<typeof onTurnComplete>[1],
+  next: Args<typeof onTurnComplete>[2],
+) {
+  try {
+    return await onTurnComplete($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptSkill($: $, e: Args<typeof onSkill>[1], next: Args<typeof onSkill>[2]) {
+  try {
+    return await onSkill($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptBash($: $, e: Args<typeof onBash>[1], next: Args<typeof onBash>[2]) {
+  try {
+    return await onBash($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+async function keptGithubTool(
+  $: $,
+  e: Args<typeof onGithubTool>[1],
+  next: Args<typeof onGithubTool>[2],
+) {
+  try {
+    return await onGithubTool($, e, next);
+  } finally {
+    void keep($);
+  }
+}
+
+// After a reload, the gate takes back what it remembered, and each leg still
+// running gets the rest of its budget. A record it cannot read is set aside
+// whole: nothing is taken back from it, so no part of an old record mixes with
+// a fresh start.
+async function recall($: $): Promise<void> {
+  const kept = await within($, read($, gate), 'reading the gate');
+  if (kept !== null) {
+    if (!isKept(kept)) {
+      $.ui.toast(
+        'review-cycle could not read the reviews it kept, so it starts this load with none',
+      );
+    } else {
+      const now = await $.clock.now();
+      const legs = new Map<string, Leg>(
+        kept.legs.map(([id, leg]) => [id, { ...leg, timer: null }]),
+      );
+      state.reviews = kept.reviews;
+      state.legs = legs;
+      state.message = { ...kept.message, grant: NO_GRANT };
+      state.messages = kept.messages;
+      state.lastAnswer = kept.lastAnswer;
+      state.misses = kept.misses;
+      state.dropped = kept.dropped;
+      state.capped = kept.capped;
+      state.scratch = kept.scratch;
+      state.reviewerChanges = kept.reviewerChanges;
+      state.held = kept.held;
+      for (const [id, leg] of legs) {
+        if (leg.done || leg.capped) continue;
+        const left = Math.max(0, LEG_BUDGET_MS - (now - leg.spawnedAt));
+        leg.timer = $.clock.after(left, () => overBudget($, id, leg));
+      }
+      keptText = JSON.stringify(kept);
+    }
+  }
+  isRecalled = true;
+}
+
+// A take-back that fails is not tried again: by then the session may have moved
+// on, and an older record taken back late would undo it. It starts fresh.
+async function recallOrSay($: $): Promise<void> {
+  try {
+    await recall($);
+  } catch (error) {
+    $.ui.toast(
+      `review-cycle could not take back its reviews after a reload, so it starts this load with none: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    isRecalled = true;
+  }
+}
+
+const isRecord = (x: unknown): x is Record<string, unknown> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x);
+const strings = (xs: unknown): boolean =>
+  Array.isArray(xs) && xs.every((x) => typeof x === 'string');
+const flags = (o: Record<string, unknown>, keys: readonly string[]) =>
+  keys.every((key) => typeof o[key] === 'boolean');
+const STEP_SET: Record<KeptStep, true> = {
+  push: true,
+  pr: true,
+  merge: true,
+  approve: true,
+  release: true,
+  comment: true,
+};
+const STEPS = Object.keys(STEP_SET);
+const isStep = (x: unknown) => STEPS.some((step) => step === x);
+
+function isReview(r: unknown): boolean {
+  return (
+    isRecord(r) &&
+    typeof r.type === 'string' &&
+    Array.isArray(r.trees) &&
+    r.trees.length === 2 &&
+    strings(r.trees) &&
+    strings(r.reviewedPaths)
+  );
+}
+
+function isLeg(entry: unknown): boolean {
+  if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !isRecord(entry[1])) return false;
+  const leg = entry[1];
+  return (
+    typeof leg.type === 'string' &&
+    (leg.spawnTree === null || typeof leg.spawnTree === 'string') &&
+    Number.isFinite(leg.spawnedAt) &&
+    flags(leg, ['counts', 'done', 'capped', 'counted'])
+  );
+}
+
+function isHeld(h: unknown): boolean {
+  return (
+    h === null || (isRecord(h) && isStep(h.step) && (h.how === 'mentioned' || h.how === 'declined'))
+  );
+}
+
+// Every field the gate reads, element by element, so taking a record back
+// cannot throw or leave a field unset; the shape tag declines one an older
+// Kept wrote.
+function isKept(k: unknown): k is Kept {
+  if (!isRecord(k) || !isRecord(k.message)) return false;
+  const m = k.message;
+  return (
+    Array.isArray(k.reviews) &&
+    k.reviews.every(isReview) &&
+    Array.isArray(k.legs) &&
+    k.legs.every(isLeg) &&
+    (m.tree === null || typeof m.tree === 'string') &&
+    flags(m, ['nudged', 'prWindow']) &&
+    Number.isFinite(k.messages) &&
+    typeof k.lastAnswer === 'string' &&
+    Array.isArray(k.misses) &&
+    k.misses.every(
+      (x) =>
+        isRecord(x) &&
+        typeof x.message === 'string' &&
+        typeof x.offer === 'string' &&
+        typeof x.refusal === 'string' &&
+        Array.isArray(x.steps) &&
+        x.steps.every(isStep),
+    ) &&
+    Array.isArray(k.dropped) &&
+    k.dropped.every(
+      (x) =>
+        isRecord(x) &&
+        typeof x.agentId === 'string' &&
+        typeof x.text === 'string' &&
+        typeof x.old === 'boolean',
+    ) &&
+    strings(k.capped) &&
+    strings(k.scratch) &&
+    strings(k.reviewerChanges) &&
+    isHeld(k.held)
+  );
+}
+
+// Each kept field matches the gate's own type exactly, so a field added to one
+// and not the other fails the typecheck; the rest start over on a reload.
+type Equal<A, B> =
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- the exact-equality idiom compares two generic signatures
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type Unkept =
+  | 'root'
+  | 'said'
+  | 'model'
+  | 'modelCheck'
+  | 'shellAliases'
+  | 'aliasError'
+  | 'aliasErrorShown'
+  | 'aliasesLoaded'
+  | 'ownRead'
+  | 'sweepServed'
+  | 'gateOn'
+  | 'stopBefore'
+  | 'nudge'
+  | 'unaskedNotice';
+const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
+const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
+const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
+const _keptHold: Equal<Hold, Kept['held']> = true;
+const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
+const _keptMessage: Equal<Omit<Message, 'grant'>, Kept['message']> = true;
+const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
 // which is what a command's own relative paths resolve against.
@@ -455,7 +792,25 @@ async function onSessionStart(
 ): Promise<Output<HookFor<'session.start'>>> {
   await registerLedger($);
   await registerScratch($);
-  if (!state.gateOn) return next(e);
+  if (!state.gateOn) {
+    // Nothing the gate kept before it was switched off holds once it is back on.
+    try {
+      await within(
+        $,
+        update($, gate, () => null),
+        'clearing the gate',
+      );
+    } catch (error) {
+      $.ui.toast(
+        `review-cycle could not clear the reviews it kept, so switching it back on may bring back old ones: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return next(e);
+  }
+  await recallOrSay($);
+  // What callbacks outside a hook change (a nudge, a capped leg) is kept here.
+  ticker?.cancel();
+  ticker = $.clock.every(1000, () => void keep($));
   try {
     await ensureRoot($);
   } catch {
@@ -625,6 +980,7 @@ async function onAgentSpawn(
       timer: null,
       capped: false,
       counted: false,
+      spawnedAt: await $.clock.now(),
     };
     state.legs.set(r.agentId, leg);
     const id = r.agentId;
@@ -2093,19 +2449,19 @@ export const register: Register = (on, options) => {
   on('session.start', onSessionStart);
   on('tool.call', { tool: 'mcp__review-cycle__ledger' }, onLedger);
   on('tool.call', { tool: 'mcp__review-cycle__ledger_record' }, onLedgerRecord);
-  on('tool.call', { tool: 'mcp__review-cycle__scratch' }, onScratch);
-  on('tool.call', { tool: 'mcp__review-cycle__sweep' }, onSweep);
+  on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
+  on('tool.call', { tool: 'mcp__review-cycle__sweep' }, keptSweep);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.
     on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatusOff);
     return;
   }
-  on('prompt.submit', onPromptSubmit);
-  on('agent.spawn', onAgentSpawn);
-  on('turn.complete', onTurnComplete);
-  on('tool.call', { tool: 'Skill' }, onSkill);
-  on('tool.call', { tool: 'Bash' }, onBash).catch(onBashError);
-  on('tool.call', { tool: MCP_GITHUB }, onGithubTool).catch(onGithubToolError);
+  on('prompt.submit', keptPromptSubmit);
+  on('agent.spawn', keptAgentSpawn);
+  on('turn.complete', keptTurnComplete);
+  on('tool.call', { tool: 'Skill' }, keptSkill);
+  on('tool.call', { tool: 'Bash' }, keptBash).catch(onBashError);
+  on('tool.call', { tool: MCP_GITHUB }, keptGithubTool).catch(onGithubToolError);
   on('tool.call', { tool: 'Bash' }, onBashEdits);
   on('tool.call', { tool: 'Edit' }, onEditContained);
   on('tool.call', { tool: 'Write' }, onWriteContained);
