@@ -47,6 +47,14 @@ pre-commit:
       env:
         TERM: dumb
       run: .beads/hooks/pre-commit
+    # bd writes sync.remote, which names the private Dolt host, into this
+    # tracked file and never commits it; reads the staged copy, not the tree.
+    beads-sync:
+      glob: '.beads/config.yaml'
+      run: >-
+        if git show :.beads/config.yaml | grep -q '^sync:'; then
+        echo '.beads/config.yaml carries a sync: block, which names the private Dolt host. Remove the block, then git add .beads/config.yaml.' >&2;
+        exit 1; fi
 
 commit-msg:
   commands:
