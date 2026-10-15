@@ -839,16 +839,25 @@ async function readyIn($: any, on: any, gh: Gh) {
 
 // News kept for the next prompt, standing in the host's state as a reload
 // leaves it, until pr-watch first writes it; `writes` records what it wrote.
-function keptBefore(on: any, held: unknown[]) {
+// `refuse` names why a read or write of a key is refused, if it is.
+function keptBefore(
+  on: any,
+  held: unknown[],
+  refuse: (op: 'get' | 'set', key: string) => string | null = () => null,
+) {
   let seed: unknown[] | null = held;
   const writes: unknown[] = [];
   on('state.get', async ($: unknown, e: { key: string }, next: (e: unknown) => Promise<any>) => {
+    const deny = refuse('get', e.key);
+    if (deny) return { deny };
     const r = await next(e);
     return e.key === 'quiet' && seed !== null ? { value: { ...r.value, value: seed } } : r;
   });
   on(
     'state.set',
     ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+      const deny = refuse('set', e.key);
+      if (deny) return { deny };
       if (e.key === 'quiet') {
         seed = null;
         writes.push(e.value);
@@ -1152,6 +1161,57 @@ describe('ready to merge, while merges need asking', () => {
     await clock.advance(1);
     expect(seen.wakes).toHaveLength(1);
     expect(seen.wakes[0]).toContain('ready to merge');
+  });
+
+  test('a prompt with nothing kept writes nothing, so a refusing store says nothing', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN, quietFails: true });
+    await start($);
+    await $.prompt.submit(person());
+    expect(seen.toasts).toEqual([]);
+  });
+
+  test('a prompt that cannot read again or put back says both', async ($, on) => {
+    // The prompt's read of the watches fails, and from then on every write of kept news.
+    let isBroken = false;
+    let isWriteRefused = false;
+    keptBefore(on, [kept(['EARLIER'], 'OLD READY')], (op, key) => {
+      if (isBroken && op === 'get' && key === 'watches') {
+        isWriteRefused = true;
+        return 'watches unreadable';
+      }
+      return isWriteRefused && op === 'set' && key === 'quiet' ? 'store refused' : null;
+    });
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN });
+    await start($);
+    isBroken = true;
+    await $.prompt.submit(person());
+    const lost = seen.toasts.filter((t) => t.startsWith('pr-watch lost the news it took'));
+    expect(lost).toHaveLength(1);
+    expect(lost[0]).toContain('store refused');
+    expect(seen.toasts.find((t) => t.startsWith('pr-watch could not add'))).toContain(
+      'watches unreadable',
+    );
+  });
+
+  test('a prompt that cannot read again puts the news back for the next one', async ($, on) => {
+    let isBroken = false;
+    keptBefore(on, [kept(['EARLIER'], 'OLD READY')], (op, key) => {
+      if (!isBroken || op !== 'get' || key !== 'watches') return null;
+      isBroken = false;
+      return 'watches unreadable';
+    });
+    mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN });
+    await start($);
+    isBroken = true;
+    await $.prompt.submit(person());
+    expect(seen.toasts).toEqual([
+      'pr-watch could not add its news to your prompt: pr-watch: $.state.get: watches unreadable',
+    ]);
+    await $.prompt.submit(person());
+    expect(seen.contexts.at(-1)?.[0]).toContain('EARLIER');
   });
 
   test('a prompt from the Agent SDK carries it', async ($, on) => {

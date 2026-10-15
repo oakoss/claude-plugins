@@ -264,6 +264,9 @@ async function quietContext(
   e: Pick<PromptSubmitInput, 'origin' | 'command'>,
 ): Promise<{ text: string | null; restore: () => Promise<void> } | null> {
   if (!PERSON.has(e.origin.kind) || e.command !== undefined || !config.isAwake) return null;
+  // Read first, so a prompt with nothing kept writes nothing a refusing store would toast.
+  const waiting = await read($, quiet);
+  if (waiting.length === 0) return null;
   let taken: readonly Held[] = [];
   await update($, quiet, (all) => {
     taken = all;
@@ -289,7 +292,10 @@ async function quietContext(
     );
     return { text: contextOf(current), restore };
   } catch (error) {
-    await restore();
+    // Said apart, so the caller's toast keeps the error that stopped the prompt.
+    await restore().catch((restoreError) =>
+      $.ui.toast(`pr-watch lost the news it took for your prompt: ${errorText(restoreError)}`),
+    );
     throw error;
   }
 }
