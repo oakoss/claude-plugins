@@ -1918,28 +1918,41 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
   return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. ${ask}`;
 }
 
-// How long the user waits on a gh read before the step asks instead.
-const LOOKUP_MS = 5000;
+// How long the user waits on a gh read before the step asks.
+const LOOKUP_MS = [5000];
+// A read confirming a merge the user asked for is tried once more for longer,
+// since GitHub is slow at times and asking them again gains nothing.
+const MERGE_LOOKUP_MS = [5000, 10_000];
 
 // What a gh read printed, or why it asks: "looking up <what> failed (…)" or
-// "… printed nothing".
-async function ghRead($: $, args: string[], what: string): Promise<Lookup> {
-  try {
-    const r = await $.process.run(['gh', ...args], {
-      timeoutMs: LOOKUP_MS,
-      env: { GH_PROMPT_DISABLED: '1' },
-    });
-    if (r.exitCode !== 0) {
-      const why = firstLine(r.stderr) || `it ended with no output, exit ${r.exitCode}`;
-      return { asks: `looking up ${what} failed (${why})` };
+// "… printed nothing". `slow` only when every try timed out.
+async function ghRead($: $, args: string[], what: string, schedule = LOOKUP_MS): Promise<Lookup> {
+  let r: Awaited<ReturnType<typeof $.process.run>> | null = null;
+  let failed = '';
+  for (const timeoutMs of schedule) {
+    try {
+      r = await $.process.run(['gh', ...args], { timeoutMs, env: { GH_PROMPT_DISABLED: '1' } });
+      break;
+    } catch (error) {
+      failed = messageOf(error);
+      // The wording of a timeout is the test kit's; a real host's is inferred to match.
+      if (!/timed? ?out/i.test(failed)) break;
     }
-    // A jq path that meets null prints an empty line and exits 0 (gh 2.102.0).
-    const out = r.stdout.trim();
-    if (out === '') return { asks: `looking up ${what} printed nothing` };
-    return { out };
-  } catch (error) {
-    return { asks: `looking up ${what} failed (${messageOf(error)})` };
   }
+  if (r === null) {
+    const slow = /timed? ?out/i.test(failed);
+    return slow
+      ? { asks: `looking up ${what} failed (${failed})`, slow }
+      : { asks: `looking up ${what} failed (${failed})` };
+  }
+  if (r.exitCode !== 0) {
+    const why = firstLine(r.stderr) || `it ended with no output, exit ${r.exitCode}`;
+    return { asks: `looking up ${what} failed (${why})` };
+  }
+  // A jq path that meets null prints an empty line and exits 0 (gh 2.102.0).
+  const out = r.stdout.trim();
+  if (out === '') return { asks: `looking up ${what} printed nothing` };
+  return { out };
 }
 
 // The gh reads GitHub judging needs, each failing into a reason to ask.
@@ -1965,9 +1978,15 @@ function ghLookups($: $): GhLookups {
           String.raw`"\(.url) \(.state) \(.mergeStateStatus)"`,
         ],
         'the pull request it merges',
+        MERGE_LOOKUP_MS,
       ),
     repoUrl: () =>
-      ghRead($, ['repo', 'view', '--json', 'url', '--jq', '.url'], 'the current repository'),
+      ghRead(
+        $,
+        ['repo', 'view', '--json', 'url', '--jq', '.url'],
+        'the current repository',
+        MERGE_LOOKUP_MS,
+      ),
     pullRequest: async (head) => {
       const args = ['pr', 'view', ...head, '--json', PR_FIELDS, '--jq', PR_JQ];
       const r = await ghRead($, args, 'the pull request it updates');
