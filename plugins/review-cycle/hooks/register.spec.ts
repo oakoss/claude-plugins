@@ -100,6 +100,8 @@ describe('the findings ledger with the gate off', () => {
     const $$ = {
       tool: { register: (t: { name: string }) => Promise.resolve(void registered.push(t.name)) },
       process: { run: (...a: unknown[]) => Promise.resolve(void runs.push(a)) },
+      clock: { after: () => ({ cancel: () => null }) },
+      ui: { toast: () => null },
     };
     const [start] = hooks.get('session.start:') ?? [];
     const out = await start?.($$, { source: 'startup' }, (e: unknown) => Promise.resolve({ e }));
