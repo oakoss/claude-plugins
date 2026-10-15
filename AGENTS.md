@@ -69,6 +69,7 @@ A rule here that a check enforces names the check; prose stays only where nothin
 | --- | --- |
 | Manifest and marketplace conventions | `tests/manifests.spec.ts` (`pnpm test`) |
 | `core.hooksPath` stays unset | `tests/hooks-path.spec.ts` (`pnpm test`) |
+| No skill or agent names a `disable-model-invocation: true` skill | `tests/skill-references.spec.ts` (`pnpm test`) |
 | No `sync:` block staged in `.beads/config.yaml` | lefthook pre-commit `beads-sync` |
 | A bump file for every change under `plugins/<name>/`; unquoted plugin names; the oakum pin | `oakum check --strict` (CI `Bump files`) |
 | Plugin structure; `$` not passed into an imported function expression | `claude plugin validate --strict` (CI `Plugin manifests`) |
@@ -144,4 +145,4 @@ pnpm typecheck && pnpm lint && pnpm format:check
 
 A change to review-cycle's consent grammar (`hooks/consent.ts`) moves verdicts the specs never name. `pnpm consent:diff [ref]` reads every quoted string in the consent spec and hook tests against every agent offer, and generated requests against no offer, every offer when they have no leading phrase, and two offers otherwise, at `ref` (default `main`) and in the working tree, comparing `grantOf`, `holdsOf` and, when both versions have it, `dropsGrant` (`combine` is pinned by its specs, not diffed), and prints how many verdicts changed, grouped by what changed, with up to three examples each. Run it before review, and hand its output to reviewers rather than having each build a differential. Start a grammar change by adding the phrasings it should and should not move to the script's generated sets, declines and pull-request endings ("of #12", "the PRs") included: a run whose inputs never reach the change reports `0 changed`, which says nothing about what it moved.
 
-Prose anchors (`plugins/<name>/tests/*.spec.ts`) pin wording that skills and agents load as instructions, where nothing else would notice it going missing. Write each against a mutation: remove the phrase it anchors and confirm the test fails.
+Prose anchors (`plugins/<name>/tests/*.spec.ts`) pin wording that skills and agents load as instructions, where nothing else would notice it going missing. Write each against a mutation: remove the phrase it anchors and confirm the test fails. Read a skill and cut a section with `tests/skills.ts` (`skillText`, `section`, `expectAnchors`); its extractions throw on a missing heading rather than return nothing to check.

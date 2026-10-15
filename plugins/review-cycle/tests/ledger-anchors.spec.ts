@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 import { skillText } from './agents';
 
 test('every brief carries the ledger, and changed code reopens an entry', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain('**Every brief carries what earlier cycles settled.**');
   expect(text).toContain('call the `mcp__review-cycle__ledger` tool with the changed-file list');
   // A busy file holds dozens of entries; the read is capped, so the skill narrows it.
@@ -40,7 +40,7 @@ test('every brief carries the ledger, and changed code reopens an entry', () => 
 });
 
 test('Phase 9 records what the cycle settled and resolves what it fixed', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain('**Record the cycle in the ledger first**');
   expect(text).toContain('`mcp__review-cycle__ledger_record`');
   expect(text).toContain('Pass as `resolve` the ids of carried entries this cycle fixed');

@@ -8,7 +8,7 @@ import { expect, test } from 'vitest';
 import { phase, skillText } from './agents';
 
 test('a fix to imported code names its importers, and the next iteration measures them', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   const six = phase(text, 6, 'Verify').join('\n');
   expect(six).toContain(
     'A fix that changes what code imported by files outside the diff does is substantive whatever its size, even one that would otherwise be mechanical or a verified message fix.',

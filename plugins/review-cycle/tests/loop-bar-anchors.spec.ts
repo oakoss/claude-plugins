@@ -6,7 +6,7 @@ import { expect, test } from 'vitest';
 import { skillText } from './agents';
 
 test('from iteration 2, a minor finding is deferred and a broken fix is not', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain('From iteration 2, only a finding that matters reopens the loop.');
   expect(text).toContain("shows one of this cycle's own fixes is wrong, at any severity");
   expect(text).toContain('a test-gap rating under 7');
@@ -20,7 +20,7 @@ test('from iteration 2, a minor finding is deferred and a broken fix is not', ()
 });
 
 test('a contaminated target is attributed from the gate, Codex by elimination', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain("The status tool's `reviewerChanges` names each Claude reviewer command");
   expect(text).toContain('The gate never compares around the Codex leg');
   expect(text).toContain('read only the ones added since');

@@ -77,7 +77,7 @@ test('cleanup is excluded, and is the only agent that is', () => {
 
 test('both skills define every grade they weight legs by', () => {
   for (const skill of ['review', 'review-pr']) {
-    const text = skillText(skill);
+    const text = skillText('review-cycle', skill);
     // Checked token by token so a failure names the missing token rather than
     // printing a body that runs to hundreds of lines.
     for (const token of [
@@ -127,7 +127,7 @@ test("each skill's brief carries the receipt ask that reaches Codex", () => {
   // that reaches the Codex leg, and a guard that reports "a grade is missing"
   // when the whole channel was deleted sends the reader to the wrong file.
   for (const skill of ['review', 'review-pr']) {
-    const text = skillText(skill);
+    const text = skillText('review-cycle', skill);
     const brief = text
       .split('\n')
       .some((line) =>

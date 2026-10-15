@@ -6,7 +6,7 @@ import { expect, test } from 'vitest';
 import { skillText } from './agents';
 
 test('the review skill keeps a question about a guard inside its stated scope', () => {
-  const text = skillText('review');
+  const text = skillText('review-cycle', 'review');
   expect(text).toContain("Keep a question about a guard inside the guard's stated scope.");
   expect(text).toContain('not whether a leg can evade it');
   expect(text).toContain('A gap an ordinary command falls into');

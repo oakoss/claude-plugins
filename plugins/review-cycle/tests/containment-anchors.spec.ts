@@ -30,7 +30,15 @@ import path from 'node:path';
 
 import { afterEach, expect, test } from 'vitest';
 
-import { AGENTS_DIR, expectAnchors, listAgents, phase, REPO_ROOT, skillText } from './agents';
+import {
+  AGENTS_DIR,
+  expectAnchors,
+  listAgents,
+  phase,
+  REPO_ROOT,
+  section as h2Section,
+  skillText,
+} from './agents';
 
 const REVIEW_SKILL = path.join(REPO_ROOT, 'plugins/review-cycle/skills/review/SKILL.md');
 const CLEANUP_AGENT = path.join(AGENTS_DIR, 'cleanup.md');
@@ -65,16 +73,6 @@ function markedLine(lines: string[], marker: string, what: string): string | und
   const marked = lines.filter((line) => line.includes(marker));
   expect.soft(marked.length, `${what}, found ${marked.length}`).toBe(1);
   return marked.length === 1 ? marked[0] : undefined;
-}
-
-// The body under `## heading`, up to the next `## ` heading or EOF.
-function h2Section(text: string, heading: string): string {
-  const lines = text.split('\n');
-  const start = lines.findIndex((l) => l.startsWith(`## ${heading}`));
-  if (start === -1) return '';
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((l) => l.startsWith('## '));
-  return (end === -1 ? rest : rest.slice(0, end)).join('\n');
 }
 
 const tempDirs: string[] = [];
@@ -131,7 +129,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
     // renamed heading, and a prose decoy defeating a file-wide or mid-line
     // match. Residual: a verbatim line-start counterfeit inside Phase 3 passes.
     const head = heads[skill] ?? '';
-    const prompts = phase(skillText(skill), 3, skill).filter(
+    const prompts = phase(skillText('review-cycle', skill), 3, skill).filter(
       (line) => /^[ \t\v\f\r]*prompt: "/.test(line) && line.includes(head),
     );
     expect
@@ -185,7 +183,7 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
 
 test('both skills carry the effort-argument contract', () => {
   for (const skill of ['review', 'review-pr']) {
-    expectAnchors(skillText(skill), skill, [
+    expectAnchors(skillText('review-cycle', skill), skill, [
       [
         '`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`',
         'seven-literal effort set lost',
@@ -301,8 +299,7 @@ test('Phase 7 checks release-note files against the diff, and cleanup may not fa
       'Phase 9 lost the release-note corrections field',
     ],
   ]);
-  const evidence = h2Section(readFileSync(CLEANUP_AGENT, 'utf8'), 'Evidence');
-  expect(evidence.trim(), 'cleanup: Evidence section not found').not.toBe('');
+  const evidence = h2Section(readFileSync(CLEANUP_AGENT, 'utf8'), 'Evidence', 'cleanup.md');
   expectAnchors(evidence, 'cleanup', [
     [
       'Never report that prose matches the code unless you compared them line by line.',
