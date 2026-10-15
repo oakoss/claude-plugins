@@ -20,7 +20,7 @@ Use `bd` (beads). Run `bd prime` for the command reference and session protocol.
 
 Run `pnpm run setup` after cloning. A fresh clone has no beads database — `.beads/embeddeddolt/` and `*.db` are gitignored — so until it runs, `bd` exits 3 in every `.beads/hooks/*` hook and each shim normalizes that to 0, skipping itself with one line on stderr. Setup runs `bd bootstrap`, which clones the task graph from `BD_SYNC_REMOTE` in `.beads/.env`; the graph lives on a Dolt remote, not in this repository. That file is gitignored because it names a private host, and without it bootstrap creates a fresh local database and everything still works.
 
-Prefer `bd bootstrap` to `bd init`. Bootstrap leaves `core.hooksPath` unset and `AGENTS.md` untouched; `bd init` sets the former — making git bypass lefthook silently — rewrites the latter, and commits with a message commitlint rejects. `bd hooks install --beads` sets `core.hooksPath` too, so if you ever regenerate the shims, unset it afterwards. `core.hooksPath` must stay unset: `lefthook.yml` calls `.beads/hooks/*` directly, and lefthook is what runs commitlint and the formatters.
+Prefer `bd bootstrap` to `bd init`. Bootstrap leaves `core.hooksPath` unset and `AGENTS.md` untouched; `bd init` sets the former — making git bypass lefthook silently — rewrites the latter, and commits with a message commitlint rejects. `bd hooks install --beads` sets `core.hooksPath` too, so if you ever regenerate the shims, unset it afterwards. `core.hooksPath` must stay unset: `lefthook.yml` calls `.beads/hooks/*` directly, and lefthook is what runs commitlint and the formatters. `pnpm test` fails while it is set.
 
 The shims on disk carry `v1.2.2` markers while the binary is 1.3.0. A shim delegates to whichever `bd` is installed, so upgrading already changed the behaviour and only the generated shell policy is stale. That policy is inert while `BEADS_HOOK_TIMEOUT` is unset or a plain integer — measured identical across both sections. Set it to anything else (`abc`, `-1`, `300x`) and the v1.2.2 section exits 125 and blocks the commit, where v1.3.0 warns and falls back to 300 seconds. Regenerating is not blocked: `bd hooks install --beads` rewrites git-tracked shims happily and replaces the `v1.2.2` section cleanly while preserving content outside the markers. It refuses symlinked hooks, and that refusal aborts the whole run rather than skipping the one hook — nothing is written. The reason not to run it is the line above — it sets `core.hooksPath`, which must stay unset here. Unset it afterwards if you ever do. (Measured on bd 1.3.0 in a throwaway clone.)
 
@@ -31,7 +31,7 @@ Do not run `bd setup codex`. This repository is worked in Claude Code; that comm
 - `bd init` silently configures a Dolt remote derived from `git origin` (`✓ Configured Dolt remote: origin → …`), and a later `bd dolt push` writes the task database into that git remote as `refs/dolt/data`, alongside a `refs/heads/__dolt_remote_info__` branch. Against a public GitHub origin that publishes the task graph. `bd bootstrap` never creates this remote, but it inherits one: when origin already carries `refs/dolt/data`, bootstrap clones from it and wires origin for future push/pull — its own `--help` says so — and the next `bd dolt push` republishes. Measured on bd 1.3.0: against a clean origin it plans `create fresh database` and leaves `bd dolt remote list` empty; with `refs/dolt/data` present it plans `clone from remote` and adopts. `pnpm run setup` is `bd bootstrap --yes`, so nothing prompts. `bd bootstrap --dry-run` shows which path applies; this repo's origin carries no dolt refs today, so it takes the fresh-database path. Point the remote at the Dolt host before any push.
 - `bd dolt push` with no Dolt remote configured does **not** adopt one. It prints `No remote is configured — skipping.` and exits 0 — a silent success, so check `bd dolt remote list` rather than the exit code. Its `--yes`, `--no-adopt` and `BD_NO_REMOTE_ADOPT=1` flags exist and `--help` describes a consent prompt, but no prompt appears under any stdin or TTY combination and `--yes` adopts nothing. The binary and its help text disagree. (Measured on bd 1.3.0.)
 - `git push` does not sync the task graph. The `pre-push` shim runs `bd hooks run pre-push`, which chains hooks and does not touch the Dolt remote, so `bd dolt push` has to be run explicitly. (Measured on bd 1.3.0 both with and without git's ref list on stdin: the remote's `refs/dolt/data` was unchanged across the hook run.)
-- The written `sync.remote` publishes the private host. Strip the `sync:` block from `config.yaml` before staging, or the next `git add -A` sweeps the private host into someone else's commit; the Dolt-level remote lives in the gitignored database directory and survives on its own. Once a real remote exists, later pushes stop rewriting the file.
+- The written `sync.remote` publishes the private host. Strip the `sync:` block from `config.yaml` before staging, or the next `git add -A` sweeps the private host into someone else's commit (lefthook's pre-commit refuses one staged); the Dolt-level remote lives in the gitignored database directory and survives on its own. Once a real remote exists, later pushes stop rewriting the file.
 
 ## Layout
 
@@ -43,7 +43,8 @@ plugins/<name>/
 │   └── plugin.json          # required: manifest
 ├── README.md                # required: per-plugin docs
 ├── LICENSE                  # required: per-plugin license (typically MIT)
-└── CHANGELOG.md             # required: Keep-a-Changelog format
+├── CHANGELOG.md             # required: Keep-a-Changelog format
+└── package.json             # required: private, the version oakum releases
 ```
 
 Optional component directories at the plugin root:
@@ -58,24 +59,28 @@ Do **not** put component directories inside `.claude-plugin/`. Only `plugin.json
 
 ## Manifest conventions
 
-Plugin `plugin.json` must include:
+`tests/manifests.spec.ts` holds every plugin to them: `name` matches the directory; `description` is one sentence and the marketplace entry repeats it; `version` is semver; `author` is `Oak OSS`, `hello@oakoss.dev`, `https://github.com/oakoss` (`oakoss.dev` has mail but no website); `license` is `MIT`; `repository` and `homepage` point at this repository and the plugin's directory; `keywords` is not empty; the required files exist and `.claude-plugin/` holds only `plugin.json`; and `marketplace.json` lists each plugin with `source: "./plugins/<name>"`.
 
-- `name` — kebab-case, matches the directory name
-- `description` — one sentence, fits in a plugin listing card
-- `version` — semver, bumped on every release that should propagate as an update
-- `author` — set to `Oak OSS` with `hello@oakoss.dev` and `url` `https://github.com/oakoss` for consistency across plugins (`oakoss.dev` has mail but no website)
-- `license` — typically `MIT`
-- `repository` — `https://github.com/oakoss/claude-plugins`
-- `homepage` — link to the plugin's subdir on GitHub
-- `keywords` — discoverability tags
+## What enforces these rules
 
-Marketplace `marketplace.json` includes each plugin with `source: "./plugins/<name>"`.
+A rule here that a check enforces names the check; prose stays only where nothing can. When a mistake repeats, turn its rule into a check whose error names the fix.
+
+| Rule | Enforced by |
+| --- | --- |
+| Manifest and marketplace conventions | `tests/manifests.spec.ts` (`pnpm test`) |
+| `core.hooksPath` stays unset | `tests/hooks-path.spec.ts` (`pnpm test`) |
+| No `sync:` block staged in `.beads/config.yaml` | lefthook pre-commit `beads-sync` |
+| A bump file for every change under `plugins/<name>/`; unquoted plugin names; the oakum pin | `oakum check --strict` (CI `Bump files`) |
+| Plugin structure; `$` not passed into an imported function expression | `claude plugin validate --strict` (CI `Plugin manifests`) |
+| Conventional commit messages | commitlint (lefthook `commit-msg`) |
+| Types of the hooks modules (not `tests/` or prose anchors); lint and format everywhere | lefthook pre-commit, CI |
+| `bd dolt push` needs a remote; no `bd init` or `bd setup codex`; every function calling `$` stays in the registering file (validate passes one passed into an imported function declaration) | prose only |
 
 ## Hooks modules
 
 Hooks here are hooks modules: TypeScript that Claude Code runs itself, named in `hooks.json` as `"modules": ["./register.ts"]`. review-cycle's commit gate and comment-slop check are one module. No plugin ships shell hooks. There is no build step and no runtime dependency — a module imports only relative files and `"claude-code"`.
 
-- Keep every function that calls `$` in the file that registers the hooks. `claude plugin validate` follows `$` only into functions declared there, and refuses a module that passes `$` across an import. Pure logic goes in sibling files, which is also what makes it testable. Code that needs a process can live there too if it takes a runner as a parameter: review-cycle's `git.ts` takes a `Git` function, which `register.ts` builds from `$` (`gitOf`). `validate --strict` accepts that. It is a gap the validator does not check, not a documented pattern, so re-check it when Claude Code updates.
+- Keep every function that calls `$` in the file that registers the hooks. That is a convention, not something `claude plugin validate` enforces: across an import it follows `$` into a function declaration and passes, and refuses only a function expression (measured on 2.1.300). Pure logic goes in sibling files, which is also what makes it testable. Code that needs a process can live there too if it takes a runner as a parameter: review-cycle's `git.ts` takes a `Git` function, which `register.ts` builds from `$` (`gitOf`). `validate --strict` accepts that. It is a gap the validator does not check, not a documented pattern, so re-check it when Claude Code updates.
 - A hook that throws is skipped and the action proceeds. Where proceeding is the harm a hook exists to prevent, catch with `on(…).catch(handler)` and refuse; everywhere else, fail open, and tell the agent in the result's `context` when a check could not run rather than passing silently.
 - Claude Code loads mods by default from v2.1.287 and ignores `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`, the early-access switch: measured on 2.1.287, `claude plugin test plugins/review-cycle` ran its 223 tests with the variable unset and with it set to `0`. An older build loads no module without that variable, and its `claude plugin test` prints a notice and exits 0 having run nothing, so check that a run reports its tests.
 - Pure logic is tested with vitest: `*.spec.ts` beside the module, run by `pnpm test`, which also runs the prose anchors in each plugin's `tests/`. The module that registers hooks is tested with `claude plugin test plugins/<name>` (`pnpm test:hooks` for review-cycle), which runs only `*.test.ts` and whose kit is the only thing that can raise engine events. That kit runs no real processes: a test answers `process.run` itself with `{ value: { exitCode, stdout, stderr } }`, its options under `e.init`.
