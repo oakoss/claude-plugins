@@ -1157,7 +1157,8 @@ export const register: Register = (on, options) => {
     const known = await read($, estimates);
     const { Box, Text, Link, Button } = $.ui.resolve(e);
     const beneath = await next(e);
-    // A segment with a URL is a link; the text between links truncates.
+    // A segment with a URL is a link, and a mark is drawn whole; the text
+    // between them truncates.
     return (
       <Box flexDirection="column" marginTop={1}>
         {list.map((w) => (
@@ -1168,6 +1169,10 @@ export const register: Register = (on, options) => {
                   {s.text.startsWith(' ') ? <Text> </Text> : <Box />}
                   <Link href={s.url} label={s.text.trim()} />
                   {s.text.endsWith(' ') ? <Text> </Text> : <Box />}
+                </Box>
+              ) : s.isMark ? (
+                <Box key={`m${i}`} flexShrink={0}>
+                  <Text color={s.color}>{s.text}</Text>
                 </Box>
               ) : (
                 <Text key={`t${i}`} wrap="truncate-end" color={s.color} dimColor={s.isDim}>

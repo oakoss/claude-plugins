@@ -347,6 +347,12 @@ async function lineIn(ui: any): Promise<string | undefined> {
   return row?.text.replace(/ ×$/, '');
 }
 
+// The color the band draws a Text of this text in; undefined when it has none.
+async function colorIn(ui: any, text: string): Promise<string | undefined> {
+  const found = await ui.find({ type: 'Text', text });
+  return found?.props.color;
+}
+
 const ESTIMATE_CALL = 'actions/workflows/7/runs';
 
 describe('a pull request Claude opens', () => {
@@ -364,6 +370,28 @@ describe('a pull request Claude opens', () => {
     await clock.advance(70_000);
     expect(seen.runs.length).toBeGreaterThan(reads);
     expect(seen.toasts).toHaveLength(1);
+  });
+
+  test('draws each mark in its color and its words plain, on both surfaces', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), estimate: CI_RUN };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await band($, surface);
+      expect(await colorIn(ui, ' ●')).toBe('blue');
+      expect(await ui.find({ type: 'Link', label: 'CI' })).toBeDefined();
+    }
+    gh.pr = prJson();
+    await clock.advance(11_000);
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await band($, surface);
+      expect(await colorIn(ui, ' ✓')).toBe('green');
+      expect(await ui.find({ type: 'Text', text: ' ready to merge' })).toBeDefined();
+      expect(await colorIn(ui, ' ready to merge')).toBeUndefined();
+    }
   });
 
   test('draws a re-run’s clock once GitHub says when its attempt started', async ($, on) => {
