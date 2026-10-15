@@ -13,8 +13,8 @@ export function neededFor(spec: PushSpec): Needed {
 
 // One remote ref a `git push --dry-run --porcelain` would update: its flag
 // (` ` fast-forward, `+` forced, `-` deleted, `*` new, `!` rejected, `=` up
-// to date), the full destination ref, and the URL of the remote.
-export type DryRunRef = { flag: string; to: string; url: string };
+// to date), the local source and full destination refs, and the remote's URL.
+export type DryRunRef = { flag: string; from?: string; to: string; url: string };
 
 export function parseDryRun(stdout: string): DryRunRef[] {
   const refs: DryRunRef[] = [];
@@ -27,7 +27,8 @@ export function parseDryRun(stdout: string): DryRunRef[] {
     const m = /^(.)\t([^\t]*)\t/.exec(line);
     if (!m) continue;
     const [, flag = '', refspec = ''] = m;
-    refs.push({ flag, to: refspec.slice(refspec.indexOf(':') + 1), url });
+    const colon = refspec.indexOf(':');
+    refs.push({ flag, from: refspec.slice(0, colon), to: refspec.slice(colon + 1), url });
   }
   return refs;
 }
@@ -55,6 +56,62 @@ export function askingReason(
     }
     if (to === `refs/heads/${head.branch}`) {
       return `it pushes to \`${head.branch}\`, the default branch`;
+    }
+  }
+  return null;
+}
+
+const bare = (name: string) => name.toLowerCase().replace(/^v(?=\d)/, '');
+
+// Whether a request names a tag: `tag:*` any, else `tag:<name>`, with or
+// without a leading v ("push the v1 tag" names `1`).
+export function namesTag(named: readonly string[], tag: string): boolean {
+  return named.some(
+    (n) => n === 'tag:*' || (n.startsWith('tag:') && bare(n.slice(4)) === bare(tag)),
+  );
+}
+
+// Why a push the user asked for still asks, and the offer whose yes covers it;
+// none for deleting the default branch, which no answer covers.
+export type Unnamed = { why: string; offer: string | null };
+
+// A rejected ref lands nothing, nor does an up-to-date one unless it is
+// `moved`, the branch a commit in the same command advances. An unreadable
+// default branch is taken to be `main` or `master`.
+export function unnamedTarget(
+  refs: readonly DryRunRef[],
+  defaults: ReadonlyMap<string, DefaultBranch>,
+  named: readonly string[],
+  moved: string | null,
+): Unnamed | null {
+  for (const { flag, from, to, url } of refs) {
+    if (flag === '!') continue;
+    // A revision like `HEAD~0` moves with the commit as `HEAD` does; `*` is a
+    // commit whose branch could not be read, which may move any of them.
+    const follows = from === undefined || !from.startsWith('refs/') || from === moved;
+    if (flag === '=' && (moved === null || (moved !== '*' && !follows))) continue;
+    if (to.startsWith('refs/tags/')) {
+      const tag = to.slice('refs/tags/'.length);
+      if (namesTag(named, tag)) continue;
+      return {
+        why: `it pushes the tag \`${tag}\`, which the request did not name`,
+        offer: `"Push the \`${tag}\` tag?"`,
+      };
+    }
+    const branch = to.replace(/^refs\/heads\//, '');
+    const head = defaults.get(url);
+    const isDefault =
+      head === undefined || 'unreadable' in head
+        ? /^(?:main|master)$/.test(branch)
+        : branch === head.branch;
+    if (isDefault && flag === '-') {
+      return { why: `it deletes \`${branch}\`, the default branch`, offer: null };
+    }
+    if (isDefault && !named.includes(branch.toLowerCase())) {
+      return {
+        why: `it pushes to \`${branch}\`, the default branch, which the request did not name`,
+        offer: `"Push to \`${branch}\`?"`,
+      };
     }
   }
   return null;

@@ -481,14 +481,14 @@ describe('grants on a request', () => {
     ['remove the no-op check and commit', COMMIT],
     ['commit the code and open a PR', COMMIT_PR],
     ['open a PR, but not until CI passes', NONE],
-    ['push the tag', PUSH],
-    ['push the v1 tag', PUSH],
-    ['push tag 0.2.0', PUSH],
-    ['push the v1 tags', PUSH],
+    ['push the tag', { ...PUSH, pushNamed: ['tag:*'] }],
+    ['push the v1 tag', { ...PUSH, pushNamed: ['tag:v1'] }],
+    ['push tag 0.2.0', { ...PUSH, pushNamed: ['tag:0.2.0'] }],
+    ['push the v1 tags', { ...PUSH, pushNamed: ['tag:v1'] }],
     ['push v1', NONE],
     ['push tag 0.2.0 but not yet', NONE],
     ['push tag 0.2.0 when CI passes', NONE],
-    ['push tag v1.2.0', PUSH],
+    ['push tag v1.2.0', { ...PUSH, pushNamed: ['tag:v1.2.0'] }],
     ['push it.2 more to go', NONE],
     // A period before a letter still ends a sentence, so a condition after it counts.
     ['done.if CI passes, push it', NONE],
@@ -1068,6 +1068,69 @@ describe('a yes does not meet the condition an offer sets', () => {
   });
   test('typed, a sentence that orders the steps with "before" withholds nothing', () => {
     expect(grantOf('push it. Before that, run the tests.')).toEqual(PUSH);
+  });
+});
+
+describe('where a push says it goes', () => {
+  test.each([
+    // A whole sentence of one exact form names where the push goes.
+    ['push to main', '', ['main']],
+    ['ok, push to main', '', ['main']],
+    ['push it to origin main', '', ['main']],
+    ['push main', '', ['main']],
+    ['push the main branch', '', ['main']],
+    ['push main to origin', '', ['main']],
+    ['push to main please', '', ['main']],
+    ['force push to main without a lease', '', ['main']],
+    ['push the tag', '', ['tag:*']],
+    ['push the tags', '', ['tag:*']],
+    ['push the v1.2.0 tag', '', ['tag:v1.2.0']],
+    ['push tag 0.2.0', '', ['tag:0.2.0']],
+    ['push the `v1.2.0-rc.1` tag', '', ['tag:v1.2.0-rc.1']],
+    ['push tag `v1.2.0`', '', ['tag:v1.2.0']],
+    // Anything around the name, or a clause that rejects it, names nothing.
+    ['push it', '', []],
+    ['push the main fix', '', []],
+    ['push main to master', '', []],
+    ['push it to the main remote', '', []],
+    ['merge main into it and push', '', []],
+    ['push it. Do not push the `v1.2.0` tag', '', []],
+    ['push the fix, then cut the `v1.2.0` tag', '', []],
+    // A retracted or quoted name names nothing, whatever follows.
+    ['push to main. no wait, never mind. push it.', '', []],
+    ['push main. never mind. commit and push it', '', []],
+    ['Push the v1.2.0 tag. Actually, never mind that. Push it.', '', []],
+    ['push the tags. no wait, never mind. push it', '', []],
+    ['push to main. thanks', '', ['main']],
+    ['yes', 'Do not\nPush to `main`?', []],
+    ['yes', 'Done.\n\nPush to `main`?', ['main']],
+    ['yes', 'Changes:\n- fixed foo\n- added bar\n\nPush to `main`?', ['main']],
+    ['yes', '```\ngit push origin main\n```\n\nPush to `main`?', ['main']],
+    ['yes', 'Push to `main`? Actually, never mind.', []],
+    ['push to main\n- Do not push to main.', '', []],
+    // A request names its own target; only a bare yes takes the offer's.
+    ['push it. Do not push to main.', 'Push to `main`?', []],
+    ['push it', 'Push to `main`?', []],
+    // An offer names it only as the closing question, in the refusal's wording.
+    ['yes', 'Push to `main`?', ['main']],
+    ['yes', 'Push to `develop`?', ['develop']],
+    ['yes', 'Push the `v1.2.0-rc.1` tag?', ['tag:v1.2.0-rc.1']],
+    ['yes', 'Push the `review-cycle@0.27.0` tag?', ['tag:review-cycle@0.27.0']],
+    ['yes', 'Can we push to main?', []],
+    ['yes', 'Push `main` to `feature-x`?', []],
+    ['yes', 'Push `fix/x` to `origin`?', []],
+    ['yes', 'Push to `fix/x`, not to `main`?', []],
+    ['yes', 'Should I push to `fix/x`, but not push to `main`?', []],
+    ['yes', 'Do you want me to push to `fix/x`, or push straight to `main`?', []],
+    ['yes', 'Rebase onto `main` and push?', []],
+    ['yes', 'Push `fix/x` and not the `v1.2.0` tag?', []],
+    ['yes', 'Push it? And open a PR into `main`?', []],
+    ['yes', 'CI fires when we push to `main`.\n\nPush to `fix/x`?', ['fix/x']],
+  ] as const)('%j after %j names %j', (prompt, offer, named) => {
+    expect(grantOf(prompt, offer).pushNamed).toEqual(named);
+  });
+  test('a yes to a release names no push', () => {
+    expect(grantOf('yes', 'Release `v0.25.0`?')).toEqual(RELEASE);
   });
 });
 

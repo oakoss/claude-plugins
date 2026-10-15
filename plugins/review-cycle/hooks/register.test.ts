@@ -2968,7 +2968,10 @@ describe('a push the user asked for', () => {
     await say($, 'push it');
     const r = await bash($, 'git push');
     expect(ran(r)).toBe(true);
-    expect(contextOf(r)).toEqual([]);
+    // This world answers no dry run, so the only note says where it went is unchecked.
+    expect(contextOf(r)).toEqual([
+      'review-cycle ran the push the user asked for without fully checking where it goes: its dry run named no ref it would update. If it may have reached the default branch or a tag they did not name, tell them.',
+    ]);
   });
   test('a reviewed commit beside it is not reported either', async ($, on) => {
     fakeWorld(on, {
@@ -3242,32 +3245,37 @@ describe('the stop-before setting', () => {
       expect(w.logs).toHaveLength(1);
     },
   );
-  // Each dry-run output is what git 2.56 printed for that push.
-  const asking: [string, readonly string[] | 'fail' | null, string][] = [
+  // Each dry-run output is what git 2.56 printed for that push. The last column
+  // is what "push it" does: run, stay refused, or run once a request names it.
+  const TAG = ['*\trefs/tags/v1:refs/tags/v1\t[new tag]'];
+  const asking: [string, readonly string[] | 'fail' | null, string, string][] = [
     [
       'git push origin main',
       [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
       'it pushes to `main`, the default branch',
+      'push it to main',
     ],
     [
       'git push origin @',
       [' \tHEAD:refs/heads/main\tb65222b..9f4a349'],
       'it pushes to `main`, the default branch',
+      'push main',
     ],
-    ['git push origin v1', ['*\trefs/tags/v1:refs/tags/v1\t[new tag]'], 'it pushes the tag `v1`'],
+    ['git push origin v1', TAG, 'it pushes the tag `v1`', 'push the v1 tag'],
     // push.followTags carries a new annotated tag along with the branch.
-    ['git push', [NEW_BRANCH, '*\trefs/tags/v1:refs/tags/v1\t[new tag]'], 'it pushes the tag `v1`'],
+    ['git push', [NEW_BRANCH, ...TAG], 'it pushes the tag `v1`', 'push the tag'],
     [
       'git push',
       'fail',
       'a dry run of it, which shows what it would push, failed (fatal: Could not read from remote repository.)',
+      'runs',
     ],
-    ['git push --tags', null, 'it pushes tags'],
-    ['git push origin --delete old', null, 'it deletes a remote branch'],
-    ['git push --all', null, 'it pushes every branch'],
-    ['git push origin "$BRANCH"', null, 'its remote or branch is built at run time'],
+    ['git push --tags', null, 'it pushes tags', 'runs'],
+    ['git push origin --delete old', null, 'it deletes a remote branch', 'runs'],
+    ['git push --all', null, 'it pushes every branch', 'runs'],
+    ['git push origin "$BRANCH"', null, 'its remote or branch is built at run time', 'refused'],
   ];
-  for (const [command, lines, reason] of asking) {
+  for (const [command, lines, reason, then] of asking) {
     test(`${command} asks whatever the setting: ${reason}`, async ($, on) => {
       const args = command.replace(/^git push ?/, '');
       const git = remoteSide(lines === null ? {} : { [args]: lines });
@@ -3276,9 +3284,87 @@ describe('the stop-before setting', () => {
       const r = await bash($, command);
       expect(denied(r, `This push asks whatever the setting: ${reason}.`)).toBe(true);
       await say($, 'push it');
+      if (then === 'refused') {
+        expect(denied(await bash($, command), 'Write the remote and branch out.')).toBe(true);
+        return;
+      }
+      if (then !== 'runs') {
+        expect(denied(await bash($, command), 'which the request did not name')).toBe(true);
+        await say($, then);
+      }
       expect(ran(await bash($, command))).toBe(true);
     });
   }
+  test('a yes to the offer the refusal suggests lets the push run', async ($, on) => {
+    const git = remoteSide({
+      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+    });
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
+    await say($, 'push it');
+    const r = await bash($, 'git push origin main');
+    expect(denied(r, '"Push to `main`?"')).toBe(true);
+    await ($ as any).turn.complete({ answer: 'Push to `main`?', reason: 'answer' });
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin main'))).toBe(true);
+  });
+  test('a push the user asked for that git partly rejects is judged by the refs it lands', async ($, on) => {
+    const lines = [
+      `To ${REMOTE}`,
+      ' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349',
+      '!\trefs/heads/other:refs/heads/other\t[rejected] (non-fast-forward)',
+      'Done',
+    ];
+    const rest = remoteSide({});
+    const git = (a: string) =>
+      a.includes('push --dry-run') && a.includes(DRY_FLAGS)
+        ? { exitCode: 1, stdout: lines.join('\n'), stderr: 'error: failed to push some refs\n' }
+        : rest(a);
+    fakeWorld(on, pushing({ git }));
+    await say($, 'push it');
+    const r = await bash($, 'git push origin main other');
+    expect(denied(r, '`main`, the default branch, which the request did not name')).toBe(true);
+  });
+  test('a commit before a push the user asked for moves an up-to-date main', async ($, on) => {
+    const rest = remoteSide({
+      'origin main': ['=\trefs/heads/main:refs/heads/main\t[up to date]'],
+    });
+    const git = (a: string) =>
+      a.startsWith('git symbolic-ref') ? { stdout: 'refs/heads/main\n' } : rest(a);
+    fakeWorld(on, pushing({ git }));
+    await review($);
+    await say($, 'commit and push');
+    const r = await bash($, 'git commit -am x && git push origin main');
+    expect(denied(r, '`main`, the default branch, which the request did not name')).toBe(true);
+    expect(denied(r, 'To commit without pushing, run the commit on its own.')).toBe(true);
+  });
+  test('a commit before a push asks for an up-to-date main when its branch cannot be read', async ($, on) => {
+    const rest = remoteSide({
+      'origin main': ['=\trefs/heads/main:refs/heads/main\t[up to date]'],
+    });
+    const git = (a: string) =>
+      a.startsWith('git symbolic-ref')
+        ? { exitCode: 128, stderr: 'fatal: not a git repository\n' }
+        : rest(a);
+    fakeWorld(on, pushing({ git }));
+    await review($);
+    await say($, 'commit and push');
+    const r = await bash($, 'git commit -am x && git push origin main');
+    expect(denied(r, '`main`, the default branch, which the request did not name')).toBe(true);
+  });
+  test("a user's push never deletes the default branch, even named", async ($, on) => {
+    const git = remoteSide({ 'origin :main': ['-\t:refs/heads/main\t[deleted]'] });
+    fakeWorld(on, pushing({ git }));
+    await say($, 'push to main');
+    const r = await bash($, 'git push origin :main');
+    expect(denied(r, 'it deletes `main`, the default branch')).toBe(true);
+    expect(denied(r, 'The gate never does that for the user')).toBe(true);
+  });
+  test('a git step before a push the user asked for asks, since it can change where it goes', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, 'push it');
+    const r = await bash($, 'git fetch && git push');
+    expect(denied(r, '`git fetch` runs before it in the same command')).toBe(true);
+  });
   test('a remote branch delete asks a question its reply grants', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
     await say($, 'fix the parser');
@@ -3901,11 +3987,10 @@ describe('the stop-before setting', () => {
     expect(denied(main, 'it pushes to `main`, the default branch')).toBe(true);
     expect(denied(main, 'It writes to GitHub directly, so no review covers it.')).toBe(true);
     await say($, 'push it');
-    const looked = w.calls.length;
+    const unnamed = await mcp($, 'mcp__github__push_files', { ...files, branch: 'main' });
+    expect(denied(unnamed, 'which the request did not name')).toBe(true);
+    await say($, 'push it to main');
     expect(ran(await mcp($, 'mcp__github__push_files', { ...files, branch: 'main' }))).toBe(true);
-    expect(w.calls.slice(looked).some((c) => c.argv.join(' ').startsWith('gh repo view'))).toBe(
-      false,
-    );
   });
   test('a hold stops a GitHub MCP pull request at every rung', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') } });
@@ -3998,6 +4083,8 @@ describe('the stop-before setting', () => {
     expect(denied(r, "doesn't ask for a bare force")).toBe(true);
     expect(denied(r, '"Force-push `fix/x` to `origin` without a lease?"')).toBe(true);
     await say($, 'force push it without a lease');
+    expect(denied(await bash($, force), '"Push to `main`?"')).toBe(true);
+    await say($, 'force push to main without a lease');
     expect(ran(await bash($, force))).toBe(true);
   });
   test('a GitHub MCP merge without a number asks where a release could follow', async ($, on) => {
@@ -4581,6 +4668,21 @@ describe('the model check', () => {
         refusal: 'granted by the model check: "ship the react aria update"',
       },
     ]);
+  });
+  test('is not asked about a push the user asked for that goes somewhere they did not name', async ($, on) => {
+    let calls = 0;
+    const git = remoteSide({
+      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+    });
+    fakeWorld(
+      on,
+      pushing({ git, model: verdictFor('push', 'push it'), onModel: () => void calls++ }),
+    );
+    await say($, 'push it');
+    expect(denied(await bash($, 'git push origin main'), 'which the request did not name')).toBe(
+      true,
+    );
+    expect(calls).toBe(0);
   });
   test('a newer message during the call stops the step, and nothing is shown or kept', async ($, on) => {
     const w = fakeWorld(

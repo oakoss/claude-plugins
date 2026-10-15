@@ -7,8 +7,10 @@ import {
   askingReason,
   neededFor,
   parseDryRun,
+  namesTag,
   pushOutcome,
   unasked,
+  unnamedTarget,
   type DefaultBranch,
 } from './push-verdict';
 
@@ -62,8 +64,8 @@ describe("what git's dry run says a push updates", () => {
         ),
       ),
     ).toEqual([
-      { flag: '*', to: 'refs/heads/fix/x', url: URL },
-      { flag: '*', to: 'refs/tags/v1', url: URL },
+      { flag: '*', from: 'HEAD', to: 'refs/heads/fix/x', url: URL },
+      { flag: '*', from: 'refs/tags/v1', to: 'refs/tags/v1', url: URL },
     ]);
   });
   const cases: [string, string, string | null][] = [
@@ -115,6 +117,63 @@ function asked(reason: string | null) {
   };
   return { calls, check };
 }
+
+const refTo = (to: string) => [{ flag: ' ', to, url: URL }];
+
+const MAIN_WHY = 'it pushes to `main`, the default branch, which the request did not name';
+const TAG_WHY = 'it pushes the tag `v1.2.0`, which the request did not name';
+
+describe('what a push the user asked for must name', () => {
+  test.each([
+    ['refs/heads/main', [], MAIN_WHY],
+    ['refs/heads/main', ['main'], null],
+    ['refs/heads/fix/x', [], null],
+    ['refs/tags/v1.2.0', [], TAG_WHY],
+    ['refs/tags/v1.2.0', ['tag:*'], null],
+    ['refs/tags/v1.2.0', ['tag:1.2.0'], null],
+    ['refs/tags/v1.2.0', ['tag:v1'], TAG_WHY],
+  ] as const)('%s named by %j', (to, named, why) => {
+    expect(unnamedTarget(refTo(to), MAIN, named, null)?.why ?? null).toBe(why);
+  });
+  test('the offer it suggests is one whose yes names the target', () => {
+    expect(unnamedTarget(refTo('refs/heads/main'), MAIN, [], null)?.offer).toBe(
+      '"Push to `main`?"',
+    );
+    expect(unnamedTarget(refTo('refs/tags/v1.2.0'), MAIN, [], null)?.offer).toBe(
+      '"Push the `v1.2.0` tag?"',
+    );
+  });
+  test('a default branch it cannot read is taken to be main or master', () => {
+    expect(unnamedTarget(refTo('refs/heads/main'), new Map(), [], null)?.why).toBe(MAIN_WHY);
+    expect(unnamedTarget(refTo('refs/heads/develop'), new Map(), [], null)).toBeNull();
+  });
+  test('an up-to-date ref counts only when a commit in the command moves it', () => {
+    const upToDate = (from: string) => [{ flag: '=', from, to: 'refs/heads/main', url: URL }];
+    expect(unnamedTarget(upToDate('refs/heads/main'), MAIN, [], null)).toBeNull();
+    expect(unnamedTarget(upToDate('refs/heads/main'), MAIN, [], 'refs/heads/main')?.why).toBe(
+      MAIN_WHY,
+    );
+    expect(unnamedTarget(upToDate('HEAD'), MAIN, [], 'refs/heads/main')?.why).toBe(MAIN_WHY);
+    expect(unnamedTarget(upToDate('refs/heads/main'), MAIN, [], 'refs/heads/feat')).toBeNull();
+    expect(unnamedTarget(upToDate('HEAD~0'), MAIN, [], 'refs/heads/main')?.why).toBe(MAIN_WHY);
+    expect(unnamedTarget(upToDate('refs/heads/main'), MAIN, [], '*')?.why).toBe(MAIN_WHY);
+    const rejected = [{ flag: '!', to: 'refs/heads/main', url: URL }];
+    expect(unnamedTarget(rejected, MAIN, [], 'refs/heads/main')).toBeNull();
+  });
+  test('deleting the default branch is never covered, even when named', () => {
+    const del = [{ flag: '-', from: '', to: 'refs/heads/main', url: URL }];
+    expect(unnamedTarget(del, MAIN, ['main'], null)).toEqual({
+      why: 'it deletes `main`, the default branch',
+      offer: null,
+    });
+  });
+  test('a tag is named by its name, with or without a v, or by any-tag', () => {
+    expect(namesTag(['tag:*'], 'v2')).toBe(true);
+    expect(namesTag(['tag:v2'], '2')).toBe(true);
+    expect(namesTag(['tag:review-cycle@0.27.0'], 'review-cycle@0.27.0')).toBe(true);
+    expect(namesTag(['tag:0.2.0'], 'v0.3.0')).toBe(false);
+  });
+});
 
 describe('what a push not covered may do', () => {
   test('a covered push runs and checks nothing', async () => {

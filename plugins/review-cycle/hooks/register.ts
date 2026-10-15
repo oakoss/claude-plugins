@@ -104,7 +104,10 @@ import {
   parseDryRun,
   pushOutcome,
   unasked,
+  unnamedTarget,
   type DefaultBranch,
+  type DryRunRef,
+  type Unnamed,
   type Needed,
 } from './push-verdict';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
@@ -1278,7 +1281,7 @@ async function onGithubTool(
   const granted = state.message.grant;
   const first = await judgeGh(shown, [action], granted, state.held, ghLookups($));
   const { gh, yes } =
-    'deny' in first
+    'deny' in first && !first.final
       ? await ghWithModel($, shown, [action], granted, first)
       : { gh: first, yes: null };
   if ('deny' in gh) return deny(gh.deny);
@@ -1286,7 +1289,11 @@ async function onGithubTool(
   if (stale !== null) return stale;
   const r = await next(e);
   if (r.deny !== undefined) return r;
-  const notes = [...(yes === null ? [] : [modelRan($, yes)]), ...unaskedNotes($, gh.ran)];
+  const notes = [
+    ...(yes === null ? [] : [modelRan($, yes)]),
+    ...unaskedNotes($, gh.ran),
+    ...(gh.notes ?? []),
+  ];
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
 }
 
@@ -1560,7 +1567,7 @@ async function judgeBash(
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
     const first = await judgeGh(quote(e.command), actions, granted, state.held, ghLookups($));
     const { gh, yes } =
-      'deny' in first
+      'deny' in first && !first.final
         ? await ghWithModel($, quote(e.command), actions, granted, first)
         : { gh: first, yes: null };
     if ('deny' in gh) return deny(gh.deny);
@@ -1589,7 +1596,11 @@ async function judgeBash(
     }
     const grant = yes === null ? granted : withModel(granted, yes.added);
     const watched = watch($, await ensureRoot($), e, next, 'unchecked', grant, since, gh.ran);
-    const r = yes === null ? await watched : await ranByModel($, watched, yes);
+    const ran = yes === null ? await watched : await ranByModel($, watched, yes);
+    const r =
+      gh.notes === undefined || ran.deny !== undefined
+        ? ran
+        : { ...ran, context: [...(ran.context ?? []), ...gh.notes] };
     if (state.aliasError === null || state.aliasErrorShown || r.deny !== undefined) return r;
     state.aliasErrorShown = true;
     return {
@@ -1627,9 +1638,11 @@ async function judgeBash(
   }
   const ran: Unasked[] = [];
   let yes: ModelYes | null = null;
+  let note: string | null = null;
   if (cls.push) {
     const commits = cls.commit !== null && finishes === null;
     let verdict = await judgePush($, root.top, e.command, commits, cls.push, granted);
+    if ('deny' in verdict && verdict.final) return deny(verdict.deny);
     if ('deny' in verdict) {
       const second = await secondRead($);
       if (second === null) return deny(verdict.deny);
@@ -1639,6 +1652,7 @@ async function judgeBash(
       yes = second;
     }
     if (verdict.ran !== null) ran.push(verdict.ran);
+    if (verdict.note !== undefined) note = verdict.note;
   }
   const checked: Checked =
     finishes !== null
@@ -1648,7 +1662,11 @@ async function judgeBash(
         : cls.history !== null
           ? 'history'
           : 'push';
-  if (yes === null) return watch($, root, e, next, checked, granted, message, ran);
+  if (yes === null) {
+    const r = await watch($, root, e, next, checked, granted, message, ran);
+    if (note === null || r.deny !== undefined) return r;
+    return { ...r, context: [...(r.context ?? []), note] };
+  }
   const watched = watch($, root, e, next, checked, withModel(granted, yes.added), message, ran);
   return ranByModel($, watched, yes);
 }
@@ -1762,12 +1780,25 @@ async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | n
   if (spec.after !== null) {
     return `\`git ${spec.after}\` runs before it in the same command, which can change where it goes (run that step on its own first, and the push is judged after it)`;
   }
-  const { config, args, end } = spec.argv;
+  const targets = await pushTargets($, top, spec.argv);
+  if (targets.failed !== null) {
+    return `a dry run of it, which shows what it would push, failed (${targets.failed})`;
+  }
+  return askingReason(targets.refs, targets.defaults);
+}
+
+// The refs a push updates, from a dry run with git's own push config applied,
+// and the default branch of each remote it goes to. A dry run that fails
+// still lists the refs it would update: one ref rejected does not stop the rest.
+async function pushTargets(
+  $: $,
+  top: string,
+  argv: NonNullable<PushSpec['argv']>,
+): Promise<{ refs: DryRunRef[]; defaults: Map<string, DefaultBranch>; failed: string | null }> {
+  const { config, args, end } = argv;
   const probe = ['--dry-run', ...args.slice(0, end), ...DRY_RUN, ...args.slice(end)];
   const dry = await run($, ['git', ...config, 'push', ...probe], { cwd: top, env: NO_PROMPT });
-  if (dry.exitCode !== 0) {
-    return `a dry run of it, which shows what it would push, failed (${firstLine(dry.stderr) || `exit ${dry.exitCode}`})`;
-  }
+  const failed = dry.exitCode === 0 ? null : firstLine(dry.stderr) || `exit ${dry.exitCode}`;
   const refs = parseDryRun(dry.stdout);
   const defaults = new Map<string, DefaultBranch>();
   for (const url of new Set(refs.map((r) => r.url))) {
@@ -1779,7 +1810,57 @@ async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | n
     if (head.exitCode === 0 && branch !== undefined) defaults.set(url, { branch });
     else defaults.set(url, { unreadable: firstLine(head.stderr) || 'no default branch named' });
   }
-  return askingReason(refs, defaults);
+  return { refs, defaults, failed };
+}
+
+// What a push the user asked for still needs: their naming of the default
+// branch or tag it pushes, or a word to the agent that its targets went
+// unread. One whose targets a step before it can change asks.
+async function coveredAsks(
+  $: $,
+  top: string,
+  command: string,
+  commits: boolean,
+  spec: PushSpec,
+  named: readonly string[],
+): Promise<{ deny: string } | { note: string } | null> {
+  const asked = "the user's latest message asks for a push, but";
+  if (spec.after !== null) {
+    return {
+      deny: `${asked} \`git ${spec.after}\` runs before it in the same command, which can change where it goes, so nothing ran. Run that step on its own first, and the push is judged after it.`,
+    };
+  }
+  if (spec.argv === null) {
+    return {
+      deny: `${asked} its remote or branch is built at run time, so the gate cannot tell where it goes, and nothing ran. Write the remote and branch out.`,
+    };
+  }
+  const t = await pushTargets($, top, spec.argv);
+  // Exit 1 is a detached HEAD; any other failure leaves the branch unknown.
+  const branch = commits ? await run($, ['git', 'symbolic-ref', '-q', 'HEAD'], { cwd: top }) : null;
+  const moved =
+    branch === null
+      ? null
+      : branch.exitCode === 0
+        ? branch.stdout.trim()
+        : branch.exitCode === 1
+          ? 'HEAD'
+          : '*';
+  const u = unnamedTarget(t.refs, t.defaults, named, moved);
+  if (u !== null) return { deny: unnamedRefusal(command, commits, u) };
+  const unread = [...t.defaults].filter(([, head]) => 'unreadable' in head);
+  const why =
+    t.refs.length === 0
+      ? t.failed === null
+        ? 'its dry run named no ref it would update'
+        : `a dry run of it failed (${t.failed})`
+      : unread.length > 0
+        ? `the default branch of ${unread[0]?.[0]} could not be read, so only \`main\` and \`master\` were checked`
+        : null;
+  if (why === null) return null;
+  return {
+    note: `review-cycle ran the push the user asked for without fully checking where it goes: ${why}. If it may have reached the default branch or a tag they did not name, tell them.`,
+  };
 }
 
 // What the push may run, or why not: a grant covers it, or a plain push the
@@ -1792,9 +1873,13 @@ async function judgePush(
   spec: PushSpec,
   granted: Grant,
   model: ModelSteps = {},
-): Promise<{ deny: string } | { ran: Unasked | null }> {
+): Promise<{ deny: string; final?: true } | { ran: Unasked | null; note?: string }> {
   const missing = unasked(spec, granted);
-  if (missing === null) return { ran: null };
+  if (missing === null) {
+    const c = await coveredAsks($, top, command, commits, spec, granted.pushNamed);
+    if (c === null) return { ran: null };
+    return 'deny' in c ? { deny: c.deny, final: true } : { ran: null, note: c.note };
+  }
   const ladder = await ladderOf($);
   const forPr = granted.pr && state.held === null;
   const bySetting = forPr || permitted(granted, ladder, state.held !== null).push;
@@ -1938,6 +2023,17 @@ function pushRefusal(
       throw new Error(`no refusal for the push level ${String(unhandled)}`);
     }
   }
+}
+
+// A push the user asked for, to a target their request did not name.
+function unnamedRefusal(command: string, commits: boolean, u: Unnamed): string {
+  const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
+  const shown = quote(command);
+  const then =
+    u.offer === null
+      ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
+      : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
+  return `the user's latest message asks for a push, but ${u.why}, so nothing ran.${alone} ${then}`;
 }
 
 // `finishes`: a `--continue` of that history command.

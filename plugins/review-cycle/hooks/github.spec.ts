@@ -84,8 +84,14 @@ describe('gh api', () => {
     expect(one(command)).toMatchObject({ kind: 'merge', lookup: { cannot } });
   });
 
-  const DEFAULT = { asks: 'it names no branch, so it commits to the default branch' };
-  const BUILT = { asks: 'the branch it names is built at run time or read from a file' };
+  const DEFAULT = {
+    asks: 'it names no branch, so it commits to the default branch',
+    toDefault: true,
+  };
+  const BUILT = {
+    asks: 'the branch it names is built at run time or read from a file',
+    unknown: true,
+  };
   test.each([
     ['gh api -X PUT repos/o/r/contents/a.md -f branch=fix/x', { branch: 'fix/x', repo: 'o/r' }],
     [
@@ -119,7 +125,11 @@ describe('gh api', () => {
     ],
     [
       'gh api repos/{owner}/{repo}/git/refs -f ref=refs/tags/v1 -f sha=abc',
-      { asks: 'it pushes a tag' },
+      { asks: 'it pushes a tag', tag: 'v1' },
+    ],
+    [
+      'gh api -X PATCH repos/{owner}/{repo}/git/refs/tags/v1 -f sha=abc',
+      { asks: 'it pushes a tag', tag: 'v1' },
     ],
     [
       'gh api -X PATCH repos/{owner}/{repo}/git/refs/heads/fix/x -f sha=abc',
@@ -127,9 +137,20 @@ describe('gh api', () => {
     ],
     [
       'gh api -X PATCH repos/{owner}/{repo}/git/refs/heads/x -f sha=a -F force=true',
-      { asks: 'it force-updates `x`', force: true },
+      {
+        asks: 'it force-updates `x`',
+        force: true,
+        branch: { name: 'x', repo: null, deletes: false },
+      },
     ],
-    ['gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/old', { asks: 'it deletes `old`' }],
+    [
+      'gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/old',
+      { asks: 'it deletes `old`', branch: { name: 'old', repo: null, deletes: true } },
+    ],
+    [
+      'GH_REPO=o/other gh api -X PATCH repos/{owner}/{repo}/git/refs/heads/x -f sha=a -F force=true',
+      { asks: 'it force-updates `x`', force: true, unknown: true },
+    ],
     ['gh api -X PUT repos/{owner}/{repo}/pulls/116/update-branch', { head: ['116'] }],
     ['gh api -X PUT repos/o/r/pulls/116/update-branch', { head: ['116', '--repo', 'o/r'] }],
     [
@@ -144,13 +165,10 @@ describe('gh api', () => {
       'gh api -X PUT repos/o/r/pulls/main/update-branch',
       { asks: 'the pull request it updates cannot be looked up' },
     ],
-    [
-      'gh api repos/{owner}/{repo}/git/refs -f ref="$R" -f sha=abc',
-      { asks: 'the branch it names is built at run time or read from a file' },
-    ],
+    ['gh api repos/{owner}/{repo}/git/refs -f ref="$R" -f sha=abc', BUILT],
     [
       'GH_REPO=o/r gh api -X PUT repos/{owner}/{repo}/contents/a -f branch=x',
-      { asks: 'where it pushes is picked outside its words' },
+      { asks: 'where it pushes is picked outside its words', unknown: true },
     ],
     [
       'gh api -X PUT repos/o/r/contents/a -f branch=x | jq -r .commit.sha',
@@ -158,7 +176,10 @@ describe('gh api', () => {
     ],
     [
       'cd ../other && gh api -X PUT repos/{owner}/{repo}/contents/a -f branch=x',
-      { asks: 'another step in the command can change which repository it reaches' },
+      {
+        asks: 'another step in the command can change which repository it reaches',
+        unknown: true,
+      },
     ],
   ])('%s pushes', (command, expected) => {
     expect(one(command)).toEqual({ kind: 'push', ref: ref(expected) });
@@ -391,7 +412,7 @@ describe('GitHub MCP tools', () => {
     [
       'mcp__github__push_files',
       { owner: 'o', repo: 'r', branch: '' },
-      { kind: 'push', ref: { asks: 'it names no branch' } },
+      { kind: 'push', ref: { asks: 'it names no branch', toDefault: true } },
     ],
     [
       'mcp__github__create_or_update_file',
@@ -406,7 +427,7 @@ describe('GitHub MCP tools', () => {
     [
       'mcp__github__delete_file',
       { owner: 'o', repo: 'r' },
-      { kind: 'push', ref: { asks: 'it names no branch' } },
+      { kind: 'push', ref: { asks: 'it names no branch', toDefault: true } },
     ],
     [
       'mcp__github__create_branch',

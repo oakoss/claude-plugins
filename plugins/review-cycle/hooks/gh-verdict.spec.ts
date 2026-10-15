@@ -238,7 +238,12 @@ describe('a push through GitHub', () => {
     const forced = push({ asks: 'it force-updates `x`', force: true });
     const r = await judge([forced], world('never stop'), grant({ push: 'lease' }));
     expect(r).toMatchObject({ deny: expect.stringContaining('bare force') });
-    expect(await judge([forced], world('commit'), grant({ push: 'bare' }))).toEqual({ ran: [] });
+    expect(await judge([forced], world('commit'), grant({ push: 'bare' }))).toEqual({
+      ran: [],
+      notes: [
+        'review-cycle ran the push the user asked for without checking where it goes: it force-updates `x`. If it may have reached the default branch or a tag they did not name, tell them.',
+      ],
+    });
   });
 
   test('a requested pull request lets no GitHub push through', async () => {
@@ -248,12 +253,105 @@ describe('a push through GitHub', () => {
     expect(w.calls).toEqual(['ladder']);
   });
 
-  test('a requested push is not looked up', async () => {
-    const w = world('commit');
+  test('a requested push to the default branch asks unless the request named it', async () => {
+    const main = push({ branch: 'main', repo: 'o/r' });
+    expect(await judge([main], world('never stop'), grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('`main`, the default branch, which the request did not name'),
+    });
     expect(
-      await judge([push({ branch: 'main', repo: 'o/r' })], w, grant({ push: 'push' })),
+      await judge([main], world('commit'), grant({ push: 'push', pushNamed: ['main'] })),
     ).toEqual({ ran: [] });
-    expect(w.calls).toEqual(['ladder']);
+    expect(
+      await judge(
+        [push({ branch: 'fix/x', repo: 'o/r' })],
+        world('commit'),
+        grant({ push: 'push' }),
+      ),
+    ).toEqual({ ran: [] });
+  });
+
+  test('a requested tag write asks unless the request named the tag', async () => {
+    const tag = push({ asks: 'it pushes a tag', force: false, tag: 'v1.2.0' });
+    expect(await judge([tag], world('commit'), grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('"Push the `v1.2.0` tag?"'),
+      final: true,
+    });
+    const named = grant({ push: 'push', pushNamed: ['tag:v1.2.0'] });
+    expect(await judge([tag], world('commit'), named)).toEqual({ ran: [] });
+  });
+
+  test('a requested forced update or delete of the default branch asks', async () => {
+    const forced = push({
+      asks: 'it force-updates `main`',
+      force: true,
+      branch: { name: 'main', repo: 'o/r', deletes: false },
+    });
+    expect(await judge([forced], world('commit'), grant({ push: 'bare' }))).toMatchObject({
+      deny: expect.stringContaining('"Push to `main`?"'),
+    });
+    const named = grant({ push: 'bare', pushNamed: ['main'] });
+    expect(await judge([forced], world('commit'), named)).toEqual({ ran: [] });
+    const deleted = push({
+      asks: 'it deletes `main`',
+      force: false,
+      branch: { name: 'main', repo: 'o/r', deletes: true },
+    });
+    expect(
+      await judge([deleted], world('commit'), grant({ push: 'push', pushNamed: ['main'] })),
+    ).toMatchObject({ deny: expect.stringContaining('The gate never does that for the user') });
+  });
+
+  test('a requested delete says so when the default branch cannot be looked up', async () => {
+    const down = world('commit', { defaultBranch: { asks: 'gh is not logged in' } });
+    const deleted = push({
+      asks: 'it deletes `develop`',
+      force: false,
+      branch: { name: 'develop', repo: 'o/r', deletes: true },
+    });
+    expect(await judge([deleted], down, grant({ push: 'push' }))).toEqual({
+      ran: [],
+      notes: [
+        'review-cycle ran the push the user asked for without checking where it goes: gh is not logged in. If it may have reached the default branch or a tag they did not name, tell them.',
+      ],
+    });
+  });
+
+  test('a requested write whose branch is built at run time asks', async () => {
+    const built = push({
+      asks: 'the branch it names is built at run time',
+      force: false,
+      unknown: true,
+    });
+    expect(await judge([built], world('commit'), grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('Write the branch and repository out'),
+      final: true,
+    });
+  });
+
+  test('a requested write that names no branch asks', async () => {
+    const unnamed = push({ asks: 'it names no branch', force: false, toDefault: true });
+    expect(await judge([unnamed], world('commit'), grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('Write the branch and repository out in the call'),
+    });
+  });
+
+  test('a requested push to main asks when the default branch cannot be looked up', async () => {
+    const down = world('commit', { defaultBranch: { asks: 'gh is not logged in' } });
+    const main = push({ branch: 'main', repo: 'o/r' });
+    expect(await judge([main], down, grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('`main`, the default branch'),
+    });
+    const other = await judge(
+      [push({ branch: 'fix/x', repo: 'o/r' })],
+      down,
+      grant({ push: 'push' }),
+    );
+    expect(other).toEqual({
+      ran: [],
+      notes: [
+        'review-cycle ran the push the user asked for without checking where it goes: gh is not logged in. If it may have reached the default branch or a tag they did not name, tell them.',
+      ],
+    });
   });
 });
 
