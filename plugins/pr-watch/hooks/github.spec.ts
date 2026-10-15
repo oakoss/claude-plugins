@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'vitest';
 
-import { estimateArgs, parseEstimate, parsePull, parseQuota, pullArgs, pushArgs } from './github';
+import {
+  attemptArgs,
+  estimateArgs,
+  parseAttemptStart,
+  parseEstimate,
+  parsePull,
+  parseQuota,
+  pullArgs,
+  pushArgs,
+} from './github';
 
 const queryOf = (args: string[]) => args.find((a) => a.startsWith('query=')) ?? '';
 
@@ -87,6 +96,14 @@ describe('parsePull', () => {
     expect(w).toMatchObject({ attempt: 2, isRerun: true });
     const [first] = parsePull(prOutput([suite({ runAttempt: undefined })])).workflows;
     expect(first).toMatchObject({ attempt: 1, isRerun: false });
+  });
+
+  test('reads the run’s id, leaving it out when GitHub sends none', () => {
+    const [w] = parsePull(prOutput([suite({ databaseId: 38_675_041_432 })])).workflows;
+    expect(w?.runId).toBe(38_675_041_432);
+    const [none] = parsePull(prOutput([suite({ databaseId: 'x' })])).workflows;
+    expect(none).not.toHaveProperty('runId');
+    expect(queryOf(pullArgs('github.com', 'o/r', 1, false))).toContain('databaseId runAttempt');
   });
 
   test('reads the pull request and its workflows', () => {
@@ -373,6 +390,25 @@ describe('parseQuota', () => {
     expect(
       parseQuota(JSON.stringify({ data: { rateLimit: { remaining: 5, limit: 0 } } })),
     ).toBeNull();
+  });
+});
+
+describe('attempt start', () => {
+  test('asks REST for the attempt, on the watch’s host', () => {
+    expect(attemptArgs('github.com', 'o/r', 9, 2)).toEqual([
+      'gh',
+      'api',
+      'repos/o/r/actions/runs/9/attempts/2',
+    ]);
+    expect(attemptArgs('ghe.example.com', 'o/r', 9, 2)).toContain('ghe.example.com');
+  });
+
+  test('reads run_started_at, and null for anything else', () => {
+    const start = JSON.stringify({ run_attempt: 2, run_started_at: '2026-10-15T03:15:16Z' });
+    expect(parseAttemptStart(start)).toBe(Date.parse('2026-10-15T03:15:16Z'));
+    expect(parseAttemptStart(JSON.stringify({ run_started_at: '1' }))).toBeNull();
+    expect(parseAttemptStart('null')).toBeNull();
+    expect(() => parseAttemptStart('<html>')).toThrow('gh printed something other than JSON');
   });
 });
 

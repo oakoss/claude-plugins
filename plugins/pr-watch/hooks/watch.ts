@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Held, Pull, Watch, Workflow } from '../types';
+import type { Activity, Held, Job, Pull, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -349,6 +349,30 @@ function gateOf(running: Workflow[], estimates: Record<string, number>, host: st
 
 export function estimateKey(host: string, workflowId: number): string {
   return `${host}/${workflowId}`;
+}
+
+export function rerunKey(host: string, runId: number, attempt: number): string {
+  return `${host}/run/${runId}/${attempt}`;
+}
+
+const JOB_NAME_MAX = 24;
+
+const isQueued = (j: Job) => j.status === 'queued';
+
+const clip = (name: string) =>
+  name.length > JOB_NAME_MAX ? `${name.slice(0, JOB_NAME_MAX - 1)}…` : name;
+
+// A running gate's name, with what it still waits on once some of its jobs
+// are done: up to two names, else a count. `queued` covers GitHub's queued,
+// waiting and pending alike, since none of them has started.
+function gateTextOf(gate: Workflow): string {
+  const name = gate.isRerun ? `${gate.name} re-run` : gate.name;
+  const left = gate.jobs.filter((j) => j.status !== 'done');
+  const allQueued = left.length > 0 && left.every((j) => isQueued(j)) ? ' queued' : '';
+  if (left.length === 0 || left.length === gate.jobs.length) return `${name}${allQueued}`;
+  if (left.length > 2) return `${name}: ${left.length} jobs${allQueued}`;
+  const names = left.map((j) => `${clip(j.name)}${isQueued(j) ? ' queued' : ''}`);
+  return `${name}: ${names.join(', ')}`;
 }
 
 // Null once every counted workflow has passed.
@@ -807,18 +831,30 @@ export function markOf(w: Workflow): string {
   return PASSED.has(w.conclusion ?? '') ? '✓' : '✗';
 }
 
-export type Segment = { text: string; color?: string; isDim?: boolean; url?: string };
+// `isMark` is drawn whole: a row too wide for the band cuts its words first.
+export type Segment = {
+  text: string;
+  color?: string;
+  isDim?: boolean;
+  url?: string;
+  isMark?: true;
+};
+
+// A status colors its mark alone; the words beside it keep the plain text color.
+const icon = (text: string, color: string | undefined): Segment => ({
+  text,
+  ...(color === undefined ? {} : { color }),
+  isMark: true,
+});
 
 const BAR_MAX = 24;
 const BAR_MIN = 8;
 
-function markSegment(w: Workflow): Segment {
+const MARK_COLOR: Record<string, string> = { '✓': 'green', '✗': 'red', '●': 'blue' };
+
+function markSegments(w: Workflow): Segment[] {
   const mark = markOf(w);
-  return {
-    text: ` · ${w.name} ${mark}`,
-    color: mark === '✗' ? 'red' : mark === '●' ? 'blue' : undefined,
-    isDim: mark === '✓',
-  };
+  return [{ text: ` · ${w.name} ` }, icon(mark, MARK_COLOR[mark])];
 }
 
 // One line of the band. A running gate whose length is known draws a bar that
@@ -868,23 +904,24 @@ export function lineOf(
   const others = (skip: number | null) =>
     runs.workflows
       .filter((w) => w.id !== skip && (isRunning || markOf(w) !== '✓'))
-      .map((w) => markSegment(w));
+      .flatMap((w) => markSegments(w));
   if (v.kind === 'ready') {
-    return [...lead, { text: ' ✓ ready to merge', color: 'green' }, ...others(null), ...tail];
+    const ready = [icon(' ✓', 'green'), { text: ' ready to merge' }];
+    return [...lead, ...ready, ...others(null), ...tail];
   }
   if (v.kind === 'merged-passed') {
-    return [...lead, { text: ' ✓ checks passed', color: 'green' }, ...tail];
+    return [...lead, icon(' ✓', 'green'), { text: ' checks passed' }, ...tail];
   }
   if (v.kind === 'merged-waiting') {
     return [...lead, { text: ' ○ waiting on checks', isDim: true }, ...tail];
   }
   if (v.kind === 'failing' || v.kind === 'merged-failing') {
-    const text = ` ✗ ${v.workflow}: ${v.job} failed`;
-    const reason = { text, color: 'red', url: v.url || undefined };
-    return [...lead, reason, ...others(v.workflowId), ...tail];
+    const reason = { text: ` ${v.workflow}: ${v.job} failed`, url: v.url || undefined };
+    return [...lead, icon(' ✗', 'red'), reason, ...others(v.workflowId), ...tail];
   }
   if (v.kind === 'blocked') {
-    return [...lead, { text: ` ⚠ ${v.reason}`, color: 'yellow' }, ...others(null), ...tail];
+    const blocked = [icon(' ⚠', 'yellow'), { text: ` ${v.reason}` }];
+    return [...lead, ...blocked, ...others(null), ...tail];
   }
   if (v.kind === 'waiting') {
     return [...lead, { text: ` ○ waiting on ${v.reason}`, isDim: true }, ...others(null), ...tail];
@@ -892,9 +929,19 @@ export function lineOf(
   const gate = v.gate;
   const elapsed = now - Date.parse(gate.startedAt);
   const estimate = estimates[estimateKey(watch.host, gate.id)] ?? 0;
-  const name = { text: ` ● ${gate.name} `, color: 'blue', url: gate.url || undefined };
-  const head = [...lead, name];
-  if (gate.isRerun) return [...head, { text: 're-run', isDim: true }, ...others(gate.id), ...tail];
+  const url = gate.url || undefined;
+  const mark = icon(' ●', 'blue');
+  if (gate.isRerun) {
+    // The bar's length is the whole workflow's, which a re-run of failed jobs undercuts.
+    const start =
+      gate.runId === undefined
+        ? undefined
+        : estimates[rerunKey(watch.host, gate.runId, gate.attempt)];
+    const name = { text: ` ${gateTextOf(gate)}`, url };
+    const clock = start === undefined ? [] : [{ text: ` ${clockText(now - start)}`, isDim: true }];
+    return [...lead, mark, name, ...clock, ...others(gate.id), ...tail];
+  }
+  const head = [...lead, mark, { text: ` ${gateTextOf(gate)} `, url }];
   if (estimate <= 0) {
     return [...head, { text: clockText(elapsed), isDim: true }, ...others(gate.id), ...tail];
   }

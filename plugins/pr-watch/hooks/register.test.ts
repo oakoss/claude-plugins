@@ -35,6 +35,10 @@ type Gh = {
   // Every GraphQL read fails, while gh pr view still answers.
   readsFail?: boolean;
   estimateFails?: number;
+  // A re-run attempt's REST answer; the call fails when unset, and with this
+  // stderr when it is set.
+  attempt?: string;
+  attemptError?: string;
   partial?: boolean;
   // Holds the first PR read, every pushed-branch read, or the next gh pr view,
   // until the test calls `release`.
@@ -112,7 +116,26 @@ function runOf(n: number, summary: Record<string, unknown>) {
   return suite;
 }
 
-const RUNNING_CI = ciSuite({ status: 'QUEUED', conclusion: null });
+const RUNNING_CI = ciSuite({ status: 'IN_PROGRESS', conclusion: null });
+
+// Docs, a workflow nothing requires, on its second attempt.
+function docsRerun(status: string) {
+  const conclusion = status === 'COMPLETED' ? 'SUCCESS' : null;
+  return {
+    status,
+    conclusion,
+    workflowRun: {
+      runAttempt: 2,
+      databaseId: 6,
+      createdAt: '2026-10-03T22:00:00Z',
+      url: 'https://github.com/o/r/actions/runs/6',
+      workflow: { databaseId: 8, name: 'Docs' },
+    },
+    checkRuns: {
+      nodes: [{ name: 'Build', status, conclusion, detailsUrl: '', isRequired: false }],
+    },
+  };
+}
 const FAILING_CI = ciSuite({ status: 'QUEUED', conclusion: null }, [
   {
     name: 'Typecheck',
@@ -142,6 +165,8 @@ function world(
   const seen = {
     toasts: [] as string[],
     runs: [] as string[],
+    // Each run's time limit, by the same index.
+    timeouts: [] as (number | undefined)[],
     wakes: [] as string[],
     order: [] as string[],
     registered: [] as string[],
@@ -238,9 +263,10 @@ function world(
     seen.registered.push(e.name);
     return { value: { tool: `mcp__pr-watch__${e.name}` } };
   });
-  on('process.run', ($: unknown, e: { argv: string[] }) => {
+  on('process.run', ($: unknown, e: { argv: string[]; init?: { timeoutMs?: number } }) => {
     const argv = e.argv.join(' ');
     seen.runs.push(argv);
+    seen.timeouts.push(e.init?.timeoutMs);
     const failed = { value: { exitCode: 1, stdout: '', stderr: 'gh: HTTP 502\nretry later' } };
     if (gh.fails) return failed;
     const isMerged = argv.includes('mergeCommit {');
@@ -268,6 +294,13 @@ function world(
     }
     if (gh.partial && argv.includes('graphql')) {
       return { value: { exitCode: 1, stdout: gh.pr, stderr: 'gh: Resource not accessible' } };
+    }
+    if (argv.includes('/attempts/')) {
+      if (gh.attemptError !== undefined) {
+        return { value: { exitCode: 1, stdout: '', stderr: gh.attemptError } };
+      }
+      if (gh.attempt === undefined) return failed;
+      return { value: { exitCode: 0, stdout: gh.attempt, stderr: '' } };
     }
     if (!argv.includes('graphql') && (gh.estimateFails ?? 0) > 0) {
       gh.estimateFails = (gh.estimateFails ?? 0) - 1;
@@ -314,6 +347,12 @@ async function lineIn(ui: any): Promise<string | undefined> {
   return row?.text.replace(/ ×$/, '');
 }
 
+// The color the band draws a Text of this text in; undefined when it has none.
+async function colorIn(ui: any, text: string): Promise<string | undefined> {
+  const found = await ui.find({ type: 'Text', text });
+  return found?.props.color;
+}
+
 const ESTIMATE_CALL = 'actions/workflows/7/runs';
 
 describe('a pull request Claude opens', () => {
@@ -331,6 +370,120 @@ describe('a pull request Claude opens', () => {
     await clock.advance(70_000);
     expect(seen.runs.length).toBeGreaterThan(reads);
     expect(seen.toasts).toHaveLength(1);
+  });
+
+  test('draws each mark in its color and its words plain, on both surfaces', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), estimate: CI_RUN };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await band($, surface);
+      expect(await colorIn(ui, ' ●')).toBe('blue');
+      expect(await ui.find({ type: 'Link', label: 'CI' })).toBeDefined();
+    }
+    gh.pr = prJson();
+    await clock.advance(11_000);
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await band($, surface);
+      expect(await colorIn(ui, ' ✓')).toBe('green');
+      expect(await ui.find({ type: 'Text', text: ' ready to merge' })).toBeDefined();
+      expect(await colorIn(ui, ' ready to merge')).toBeUndefined();
+    }
+  });
+
+  test('draws a re-run’s clock once GitHub says when its attempt started', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const rerun = {
+      ...RUNNING_CI,
+      workflowRun: { ...RUNNING_CI.workflowRun, runAttempt: 2, databaseId: 5 },
+    };
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [rerun]), estimate: CI_RUN };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 ● CI re-run');
+    const asks = () => seen.runs.filter((r) => r.includes('actions/runs/5/attempts/2')).length;
+    expect(asks()).toBe(1);
+    gh.attempt = JSON.stringify({ run_attempt: 2, run_started_at: '2026-10-03T22:00:30Z' });
+    await clock.advance(30_000);
+    expect(asks()).toBe(1);
+    await clock.advance(31_000);
+    expect(await lineIn(ui)).toBe('#128 ● CI re-run 1m42s');
+    await clock.advance(60_000);
+    expect(asks()).toBe(2);
+  });
+
+  for (const [what, attemptError, asks] of [
+    ['a missing run', 'gh: Not Found (HTTP 404)\n', 1],
+    ['a token without Actions', 'gh: Resource not accessible by integration (HTTP 403)\n', 1],
+    ['a rate limit', 'gh: API rate limit exceeded for user ID 1. (HTTP 403)\n', 4],
+    ['a server error', 'gh: Server Error (HTTP 502)\n', 4],
+  ] as const) {
+    test(`asks for a re-run’s start again after ${what} only if it may pass`, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const rerun = {
+        ...RUNNING_CI,
+        workflowRun: { ...RUNNING_CI.workflowRun, runAttempt: 2, databaseId: 5 },
+      };
+      const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [rerun]), attemptError };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      await clock.advance(180_000);
+      expect(seen.runs.filter((r) => r.includes('/attempts/'))).toHaveLength(asks);
+      expect(await lineIn(await band($))).toBe('#128 ● CI re-run');
+    });
+  }
+
+  test('gives a length or start lookup 10 s', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const rerun = {
+      ...RUNNING_CI,
+      workflowRun: { ...RUNNING_CI.workflowRun, runAttempt: 2, databaseId: 5 },
+    };
+    const seen = world(on, { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [rerun]) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const limits = seen.runs.flatMap((r, i) =>
+      r.includes('/attempts/') || r.includes(ESTIMATE_CALL) ? [seen.timeouts[i]] : [],
+    );
+    expect(limits).toEqual([10_000, 10_000]);
+  });
+
+  test('asks only for the re-run the line draws, and none that finished', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI, docsRerun('IN_PROGRESS')]),
+    };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.pr = prJson({}, [docsRerun('COMPLETED')]);
+    await clock.advance(30_000);
+    expect(seen.runs.filter((r) => r.includes('/attempts/'))).toEqual([]);
+  });
+
+  test('learns a re-run’s start on a merged line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const body = JSON.parse(mergedJson('IN_PROGRESS', null));
+    const [release] = body.data.repository.pullRequest.mergeCommit.checkSuites.nodes;
+    release.workflowRun = { ...release.workflowRun, runAttempt: 2, databaseId: 9 };
+    const attempt = JSON.stringify({ run_started_at: '2026-10-03T22:01:05Z' });
+    const seen = world(on, { pr: JSON.stringify(body), view: VIEW, attempt }, '');
+    await start($);
+    await create($, 'gh pr merge 128 --squash');
+    await clock.advance(1000);
+    await clock.advance(10_000);
+    expect(seen.runs.some((r) => r.includes('actions/runs/9/attempts/2'))).toBe(true);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release re-run 0m16s');
   });
 
   test('draws a running workflow with its bar and times, asking its length once', async ($, on) => {

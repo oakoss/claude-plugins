@@ -18,6 +18,8 @@ export type Workflow = {
   isRerun: boolean;
   // The run's attempt, 1 for the first: a re-run keeps the run's URL.
   attempt: number;
+  // The run's id, which asks GitHub when a re-run's attempt started.
+  runId?: number;
   url: string;
   jobs: Job[];
 };
@@ -93,7 +95,8 @@ declare module 'claude-code' {
     'pr-watch': {
       watches: Watch[];
       // The last successful run's length in ms, by `<host>/<workflow id>`; 0
-      // when the workflow has none.
+      // when the workflow has none. Also a re-run attempt's start in ms, by
+      // `<host>/run/<run id>/<attempt>`.
       estimates: Record<string, number>;
       now: number;
       // On the host, so a reload mid-turn keeps held news already saved as told.

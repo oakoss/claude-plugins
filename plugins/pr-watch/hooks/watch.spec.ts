@@ -16,6 +16,8 @@ import {
   untilText,
   isSettled,
   lineOf,
+  rerunKey,
+  type Segment,
   mergedPullOf,
   mergingPull,
   movesPulls,
@@ -1184,13 +1186,21 @@ function textOf(w: Watch, estimates = {}, columns = 80): string {
 }
 
 const runningCi = () => ci([job('CI Summary', null, true)]);
+// The line of a pull request whose CI holds these jobs.
+const left = (...jobs: Job[]) => textOf(watched(pull([ci(jobs)])));
+const queued = (name: string): Job => ({ ...job(name, null), status: 'queued' });
 const KNOWN = { 'github.com/1': 140_000 };
 
 // How many cells the running bar takes in a band `columns` wide.
 function cells(columns: number): number {
-  const segs = lineOf(watched(pull([runningCi()])), at, KNOWN, columns);
-  return (segs[2]?.text.length ?? 0) + (segs[3]?.text.length ?? 0);
+  return barCells(lineOf(watched(pull([runningCi()])), at, KNOWN, columns));
 }
+
+// The two segments after a line's label.
+const leadOf = (p: Pull) => lineOf(watched(p), at, KNOWN, 80).slice(1, 3);
+
+// The bar's two segments follow the label, the gate's mark and its name.
+const barCells = (segs: Segment[]) => (segs[3]?.text.length ?? 0) + (segs[4]?.text.length ?? 0);
 
 // Merged at 22:00:00, 70 s before `at`, with these runs on the merge commit.
 function merged(runs: Workflow[] | null): Pull {
@@ -1327,19 +1337,46 @@ describe('lineOf', () => {
     expect(textOf(watched(undefined, { error: over.error }))).toBe('#128 gh failed: HTTP 502');
   });
 
-  test('paints what runs blue, keeping yellow for blocked', () => {
+  test('paints what runs blue: the mark and the bar, not the name', () => {
     const segs = lineOf(watched(pull([runningCi(), codeql(null)])), at, KNOWN, 80);
     const colorOf = (text: RegExp) => segs.find((s) => text.test(s.text))?.color;
-    expect(colorOf(/^ ● CI $/)).toBe('blue');
+    expect(segs.slice(1, 3)).toEqual([
+      { text: ' ●', color: 'blue', isMark: true },
+      { text: ' CI ', url: 'https://x/run/1' },
+    ]);
     expect(colorOf(/█/)).toBe('blue');
-    expect(colorOf(/CodeQL ●/)).toBe('blue');
-    const blocked = lineOf(watched(pull([green()], { merge: 'DIRTY' })), at, KNOWN, 80);
-    expect(blocked.find((s) => s.text.includes('⚠'))?.color).toBe('yellow');
+    expect(segs.slice(-2)).toEqual([
+      { text: ' · CodeQL ' },
+      { text: '●', color: 'blue', isMark: true },
+    ]);
   });
 
-  test('marks a failed other workflow red', () => {
-    const segs = lineOf(watched(pull([runningCi(), codeql('FAILURE')])), at, KNOWN, 80);
-    expect(segs.at(-1)).toEqual({ text: ' · CodeQL ✗', color: 'red', isDim: false });
+  test("colors only another workflow's mark: red failed, green passed", () => {
+    const failed = lineOf(watched(pull([runningCi(), codeql('FAILURE')])), at, KNOWN, 80);
+    expect(failed.slice(-2)).toEqual([
+      { text: ' · CodeQL ' },
+      { text: '✗', color: 'red', isMark: true },
+    ]);
+    const passed = lineOf(watched(pull([runningCi(), codeql('SUCCESS')])), at, KNOWN, 80);
+    expect(passed.slice(-2)).toEqual([
+      { text: ' · CodeQL ' },
+      { text: '✓', color: 'green', isMark: true },
+    ]);
+  });
+
+  test("colors only the lead's mark: ready and passed green, blocked yellow", () => {
+    expect(leadOf(pull([green()]))).toEqual([
+      { text: ' ✓', color: 'green', isMark: true },
+      { text: ' ready to merge' },
+    ]);
+    expect(leadOf(merged([green()]))).toEqual([
+      { text: ' merged into main ·', isDim: true },
+      { text: ' ✓', color: 'green', isMark: true },
+    ]);
+    expect(leadOf(pull([green()], { merge: 'DIRTY' }))).toEqual([
+      { text: ' ⚠', color: 'yellow', isMark: true },
+      { text: ' conflicts' },
+    ]);
   });
 
   test('sizes the bar to the band, between 8 and 24 cells', () => {
@@ -1357,9 +1394,85 @@ describe('lineOf', () => {
     expect(textOf(watched(pull([runningCi()])))).toBe('#128 ● CI 1m10s');
   });
 
-  test('a re-run shows no clock, since GitHub keeps the first attempt’s start', () => {
-    const rerun = { ...runningCi(), isRerun: true };
+  test('a re-run shows no clock until its attempt’s start is known', () => {
+    const rerun = { ...runningCi(), isRerun: true, attempt: 2, runId: 9 };
     expect(textOf(watched(pull([rerun])), KNOWN)).toBe('#128 ● CI re-run');
+    expect(textOf(watched(pull([{ ...rerun, runId: undefined }])), KNOWN)).toBe('#128 ● CI re-run');
+  });
+
+  test('a re-run counts from its attempt’s start, with no bar', () => {
+    const rerun = { ...runningCi(), isRerun: true, attempt: 2, runId: 9 };
+    const known = { ...KNOWN, [rerunKey('github.com', 9, 2)]: at - 72_000 };
+    expect(textOf(watched(pull([rerun])), known)).toBe('#128 ● CI re-run 1m12s');
+    const other = { ...KNOWN, [rerunKey('github.com', 9, 1)]: at - 72_000 };
+    expect(textOf(watched(pull([rerun])), other)).toBe('#128 ● CI re-run');
+  });
+
+  test('names the jobs a running gate still waits on, once some are done', () => {
+    expect(left(job('Lint', 'SUCCESS'), job('Windows', null))).toBe('#128 ● CI: Windows 1m10s');
+    expect(left(job('Lint', 'SUCCESS'), job('Windows', null), job('Mac', null))).toBe(
+      '#128 ● CI: Windows, Mac 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), job('A', null), job('B', null), job('C', null))).toBe(
+      '#128 ● CI: 3 jobs 1m10s',
+    );
+    expect(left(job('Lint', null), job('Tests', null))).toBe('#128 ● CI 1m10s');
+  });
+
+  test('says queued where no job left has started, and clips long names', () => {
+    expect(left(job('Lint', 'SUCCESS'), queued('Windows'))).toBe('#128 ● CI: Windows queued 1m10s');
+    expect(left(queued('Lint'), queued('Tests'))).toBe('#128 ● CI queued 1m10s');
+    expect(left(job('Lint', 'SUCCESS'), queued('Windows'), job('Mac', null))).toBe(
+      '#128 ● CI: Windows queued, Mac 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), queued('A'), queued('B'), job('C', null))).toBe(
+      '#128 ● CI: 3 jobs 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), queued('A'), queued('B'), queued('C'))).toBe(
+      '#128 ● CI: 3 jobs queued 1m10s',
+    );
+    expect(left(job('Lint', 'SUCCESS'), job('Analyze (javascript-typescript)', null))).toBe(
+      '#128 ● CI: Analyze (javascript-typ… 1m10s',
+    );
+  });
+
+  test('reads only this attempt’s start, and names a re-run’s jobs after it', () => {
+    const third = { ...runningCi(), isRerun: true, attempt: 3, runId: 9 };
+    const second = { ...KNOWN, [rerunKey('github.com', 9, 2)]: at - 72_000 };
+    expect(textOf(watched(pull([third])), second)).toBe('#128 ● CI re-run');
+    const jobs = [job('Lint', 'SUCCESS'), queued('Tests')];
+    const rerun = { ...ci(jobs), isRerun: true, attempt: 2, runId: 9 };
+    const started = { [rerunKey('github.com', 9, 2)]: at - 4000 };
+    expect(textOf(watched(pull([rerun])), started)).toBe('#128 ● CI re-run: Tests queued 0m04s');
+  });
+
+  test('names nothing, and says no queued, when every job of a running gate is done', () => {
+    const done = flow(1, 'CI', [job('Lint', 'SUCCESS')], 'running');
+    expect(textOf(watched(pull([done])))).toBe('#128 ● CI 1m10s');
+  });
+
+  test('keeps a job name of exactly 24 characters whole', () => {
+    const name = 'abcdefghijklmnopqrstuvwx';
+    expect(left(job('Lint', 'SUCCESS'), job(name, null))).toBe(`#128 ● CI: ${name} 1m10s`);
+  });
+
+  test('names the jobs left, and a re-run’s clock, on a merged line too', () => {
+    const release = flow(9, 'Release', [job('Build', 'SUCCESS'), job('Publish', null)]);
+    expect(textOf(watched(merged([release])))).toBe(
+      '#128 merged into main · ● Release: Publish 1m10s',
+    );
+    const rerun = { ...release, isRerun: true, attempt: 2, runId: 4 };
+    const started = { [rerunKey('github.com', 4, 2)]: at - 5000 };
+    expect(textOf(watched(merged([rerun])), started)).toBe(
+      '#128 merged into main · ● Release re-run: Publish 0m05s',
+    );
+  });
+
+  test('names the jobs left inside the width the bar is sized from', () => {
+    const p = pull([ci([job('Lint', 'SUCCESS'), job('Windows', null)])]);
+    const segs = lineOf(watched(p), at, { 'github.com/1': 140_000 }, 40);
+    const used = '#128 ● CI: Windows '.length + ' 1m10s / ~2m20s'.length;
+    expect(barCells(segs)).toBe(Math.max(8, 40 - used - 2));
   });
 
   test('a waiting, blocked or failing PR still shows optional workflows that fail or run', () => {
@@ -1386,9 +1499,12 @@ describe('lineOf', () => {
     expect(textOf(watched(pull([], { merge: 'UNKNOWN' })))).toBe('#128 ○ waiting on checking');
   });
 
-  test('the failing job links to its log', () => {
+  test('the failing job links to its log, its mark alone red', () => {
     const failing = pull([ci([job('Typecheck', 'FAILURE'), job('CI Summary', null, true)])]);
-    expect(lineOf(watched(failing), at, {}, 80)[1]?.url).toBe('https://x/Typecheck');
+    expect(lineOf(watched(failing), at, {}, 80).slice(1, 3)).toEqual([
+      { text: ' ✗', color: 'red', isMark: true },
+      { text: ' CI: Typecheck failed', url: 'https://x/Typecheck' },
+    ]);
   });
 
   test('a ready PR still shows optional workflows that fail or run', () => {
