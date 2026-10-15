@@ -49,6 +49,8 @@ type Gh = {
   reviewCycle?: 'absent' | 'off';
   settingsFail?: boolean;
   configFails?: boolean;
+  // Runs once as review-cycle's /config rows are read, before they answer.
+  onConfigList?: () => Promise<void>;
   suggestions?: boolean;
   // A hook beneath pr-watch drops the person's prompts; writes of kept news are refused.
   dropPerson?: boolean;
@@ -179,7 +181,10 @@ function world(
     return { value: { pluginConfigs: { 'review-cycle@oakoss': { options: { stopBefore } } } } };
   });
   // review-cycle's rows show the options it loaded with: a managed value over the user's.
-  on('config.list', () => {
+  on('config.list', async () => {
+    const during = gh.onConfigList;
+    gh.onConfigList = undefined;
+    await during?.();
     if (gh.configFails) return { deny: 'menu unreadable' };
     if (gh.reviewCycle === 'absent') return { value: [] };
     const { policy, user } = gh.stopBefore ?? { user: 'release' };
@@ -832,6 +837,36 @@ async function readyIn($: any, on: any, gh: Gh) {
   return { clock, seen };
 }
 
+// News kept for the next prompt, standing in the host's state as a reload
+// leaves it, until pr-watch first writes it; `writes` records what it wrote.
+function keptBefore(on: any, held: unknown[]) {
+  let seed: unknown[] | null = held;
+  const writes: unknown[] = [];
+  on('state.get', async ($: unknown, e: { key: string }, next: (e: unknown) => Promise<any>) => {
+    const r = await next(e);
+    return e.key === 'quiet' && seed !== null ? { value: { ...r.value, value: seed } } : r;
+  });
+  on(
+    'state.set',
+    ($: unknown, e: { key: string; value: unknown }, next: (e: unknown) => unknown) => {
+      if (e.key === 'quiet') {
+        seed = null;
+        writes.push(e.value);
+      }
+      return next(e);
+    },
+  );
+  return writes;
+}
+
+const kept = (news: string[], ready: string | null = null) => ({
+  id: ID,
+  label: '#128',
+  url: URL,
+  news,
+  ready,
+});
+
 describe('ready to merge, while merges need asking', () => {
   const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
   const MERGED = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-10-03T22:01:00Z' });
@@ -1056,9 +1091,103 @@ describe('ready to merge, while merges need asking', () => {
     },
   );
 
+  test(
+    'with waking off, news kept before is not told, and is let go at the start',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      mock.clock(on, { now: T0 });
+      const writes = keptBefore(on, [kept(['EARLIER'])]);
+      const seen = world(on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+      await $.prompt.submit(person());
+      expect(seen.contexts[0]).toBeUndefined();
+      await start($);
+      expect(writes).toContainEqual([]);
+    },
+  );
+
   test('says once that the settings could not be read', async ($, on) => {
     const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, settingsFail: true });
     expect(seen.toasts.filter((t) => t.includes("could not read review-cycle's"))).toHaveLength(1);
+  });
+
+  test('says it again only after a read that worked', async ($, on) => {
+    const gh: Gh = { pr: prJson(), view: OPEN, configFails: true };
+    const { clock, seen } = await readyIn($, on, gh);
+    const again = async () => {
+      gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+      await clock.advance(61_000);
+      gh.pr = prJson();
+      await clock.advance(11_000);
+    };
+    const said = () => seen.toasts.filter((t) => t.includes("could not read review-cycle's"));
+    await again();
+    expect(said()).toHaveLength(1);
+    gh.configFails = false;
+    await again();
+    gh.configFails = true;
+    await again();
+    expect(said()).toHaveLength(2);
+  });
+
+  test('a turn that starts while the settings are read holds the ready line', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), view: OPEN };
+    const seen = world(on, gh);
+    on('turn.start', () => ({ turnId: 't1' }));
+    on('turn.complete', () => ({ text: '' }));
+    gh.onConfigList = async () => {
+      await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+    };
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    await ($ as any).turn.complete({
+      answer: '',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'answer',
+    });
+    await clock.advance(1);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('ready to merge');
+  });
+
+  test('a prompt from the Agent SDK carries it', async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
+    await $.prompt.submit(person('next', { origin: { kind: 'sdk' } }));
+    expect(seen.contexts[0]?.[0]).toContain('ready to merge');
+  });
+
+  test('a ready line Claude is woken for leaves the passed lines kept with it', async ($, on) => {
+    keptBefore(on, [kept(['PASSED'], 'OLD READY')]);
+    const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN });
+    expect(seen.wakes).toHaveLength(1);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]?.[0]).toContain('PASSED');
+    expect(seen.contexts[0]?.[0]).not.toContain('OLD READY');
+  });
+
+  test('a dropped prompt puts back what it took under news kept since', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    keptBefore(on, [kept(['EARLIER'], 'OLD READY')]);
+    const gh: Gh = { pr: prJson(), view: OPEN, stopBefore: ASKED, dropPerson: true };
+    const seen = world(on, gh);
+    await start($);
+    gh.holdView = true;
+    const dropped = $.prompt.submit(person());
+    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await create($);
+    await clock.advance(1000);
+    gh.release!();
+    await dropped;
+    gh.dropPerson = false;
+    await $.prompt.submit(person());
+    const text = seen.contexts.at(-1)?.[0];
+    expect(text).toContain('EARLIER');
+    expect(text).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(text).not.toContain('OLD READY');
   });
 
   test('a failed check still wakes Claude, and notifies', async ($, on) => {
