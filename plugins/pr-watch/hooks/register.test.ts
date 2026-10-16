@@ -34,6 +34,8 @@ type Gh = {
   mergedLimited?: boolean;
   // Every GraphQL read fails, while gh pr view still answers.
   readsFail?: boolean;
+  // GitHub cannot be reached: every GraphQL read fails as gh does on a dropped connection.
+  offline?: boolean;
   estimateFails?: number;
   // A re-run attempt's REST answer; the call fails when unset, and with this
   // stderr when it is set.
@@ -267,7 +269,8 @@ function world(
     const argv = e.argv.join(' ');
     seen.runs.push(argv);
     seen.timeouts.push(e.init?.timeoutMs);
-    const failed = { value: { exitCode: 1, stdout: '', stderr: 'gh: HTTP 502\nretry later' } };
+    // A refusal, not a network failure, which pr-watch retries without counting.
+    const failed = { value: { exitCode: 1, stdout: '', stderr: 'gh: HTTP 401\nretry later' } };
     if (gh.fails) return failed;
     const isMerged = argv.includes('mergeCommit {');
     if (argv.includes('graphql') && (gh.limited || (gh.mergedLimited && isMerged))) {
@@ -276,6 +279,18 @@ function world(
       return { value: { exitCode: 1, stdout, stderr: `gh: ${message}\n` } };
     }
     if (gh.readsFail && argv.includes('graphql')) return failed;
+    if (gh.offline && argv.includes('graphql')) {
+      const stderr = 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout\n';
+      const down = { value: { exitCode: 1, stdout: '', stderr } };
+      // A connection that hangs before failing, held until the test releases it.
+      if (gh.holdPush && argv.includes('refs/heads/')) {
+        gh.holdPush = false;
+        return new Promise((resolve) => {
+          gh.release = () => resolve(down);
+        });
+      }
+      return down;
+    }
     if (argv.startsWith('gh pr view')) {
       seen.order.push(argv);
       if (gh.view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
@@ -610,7 +625,7 @@ describe('a pull request Claude opens', () => {
     await create($);
     await clock.advance(1000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe('#128 gh failed: HTTP 502');
+    expect(await lineIn(ui)).toBe('#128 gh failed: HTTP 401');
     const tries = seen.runs.length;
     await clock.advance(5000);
     expect(seen.runs.length).toBe(tries);
@@ -619,7 +634,7 @@ describe('a pull request Claude opens', () => {
     expect(await lineIn(ui)).toBe('#128 ✓ ready to merge');
     gh.fails = true;
     await clock.advance(60_000);
-    expect(await lineIn(ui)).toBe('#128 ✓ ready to merge · gh failed: HTTP 502');
+    expect(await lineIn(ui)).toBe('#128 ✓ ready to merge · gh failed: HTTP 401');
     gh.fails = false;
     await clock.advance(60_000);
     expect(await lineIn(ui)).toBe('#128 ✓ ready to merge');
@@ -2007,7 +2022,7 @@ describe('a merged pull request', () => {
     gh.fails = true;
     await clock.advance(100_000);
     const ui = await band($);
-    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed · gh failed: HTTP 502');
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed · gh failed: HTTP 401');
     const before = reads(seen.runs);
     await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
     expect(await lineIn(ui)).toMatch(/gh failed/);
@@ -2029,7 +2044,7 @@ describe('a merged pull request', () => {
     await clock.advance(120_000);
     const ui = await band($);
     expect(await lineIn(ui)).toBe(
-      '#128 merged into main · ○ waiting on checks · gh failed: HTTP 502',
+      '#128 merged into main · ○ waiting on checks · gh failed: HTTP 401',
     );
     gh.fails = false;
     gh.pr = mergedJson('IN_PROGRESS', null);
@@ -2489,6 +2504,258 @@ function hhmm(at: number): string {
 
 const MINUTE = 60_000;
 
+describe('GitHub out of reach', () => {
+  test('one failed read is quiet, the next says so dim, and none gives up', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    gh.offline = true;
+    await clock.advance(10_000);
+    expect(await lineIn(ui)).toMatch(/^#128 ● CI \dm\d\ds$/);
+    await clock.advance(16_000);
+    expect(await lineIn(ui)).toMatch(/^#128 ● CI \dm\d\ds · offline, retrying$/);
+    await clock.advance(30 * 60_000);
+    expect(await lineIn(ui)).toMatch(/ · offline, retrying$/);
+    // Told once, some 15 minutes in, that it keeps trying; never given up on.
+    expect(seen.toasts).toEqual([
+      'pr-watch cannot reach github.com: Post "https://api.github.com/graphql": net/http: TLS handshake timeout. It keeps trying; unwatch a line with its × if the host or proxy is wrong.',
+    ]);
+    expect(seen.wakes).toEqual([]);
+    gh.offline = false;
+    await clock.advance(61_000);
+    expect(await lineIn(ui)).toMatch(/^#128 ● CI \d+m\d\ds$/);
+    // Back online, a running line is read every 10 s again, no more often.
+    const before = reads(seen.runs);
+    await clock.advance(30_000);
+    expect(reads(seen.runs) - before).toBe(3);
+  });
+
+  test('one read at a time tries the host, and every line on it says so', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.offline = true;
+    await clock.advance(11_000);
+    const before = reads(seen.runs);
+    // Probes 15, 30 and 60 s apart: three reads in the next 110 s, not three per line.
+    await clock.advance(110_000);
+    expect(reads(seen.runs) - before).toBe(3);
+    const ui = await band($);
+    expect(await lineIn(ui)).toMatch(/ · offline, retrying$/);
+    expect(await pushLineIn(ui)).toMatch(/ · offline, retrying$/);
+  });
+
+  test('one answer clears every line on the host, and a refusal after it backs off as before', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.offline = true;
+    await clock.advance(30_000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toMatch(/ · offline, retrying$/);
+    gh.offline = false;
+    gh.readsFail = true;
+    // The next probe is answered, if only with a refusal, and the line it did
+    // not read loses its note in the same moment.
+    for (let s = 0; s < 60; s++) {
+      const pushLine = await pushLineIn(ui);
+      if (!pushLine?.includes('offline')) break;
+      await clock.advance(1000);
+    }
+    expect(await pushLineIn(ui)).not.toContain('offline');
+    expect(await lineIn(ui)).not.toContain('offline');
+    const before = reads(seen.runs);
+    await clock.advance(60_000);
+    // Retried 10, 20, 40 s apart per line, not every second.
+    expect(reads(seen.runs) - before).toBeLessThanOrEqual(6);
+    expect(seen.toasts.filter((t) => t.includes('stopped watching'))).toEqual([]);
+  });
+
+  test('a rate limit is an answer too: every line drops the note on it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.offline = true;
+    await clock.advance(30_000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toMatch(/ · offline, retrying$/);
+    gh.offline = false;
+    gh.limited = true;
+    for (let s = 0; s < 60; s++) {
+      const line = await lineIn(ui);
+      if (line?.includes('rate limited')) break;
+      await clock.advance(1000);
+    }
+    expect(await lineIn(ui)).not.toContain('offline');
+    expect(await pushLineIn(ui)).not.toContain('offline');
+  });
+
+  test('a push not yet read waits for a read of its own after GitHub answers', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.offline = true;
+    gh.push = pushJson('IN_PROGRESS');
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(200_000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBe('⟳ push feat/x offline, retrying');
+    gh.offline = false;
+    await clock.advance(61_000);
+    expect(await pushLineIn(ui)).toMatch(/^⟳ push feat\/x · ● Release /);
+  });
+
+  test('a push made late in an outage gets its own 15 minutes, and its read after', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.offline = true;
+    await clock.advance(14 * 60_000);
+    gh.push = pushJson('IN_PROGRESS');
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(5 * 60_000);
+    const ui = await band($);
+    expect(await pushLineIn(ui)).toBeDefined();
+    gh.offline = false;
+    await clock.advance(61_000);
+    expect(await pushLineIn(ui)).toMatch(/^⟳ push feat\/x · ● Release /);
+  });
+
+  test('a later outage starts afresh once an earlier one’s lines have left', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), offline: true };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(16 * 60_000);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    gh.offline = false;
+    await clock.advance(60 * 60_000);
+    gh.offline = true;
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(125_000);
+    expect(await pushLineIn(await band($))).toBe('⟳ push feat/x offline, retrying');
+    await clock.advance(15 * 60_000);
+    expect(
+      seen.toasts.filter((t) => t.startsWith('pr-watch cannot reach github.com')),
+    ).toHaveLength(2);
+  });
+
+  test('a slow probe is not joined by another line’s', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      push: pushJson('IN_PROGRESS'),
+    };
+    const seen = world(on, gh, `${PUSH_OUT}\n${URL}\n`);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.offline = true;
+    gh.holdPush = true;
+    await clock.advance(11_000);
+    const before = reads(seen.runs);
+    await clock.advance(40_000);
+    expect(reads(seen.runs)).toBe(before);
+    gh.release?.();
+  });
+
+  test('the watch tool says when its first read could not reach GitHub', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), view: OPEN_VIEW, offline: true });
+    await start($);
+    await clock.advance(1000);
+    const answer = await tool($, 'watch', { pull: '128' });
+    expect(answer).toContain('GitHub could not be reached');
+    expect(answer).toContain('pr-watch keeps trying');
+  });
+
+  test('a push GitHub could not be asked about for 15 minutes leaves, said once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), offline: true };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(16 * 60_000);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    expect(
+      seen.toasts.filter((t) => t.startsWith('pr-watch cannot reach github.com')),
+    ).toHaveLength(1);
+  });
+
+  test('a push GitHub could not be asked about stays past 90 s', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS'), offline: true };
+    world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(200_000);
+    expect(await pushLineIn(await band($))).toBe('⟳ push feat/x offline, retrying');
+  });
+
+  test('a merged line waits out the outage past its 90 s', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), view: VIEW };
+    const seen = world(on, gh, '');
+    await start($);
+    await create($, 'gh pr merge 128 --squash');
+    await clock.advance(1000);
+    gh.offline = true;
+    await clock.advance(200_000);
+    expect(await lineIn(await band($))).toMatch(
+      /^#128 merged into main · ● Release .* · offline, retrying$/,
+    );
+    gh.offline = false;
+    gh.pr = mergedJson('COMPLETED', 'SUCCESS');
+    await clock.advance(61_000);
+    expect(seen.toasts).toContain('#128 merged: its checks passed');
+  });
+
+  test('a refusal still reads red', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.readsFail = true;
+    await clock.advance(11_000);
+    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 401$/);
+  });
+});
+
 describe('reads that fail', () => {
   test('a spent quota pauses every watch on the host until it resets', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
@@ -2562,14 +2829,14 @@ describe('reads that fail', () => {
     // Failed reads at 11 s, then 10, 20, 40, 80, 160, 300 and 300 s apart.
     await clock.advance(15 * MINUTE);
     expect(reads(seen.runs)).toBe(1 + GIVE_UP - 1);
-    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 502$/);
+    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 401$/);
     await clock.advance(MINUTE);
     expect(reads(seen.runs)).toBe(1 + GIVE_UP);
     expect(await lineIn(await band($))).toBeUndefined();
-    expect(seen.toasts).toContain('pr-watch stopped watching #128: gh failed: HTTP 502');
+    expect(seen.toasts).toContain('pr-watch stopped watching #128: gh failed: HTTP 401');
     expect(seen.wakes).toEqual([
       [
-        'pr-watch: 8 reads of o/r#128 in a row failed, so pr-watch stopped watching it. The last: gh failed: HTTP 502',
+        'pr-watch: 8 reads of o/r#128 in a row failed, so pr-watch stopped watching it. The last: gh failed: HTTP 401',
         `Watch it again with pr-watch's watch tool once gh can read it. ${URL}`,
       ].join('\n'),
     ]);
@@ -2589,7 +2856,7 @@ describe('reads that fail', () => {
     await clock.advance(5 * MINUTE);
     gh.fails = true;
     await clock.advance(10 * MINUTE);
-    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 502$/);
+    expect(await lineIn(await band($))).toMatch(/ · gh failed: HTTP 401$/);
   });
 
   test('the watch tool reads nothing while its host is paused, and says why', async ($, on) => {
@@ -2866,7 +3133,7 @@ describe('reads that fail', () => {
       await clock.advance(1000);
       gh.fails = true;
       await clock.advance(16 * MINUTE);
-      expect(seen.toasts).toContain('pr-watch stopped watching #128: gh failed: HTTP 502');
+      expect(seen.toasts).toContain('pr-watch stopped watching #128: gh failed: HTTP 401');
       expect(seen.wakes).toEqual([]);
     },
   );

@@ -10,7 +10,9 @@ import {
   GIVE_UP_AFTER,
   isCleared,
   isQuotaLow,
+  isNetworkError,
   isRateLimited,
+  offlineDelayOf,
   pauseOf,
   retryDelayOf,
   untilText,
@@ -602,6 +604,42 @@ describe('isRateLimited', () => {
     expect(isRateLimited(JSON.stringify({ data: { title: 'rate limit' } }), '')).toBe(false);
     expect(isRateLimited('not json', '')).toBe(false);
     expect(isRateLimited('', 'gh: Rate limiting is not enabled. (HTTP 404)')).toBe(false);
+  });
+});
+
+describe('isNetworkError', () => {
+  test('reads what gh prints when GitHub cannot be reached', () => {
+    for (const stderr of [
+      'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
+      'Post "https://api.github.com/graphql": net/http: TLS handshake timeout',
+      'Post "https://api.github.com/graphql": proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused',
+      'Post "https://api.github.com/graphql": read tcp 10.0.0.2:5000->1.2.3.4:443: read: connection reset by peer',
+      'Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host',
+      'Post "https://api.github.com/graphql": dial tcp 1.2.3.4:443: i/o timeout',
+      'Post "https://api.github.com/graphql": EOF',
+      'Post "https://api.github.com/graphql": unexpected EOF',
+      'gh: Bad Gateway (HTTP 502)',
+      'gh: Service Unavailable (HTTP 503)',
+      'gh: Gateway Timeout (HTTP 504)',
+    ]) {
+      expect(isNetworkError(stderr), stderr).toBe(true);
+    }
+  });
+
+  test('is not a refusal, a missing pull request or a GraphQL error', () => {
+    for (const stderr of [
+      'gh: Not Found (HTTP 404)',
+      'gh: Bad credentials (HTTP 401)',
+      'gh: Resource not accessible by integration (HTTP 403)',
+      'gh: Server Error (HTTP 500)',
+      'gh: Could not resolve to a PullRequest with the number of 999.',
+    ]) {
+      expect(isNetworkError(stderr), stderr).toBe(false);
+    }
+  });
+
+  test('tries an unreachable host sooner than a failing read, up to a minute apart', () => {
+    expect([1, 2, 3, 4].map((n) => offlineDelayOf(n))).toEqual([15_000, 30_000, 60_000, 60_000]);
   });
 });
 
@@ -1374,6 +1412,19 @@ describe('lineOf', () => {
     expect(textOf(watched(p), KNOWN)).toMatch(
       /^#128 ● CI [█▏▎▍▌▋▊▉]+░+ 1m10s \/ ~2m20s · CodeQL ✓ · Deps ●$/,
     );
+  });
+
+  test('keeps one unreachable read quiet, then says so dim, never red', () => {
+    const ready = pull([green()]);
+    expect(textOf(watched(ready, { offline: 1 }))).toBe('#128 ✓ ready to merge');
+    const segs = lineOf(watched(ready, { offline: 2 }), at, KNOWN, 80);
+    expect(segs.at(-1)).toEqual({ text: ' · offline, retrying', isDim: true });
+    expect(segs.some((s) => s.color === 'red')).toBe(false);
+    expect(textOf(watched(undefined, { offline: 1 }))).toBe('#128 loading…');
+    expect(lineOf(watched(undefined, { offline: 2 }), at, KNOWN, 80)[1]).toEqual({
+      text: ' offline, retrying',
+      isDim: true,
+    });
   });
 
   test('says a rate limit beside a failure, read or not', () => {

@@ -274,8 +274,30 @@ export function untilText(at: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-// Reads that fail for any reason but a rate limit are retried less often each
-// time, and after GIVE_UP_AFTER in a row, some 15 minutes, the watch ends.
+// gh exits 1 for these as for a 404, so only its words tell them apart.
+const UNREACHABLE =
+  /error connecting to |check your internet connection|TLS handshake timeout|i\/o timeout|connection (?:refused|reset)|no such host|network is unreachable|(?:unexpected|:) EOF\b|context deadline exceeded|Client\.Timeout|\bHTTP 50[234]\b/i;
+
+export function isNetworkError(stderr: string): boolean {
+  return UNREACHABLE.test(stderr);
+}
+
+// How long out of reach before someone is told: GIVE_UP_AFTER failed reads' worth.
+export const OFFLINE_TELL_MS = 15 * 60_000;
+
+// Soon enough to notice a laptop back online; never given up on.
+const OFFLINE_FIRST_MS = 15_000;
+const OFFLINE_MAX_MS = 60_000;
+
+export function offlineDelayOf(count: number): number {
+  return Math.min(OFFLINE_FIRST_MS * 2 ** Math.max(count - 1, 0), OFFLINE_MAX_MS);
+}
+
+// One unreachable read is a blip, kept quiet.
+const OFFLINE_NOTE_AFTER = 2;
+
+// Reads that fail for any other reason are retried less often each time, and
+// after GIVE_UP_AFTER in a row, some 15 minutes, the watch ends.
 export const GIVE_UP_AFTER = 8;
 const RETRY_MAX_MS = 5 * 60_000;
 
@@ -904,11 +926,13 @@ export function lineOf(
       ? undefined
       : `rate limited until ${untilText(watch.limitedUntil)}`;
   const problem = [watch.error, pause].filter(Boolean).join(' · ') || undefined;
+  const isOffline = (watch.offline ?? 0) >= OFFLINE_NOTE_AFTER;
   if (!pull) {
+    const quiet = isOffline ? 'offline, retrying' : 'loading…';
     return [
       label,
       {
-        text: ` ${problem ?? 'loading…'}`,
+        text: ` ${problem ?? quiet}`,
         isDim: problem === undefined,
         color: problem === undefined ? undefined : 'red',
       },
@@ -929,6 +953,7 @@ export function lineOf(
   const tail: Segment[] = [];
   if (runs.isTruncated) tail.push({ text: ' · more checks not shown', isDim: true });
   if (problem !== undefined) tail.push({ text: ` · ${problem}`, color: 'red' });
+  if (isOffline) tail.push({ text: ' · offline, retrying', isDim: true });
   const isRunning = v.kind === 'running' || v.kind === 'merged-running';
   // Other workflows, while they run or once they failed; on a running line,
   // every other workflow.
