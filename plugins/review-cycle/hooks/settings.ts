@@ -6,7 +6,7 @@
 // loosens it without passing through `config.set`. Any JSON file counts,
 // because a settings file can be passed with `--settings` under any name.
 
-import { parse, type Statement, type Word } from './shell';
+import { assignmentName, parse, type Statement, type Word } from './shell';
 
 const PLUGIN = /^review-cycle(@|$)/;
 const SWITCHES = ['enabledPlugins', 'pluginConfigs'] as const;
@@ -221,6 +221,10 @@ function removesPlugin(st: Statement): boolean {
 
 function writes(st: Statement): boolean {
   if (st.writes.some(writesFile)) return true;
+  // `claude` runs none of its arguments: the `install` in `claude plugin
+  // install` is a subcommand, not the program that writes files.
+  const command = st.words.find((w) => assignmentName(w) === null);
+  if (command !== undefined && CLAUDE.test(basename(command.text))) return false;
   const n = names(st);
   if (n.some((name) => WRITERS.has(name) || INTERPRETERS.test(name))) return true;
   const inPlace = st.words.some((w) => /^(-[a-zA-Z0-9]*i|--in-place)/.test(w.text));
