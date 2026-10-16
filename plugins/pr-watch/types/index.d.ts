@@ -78,8 +78,10 @@ export type Watch = {
   shown?: string;
   // When `shown` last changed, so a line long the same is read less often.
   shownAt?: number;
-  // Reads in a row that failed, a rate limit aside.
+  // Reads in a row that failed, a rate limit and an unreachable GitHub aside.
   failures?: number;
+  // Reads in a row on its host that could not reach GitHub.
+  offline?: number;
   // When the rate limit pausing its host ends, until a read of its own.
   limitedUntil?: number;
   // The conditions Claude has been told of, so each is told once while it lasts.

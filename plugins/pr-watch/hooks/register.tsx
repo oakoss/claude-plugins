@@ -41,7 +41,10 @@ import {
   isChecking,
   isMergeFresh,
   isQuotaLow,
+  isNetworkError,
   isRateLimited,
+  OFFLINE_TELL_MS,
+  offlineDelayOf,
   GIVE_UP_AFTER,
   LOW_QUOTA_MS,
   pauseOf,
@@ -109,6 +112,16 @@ const quota = new Map<string, Quota>();
 // Each rate-limited host's pause, kept after it ends until a read succeeds, so
 // a limit hit again waits longer.
 const paused = new Map<string, Pause>();
+// Hosts gh could not reach: one read probes each until it answers.
+const unreachable = new Map<
+  string,
+  { count: number; until: number; since: number; isTold: boolean; why: string }
+>();
+
+// GitHub answered, so no line on the host waits on it any more.
+// A push not yet read keeps its note until a read of its own.
+const reachedOn = (w: Watch, host: string): Watch =>
+  w.host === host && w.pull && w.offline !== undefined ? { ...w, offline: undefined } : w;
 // Finished runs a length was learned after, so each one re-learns it once.
 const learnedAfter = new Set<string>();
 // After Claude pushes, merges or starts a run, a watch last read before
@@ -428,6 +441,8 @@ async function learnRerunStart(
   }
 }
 
+class Offline extends Error {}
+
 class RateLimited extends Error {
   constructor(readonly until: number) {
     super(`rate limited until ${untilText(until)}`);
@@ -463,6 +478,7 @@ async function readGh<T>(
     return parse(r.stdout);
   } catch (error) {
     if (r.exitCode === 0) throw error;
+    if (isNetworkError(r.stderr)) throw new Offline(r.stderr.trim(), { cause: error });
     throw new Error(r.stderr.trim() || `gh exited ${r.exitCode}`, { cause: error });
   }
 }
@@ -510,6 +526,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
   try {
     let next: Watch;
     let isLimited = false;
+    let isOffline = false;
     const pause = paused.get(target.host);
     // A read that began before another read paused the host still waits it out.
     const pausedUntil = async () => {
@@ -521,9 +538,12 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       // Only a whole read that began after the pause was set shows the limit
       // lifted: a merged pull request's second read may still be refused.
       if (paused.get(target.host) === pause) paused.delete(target.host);
+      unreachable.delete(target.host);
       const limitedUntil = await pausedUntil();
       if (read.kind === 'gone') {
-        await update($, watches, (all) => all.filter((w) => !isSame(w, target)));
+        await update($, watches, (all) =>
+          all.filter((w) => !isSame(w, target)).map((w) => reachedOn(w, target.host)),
+        );
         return;
       }
       if (read.kind === 'handoff') {
@@ -532,7 +552,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         const to = { ...read.to, told };
         await update($, watches, (all) => {
           if (!all.some((w) => isSame(w, target))) return all;
-          const rest = all.filter((w) => !isSame(w, target));
+          const rest = all.filter((w) => !isSame(w, target)).map((w) => reachedOn(w, target.host));
           if (!rest.some((w) => idOf(w) === idOf(to))) return [...rest, to];
           return rest.map((w) =>
             idOf(w) === idOf(to) ? { ...w, told: [...new Set([...(w.told ?? []), ...told])] } : w,
@@ -545,6 +565,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         pull: read.pull,
         error: undefined,
         failures: undefined,
+        offline: undefined,
         limitedUntil,
         checkedAt: now,
       };
@@ -552,21 +573,42 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       // checkedAt stays the last good read's: settling is judged by it, and
       // `tried` already spaces the retries. A rate limit is GitHub's to lift,
       // so it does not count toward giving up.
+      if (!(error instanceof Offline)) unreachable.delete(target.host);
       if (error instanceof RateLimited) {
         isLimited = true;
-        next = { ...target, limitedUntil: error.until };
+        next = { ...target, offline: undefined, limitedUntil: error.until };
+      } else if (error instanceof Offline) {
+        // Neither counted toward giving up nor shown in red: the line stays as last read.
+        isOffline = true;
+        const at = await $.clock.now();
+        const was = unreachable.get(target.host);
+        // Lines that fail in the same round count once, so the wait doubles per probe.
+        const isSameRound = was !== undefined && at < was.until;
+        const count = isSameRound ? was.count : (was?.count ?? 0) + 1;
+        unreachable.set(target.host, {
+          count,
+          since: was?.since ?? at,
+          isTold: was?.isTold ?? false,
+          until: isSameRound ? was.until : at + offlineDelayOf(count),
+          why: errorText(error),
+        });
+        if (kept)
+          kept.error = `GitHub could not be reached (${errorText(error)}); pr-watch keeps trying`;
+        next = { ...target, offline: count, limitedUntil: await pausedUntil() };
       } else {
         next = {
           ...target,
           error: `gh failed: ${errorText(error)}`,
           failures: (target.failures ?? 0) + 1,
+          offline: undefined,
           limitedUntil: await pausedUntil(),
         };
       }
     }
-    const isGivenUp = !isLimited && (next.failures ?? 0) >= GIVE_UP_AFTER;
+    // An offline read keeps the line, so failures left by earlier saves must not end it.
+    const isGivenUp = !isLimited && !isOffline && (next.failures ?? 0) >= GIVE_UP_AFTER;
     // Only a read that answered is judged; a limited one keeps the last good state.
-    const isFresh = !isLimited && next.error === undefined;
+    const isFresh = !isLimited && !isOffline && next.error === undefined;
     let toast: string | null = null;
     let isUrgent = false;
     let news: string | null = null;
@@ -600,11 +642,20 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     let isSaved = false;
     await update($, watches, (all) => {
       isSaved = all.some((w) => isSame(w, target));
-      if (isClosed || isGivenUp) return all.filter((w) => !isSame(w, target));
+      // The host's other lines wait on this read's probe, so they say so too.
+      if (isOffline) {
+        const { offline } = next;
+        return all.map((w) =>
+          isSame(w, target) ? next : w.host === next.host ? { ...w, offline } : w,
+        );
+      }
+      // Any answer, a refusal or a limit included, shows GitHub is reachable.
+      const reached = all.map((w) => reachedOn(w, next.host));
+      if (isClosed || isGivenUp) return reached.filter((w) => !isSame(w, target));
       // Every watch on the host waits out the pause, so each line says so.
       if (isLimited) {
         const { limitedUntil } = next;
-        return all.map((w) =>
+        return reached.map((w) =>
           isSame(w, target) ? next : w.host === next.host ? { ...w, limitedUntil } : w,
         );
       }
@@ -621,7 +672,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         next.heard = woke.heard;
       }
       return takeOverPush(
-        all.map((w) => (isSame(w, target) ? next : w)),
+        reached.map((w) => (isSame(w, target) ? next : w)),
         next,
       );
     });
@@ -685,9 +736,22 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
 async function tick($: $): Promise<void> {
   const saved = await read($, watches);
   await remember($, saved);
+  // A host no line is on any more is forgotten, so a later outage starts afresh.
+  for (const host of unreachable.keys()) {
+    if (!saved.some((w) => w.host === host)) unreachable.delete(host);
+  }
   if (saved.length === 0) return;
   const now = await $.clock.now();
   const known = await read($, estimates);
+  // A host or proxy that will never answer looks like a blip until someone is
+  // told; said before the lines that waited on it can leave.
+  for (const [host, down] of unreachable) {
+    if (down.isTold || now - down.since < OFFLINE_TELL_MS) continue;
+    down.isTold = true;
+    $.ui.toast(
+      `pr-watch cannot reach ${host}: ${down.why}. It keeps trying; unwatch a line with its × if the host or proxy is wrong.`,
+    );
+  }
   // Judged on the list as saved, so a push that replaced a watch since stays.
   let list: Watch[] = [];
   await update($, watches, (all) => {
@@ -698,13 +762,28 @@ async function tick($: $): Promise<void> {
       const until = paused.get(w.host)?.until ?? 0;
       const held = now < until && w.limitedUntil === undefined ? { ...w, limitedUntil: until } : w;
       if (held !== w) isChanged = true;
-      const isKept = !isGone(held, known, now) || (!held.pull && held.limitedUntil !== undefined);
+      // A line GitHub could not be asked about waits, as a paused unread push does,
+      // until its host has been out of reach long enough to be told.
+      const down = unreachable.get(held.host);
+      const isLongDown = down !== undefined && now - down.since >= OFFLINE_TELL_MS;
+      const isUnreached = down !== undefined && !isLongDown;
+      // An unread push waits for a read of its own: while its host is out of
+      // reach, 15 minutes from the later of the outage and the push; after, until read.
+      const waitedFrom = Math.max(down?.since ?? 0, held.push?.pushedAt ?? 0);
+      const isUnread =
+        !held.pull &&
+        (down === undefined
+          ? held.offline !== undefined || held.limitedUntil !== undefined
+          : now - waitedFrom < OFFLINE_TELL_MS);
+      const isWaiting = isUnreached || isUnread;
+      const isKept = !isGone(held, known, now) || isWaiting;
       if (!isKept) isChanged = true;
       return isKept ? [held] : [];
     });
     return isChanged ? list : all;
   });
   let isMoving = false;
+  const probed = new Set<string>();
   for (const w of list) {
     // Settling and closing are judged at the last read, so a run that started
     // after it is not missed.
@@ -712,6 +791,16 @@ async function tick($: $): Promise<void> {
     if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
     const pauseEnd = paused.get(w.host)?.until ?? 0;
     if (now < pauseEnd) continue;
+    // One read at a time tries a host gh could not reach, not every line on it.
+    const down = unreachable.get(w.host);
+    if (down) {
+      // A probe still in flight counts, so a slow one is not joined by another.
+      const isProbing = list.some((x) => x.host === w.host && busy.has(idOf(x)));
+      if (now < down.until || probed.has(w.host) || isProbing) continue;
+      probed.add(w.host);
+      void refresh($, w, now);
+      continue;
+    }
     const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt, w.shownAt) : 10_000;
     // A failing watch retries on its own schedule; low on quota, a watch waits
     // its slow delay. Neither bursts.
