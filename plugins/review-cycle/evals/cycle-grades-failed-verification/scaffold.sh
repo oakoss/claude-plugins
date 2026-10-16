@@ -2,9 +2,11 @@
 set -euo pipefail
 
 # Workspace: a git repo with a tiny uncommitted change (light tier) and a codex
-# shim whose canned review opens with a receipt: one verification that
-# succeeded and one that failed. Phase 4's table grades that receipt partial,
-# so the summary must label the Codex leg partial, naming what failed.
+# shim whose canned review logs two commands the way codex-cli 0.162.1 does,
+# one that succeeded and one that exited 1, and whose verdict carries no
+# receipt lines. The skill builds Codex's receipt from that log, and Phase 4's
+# table grades it partial, so the summary must label the Codex leg partial,
+# naming what failed.
 
 git init -q .
 cat > greet.py <<'EOF'
@@ -37,8 +39,15 @@ case "${1:-}" in
     exit 0
     ;;
   review)
-    echo "execution: python3 -c 'import greet; print(greet.greet(None))' — Hello, friend"
-    echo "attempted-but-failed: python3 -m pytest — No module named pytest"
+    e=$(printf '\033')
+    printf '%s\n' "OpenAI Codex v0.147.0 (eval shim)" "--------"
+    printf '%s\n' "${e}[35m${e}[3mexec${e}[0m${e}[0m"
+    printf '%s\n' "${e}[1m/bin/zsh -lc \"python3 -c 'import greet; print(greet.greet(None))'\"${e}[0m in $PWD"
+    printf '%s\n' "${e}[32m succeeded in 41ms:${e}[0m" "Hello, friend" ""
+    printf '%s\n' "${e}[35m${e}[3mexec${e}[0m${e}[0m"
+    printf '%s\n' "${e}[1m/bin/zsh -lc 'python3 -m pytest'${e}[0m in $PWD"
+    printf '%s\n' "${e}[31m exited 1 in 38ms:${e}[0m" "/usr/bin/python3: No module named pytest" ""
+    printf '%s\n' "${e}[35m${e}[3mcodex${e}[0m${e}[0m"
     echo "Overall verdict: clean"
     echo "No findings. The uncommitted change is a small, correct fallback."
     exit 0

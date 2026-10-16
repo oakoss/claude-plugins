@@ -15,6 +15,7 @@ import {
 
 import type { Kept, KeptStep } from '../types';
 import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
+import { readCodexLog } from './codex-log';
 import {
   aliasCommits,
   classify,
@@ -142,6 +143,7 @@ type LedgerHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger' }
 type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_record' }>;
 type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch' }>;
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
+type CodexLogHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__codex_log' }>;
 type ConfigHook = MatchedHook<
   'config.set',
   {
@@ -795,6 +797,7 @@ async function onSessionStart(
 ): Promise<Output<HookFor<'session.start'>>> {
   await registerLedger($);
   await registerScratch($);
+  await registerCodexLog($);
   if (!state.gateOn) {
     // Nothing the gate kept before it was switched off holds once it is back on.
     try {
@@ -2336,6 +2339,53 @@ async function onSweep(
   return { result: JSON.stringify(swept, null, 2) };
 }
 
+// The Codex leg's receipt comes from its command log, so the cycle grades what
+// Codex ran rather than what its verdict says it ran. Gates nothing.
+async function registerCodexLog($: $): Promise<void> {
+  try {
+    await $.tool.register({
+      name: 'codex_log',
+      description:
+        "Reads a `codex review` output file and lists every command Codex ran, in order: the command, its working directory, `status` (`succeeded`, `exited`, `rejected` when Codex refused to run it, or `unfinished` when the log ends with no status for it), `exitCode`, `durationMs`, `guessed` (true when overlapping commands, or a log without color, leave it unclear which command a status belongs to), `masked` (true when the command chains parts with `;`, a newline, `||`, `|` or `&`, so its exit code is only the last part's), and the first and last non-empty lines of its output, each clipped at 200 characters. Answers with an error, not an empty list, for a file that is not a Codex log. Build the Codex leg's execution receipt from this, not from its verdict. Read-only.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: "Absolute path of the Codex leg's output file." },
+        },
+        required: ['path'],
+      },
+    });
+  } catch {
+    // Without it, the skill grades the Codex leg from its verdict.
+  }
+}
+
+async function onCodexLog(
+  $: $,
+  e: Input<CodexLogHook>,
+  _next: NextOf<CodexLogHook>,
+): Promise<Output<CodexLogHook>> {
+  const { path } = e as { path?: unknown };
+  if (typeof path !== 'string' || !path.startsWith('/')) {
+    return { result: 'review-cycle codex_log: `path` must be an absolute path.' };
+  }
+  try {
+    if (!(await $.fs.exists(path))) {
+      return { result: `review-cycle codex_log: no file at ${path}.` };
+    }
+    const { recognized, commands } = readCodexLog(await $.fs.read(path));
+    // An empty list would read as a Codex that ran nothing.
+    if (!recognized) {
+      return {
+        result: `review-cycle codex_log: ${path} is not a codex review log (no \`OpenAI Codex v\` banner).`,
+      };
+    }
+    return { result: JSON.stringify({ commands }, null, 2) };
+  } catch (error) {
+    return { result: `review-cycle codex_log: could not read ${path}: ${messageOf(error)}` };
+  }
+}
+
 // The ledger gates nothing, so its tools are served whether or not the gate is on.
 async function registerLedger($: $): Promise<void> {
   try {
@@ -2566,6 +2616,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__review-cycle__ledger_record' }, onLedgerRecord);
   on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
   on('tool.call', { tool: 'mcp__review-cycle__sweep' }, keptSweep);
+  on('tool.call', { tool: 'mcp__review-cycle__codex_log' }, onCodexLog);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.
     on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatusOff);

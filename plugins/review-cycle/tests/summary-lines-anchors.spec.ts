@@ -45,7 +45,9 @@ test("the review skill records each round's cost as its legs report", () => {
 
 test('the final message carries the summary block, not a prose retelling', () => {
   const nine = section(9);
-  expect(nine).toContain('print this summary in your final message as a `text` block');
+  expect(nine).toContain(
+    'print this summary in your final message, after any Phase 10 commit, as a `text` block',
+  );
   expect(nine).toContain('every field by its name below and in this order');
   expect(nine).toContain('Prose before or after it may explain it, but never replaces it');
 });
