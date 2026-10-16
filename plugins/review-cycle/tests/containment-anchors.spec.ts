@@ -58,6 +58,15 @@ const SCRIPT_DIR_ANCHOR = /set -u.*cd <dir> &&`? before any git command/;
 const RM_PATH_ANCHOR = /rm`? guards every variable in its path, as in `?"?\$\{DIR:\?\}\/…/;
 const SCRIPT_GIT_ANCHOR =
   'a script never runs git anywhere but your copy or the target you were given';
+// A leg whose mktemp -d failed under `;` wrote its files into the target.
+const MKTEMP_FAIL_ANCHOR =
+  'Make it with `D=$(mktemp -d …) && cd "$D" && …`: when `mktemp` fails, stop and say so, never carry on in the current directory or a fixed path such as `/tmp/x`.';
+// A leg's plugin install once landed in the user's own config.
+const OWN_STATE_ANCHOR =
+  "Write and edit files there with Edit or Write, not an interpreter or `sed -i`, and run any `claude plugin install` as `cd <your dir> && CLAUDE_CONFIG_DIR=<your dir>/claude claude plugin install …`, so Claude Code's own state stays in it too.";
+// The Bash tool resets the directory and drops `$D` between calls.
+const SPELL_PATH_ANCHOR =
+  'Spell the path out in every command: the Bash tool keeps neither the directory nor `$D` from one call to the next.';
 
 // Seven agents today, cleanup included. A floor, not a count: the per-file
 // loop catches one dropping out; this only catches the enumeration collapsing.
@@ -101,6 +110,9 @@ test('every measuring agent requires a private mktemp -d it names in its report'
       [SCRIPT_DIR_ANCHOR, 'script directory rule lost'],
       [RM_PATH_ANCHOR, 'rm path rule lost'],
       [SCRIPT_GIT_ANCHOR, 'script git-location rule lost'],
+      [MKTEMP_FAIL_ANCHOR, 'a failed mktemp -d no longer stops the leg'],
+      [OWN_STATE_ANCHOR, 'file edits or Claude Code state may leave the leg directory'],
+      [SPELL_PATH_ANCHOR, 'a later call may run outside the leg directory'],
     ]);
   }
 });
