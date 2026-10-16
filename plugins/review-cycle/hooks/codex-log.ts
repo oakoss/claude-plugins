@@ -21,6 +21,10 @@ export type CodexCommand = {
   // True when the status could belong to another command: it was read while
   // commands overlapped, or from a log without color.
   guessed: boolean;
+  // True when the shell script runs more parts after one joined by `;`, a
+  // newline, `||`, `|` or `&`: its exit code is the last part's, so an earlier
+  // part's failure would not show.
+  masked: boolean;
   firstOutputLine: string;
   lastOutputLine: string;
 };
@@ -51,6 +55,157 @@ const unescape = (s: string) => s.replaceAll(/\\(.)/g, '$1');
 const clip = (s: string) => (s.length > MAX_LINE ? `${s.slice(0, MAX_LINE - 1)}…` : s);
 
 type Line = { raw: string; text: string; colored: boolean };
+
+const SHELL = /^(?:\S*\/)?(?:ba|z)?sh\s+-l?c\s+([\s\S]*)$/;
+
+// The first shell word of `s`, with its quoting removed.
+function shellWord(s: string): string {
+  let out = '';
+  let i = 0;
+  while (i < s.length && !/\s/.test(s[i]!)) {
+    const c = s[i]!;
+    if (c === "'") {
+      const end = s.indexOf("'", i + 1);
+      out += s.slice(i + 1, end === -1 ? s.length : end);
+      i = end === -1 ? s.length : end + 1;
+    } else if (c === '"') {
+      i++;
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === '\\' && '"\\$`'.includes(s[i + 1] ?? '')) i++;
+        out += s[i] ?? '';
+        i++;
+      }
+      i++;
+    } else {
+      if (c === '\\') i++;
+      out += s[i] ?? '';
+      i++;
+    }
+  }
+  return out;
+}
+
+// Words that close or continue a compound command after a separator, rather
+// than start a part that would replace the exit code.
+const CLOSER = /^(?:then|else|elif|fi|esac)(?=$|[\s;&|)])/;
+const HEREDOC = /^<<-?[ \t]*((?:\\.|'[^']*'|"[^"]*"|[^\s;&|<>()\\'"])+)/;
+const escapeRegExp = (s: string) => s.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+
+// Backslash escapes count in every quote but a single one.
+function quoteEnd(script: string, i: number): number {
+  const q = script[i];
+  let j = i + 1;
+  while (j < script.length && script[j] !== q) j += q !== "'" && script[j] === '\\' ? 2 : 1;
+  return Math.min(j + 1, script.length);
+}
+
+// Whether a part of `script` runs after a separator whose failure the exit
+// code would hide: `;`, a newline, `||`, `|` or `&`. `&&` hides nothing, a
+// newline after an operator continues the line, and text inside quotes,
+// `$(…)`, backticks and heredoc bodies is not a separator.
+export function masksFailure(command: string): boolean {
+  const shell = SHELL.exec(command);
+  const script = shell ? shellWord(shell[1] ?? '') : command;
+  let separated = false;
+  // A part has run since the last separator or operator, so a newline right
+  // after `&&` or `|` separates nothing.
+  let part = false;
+  let substitution = 0;
+  const heredocs: string[] = [];
+  const begin = (): boolean => {
+    if (separated) return true;
+    part = true;
+    return false;
+  };
+  const separate = (masks: boolean) => {
+    if (part && masks) separated = true;
+    part = false;
+  };
+  let i = 0;
+  while (i < script.length) {
+    const c = script[i]!;
+    const next = script[i + 1] ?? '';
+    if (substitution > 0) {
+      if (c === "'" || c === '"' || c === '`') i = quoteEnd(script, i);
+      else {
+        if (c === '(') substitution++;
+        if (c === ')') substitution--;
+        i += c === '\\' ? 2 : 1;
+      }
+      continue;
+    }
+    if (c === '\\' || c === "'" || c === '"' || c === '`') {
+      if (begin()) return true;
+      i = c === '\\' ? i + 2 : quoteEnd(script, i);
+      continue;
+    }
+    if (c === '$' && next === '(') {
+      if (begin()) return true;
+      substitution++;
+      i += 2;
+      continue;
+    }
+    if (c === '<' && next === '<') {
+      if (script[i + 2] === '<') {
+        i += 3;
+        continue;
+      }
+      const word = HEREDOC.exec(script.slice(i));
+      if (word) {
+        heredocs.push(shellWord(word[1] ?? ''));
+        i += word[0].length;
+        continue;
+      }
+    }
+    if (c === '\n') {
+      let at = i + 1;
+      // Skip each heredoc body through its delimiter line.
+      for (const delimiter of heredocs.splice(0)) {
+        const end = new RegExp(`^[ \\t]*${escapeRegExp(delimiter)}[ \\t]*$`, 'm').exec(
+          script.slice(at),
+        );
+        if (!end) return false;
+        at += end.index + end[0].length;
+      }
+      separate(true);
+      i = at;
+      continue;
+    }
+    if (c === '&' && next === '&') {
+      separate(false);
+      i += 2;
+      continue;
+    }
+    const redirect = c === '&' && (next === '>' || /[<>]$/.test(script.slice(0, i)));
+    // A backgrounded part's exit code never reaches the script's.
+    if (c === '&' && !redirect && part) return true;
+    if (c === ';' || c === '|' || (c === '&' && !redirect)) {
+      separate(true);
+      i += c === '|' && (next === '|' || next === '&') ? 2 : 1;
+      continue;
+    }
+    if (c === '#' && (i === 0 || /\s/.test(script[i - 1]!))) {
+      const end = script.indexOf('\n', i);
+      i = end === -1 ? script.length : end;
+      continue;
+    }
+    if (/\s/.test(c) || c === '(' || c === '{') {
+      i++;
+      continue;
+    }
+    // In command position, a block's end, or the next clause of an if or case,
+    // starts no new part; a closed block is itself a part a later separator hides.
+    if (!part && (c === ')' || c === '}' || CLOSER.test(script.slice(i)))) {
+      separated = false;
+      part = c === ')' || c === '}' || /^(?:fi|esac)\b/.test(script.slice(i));
+      i += c === ')' || c === '}' ? 1 : (/^\w+/.exec(script.slice(i))?.[0].length ?? 1);
+      continue;
+    }
+    if (begin()) return true;
+    i++;
+  }
+  return false;
+}
 
 export function readCodexLog(log: string): CodexLog {
   const lines: Line[] = log
@@ -97,13 +252,15 @@ export function readCodexLog(log: string): CodexLog {
         }
         header.push(h.text);
       }
+      const text = header.join('\n').trim();
       const command: CodexCommand = {
-        command: header.join('\n').trim(),
+        command: text,
         cwd,
         status: 'unfinished',
         exitCode: null,
         durationMs: null,
         guessed: false,
+        masked: masksFailure(text),
         firstOutputLine: '',
         lastOutputLine: '',
       };
@@ -137,13 +294,15 @@ export function readCodexLog(log: string): CodexLog {
     justHeaded = null;
     const rejected = isMarker(line) ? REJECTED.exec(line.text) : null;
     if (rejected) {
+      const text = unescape(unescape(rejected[1] ?? ''));
       commands.push({
-        command: unescape(unescape(rejected[1] ?? '')),
+        command: text,
         cwd: null,
         status: 'rejected',
         exitCode: null,
         durationMs: null,
         guessed: !colored,
+        masked: masksFailure(text),
         firstOutputLine: '',
         lastOutputLine: '',
       });

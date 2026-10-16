@@ -142,6 +142,14 @@ test("each skill writes the Codex leg's receipt from its command log", () => {
       ['failed despite exit 0', 'a masked failure reads as success'],
       ["the project's build or test suite when no command ran it", 'unattempted suite dropped'],
       [
+        'A `masked` success confirms only its last part; its earlier verifications go on line two',
+        'a chained failure reads as success',
+      ],
+      [
+        'tell Codex to join verification commands with &&, never ; or a newline',
+        'Codex is not steered away from chains that hide failures',
+      ],
+      [
         'A leg that participated with no commands has `execution: none`',
         'a no-command run reads as unknown',
       ],

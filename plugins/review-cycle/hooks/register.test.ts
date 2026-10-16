@@ -4438,6 +4438,7 @@ describe('the Codex command log', () => {
           exitCode: 1,
           durationMs: 147,
           guessed: false,
+          masked: false,
           firstOutputLine: 'failed to load config',
           lastOutputLine: 'failed to load config',
         },

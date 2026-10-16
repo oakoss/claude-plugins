@@ -2346,7 +2346,7 @@ async function registerCodexLog($: $): Promise<void> {
     await $.tool.register({
       name: 'codex_log',
       description:
-        "Reads a `codex review` output file and lists every command Codex ran, in order: the command, its working directory, `status` (`succeeded`, `exited`, `rejected` when Codex refused to run it, or `unfinished` when the log ends with no status for it), `exitCode`, `durationMs`, `guessed` (true when overlapping commands, or a log without color, leave it unclear which command a status belongs to), and the first and last non-empty lines of its output, each clipped at 200 characters. Answers with an error, not an empty list, for a file that is not a Codex log. Build the Codex leg's execution receipt from this, not from its verdict. Read-only.",
+        "Reads a `codex review` output file and lists every command Codex ran, in order: the command, its working directory, `status` (`succeeded`, `exited`, `rejected` when Codex refused to run it, or `unfinished` when the log ends with no status for it), `exitCode`, `durationMs`, `guessed` (true when overlapping commands, or a log without color, leave it unclear which command a status belongs to), `masked` (true when the command chains parts with `;`, a newline, `||`, `|` or `&`, so its exit code is only the last part's), and the first and last non-empty lines of its output, each clipped at 200 characters. Answers with an error, not an empty list, for a file that is not a Codex log. Build the Codex leg's execution receipt from this, not from its verdict. Read-only.",
       inputSchema: {
         type: 'object',
         properties: {

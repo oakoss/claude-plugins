@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { readCodexLog } from './codex-log';
+import { masksFailure, readCodexLog } from './codex-log';
 
 // The shapes codex-cli 0.162.1 writes when its output goes to a file, colored
 // when FORCE_COLOR is set.
@@ -18,6 +18,8 @@ const brief = (s: string) =>
   readCodexLog(s).commands.map((c) => [c.command, c.status, c.exitCode, c.guessed]);
 const unguessed = (s: string) =>
   readCodexLog(s).commands.map((c) => ({ ...c, guessed: undefined }));
+// Codex's own wrapping: the script single-quoted, a quote inside as '"'"'.
+const zsh = (script: string) => `/bin/zsh -lc '${script.replaceAll("'", `'"'"'`)}'`;
 
 describe('readCodexLog', () => {
   test('reads each command with its status, exit code, time and output lines', () => {
@@ -46,6 +48,7 @@ describe('readCodexLog', () => {
         exitCode: 1,
         durationMs: 147,
         guessed: false,
+        masked: false,
         firstOutputLine: 'mise WARN cache',
         lastOutputLine: 'Error: EPERM',
       },
@@ -56,6 +59,7 @@ describe('readCodexLog', () => {
         exitCode: 0,
         durationMs: 2400,
         guessed: false,
+        masked: false,
         firstOutputLine: '$ tsc -p .',
         lastOutputLine: '$ tsc -p .',
       },
@@ -278,5 +282,86 @@ describe('readCodexLog', () => {
     expect(readCodexLog('')).toEqual({ recognized: false, commands: [] });
     expect(readCodexLog('Error: unauthorized').recognized).toBe(false);
     expect(readCodexLog(log(codex, 'No findings.'))).toEqual({ recognized: true, commands: [] });
+  });
+
+  test('a chained command is masked, and a rejected one is read the same way', () => {
+    const chainedRefusal = refusal.replace('pnpm test', 'pnpm lint; pnpm test');
+    const { commands } = readCodexLog(
+      log(
+        exec,
+        cmd("/bin/zsh -lc 'pnpm test; pnpm typecheck'"),
+        ok(5),
+        exec,
+        cmd('pnpm lint'),
+        ok(1),
+        chainedRefusal,
+        refusal,
+      ),
+    );
+    expect(commands.map((c) => [c.status, c.masked])).toEqual([
+      ['succeeded', true],
+      ['succeeded', false],
+      ['rejected', true],
+      ['rejected', true],
+    ]);
+  });
+});
+
+describe('masksFailure', () => {
+  test.each([
+    ['pnpm test; pnpm typecheck', true],
+    ['pnpm test || true', true],
+    ['pnpm test | tail -5', true],
+    ['pnpm test & pnpm lint', true],
+    ['export TMPDIR=/x; pnpm test', true],
+    ['for f in a b; do pnpm test $f; done', true],
+    ["node <<'JS'\nx;\nJS\npnpm test", true],
+    ['pnpm test\npnpm lint', true],
+    ['pnpm test && pnpm typecheck', false],
+    ['pnpm test', false],
+    ['pnpm test;', false],
+    ['pnpm test 2>&1', false],
+    ['pnpm test &> out', false],
+    ['T=$(mktemp -d; echo x) pnpm test', false],
+    ["echo 'a; b' && pnpm test", false],
+    ["node <<'JS'\nconsole.log(1);\nconsole.log(2)\nJS", false],
+    ['pnpm test # then; lint', false],
+    // Measured against zsh -f: each false here keeps the failure in the exit code.
+    [String.raw`printf "a\"b" && pnpm test; true`, true],
+    ['cat <<<hello\npnpm test; true', true],
+    ['cat <<END-OF-TEXT\nx;y\nEND-OF-TEXT\npnpm test; true', true],
+    ['cat <<-EOF\n\tx; y\n\tEOF\npnpm test', true],
+    ['{ pnpm test; true; }', true],
+    ['pnpm test &&\npnpm lint', false],
+    ['# verify\npnpm test', false],
+    ['\npnpm test', false],
+    ['(pnpm test;)', false],
+    ['if true; then pnpm test; fi', false],
+    ['case x in x) pnpm test;; esac', false],
+    ['X=`echo a; echo b` pnpm test', false],
+    [String.raw`echo a\;b && pnpm test`, false],
+    ['X=$(echo $(date); y) pnpm test', false],
+    ['echo then && pnpm test', false],
+    ['echo fi; pnpm test', true],
+    ['{ pnpm test; }; true', true],
+    ['if true; then pnpm test; fi; true', true],
+    ['case x in x) pnpm test;; esac\necho done', true],
+    ['cat <<\\EOF\nbody\nEOF\npnpm test; true', true],
+    ['cat <<E"OF"\nbody\nEOF\npnpm test; true', true],
+    ['pnpm test &', true],
+    ['pnpm test |\ncat', true],
+    ['curl a#b; pnpm test', true],
+  ])('%j → %s', (script, masked) => {
+    expect(masksFailure(zsh(script))).toBe(masked);
+  });
+
+  test.each([
+    [String.raw`bash -c "echo \"x\"; pnpm test"`, true],
+    [String.raw`bash -c "pnpm test && echo \a\;b"`, false],
+    [String.raw`/bin/bash -lc pnpm\ test\;lint`, true],
+    ['pnpm test; pnpm lint', true],
+    ['pnpm test && pnpm lint', false],
+  ])('%j, a bash or bare command → %s', (command, masked) => {
+    expect(masksFailure(command)).toBe(masked);
   });
 });
