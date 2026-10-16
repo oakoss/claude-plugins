@@ -327,7 +327,12 @@ describe('ship: what it may do unasked', () => {
     expect(text).toContain(
       'When `bd dolt remote list` lists nothing, skip the push and say so in the report',
     );
-    expect(text).toContain('When a push was refused after items were closed, name those items');
+  });
+
+  test('the branch is pushed before any item is closed', () => {
+    expect(text).toMatch(/## 4\. Push[\s\S]*## 5\. Close finished tracker items/);
+    expect(text).toContain('A refused push ends the ship here, before any item is closed.');
+    expect(text).not.toContain('reopen');
   });
 
   test('the body follows the repository template, then the reference, without attribution', () => {
@@ -355,6 +360,8 @@ describe('ship: what it may do unasked', () => {
     for (const phrase of ['"ship it"', '"let\'s ship"', '"ship"', '"push it"']) {
       expect(front).toContain(phrase);
     }
+    // Loaded with every session's skill list, so it states the order the body runs.
+    expect(front).toContain("pushes, closes the branch's finished tracker items");
   });
 });
 
