@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.5.0 (2026-10-16)
+
+### Added
+
+pr-watch wakes Claude only for news it can act on alone: a failed run, merge conflicts, requested changes, comments and reviews. A pull request turning ready to merge, and a merge's or push's checks passing, now wait for your next message, which carries them to Claude unseen, instead of starting a turn whose answer is "want me to merge?". A ready pull request still wakes Claude where review-cycle's stop-before setting is `release` or `never stop`, since Claude may merge it unasked there; pr-watch reads that setting from the same files review-cycle does.
+
+A ready pull request also suggests `merge #<number>` in the empty prompt box (Tab to take), unless `promptSuggestionEnabled` is off, and a ready pull request or a failed run sends a notification through your notification channel beside the toast. Your next message reads a waiting ready pull request again before calling it ready, so one merged meanwhile is left out; a slash command or another plugin's prompt leaves the news waiting.
+
+A session resumed with `claude --resume` or `/resume` watches its pull requests again, where it used to come back with an empty band. pr-watch saves the pull requests a session watches in its own store, keyed by session id, whenever the list changes; a resumed session keeps its id, so it finds them and reads each at once, telling Claude what changed while it was away: a failed run, conflicts, requested changes, comments, and, with your next message, a pull request now ready to merge or a merge whose checks passed. News told before the exit is not told again. A new session, a fork or a `/clear` starts with none, and pushed branches are not brought back.
+
+### Fixed
+
+A draft pull request's line now shows its checks. It starts `#128 draft ·` and follows them like any other line: the bar while they run, the job that failed, `○ waiting on checks` while a required GitHub App check runs, or `✓ checks passed` once they pass, where it had read `○ waiting on draft` and hidden them. It still never says `ready to merge` while a draft, and now also says what would block the merge once it is marked ready, as in `#128 draft · ✓ checks passed · ⚠ conflicts`. A draft with no checks reads `#128 ○ draft`.
+
+A ready pull request wakes Claude only while review-cycle is loaded with its commit gate on and its stop-before setting past `merge`. pr-watch now reads that setting from review-cycle's own `/config` rows rather than from every review-cycle entry in your settings, so a leftover value from an uninstalled review-cycle, or from another copy of it such as a `--plugin-dir` one, no longer decides; `.claude/settings.json` and `.claude/settings.local.json` still apply as before. With review-cycle absent or its gate switched off, a ready pull request waits for your next message, as it does in a headless `claude -p` session, where `/config` lists no plugin's settings.
+
+A status in the band colors only its mark, not the words beside it. Each other workflow reads ` · CodeQL ` in the normal text color with its mark carrying the state: `●` blue while it runs, `✓` green once it passes, `✗` red when it fails. A line's own status does the same: `✓ ready to merge` and `✓ checks passed` color only the `✓` green, a blocked line only its `⚠` yellow, a failed job only its `✗` red, and the running workflow only its `●` blue. The running `●` and the failed `✗` had drawn uncolored, since their names are links. An error such as `gh failed` still reads red. A mark is drawn whole when a line is too wide for the band; the plain text beside it is cut first.
+
+pr-watch no longer gives up on your pull requests when GitHub cannot be reached. A dropped connection, a laptop offline, or a 502 to 504 from GitHub's gateway used to show `gh`'s raw error in red at once and count toward the 8 failed reads that end a watch, so some 15 minutes offline stopped every watch and told Claude it had given up. Now the line keeps what it last showed, adds a dim `· offline, retrying` from the second such read, and stays: one read at a time tries GitHub, 15 seconds after the last, doubling up to a minute, and every line drops the note as soon as GitHub answers anything. After 15 minutes out of reach a toast names the host and `gh`'s reason once, in case a host or proxy is wrong. The watch tool says when its first read could not reach GitHub. Other failures, such as a refused token or a missing pull request, still show in red and still end the watch after 8 in a row.
+
+A pull request opened after a push now takes over the push's line in place. After `git push` then `gh pr create`, the `⟳ push <branch>` line and the new pull request's line had stacked until the push line's own next read found the pull request, up to about 10 seconds or longer; now the pull request's first read, about a second after it is watched, puts it in the push line's row and drops the push line, keeping what Claude was told of either. This applies within one repository; a push to a fork is still handed to its pull request upstream by the push's own next read.
+
+A prompt with no news kept for it no longer writes pr-watch's kept-news store, so a store that refuses writes no longer shows "could not add its news to your prompt" on every message. When a prompt can neither re-read a pull request's ready line nor put back the news it took, pr-watch now says both: the toast about your prompt keeps the error that stopped it, and a second toast says the news was lost.
+
+A running line now says what its workflow still waits on. Once some of its jobs have finished, it names those left, as in `● CI: Windows ████████████████▉░░░░░░░ 3m29s / ~4m58s`, marking each that has not started `queued`, or counts them past two; a long job name is cut at 24 characters. A re-run now shows how long it has run, as in `● CI re-run: Tests 1m12s`, timed from its attempt's start, which pr-watch asks GitHub for once per attempt, again a minute later if that fails, and no more once GitHub refuses; it still draws no bar, since re-running the failed jobs takes less than the whole workflow. Workflow-length lookups now give up after 10 seconds, so a slow one no longer holds up a pull request's next read.
+
 ## 0.4.1 (2026-10-13)
 
 ### Fixed
@@ -68,4 +94,4 @@ A new plugin: a line above the prompt for each pull request Claude opens with `g
 
 The band now reacts to Claude's own `git push` and `gh pr merge` within a second or two, rather than at its next slow poll. A pull request that had settled (failing, ready, or waiting on a review) was read only once a minute, so a fix Claude pushed could take up to a minute to show its new runs. After a push or a merge, every watched pull request is read at once and then every 5 seconds for a minute while GitHub starts the new runs. A push from your own terminal still shows at the next poll.
 
-Generated by oakum 0.4.0.
+Generated by oakum 0.5.0.

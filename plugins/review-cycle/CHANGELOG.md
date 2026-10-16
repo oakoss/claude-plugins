@@ -4,6 +4,24 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.31.0 (2026-10-16)
+
+### Added
+
+A push you asked for no longer goes to the default branch, or pushes a tag, unless your message or the question you answered named where it goes. "push it" while the agent was on `main` used to push `main` without asking, which branch protection does not stop for an admin; the gate now asks, naming the branch and the question to put to you, and a yes to it covers the push. Only exact forms name a target, so nothing around the name can reject or redirect it: a message that is just "push to main", "push main" or "push the main branch" covers `main`; "push the v1.2.0 tag" covers that tag and "push the tags" any tag; and a bare yes covers the target only when the last paragraph of the agent's answer is exactly the question the refusal suggested, "Push to `develop`?" or "Push the `v1.2.0-rc.1` tag?". No request covers deleting the default branch. A push after another git step in the same command (`git fetch && git push`), or to a branch built at run time, now asks rather than running unchecked. The gate reads where a push you asked for goes with the dry run it already makes for pushes your stop-before setting lets through, so such a push costs a round trip to the remote; when that dry run fails or names no ref, the push runs as asked and the agent is told its target went unchecked. GitHub writes follow the same rule: a tag write needs the tag named, a forced update or delete is judged by the branch it names, and a write that names no branch, builds it at run time, or picks its repository outside its words asks.
+
+### Fixed
+
+The review cycle and `/review-cycle:review-pr` grade the Codex leg from the commands it ran, not from its verdict. `codex review` prints its own verdict format, which carries the execution receipt only some of the time, so Codex was usually graded `unknown`. A new `mcp__review-cycle__codex_log` tool reads Codex's output file, with or without color, and lists each command with its status, exit code, and first and last output lines, including commands Codex refused to run. It flags a status that parallel commands leave unclear, and a command chained with `;`, a newline, `||`, `|` or `&`, whose exit code shows only its last part. The skills build Codex's receipt from that list: a chained success confirms only its last part, and the project's test suite counts as unattempted when no command ran it. They no longer ask Codex for receipt lines, and instead ask it to join verification commands with `&&`. A file that is not a Codex log is refused rather than read as a Codex that ran nothing, and the skills then read the receipt off the verdict as before.
+
+The review cycle's final message now carries its summary block field by field, after any commit the cycle makes, with any prose around it explaining the block rather than replacing it. Eval runs caught one final message that retold the summary in prose, dropping fields such as the Codex leg's status, and another that printed it before the commit and ended with prose.
+
+The eval suite's Codex shims now reach the session, so an eval run no longer launches the real Codex CLI, and its graders match what a correct cycle reports.
+
+The commit gate keeps what reviewers saw when its module reloads, which a `/config` change to review-cycle does mid-session, as does saving its hooks while developing it. It used to start over: a review that finished after the reload was not counted, the commit was refused as unreviewed, and the scratch directories a sweep should remove were forgotten. Reviews, the reviewer legs still running, scratch directories, a "don't push yet" hold and the rest of the gate's record are now kept in Claude Code's session state and taken back when the module loads again; a leg still running keeps the rest of its 30-minute budget. What your last message granted is not kept, so after a reload the next push, pull request or merge asks again. Switching review-cycle off in `/config` clears what it kept, so switching it back on starts fresh.
+
+When you ask for a merge, the gate's GitHub lookup of the pull request (`gh pr view`, `gh repo view`) is tried again, for up to 10 seconds, when it times out after 5. When GitHub still does not answer, the refusal tells the agent GitHub was slow and to run the same command again, rather than asking you to confirm a merge you already asked for. Other GitHub lookups keep their single 5-second try, and a lookup that fails with an error rather than a timeout still asks.
+
 ## 0.30.0 (2026-10-14)
 
 ### Added
@@ -1114,4 +1132,4 @@ Security and robustness fixes for issues found by running `/review-cycle:review`
 - Per-project opt-out via `.claude/.no-review-gate` and global kill-switch via `~/.claude/.disable-review-gate`.
 - Embedded comment and fix-vs-defer policies inside the skills, with standalone copies in `reference/policies.md` for optional CLAUDE.md installation.
 
-Generated by oakum 0.4.0.
+Generated by oakum 0.5.0.
