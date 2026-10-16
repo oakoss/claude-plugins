@@ -207,6 +207,9 @@ type GateState = {
   reviews: Review[];
   legs: Map<string, Leg>;
   message: Message;
+  // The review reminder the user's next prompt owes the agent, measured from
+  // `since`. Apart from `message`, so a prompt replacing it cannot lose one.
+  owed: { since: string } | null;
   // How many messages the user has typed, queued ones included.
   messages: number;
   lastAnswer: string;
@@ -257,6 +260,7 @@ const state: GateState = {
   legs: new Map(),
   // No message yet, so nothing to nudge about.
   message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
+  owed: null,
   messages: 0,
   lastAnswer: '',
   said: { text: '', before: '', origin: null },
@@ -603,6 +607,7 @@ type Unkept =
   | 'gateOn'
   | 'stopBefore'
   | 'nudge'
+  | 'owed'
   | 'unaskedNotice';
 const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
 const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
@@ -798,6 +803,9 @@ async function onSessionStart(
   await registerLedger($);
   await registerScratch($);
   await registerCodexLog($);
+  // A reload forgets what was owed, so the line promising a reminder goes too.
+  state.owed = null;
+  showStatus($);
   if (!state.gateOn) {
     // Nothing the gate kept before it was switched off holds once it is back on.
     try {
@@ -863,10 +871,10 @@ async function onPromptSubmit(
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
-      // Updated in place: a pending nudge's rollback holds this record.
       const drops = dropsGrant(e.text, state.lastAnswer);
       state.message.grant = drops ? grant : combine(state.message.grant, grant);
-      state.message.nudged = false;
+      // An owed reminder already covers this turn's changes.
+      state.message.nudged = state.owed !== null;
     } else {
       let tree: string | null = null;
       try {
@@ -875,10 +883,69 @@ async function onPromptSubmit(
       } catch {
         // No starting tree means no nudge this message; the commit gate still holds.
       }
-      state.message = { grant, tree, nudged: false, prWindow: false };
+      // Read after the awaits, so a reminder armed meanwhile rides on this prompt.
+      const owed = state.owed;
+      const reviews = e.command?.name === 'review-cycle:review';
+      // A slash command may never reach the agent, so the reminder waits for
+      // the next message; typing the review skill is the review itself.
+      const waits = owed !== null && e.command !== undefined && !reviews;
+      state.message = { grant, tree, nudged: waits || reviews, prWindow: false };
+      if (owed === null || waits) return next(e);
+      const reminder = reviews ? null : await reminderFor($, owed.since, tree);
+      const r = await next(
+        reminder === null ? e : { ...e, context: [...(e.context ?? []), reminder] },
+      );
+      // Consumed once the prompt is accepted, and only if nothing has since
+      // replaced or retired it: a refused or failed prompt leaves it owed.
+      if (!('drop' in r && r.drop !== undefined) && state.owed === owed) {
+        state.owed = null;
+        showStatus($);
+      }
+      return r;
     }
   }
   return next(e);
+}
+
+// What changed between two trees that no reviewer has seen, or null when
+// nothing did. Throws when git cannot say, so a failure never reads as clean.
+async function unreviewedSince(
+  $: $,
+  top: string,
+  since: string,
+  tree: string,
+): Promise<Coverage | null> {
+  const paths = await reviewablePaths(gitOf($), top, since, tree);
+  if (paths === null) throw new Error('git could not list what changed');
+  const c = await coverageOf(gitOf($), top, await headOf(gitOf($), top), tree, state.reviews);
+  if (c === null) throw new Error('git could not compare the tree with the reviewed ones');
+  const touched = new Set(paths);
+  const rows = c.rows.filter((row) => touched.has(row.path));
+  return uncoveredOf(rows).length === 0 ? null : { ...c, rows };
+}
+
+// Built when the prompt is sent, so a review, an edit or the nudge turned off
+// since the turn ended counts. When git cannot check, the reminder says so.
+async function reminderFor($: $, since: string, tree: string | null): Promise<string | null> {
+  if (!(await nudgeWanted($))) return null;
+  try {
+    const root = state.root;
+    if (!root || tree === null) throw new Error('the working tree could not be read');
+    const c = await unreviewedSince($, root.top, since, tree);
+    if (c === null) return null;
+    return `review-cycle: your last turn left changes no reviewer has seen (${explain(c)}). Invoke /review-cycle:review via the Skill tool before anything else, then carry on with this message. Skip it only if this message says not to review, or answers a question you asked that must come first.`;
+  } catch (error) {
+    return `review-cycle: could not check whether your last turn's changes were reviewed (${messageOf(error)}). Invoke /review-cycle:review via the Skill tool before anything else, unless this message says not to review.`;
+  }
+}
+
+// Without text, clears the line.
+function showStatus($: $, text?: string): void {
+  try {
+    $.ui.status(text);
+  } catch {
+    // The reminder does not depend on the line.
+  }
 }
 
 // The nudge as the settings set it. A file that cannot be read sets nothing,
@@ -897,10 +964,8 @@ async function nudgeWanted($: $): Promise<boolean> {
   return nudgeOn(state.nudge, set.project ?? null, set.local ?? null);
 }
 
-// At the end of a main-loop turn that changed the tree, content no reviewer
-// has seen gets one prompt telling the agent to review it, so the agent does
-// not stop to ask the user whether to. Once per user message, and not while a
-// review is under way.
+// The agent reviews on the user's next prompt rather than asking whether to.
+// Once per user message, and not while a review is under way.
 async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<void> {
   const message = state.message;
   if (message.nudged || e.reason !== 'answer' || asksUser(e.answer)) return;
@@ -915,34 +980,36 @@ async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<vo
     for (const [id, leg] of pending) if (!live.has(id)) leg.done = true;
     if (pending.some(([, leg]) => !leg.done)) return;
   }
-  const tree = await worktreeTree(gitOf($), root.top);
-  if (tree === since) return;
-  const touched = new Set(await reviewablePaths(gitOf($), root.top, since, tree));
-  const c = await coverageOf(
-    gitOf($),
-    root.top,
-    await headOf(gitOf($), root.top),
-    tree,
-    state.reviews,
-  );
-  if (c === null) return;
-  const rows = c.rows.filter((row) => touched.has(row.path));
-  if (uncoveredOf(rows).length === 0) return;
+  // A turn git cannot check still owes a reminder, which the next prompt
+  // rebuilds or reports as unchecked.
+  let unreviewed: number | null = null;
+  // Counted from where the reminder will measure, an older one's tree if owed.
+  const owedAtStart = state.owed;
+  const from = owedAtStart?.since ?? since;
+  try {
+    const tree = await worktreeTree(gitOf($), root.top);
+    if (tree === since) return;
+    const c = await unreviewedSince($, root.top, from, tree);
+    if (c === null) return;
+    unreviewed = uncoveredOf(c.rows).length;
+  } catch {
+    unreviewed = null;
+  }
   if (!(await nudgeWanted($))) return;
-  message.nudged = true;
-  const text = `review-cycle: this turn left changes no reviewer has seen (${explain({ ...c, rows })}). Invoke /review-cycle:review via the Skill tool now, then report back. Skip it only if the user's latest message said not to review, or your last message asked them something they must answer first.`;
-  // Not awaited: the prompt enters once this turn has ended. A hook's refusal
-  // resolves with `drop` rather than rejecting.
-  Promise.resolve()
-    .then(() => $.prompt.submit({ text }))
-    .then(
-      (r) => {
-        if (r.drop !== undefined) message.nudged = false;
-      },
-      () => {
-        message.nudged = false;
-      },
-    );
+  // A prompt that arrived meanwhile started from a tree holding these changes,
+  // so the reminder is still owed and the next prompt carries it, unless that
+  // prompt reviewed them or settled what was owed when this count began.
+  if (state.message !== message && (state.message.nudged || state.owed !== owedAtStart)) return;
+  if (state.message === message) message.nudged = true;
+  // An older reminder still owed measures from further back, so it stays.
+  state.owed ??= { since };
+  const n = unreviewed;
+  showStatus(
+    $,
+    n === null
+      ? 'review-cycle: this turn could not be checked; your next message checks again'
+      : `review-cycle: ${n} ${n === 1 ? 'file' : 'files'} no reviewer has seen; your next message asks Claude to review`,
+  );
 }
 
 function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {
@@ -951,6 +1018,10 @@ function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType
     state.message.prWindow = false;
     // A review already under way needs no reminder to start one.
     state.message.nudged = true;
+    if (state.owed !== null) {
+      state.owed = null;
+      showStatus($);
+    }
   }
   return next(e);
 }
@@ -2556,6 +2627,10 @@ function onStatusOff(
 function onConfigSet($: $, e: Input<ConfigHook>, next: NextOf<ConfigHook>): ReturnType<ConfigHook> {
   if (e.origin?.kind !== 'composer') {
     return { deny: "review-cycle's settings are changed only by the user in /config." };
+  }
+  if (e.key === 'review-cycle.nudge' && e.value === false && state.owed !== null) {
+    state.owed = null;
+    showStatus($);
   }
   return next(e);
 }

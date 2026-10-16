@@ -29,7 +29,7 @@
     "nudge": {
       "type": "boolean",
       "title": "Review nudge",
-      "description": "At the end of a turn that left changes no reviewer has seen, prompt the agent to run /review-cycle:review, unless its last message ends with a question mark. A project's .claude/settings.json can turn it off; .claude/settings.local.json can set it either way. Only you can change this, here in /config.",
+      "description": "When a turn leaves changes no reviewer has seen, show a status line and have your next message remind the agent to run /review-cycle:review first, unless its last message ends with a question mark. A project's .claude/settings.json can turn it off; .claude/settings.local.json can set it either way. Only you can change this, here in /config.",
       "default": true
     },
     "unaskedNotice": {
