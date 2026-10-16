@@ -26,10 +26,15 @@ def slugify(text, sep="-"):
     return re.sub(r"[^a-z0-9]+", sep, text).strip(sep)
 EOF
 
-mkdir -p .eval-bin
-cat > .eval-bin/codex <<'EOF'
+# The shim lives in the eval HOME, outside the reviewed repo. This script's
+# environment never reaches the session, and case.yaml may set only EVAL_*
+# variables, so the shell rc files the session sources put it on PATH.
+mkdir -p "$HOME/.eval-bin"
+cat > "$HOME/.eval-bin/codex" <<'EOF'
 #!/usr/bin/env bash
 exit 127
 EOF
-chmod +x .eval-bin/codex
-export PATH="$PWD/.eval-bin:$PATH"
+chmod +x "$HOME/.eval-bin/codex"
+for rc in .zshenv .zprofile .zshrc .bashrc .bash_profile; do
+  printf 'export PATH="%s:$PATH"\n' "$HOME/.eval-bin" >> "$HOME/$rc"
+done
