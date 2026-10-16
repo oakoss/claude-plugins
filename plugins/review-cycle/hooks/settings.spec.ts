@@ -167,6 +167,11 @@ describe('bashTouchesGate', () => {
     // Reading settings into another file is refused too: the settings path is
     // read from the whole text, not resolved per write.
     `jq '.enabledPlugins' ~/.claude/settings.json > /tmp/s`,
+    // A `claude` command still writes through its redirects, and a writer
+    // beside it is still a writer.
+    'claude plugin install x@y > ~/.claude/settings.json',
+    'CLAUDE_CONFIG_DIR=/x/claude claude plugin install x@y && cp /tmp/s /x/claude/settings.json',
+    'sudo cp /tmp/s ~/.claude/settings.json',
   ])('refuses %s', (cmd) => expect(bashTouchesGate(cmd)).toBe(true));
   test.each([
     'cat ~/.claude/settings.json',
@@ -204,6 +209,9 @@ describe('bashTouchesGate', () => {
     'git commit -m "docs: say why cp > .claude/settings.json is refused"',
     'echo "claude plugin uninstall is refused" > notes.md',
     'npm plugin remove foo',
+    // A reviewer leg's test install, checked in the same command.
+    'cd /x && CLAUDE_CONFIG_DIR=/x/claude claude plugin install pr-kit@oakoss --scope local && cat /x/.claude/settings.local.json',
+    'CLAUDE_CONFIG_DIR=/x/claude claude plugin install pr-kit@oakoss; ls /x/claude/settings.json',
   ])('allows %s', (cmd) => expect(bashTouchesGate(cmd)).toBe(false));
   test('falls back to the text check when the command does not parse', () => {
     expect(bashTouchesGate(`echo {} > ~/.claude/settings.json; echo '`)).toBe(true);
