@@ -24,7 +24,7 @@ import path from 'node:path';
 
 import { afterEach, expect, test } from 'vitest';
 
-import { AGENTS_DIR, expectAnchors, listAgents, skillText } from './agents';
+import { AGENTS_DIR, expectAnchors, listAgents, REPO_ROOT, skillText } from './agents';
 
 const AGENT_ANCHOR = 'Open your report with the execution receipt';
 // Both anchors quote the fenced template's own wording rather than the bare
@@ -35,6 +35,11 @@ const FIRST_LINE = 'execution: <the heaviest verification that SUCCEEDED';
 const SECOND_LINE = "and the project's own build or test suite when you did not attempt it at all";
 const BOTH_REQUIRED = 'Both lines are required';
 const OUTPUT_NOTE = 'Emit the execution receipt above this';
+
+const GRADING = readFileSync(
+  path.join(REPO_ROOT, 'plugins/review-cycle/reference/grading.md'),
+  'utf8',
+);
 
 // Six reviewers today. A floor, not a count: the per-file loop is what catches
 // one dropping out, and this only catches the enumeration collapsing.
@@ -75,25 +80,68 @@ test('cleanup is excluded, and is the only agent that is', () => {
   expect(names).toContain('spec-conformance-analyzer.md');
 });
 
-test('both skills define every grade they weight legs by', () => {
+test('the shared grading reference defines every grade the skills weight legs by', () => {
+  // Checked token by token so a failure names the missing token rather than
+  // printing the whole file.
+  for (const token of [
+    'execution:',
+    'attempted-but-failed:',
+    'static-analysis-only',
+    'partial (<what was unreachable>)',
+    '`executed`',
+    'the leg is `unknown`',
+    'are not verifications',
+    'a receipt quoting a compile error is `static-analysis-only`, never `executed`',
+    'A leg that was skipped, failed, dropped, or capped carries no execution label',
+  ]) {
+    expect.soft(GRADING.includes(token), `reference/grading.md lacks: ${token}`).toBe(true);
+  }
+  expect(GRADING).toMatch(/\|\s*yes\s*\|\s*`none`\s*\|\s*`executed`\s*\|/);
+  expect(GRADING).toMatch(/\|\s*no\s*\|\s*—\s*\|\s*`static-analysis-only`\s*\|/);
+});
+
+test('both skills grade legs by the shared reference, and carry no copy of it', () => {
   for (const skill of ['review', 'review-pr']) {
     const text = skillText('review-cycle', skill);
-    // Checked token by token so a failure names the missing token rather than
-    // printing a body that runs to hundreds of lines.
-    for (const token of [
-      'execution:',
-      'attempted-but-failed:',
-      'static-analysis-only',
-      'partial (<what was unreachable>)',
-      '`executed`',
-      'the leg is `unknown`',
-      'are not verifications',
-      'Leg execution:',
-      '| yes | `none` | `executed` |',
-      '| no | — | `static-analysis-only` |',
-    ]) {
-      expect.soft(text.includes(token), `${skill}/SKILL.md lacks: ${token}`).toBe(true);
-    }
+    expectAnchors(text, skill, [
+      [
+        `\`\${CLAUDE_PLUGIN_ROOT}/reference/grading.md\`: read it before grading the first leg`,
+        'no pointer',
+      ],
+    ]);
+    expect(text, `${skill}: still carries its own grading table`).not.toContain(
+      '| line one names a verification that succeeded |',
+    );
+  }
+});
+
+const legExecutionLine = (skill: string) =>
+  skillText('review-cycle', skill)
+    .split('\n')
+    .find((l) => l.startsWith('Leg execution:'));
+
+test('both skills report leg execution with the same summary line', () => {
+  expect(legExecutionLine('review'), 'review lost its Leg execution: line').toBeDefined();
+  expect(legExecutionLine('review-pr'), 'review-pr drifted from review').toBe(
+    legExecutionLine('review'),
+  );
+});
+
+test('every reviewer agent carries the same receipt block, byte for byte', () => {
+  // Agent bodies cannot include a shared file, so the copies are held equal here.
+  const blocks = listReviewerAgents().map((f) => {
+    const text = readFileSync(f, 'utf8');
+    const start = text.indexOf(AGENT_ANCHOR);
+    const end = text.indexOf(
+      '\n\n',
+      text.indexOf('**One report, when your work is done.**', start),
+    );
+    return { name: path.basename(f), block: text.slice(start, end) };
+  });
+  const [first] = blocks;
+  expect(first?.block.length).toBeGreaterThan(200);
+  for (const { name, block } of blocks) {
+    expect(block, `${name} drifted from ${first?.name}`).toBe(first?.block);
   }
 });
 
@@ -122,42 +170,47 @@ test('a planted agent without the contract is named', () => {
   expect(missing).toContain('zz-not-a-real-agent.md');
 });
 
-test("each skill writes the Codex leg's receipt from its command log", () => {
+test("the Codex leg's receipt is written from its command log", () => {
   // `codex review` prints its own verdict, which carries the receipt lines only
   // sometimes, so the receipt comes from the commands its log records.
+  expectAnchors(GRADING, 'reference/grading.md', [
+    ["**Write the Codex leg's receipt yourself, from its command log**", 'no log receipt'],
+    ['call `mcp__review-cycle__codex_log` with its output file', 'log tool not named'],
+    [
+      'the heaviest verification among its `succeeded` commands not `guessed`',
+      'line one source lost',
+    ],
+    [
+      'every verification that `exited`, was `rejected`, stayed `unfinished` or is `guessed`',
+      'line two source lost',
+    ],
+    ['failed despite exit 0', 'a masked failure reads as success'],
+    ["the project's build or test suite when no command ran it", 'unattempted suite dropped'],
+    [
+      'A `masked` success confirms only its last part; its earlier verifications go on line two',
+      'a chained failure reads as success',
+    ],
+    [
+      'A leg that participated with no commands has `execution: none`',
+      'a no-command run reads as unknown',
+    ],
+    [
+      'When the tool is missing or answers with an error, read the receipt off its verdict',
+      'no fallback',
+    ],
+  ]);
+});
+
+test("each skill's Codex brief steers it, and asks it for no receipt", () => {
   for (const skill of ['review', 'review-pr']) {
     const text = skillText('review-cycle', skill);
     expectAnchors(text, skill, [
       ['Leave the ask out of the Codex brief', 'brief still asks Codex for receipt lines'],
-      ["**Write the Codex leg's receipt yourself, from its command log**", 'no log receipt'],
-      ['call `mcp__review-cycle__codex_log` with its output file', 'log tool not named'],
-      [
-        'the heaviest verification among its `succeeded` commands not `guessed`',
-        'line one source lost',
-      ],
-      [
-        'every verification that `exited`, was `rejected`, stayed `unfinished` or is `guessed`',
-        'line two source lost',
-      ],
-      ['failed despite exit 0', 'a masked failure reads as success'],
-      ["the project's build or test suite when no command ran it", 'unattempted suite dropped'],
-      [
-        'A `masked` success confirms only its last part; its earlier verifications go on line two',
-        'a chained failure reads as success',
-      ],
       [
         'tell Codex to join verification commands with &&, never ; or a newline',
         'Codex is not steered away from chains that hide failures',
       ],
-      [
-        'A leg that participated with no commands has `execution: none`',
-        'a no-command run reads as unknown',
-      ],
       ['FORCE_COLOR=1 codex review', 'Codex logs lose the color its markers are read by'],
-      [
-        'When the tool is missing or answers with an error, read the receipt off its verdict',
-        'no fallback',
-      ],
       ['attempted-but-failed:', 'brief omits line two'],
       ['never attempted it', 'brief omits the unattempted-check clause'],
     ]);

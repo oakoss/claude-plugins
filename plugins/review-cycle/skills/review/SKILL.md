@@ -287,21 +287,7 @@ Collect findings from every reviewer:
 - Codex output is structured: `verdict`, `summary`, `findings[]` each with `severity` (critical/high/medium/low), `file`, `line_start`, `line_end`, `confidence`, `recommendation`
 - pr-review-toolkit output is markdown organized as Critical / Important / Suggestions / Strengths
 
-**Label each leg by what it could actually run.** Read the two receipt lines before weighting a single finding.
-
-A *verification* is a command that exercises this project — its build, test suite, typecheck, linter, schema or manifest validator, or a repro the leg's findings rest on. Reading commands (`git status`, `git diff`, `ls`, `cat`, `find`, `grep`, `rg`) are not verifications: they succeed on a machine where nothing else does.
-
-If either receipt line is absent, or present with nothing after it, the leg is `unknown`. Otherwise read two facts off the receipt:
-
-| line one names a verification that succeeded | `attempted-but-failed:` | label |
-| --- | --- | --- |
-| yes | `none` | `executed` |
-| yes | anything else | `partial (<what was unreachable>)` |
-| no | — | `static-analysis-only` |
-
-`execution: none`, a line one naming no verification, and one naming a verification that failed are the same row: a receipt quoting a compile error is `static-analysis-only`, never `executed`. A category the leg says it could not exercise at all also makes it `partial`; a claim it labelled `inferred` does not.
-
-**Write the Codex leg's receipt yourself, from its command log**, even when its verdict carries one: call `mcp__review-cycle__codex_log` with its output file. Line one is the heaviest verification among its `succeeded` commands not `guessed`, with an output line; line two lists every verification that `exited`, was `rejected`, stayed `unfinished` or is `guessed`, one whose output lines show it failed despite exit 0, and the project's build or test suite when no command ran it. A `masked` success confirms only its last part; its earlier verifications go on line two. A leg that participated with no commands has `execution: none`. When the tool is missing or answers with an error, read the receipt off its verdict as for any leg.
+**Label each leg by what it could actually run.** Read the two receipt lines before weighting a single finding, and grade them by `${CLAUDE_PLUGIN_ROOT}/reference/grading.md`: read it before grading the first leg. It defines a verification, the four labels and their table, and how to write the Codex leg's receipt from its command log.
 
 **The receipt narrows what a leg can quietly omit; it does not verify.** Nothing checks the quoted output, so treat an unqualified `executed` from a leg making external-tool claims as unconfirmed. An `executed` receipt naming none of the project checks Phase 2 recorded is worth a second look.
 

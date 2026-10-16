@@ -158,23 +158,7 @@ Collect findings from every reviewer. Attribute each to its source, group by fil
 
 **Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. This is deliberately broader than the working-tree cycle, and the difference is the class of claim rather than the leg: there, demotion covers claims about external tool behavior; here it covers any finding whose only support is a declaration, because the finding leaves as a public comment with no fix loop and no author turn behind it. Neither is gated on the leg's grade. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file.
 
-**Grade each leg that reported, from its two receipt lines.**
-
-A *verification* is a command that exercises this project — its build, test suite, typecheck, linter, schema or manifest validator, or a repro the leg's findings rest on. Reading commands (`git status`, `git diff`, `ls`, `cat`, `find`, `grep`, `rg`) are not verifications: they succeed on a machine where nothing else does.
-
-If either receipt line is absent, or present with nothing after it, the leg is `unknown`. Otherwise read two facts off the receipt:
-
-| line one names a verification that succeeded | `attempted-but-failed:` | label |
-| --- | --- | --- |
-| yes | `none` | `executed` |
-| yes | anything else | `partial (<what was unreachable>)` |
-| no | — | `static-analysis-only` |
-
-`execution: none`, a line one naming no verification, and one naming a verification that failed are the same row — a receipt quoting a compile error is `static-analysis-only`, never `executed`. A category the leg says it could not exercise at all also makes it `partial`; a claim it labelled `inferred` does not, since that reflects a budget spent elsewhere and naming what you inferred must never cost the grade a silent leg keeps.
-
-**Write the Codex leg's receipt yourself, from its command log**, even when its verdict carries one: call `mcp__review-cycle__codex_log` with its output file. Line one is the heaviest verification among its `succeeded` commands not `guessed`, with an output line; line two lists every verification that `exited`, was `rejected`, stayed `unfinished` or is `guessed`, one whose output lines show it failed despite exit 0, and the project's build or test suite when no command ran it. A `masked` success confirms only its last part; its earlier verifications go on line two. A leg that participated with no commands has `execution: none`. When the tool is missing or answers with an error, read the receipt off its verdict as for any leg.
-
-A leg that was skipped, failed, or dropped carries no execution label — its coverage outcome already says why, and calling it `unknown` would blur "we cannot tell what it did" into "it never ran".
+**Grade each leg that reported, from its two receipt lines**, by `${CLAUDE_PLUGIN_ROOT}/reference/grading.md`: read it before grading the first leg. It defines a verification, the four labels and their table, and how to write the Codex leg's receipt from its command log.
 
 The receipt narrows what a leg can quietly omit; it does not verify. Nothing checks the quoted output against a real run, and `partial` rests on the leg volunteering what it could not reach — which matters more here than in the working-tree cycle, since a finding leaves this skill as a public comment with no fix loop behind it. Demote one narrow class to questions, keyed on the claim's evidence rather than the leg's grade: a claim about how an external tool, framework, or service behaves whose only support is a manifest, config file, lockfile, or CI file. A leg that got one unrelated check to pass is not thereby a witness to this one. A `partial` leg's claims about the category it named unreachable are demoted too. An `unknown` leg is not demoted for the missing receipt alone — a formatting miss is not evidence of incapacity — but omission must not beat candour: if anything else in the report says the leg could not run the checks, demote it exactly as `static-analysis-only`. Claims about what the changed code itself does are read from the source and stand, whatever the leg could run.
 
