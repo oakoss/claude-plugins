@@ -69,6 +69,7 @@ test('every reviewer agent asks for the execution receipt', () => {
       [SECOND_LINE, 'line two lost the unattempted-check clause'],
       [BOTH_REQUIRED, 'no longer requires both lines'],
       [OUTPUT_NOTE, 'output template does not place the receipt first'],
+      ['never belong on line one', 'orientation commands may count as a verification'],
     ]);
   }
 });
@@ -80,24 +81,31 @@ test('cleanup is excluded, and is the only agent that is', () => {
   expect(names).toContain('spec-conformance-analyzer.md');
 });
 
+// The label table's rows, matched whatever their column padding.
+const TABLE_ROWS = [
+  /\|\s*yes\s*\|\s*`none`\s*\|\s*`executed`\s*\|/,
+  /\|\s*yes\s*\|\s*anything else\s*\|\s*`partial \(<what was unreachable>\)`\s*\|/,
+  /\|\s*no\s*\|\s*—\s*\|\s*`static-analysis-only`\s*\|/,
+];
+
 test('the shared grading reference defines every grade the skills weight legs by', () => {
-  // Checked token by token so a failure names the missing token rather than
-  // printing the whole file.
+  // Whole rules, not their keywords, so a rule whose condition flips fails
+  // here; checked one by one so a failure names the rule rather than printing
+  // the whole file.
   for (const token of [
     'execution:',
     'attempted-but-failed:',
-    'static-analysis-only',
-    'partial (<what was unreachable>)',
-    '`executed`',
-    'the leg is `unknown`',
-    'are not verifications',
+    'its build, test suite, typecheck, linter, schema or manifest validator, or a repro',
+    'Reading commands (`git status`, `git diff`, `ls`, `cat`, `find`, `grep`, `rg`) are not verifications',
+    'If either receipt line is absent, or present with nothing after it, the leg is `unknown`',
     'a receipt quoting a compile error is `static-analysis-only`, never `executed`',
+    'A category the leg says it could not exercise at all also makes it `partial`',
+    'a claim it labelled `inferred` does not',
     'A leg that was skipped, failed, dropped, or capped carries no execution label',
   ]) {
     expect.soft(GRADING.includes(token), `reference/grading.md lacks: ${token}`).toBe(true);
   }
-  expect(GRADING).toMatch(/\|\s*yes\s*\|\s*`none`\s*\|\s*`executed`\s*\|/);
-  expect(GRADING).toMatch(/\|\s*no\s*\|\s*—\s*\|\s*`static-analysis-only`\s*\|/);
+  for (const row of TABLE_ROWS) expect(GRADING).toMatch(row);
 });
 
 test('both skills grade legs by the shared reference, and carry no copy of it', () => {
@@ -109,8 +117,13 @@ test('both skills grade legs by the shared reference, and carry no copy of it', 
         'no pointer',
       ],
     ]);
-    expect(text, `${skill}: still carries its own grading table`).not.toContain(
-      '| line one names a verification that succeeded |',
+    // A copy of the table's rows or the Codex rule here would drift from the
+    // reference; the rows are what a pasted copy keeps, whatever its header.
+    for (const row of TABLE_ROWS) {
+      expect(text, `${skill}: still carries its own grading table`).not.toMatch(row);
+    }
+    expect(text, `${skill}: still carries its own Codex receipt rule`).not.toMatch(
+      /Write the Codex leg's receipt yourself|heaviest verification among its/,
     );
   }
 });
@@ -121,27 +134,32 @@ const legExecutionLine = (skill: string) =>
     .find((l) => l.startsWith('Leg execution:'));
 
 test('both skills report leg execution with the same summary line', () => {
-  expect(legExecutionLine('review'), 'review lost its Leg execution: line').toBeDefined();
+  expect(legExecutionLine('review'), 'review lost its labels').toContain(
+    '<leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown',
+  );
   expect(legExecutionLine('review-pr'), 'review-pr drifted from review').toBe(
     legExecutionLine('review'),
   );
 });
 
-test('every reviewer agent carries the same receipt block, byte for byte', () => {
-  // Agent bodies cannot include a shared file, so the copies are held equal here.
-  const blocks = listReviewerAgents().map((f) => {
+test('every reviewer agent carries the same receipt section and output note, byte for byte', () => {
+  // Agent bodies cannot include a shared file, so the copies are held equal
+  // here. Each agent's Containment paragraph differs on purpose and is not.
+  const parts = listReviewerAgents().map((f) => {
     const text = readFileSync(f, 'utf8');
     const start = text.indexOf(AGENT_ANCHOR);
     const end = text.indexOf(
       '\n\n',
       text.indexOf('**One report, when your work is done.**', start),
     );
-    return { name: path.basename(f), block: text.slice(start, end) };
+    const note = text.split('\n').find((l) => l.startsWith(OUTPUT_NOTE));
+    return { name: path.basename(f), block: text.slice(start, end), note };
   });
-  const [first] = blocks;
+  const [first] = parts;
   expect(first?.block.length).toBeGreaterThan(200);
-  for (const { name, block } of blocks) {
-    expect(block, `${name} drifted from ${first?.name}`).toBe(first?.block);
+  for (const { name, block, note } of parts) {
+    expect(block, `${name}'s receipt section drifted from ${first?.name}`).toBe(first?.block);
+    expect(note, `${name}'s output note drifted from ${first?.name}`).toBe(first?.note);
   }
 });
 
@@ -176,6 +194,7 @@ test("the Codex leg's receipt is written from its command log", () => {
   expectAnchors(GRADING, 'reference/grading.md', [
     ["**Write the Codex leg's receipt yourself, from its command log**", 'no log receipt'],
     ['call `mcp__review-cycle__codex_log` with its output file', 'log tool not named'],
+    ['even when its verdict carries one', "Codex's own receipt lines are trusted again"],
     [
       'the heaviest verification among its `succeeded` commands not `guessed`',
       'line one source lost',
