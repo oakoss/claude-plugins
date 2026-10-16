@@ -4413,6 +4413,65 @@ describe('the scratch directory', () => {
   });
 });
 
+describe('the Codex command log', () => {
+  const E = String.fromCodePoint(27);
+  const LOG = [
+    'OpenAI Codex v0.162.1',
+    `${E}[35m${E}[3mexec${E}[0m${E}[0m`,
+    `${E}[1m/bin/zsh -lc 'pnpm test'${E}[0m in /repo`,
+    `${E}[31m exited 1 in 147ms:${E}[0m`,
+    'failed to load config',
+  ].join('\n');
+  test('codex_log lists the commands in a Codex output file', async ($, on) => {
+    fakeWorld(on, { files: { '/tmp/codex.out': LOG } });
+    await ($ as any).session.start({ source: 'startup' });
+    const r = (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_log',
+      path: '/tmp/codex.out',
+    } as any)) as { result: string };
+    expect(JSON.parse(r.result)).toEqual({
+      commands: [
+        {
+          command: "/bin/zsh -lc 'pnpm test'",
+          cwd: '/repo',
+          status: 'exited',
+          exitCode: 1,
+          durationMs: 147,
+          guessed: false,
+          firstOutputLine: 'failed to load config',
+          lastOutputLine: 'failed to load config',
+        },
+      ],
+    });
+  });
+  test('codex_log refuses a file that is not a Codex log, rather than list nothing', async ($, on) => {
+    // Command-shaped lines without the banner are still refused.
+    fakeWorld(on, { files: { '/tmp/other.out': LOG.split('\n').slice(1).join('\n') } });
+    await ($ as any).session.start({ source: 'startup' });
+    const r = (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_log',
+      path: '/tmp/other.out',
+    } as any)) as { result: string };
+    expect(r.result).toBe(
+      'review-cycle codex_log: /tmp/other.out is not a codex review log (no `OpenAI Codex v` banner).',
+    );
+  });
+  test('codex_log says so when the file is missing or the path is relative', async ($, on) => {
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    const missing = (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_log',
+      path: '/tmp/none.out',
+    } as any)) as { result: string };
+    expect(missing.result).toBe('review-cycle codex_log: no file at /tmp/none.out.');
+    const relative = (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_log',
+      path: 'codex.out',
+    } as any)) as { result: string };
+    expect(relative.result).toContain('must be an absolute path');
+  });
+});
+
 describe('the leg time budget', () => {
   test('a leg past its budget asks the session to stop it, and is capped, not dropped', async ($, on) => {
     const w = fakeWorld(on);

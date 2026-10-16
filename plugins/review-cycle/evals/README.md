@@ -57,10 +57,12 @@ on PATH the cycle runs the host's real Codex with your credentials: a run on
   `review`, logging its argv to `$HOME/codex-shim-argv.log`. The eval HOME has
   no `~/.codex/config.toml`, so on this 2-line diff the skill must append
   `-c model_reasoning_effort="low"` and report `participated (effort: low)`.
-- **cycle-grades-failed-verification** — the shim's canned review opens with a
-  receipt naming one verification that succeeded and one that failed. Phase 4's
-  table grades that `partial`, so the summary's `Leg execution:` line must
-  grade the Codex leg partial and name pytest.
+- **cycle-grades-failed-verification** — the shim's canned review logs two
+  commands in codex-cli's format, one that succeeded and one that exited 1, and
+  its verdict carries no receipt lines. The cycle must read the log with
+  `mcp__review-cycle__codex_log`, and Phase 4's table grades that receipt
+  `partial`, so the summary's `Leg execution:` line must grade the Codex leg
+  partial and name pytest.
 - **reviewer-receipt-from-agent-body** — runs no cycle. The session spawns
   `review-cycle:code-reviewer` with a bare prompt and relays its report, which
   must open with the two receipt lines. The skill's own briefs always ask for

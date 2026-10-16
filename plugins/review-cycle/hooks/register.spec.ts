@@ -106,7 +106,7 @@ describe('the findings ledger with the gate off', () => {
     const [start] = hooks.get('session.start:') ?? [];
     const out = await start?.($$, { source: 'startup' }, (e: unknown) => Promise.resolve({ e }));
     expect(out).toEqual({ e: { source: 'startup' } });
-    expect(registered).toEqual(['ledger', 'ledger_record', 'scratch', 'sweep']);
+    expect(registered).toEqual(['ledger', 'ledger_record', 'scratch', 'sweep', 'codex_log']);
     expect(runs).toEqual([]);
   });
 });

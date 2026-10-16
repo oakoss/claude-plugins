@@ -40,6 +40,7 @@ case "${1:-}" in
     exit 0
     ;;
   review)
+    echo "OpenAI Codex v0.147.0 (eval shim)"
     echo "Overall verdict: clean"
     echo "No findings. The uncommitted change is a small, correct fallback."
     exit 0

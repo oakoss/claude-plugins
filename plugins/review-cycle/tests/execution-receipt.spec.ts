@@ -122,22 +122,39 @@ test('a planted agent without the contract is named', () => {
   expect(missing).toContain('zz-not-a-real-agent.md');
 });
 
-test("each skill's brief carries the receipt ask that reaches Codex", () => {
-  // Its own test, not a token in the grade list: the brief is the only channel
-  // that reaches the Codex leg, and a guard that reports "a grade is missing"
-  // when the whole channel was deleted sends the reader to the wrong file.
+test("each skill writes the Codex leg's receipt from its command log", () => {
+  // `codex review` prints its own verdict, which carries the receipt lines only
+  // sometimes, so the receipt comes from the commands its log records.
   for (const skill of ['review', 'review-pr']) {
     const text = skillText('review-cycle', skill);
-    const brief = text
-      .split('\n')
-      .some((line) =>
-        /the (only )?channel that reaches it|brief is (again )?the only channel/i.test(line),
-      );
-    expect.soft(brief, `${skill}: no brief paragraph naming the Codex channel`).toBe(true);
-    if (!brief) continue;
     expectAnchors(text, skill, [
+      ['Leave the ask out of the Codex brief', 'brief still asks Codex for receipt lines'],
+      ["**Write the Codex leg's receipt yourself, from its command log**", 'no log receipt'],
+      ['call `mcp__review-cycle__codex_log` with its output file', 'log tool not named'],
+      [
+        'the heaviest verification among its `succeeded` commands not `guessed`',
+        'line one source lost',
+      ],
+      [
+        'every verification that `exited`, was `rejected`, stayed `unfinished` or is `guessed`',
+        'line two source lost',
+      ],
+      ['failed despite exit 0', 'a masked failure reads as success'],
+      ["the project's build or test suite when no command ran it", 'unattempted suite dropped'],
+      [
+        'A leg that participated with no commands has `execution: none`',
+        'a no-command run reads as unknown',
+      ],
+      ['FORCE_COLOR=1 codex review', 'Codex logs lose the color its markers are read by'],
+      [
+        'When the tool is missing or answers with an error, read the receipt off its verdict',
+        'no fallback',
+      ],
       ['attempted-but-failed:', 'brief omits line two'],
       ['never attempted it', 'brief omits the unattempted-check clause'],
     ]);
+    expect(text, `${skill}: still sends Codex the receipt ask`).not.toMatch(
+      /Codex learns them only from the brief|Codex does not, so the brief is the only channel/,
+    );
   }
 });
