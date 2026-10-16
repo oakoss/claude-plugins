@@ -224,7 +224,7 @@ In a single conversation turn, invoke ALL of the following:
 
    `developer_instructions` is additive: Codex still reads the repo's `AGENTS.md`. Never add `--strict-config`: an unrecognized key then fails the leg instead of degrading to an unbriefed review. Tier on effort, never on a model name. Save the shell ID; you read its output when notified.
 
-2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool with `run_in_background: true` in the same single message as the codex invocation. Dispatch by the tier decided in Phase 1 — on the **light** tier, spawn `review-cycle:code-reviewer`, plus spec conformance in iteration 1 (below), and nothing else. On the **full** tier, conditional dispatch:
+2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool, which runs it in the background, in the same single message as the codex invocation. Dispatch by the tier decided in Phase 1 — on the **light** tier, spawn `review-cycle:code-reviewer`, plus spec conformance in iteration 1 (below), and nothing else. On the **full** tier, conditional dispatch:
 
    - `review-cycle:code-reviewer` — always
    - `review-cycle:pr-test-analyzer` — if the diff changes source code at all, whether or not it touches `*.test.*`, `*.spec.*`, `tests/`, `__tests__/`, or similar test paths. A source change that ships **no** corresponding test is precisely the case to flag, so do not gate this on test files being touched.
@@ -254,7 +254,6 @@ In a single conversation turn, invoke ALL of the following:
    Agent({
      subagent_type: "review-cycle:code-reviewer",
      description: "Code review of uncommitted changes",
-     run_in_background: true,
      prompt: "Review uncommitted changes in <PROJECT_ROOT>. Intent: <brief>. Changed files: <list>. Do not edit, stage, or commit anything in <PROJECT_ROOT> — perturb only a copy in a private directory you make with mktemp -d <SCRATCH>/leg.XXXXXX, never a shared scratchpad, and never reshape a command to slip past a guard. Name that directory in your report, delete it when you finish, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with set -u and runs cd <dir> && before any git command, and an rm guards every variable in its path, as in ${DIR:?}/…, never $DIR/…. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Settle this first, by measurement rather than reading, and report what you ran: <falsifiable question>. Then output findings as file:line — severity — issue — suggested fix. List separately, under Questions, any claim about tool behavior you could neither exercise here nor settle against authoritative documentation."
    })
    ```

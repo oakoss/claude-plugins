@@ -141,7 +141,6 @@ In a single conversation turn, invoke ALL of the following:
    Agent({
      subagent_type: "review-cycle:code-reviewer",
      description: "PR review",
-     run_in_background: true,
      prompt: "Review git diff <REMOTE>/<baseRefName>...HEAD (three dots — the merge-base diff, matching the PR as GitHub shows it) in <WT>, a detached worktree at PR #<n>'s head — run git commands there, not in the main checkout. Intent: <brief>. Changed files: <list>. REPORT-ONLY: do not edit any file in <WT> or in the main checkout — verification that has to run or perturb code goes in a private directory you make with mktemp -d <SCRATCH>/leg.XXXXXX, outside both, never a shared scratchpad, under the containment rule in your own prompt — and never reshape a command to slip past a guard. Name that directory in your report, delete it when you finish, and write nowhere outside it. Copy files into it, never symlink anything from the target, and run no package-manager install there; a script starts with set -u and runs cd <dir> && before any git command, and an rm guards every variable in its path, as in ${DIR:?}/…, never $DIR/…. End every process you started before you report: one left blocked on a pipe you opened outlives both you and the directory. Output findings as file:line — severity — issue — suggested fix."
    })
    ```
