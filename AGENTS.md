@@ -33,6 +33,18 @@ Do not run `bd setup codex`. This repository is worked in Claude Code; that comm
 - `git push` does not sync the task graph. The `pre-push` shim runs `bd hooks run pre-push`, which chains hooks and does not touch the Dolt remote, so `bd dolt push` has to be run explicitly. (Measured on bd 1.3.0 both with and without git's ref list on stdin: the remote's `refs/dolt/data` was unchanged across the hook run.)
 - The written `sync.remote` publishes the private host. Strip the `sync:` block from `config.yaml` before staging, or the next `git add -A` sweeps the private host into someone else's commit (lefthook's pre-commit refuses one staged); the Dolt-level remote lives in the gitignored database directory and survives on its own. Once a real remote exists, later pushes stop rewriting the file.
 
+### Labels, parents, order and priority
+
+Four facts about a bead live in four places: labels say what it touches and what it does to a release, a parent says which branch it rides, a dependency says what comes first, and priority says how urgent it is. The scheme follows oakum's `docs/contributing/task-tracking.md`, with one label more because this repository ships several plugins.
+
+- **Labels are `<dimension>:<value>`.** Every bead carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every bead but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. A container carries only `plugin:` and `area:`, since `bd create --parent` copies its labels onto every child. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label at triage, and re-label when a decision changes the bump.
+- **The namespace is load-bearing.** `bd query` reads `label=none` as "has no labels", so a plain `none` label cannot be queried. Measured on bd 1.3.1 in oakum, which uses one: `bd query 'label=none'` returned 26 unlabelled beads, and `bd list --label none` the 71 that carry it.
+- **A parent is a branch or a finding set.** A branch that carries several beads gets a parent bead of type `task`, and `bd ready --parent <id>` is its checklist. `epic` is for a finding set or a rollout, such as `cpl-7ktn`, `cpl-bg0r` and `cpl-3utg`. `bd create --parent` copies the parent's labels onto the child; re-parenting copies nothing.
+- **A new finding joins the unclaimed parent whose branch already edits its file**, or takes a `related` link to it (`bd link <new> <parent> --type related`) when that parent's branch is in flight. Find that parent with `bd list --status open,in_progress,blocked,deferred --desc-contains <path> --limit 0`, since `bd search` matches only titles and ids.
+- **Order is a dependency** (`bd dep add <later> <earlier>`); a `related` link blocks nothing. **Priority is urgency**: P0 now, P1 the next branch opened, P2 the next release, P3 scheduled, P4 may slip.
+
+Views that use these: `bd list --label plugin:pr-kit`, `bd query "status=open AND label=bump:minor"`, `bd stale`, `bd find-duplicates`, and `bd orphans` (open beads a commit already references).
+
 ## Layout
 
 Every plugin lives under `plugins/<name>/` with the following minimum structure:
@@ -75,7 +87,7 @@ A rule here that a check enforces names the check; prose stays only where nothin
 | Plugin structure; `$` not passed into an imported function expression | `claude plugin validate --strict` (CI `Plugin manifests`) |
 | Conventional commit messages | commitlint (lefthook `commit-msg`) |
 | Types of the hooks modules (not `tests/` or prose anchors); lint and format everywhere | lefthook pre-commit, CI |
-| `bd dolt push` needs a remote; no `bd init` or `bd setup codex`; every function calling `$` stays in the registering file (validate passes one passed into an imported function declaration) | prose only |
+| `bd dolt push` needs a remote; no `bd init` or `bd setup codex`; bead labels, parents and priorities; every function calling `$` stays in the registering file (validate passes one passed into an imported function declaration) | prose only |
 
 ## Hooks modules
 
