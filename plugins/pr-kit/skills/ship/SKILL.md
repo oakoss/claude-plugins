@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Publish the current branch as a pull request, or update its open pull request. Reviews and commits leftover work, runs the project's checks, closes the branch's finished tracker items, pushes, and writes the title and body from one template. Use when the user says "ship it", "let's ship", "ship", or "push it".
+description: Publish the current branch as a pull request, or update its open pull request. Reviews and commits leftover work, runs the project's checks, pushes, closes the branch's finished tracker items, and writes the title and body from one template. Use when the user says "ship it", "let's ship", "ship", or "push it".
 ---
 
 # Ship
@@ -46,7 +46,15 @@ Run only the merge when the count is above zero. On a conflict, stop with the me
 
 Then run the project's full checks: the commands its `AGENTS.md` or `CLAUDE.md` names for "done", else its pre-commit and CI configuration, else `package.json` scripts. Typically: the test suite, typecheck, lint, format check, and any validator or bump-file check the repository uses. Run each check unpiped and read its exit code: piped into `tail` or `head`, `$?` is that command's status, not the check's. For a long log, send it to a file (`<check> >| <log> 2>&1; echo $?`, where `>|` overwrites under `noclobber`) and read the file's end. On any failure, stop and show its output; shipping waits for a fix. Keep each command and the line it printed (counts, exit status): the body's Verification section is written from these, not from memory.
 
-## 4. Close finished tracker items
+## 4. Push
+
+```bash
+git push -u origin <branch>
+```
+
+A refused push ends the ship here, before any item is closed.
+
+## 5. Close finished tracker items
 
 List the work items the branch's commits name:
 
@@ -70,12 +78,6 @@ bd dolt push
 ```
 
 GitHub issues close themselves when the pull request merges. Other trackers close through their own integration; leave them to it.
-
-## 5. Push
-
-```bash
-git push -u origin <branch>
-```
 
 ## 6. Write the pull request
 
@@ -110,4 +112,4 @@ gh pr edit <number> --body-file <file>
 
 ## 7. Report
 
-The pull request URL, the items closed, and anything the checks or review left for the user. When a push was refused after items were closed, name those items so the user can reopen them. Merging is theirs to ask for.
+The pull request URL, the items closed, and anything the checks or review left for the user. Merging is theirs to ask for.
