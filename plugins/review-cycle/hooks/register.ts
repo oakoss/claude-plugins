@@ -2628,11 +2628,24 @@ function onConfigSet($: $, e: Input<ConfigHook>, next: NextOf<ConfigHook>): Retu
   if (e.origin?.kind !== 'composer') {
     return { deny: "review-cycle's settings are changed only by the user in /config." };
   }
-  if (e.key === 'review-cycle.nudge' && e.value === false && state.owed !== null) {
+  return e.key === 'review-cycle.nudge' ? nudgeSet($, e, next) : next(e);
+}
+
+// The local settings file can keep the nudge on whatever this value says, so
+// what is owed goes only when the nudge is off once every setting is read.
+async function nudgeSet(
+  $: $,
+  e: Input<ConfigHook>,
+  next: NextOf<ConfigHook>,
+): Promise<Output<ConfigHook>> {
+  const r = await next(e);
+  if (r.deny !== undefined) return r;
+  state.nudge = r.value !== false;
+  if (state.owed !== null && !(await nudgeWanted($))) {
     state.owed = null;
     showStatus($);
   }
-  return next(e);
+  return r;
 }
 
 async function withNote(

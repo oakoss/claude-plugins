@@ -2789,6 +2789,22 @@ describe('the review nudge', () => {
     await say($, 'thanks');
     expect(w.contexts ?? []).toEqual([]);
   });
+  test('turning the nudge off where the local file keeps it on keeps the reminder', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: nudge(true) } });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    await $.config.set({
+      key: 'review-cycle.nudge',
+      value: false,
+      previous: true,
+      provider: { plugin: 'review-cycle', tier: 'user' as const },
+      origin: { kind: 'composer' },
+    });
+    expect(w.statuses?.at(-1)).toContain('no reviewer has seen');
+    await say($, 'thanks');
+    expect(reminders(w)).toHaveLength(1);
+  });
   test('turning the nudge off and on again does not bring the old reminder back', async ($, on) => {
     const w = fakeWorld(on);
     await say($, 'fix it');
