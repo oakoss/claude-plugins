@@ -2,7 +2,14 @@
 // the refusals when they may not. Pure: what it needs from gh or the settings
 // comes through `GhLookups`, which register.ts builds.
 
-import { covers, NAMED_ELSEWHERE, type Grant, type HoldReason, type HoldStep } from './consent';
+import {
+  covers,
+  NAMED_ELSEWHERE,
+  type Grant,
+  type HoldReason,
+  type HoldStep,
+  type UnreadOffer,
+} from './consent';
 import type { GhAction, PushRef } from './github';
 import { asks, type Ladder, type Step } from './ladder';
 import {
@@ -112,20 +119,36 @@ function heldWhy(held: HoldReason): string {
     : `they put off ${step} the agent offered`;
 }
 
+// Why a reply granted nothing, when the refused step is one its offer named;
+// merging the version pull request is the release a merge offer covers.
+export function unreadFor(unread: UnreadOffer | null, step: HoldStep | 'commit'): string | null {
+  if (unread === null) return null;
+  const named =
+    unread.steps.includes(step) || (step === 'release' && unread.steps.includes('merge'));
+  return named ? unread.why : null;
+}
+
 // Why the user's latest message does not cover the step, the setting
-// included when its files could not be read.
-export function notAsked(what: string, ladder: InForce, holdable: boolean, held: Hold): string {
+// included when its files could not be read. `unread` is `unreadFor`'s reason.
+export function notAsked(
+  what: string,
+  ladder: InForce,
+  holdable: boolean,
+  held: Hold,
+  unread: string | null = null,
+): string {
+  const offer = unread === null ? '' : ` (${unread})`;
   const why =
     holdable && held !== null
       ? `the user held off (${heldWhy(held)}) and hasn't asked for ${what} since`
-      : `the user's latest message doesn't ask for ${what}`;
+      : `the user's latest message doesn't ask for ${what}${offer}`;
   return ladder.unreadable === undefined
     ? why
     : `could not read ${ladder.unreadable}, so the gate stops before every step, and ${why}`;
 }
 
-function prRefusal(shown: string, ladder: InForce, held: Hold): string {
-  return `${notAsked('a pull request', ladder, true, held)}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
+function prRefusal(shown: string, ladder: InForce, held: Hold, unread: UnreadOffer | null): string {
+  return `${notAsked('a pull request', ladder, true, held, unreadFor(unread, 'pr'))}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
 }
 
 // The branch oakum's version pull request comes from: merging it is the release.
@@ -307,12 +330,13 @@ function ghRefusal(
   ladder: InForce,
   always: string | null,
   held: Hold,
+  unread: UnreadOffer | null,
 ): string {
   const [what, naming, example] = GH_ASK[kind];
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
   const unreviewed =
     kind === 'push' ? ' It writes to GitHub directly, so no review covers it.' : '';
-  return `${notAsked(what, ladder, true, held)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
+  return `${notAsked(what, ladder, true, held, unreadFor(unread, kind))}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
 }
 
 // A refusal no model reading can lift is `final`; `notes` tell the agent what
@@ -332,6 +356,7 @@ export async function judgeGh(
   held: Hold,
   lookups: GhLookups,
   model: ModelSteps = {},
+  unread: UnreadOffer | null = null,
 ): Promise<GhVerdict> {
   const ran: Unasked[] = [];
   const notes: string[] = [];
@@ -341,12 +366,12 @@ export async function judgeGh(
   // Only a step the setting let through is noted as run unasked.
   const bySetting = permitted(granted, ladder, held !== null);
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
-    deny: ghRefusal(shown, kind, ladder, always, held),
+    deny: ghRefusal(shown, kind, ladder, always, held, unread),
   });
   for (const action of actions) {
     switch (action.kind) {
       case 'pr': {
-        if (!may.pr) return { deny: prRefusal(shown, ladder, held) };
+        if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
         if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         break;
       }

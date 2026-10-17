@@ -35,8 +35,10 @@ import {
   NO_GRANT,
   isReply,
   stepsNamed,
+  unreadOffer,
   type Grant,
   type HoldStep,
+  type UnreadOffer,
 } from './consent';
 import { askOf, judge, offerOf, RULES, type Judged, type ModelGrant } from './consent-model';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
@@ -45,6 +47,7 @@ import {
   askThem,
   judgeGh,
   notAsked,
+  unreadFor,
   parsePullRequest,
   permitted,
   PR_FIELDS,
@@ -194,6 +197,8 @@ type Message = {
   nudged: boolean;
   // Legs spawned while review-pr runs review a PR worktree, not this tree.
   prWindow: boolean;
+  // Why the reply granted nothing the agent's offer named, for refusals.
+  unread: UnreadOffer | null;
 };
 
 type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
@@ -259,7 +264,7 @@ const state: GateState = {
   reviews: [],
   legs: new Map(),
   // No message yet, so nothing to nudge about.
-  message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false },
+  message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false, unread: null },
   owed: null,
   messages: 0,
   lastAnswer: '',
@@ -470,7 +475,7 @@ async function recall($: $): Promise<void> {
       );
       state.reviews = kept.reviews;
       state.legs = legs;
-      state.message = { ...kept.message, grant: NO_GRANT };
+      state.message = { ...kept.message, grant: NO_GRANT, unread: null };
       state.messages = kept.messages;
       state.lastAnswer = kept.lastAnswer;
       state.misses = kept.misses;
@@ -614,7 +619,7 @@ const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
 const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
 const _keptHold: Equal<Hold, Kept['held']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
-const _keptMessage: Equal<Omit<Message, 'grant'>, Kept['message']> = true;
+const _keptMessage: Equal<Omit<Message, 'grant' | 'unread'>, Kept['message']> = true;
 const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -864,6 +869,7 @@ async function onPromptSubmit(
     // What a held message asks for still runs: "push it; don't open a PR yet".
     state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
     const grant = grantOf(e.text, state.lastAnswer);
+    const unread = unreadOffer(e.text, state.lastAnswer);
     const hold = holdOf(e.text, state.lastAnswer);
     if (hold !== null) state.held = hold;
     else if (liftsHold(grant)) state.held = null;
@@ -872,6 +878,8 @@ async function onPromptSubmit(
     if (e.turnId !== undefined) {
       const drops = dropsGrant(e.text, state.lastAnswer);
       state.message.grant = drops ? grant : combine(state.message.grant, grant);
+      // A retraction takes the reason with the yes it explained.
+      state.message.unread = drops ? null : (state.message.unread ?? unread);
       // An owed reminder already covers this turn's changes.
       state.message.nudged = state.owed !== null;
     } else {
@@ -888,7 +896,7 @@ async function onPromptSubmit(
       // A slash command may never reach the agent, so the reminder waits for
       // the next message; typing the review skill is the review itself.
       const waits = owed !== null && e.command !== undefined && !reviews;
-      state.message = { grant, tree, nudged: waits || reviews, prWindow: false };
+      state.message = { grant, tree, nudged: waits || reviews, prWindow: false, unread };
       if (owed === null || waits) return next(e);
       const reminder = reviews ? null : await reminderFor($, owed.since, tree);
       const r = await next(
@@ -1326,7 +1334,15 @@ async function onGithubTool(
   const message = state.messages;
   const shown = shownCall(e.tool, e);
   const granted = state.message.grant;
-  const first = await judgeGh(shown, [action], granted, state.held, ghLookups($));
+  const first = await judgeGh(
+    shown,
+    [action],
+    granted,
+    state.held,
+    ghLookups($),
+    {},
+    state.message.unread,
+  );
   const { gh, yes } =
     'deny' in first && !first.final
       ? await ghWithModel($, shown, [action], granted, first)
@@ -1592,7 +1608,15 @@ async function ghWithModel(
   const second = actions.length > 0 ? await secondRead($) : null;
   if (second === null) return { gh: first, yes: null };
   if ('why' in second) return { gh: { deny: first.deny + couldNotJudge(second.why) }, yes: null };
-  const gh = await judgeGh(shown, actions, granted, state.held, ghLookups($), second.steps);
+  const gh = await judgeGh(
+    shown,
+    actions,
+    granted,
+    state.held,
+    ghLookups($),
+    second.steps,
+    state.message.unread,
+  );
   return { gh, yes: 'deny' in gh ? null : second };
 }
 
@@ -1612,7 +1636,15 @@ async function judgeBash(
   if (cls.kind === 'none') {
     const actions = ghActions(e.command, state.shellAliases);
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
-    const first = await judgeGh(quote(e.command), actions, granted, state.held, ghLookups($));
+    const first = await judgeGh(
+      quote(e.command),
+      actions,
+      granted,
+      state.held,
+      ghLookups($),
+      {},
+      state.message.unread,
+    );
     const { gh, yes } =
       'deny' in first && !first.final
         ? await ghWithModel($, quote(e.command), actions, granted, first)
@@ -1962,7 +1994,7 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
     finishes === null
       ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
       : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
-  return `${notAsked('a commit', ladder, false, state.held)}${setting}, so nothing ran. ${ask}`;
+  return `${notAsked('a commit', ladder, false, state.held, unreadFor(state.message.unread, 'commit'))}${setting}, so nothing ran. ${ask}`;
 }
 
 // How long the user waits on a gh read before the step asks.
@@ -2080,9 +2112,9 @@ function pushRefusal(
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
       if (always === DELETES) {
-        return `${notAsked('a push', ladder, true, state.held)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
+        return `${notAsked('a push', ladder, true, state.held, unreadFor(state.message.unread, 'push'))}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
       }
-      return `${notAsked('a push', ladder, true, state.held)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+      return `${notAsked('a push', ladder, true, state.held, unreadFor(state.message.unread, 'push'))}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {
       const unhandled: never = missing;
