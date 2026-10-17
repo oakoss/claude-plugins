@@ -9,6 +9,7 @@ import {
   liftsHold,
   NAMED_ELSEWHERE,
   NO_GRANT,
+  unreadOffer,
   VERB_FORMS,
 } from './consent';
 
@@ -1687,5 +1688,103 @@ describe('finishing a history command', () => {
     expect(grantOf(reply)).toEqual(NONE);
     expect(grantOf(reply, 'Should I push `fix/x`?')).toEqual(NONE);
     expect(grantOf(reply, 'Should I commit it?')).toEqual(NONE);
+  });
+});
+
+const after = (sentence: string) =>
+  `their yes answered an offer held by a condition word in a sentence after its question ("${sentence}"); ask again with any explanation before the question`;
+const inQuestion = (sentence: string) =>
+  `their yes answered an offer whose question sets a condition ("${sentence}"); ask again once it is met, or without it`;
+
+describe('why a yes to an offer granted nothing', () => {
+  test.each([
+    [
+      'Should I squash-merge #3, then #4? They touch different files, so neither needs a rebase after the other merges.',
+      after('They touch different files, so neither needs a rebase after the other merges.'),
+      ['merge'],
+    ],
+    ['Should I push? After that, CI will run.', after('After that, CI will run.'), ['push']],
+    ['Should I commit? After that, CI will run.', after('After that, CI will run.'), ['commit']],
+    [
+      'Should I go ahead with committing? After that, CI will run.',
+      after('After that, CI will run.'),
+      ['commit'],
+    ],
+    // "commits" names no commit step.
+    [
+      'Should I push? It has 3 commits. After that, CI will run.',
+      after('After that, CI will run.'),
+      ['push'],
+    ],
+    [
+      'Should I merge #130, if the tests pass?',
+      inQuestion('Should I merge #130, if the tests pass?'),
+      ['merge'],
+    ],
+    // A later question is still the offer's, and its own words are quoted.
+    [
+      'Does the push look right? Should I merge #130, if tests pass?',
+      inQuestion('Should I merge #130, if tests pass?'),
+      ['push', 'merge'],
+    ],
+    [
+      'Should I push `fix/x` once CI passes?',
+      inQuestion('Should I push `fix/x` once CI passes?'),
+      ['push'],
+    ],
+    // A period inside backticks splits the raw text apart, so the read sentence is quoted.
+    [
+      'Should I push `v1.2. x` once CI passes?',
+      inQuestion('Should I push it once CI passes?'),
+      ['push'],
+    ],
+    [
+      'Do you like #1 (the bug fix)? Should I merge #3 (rust 1.99.1)?',
+      'their yes answered an offer with a note in parentheses beside a pull request (#1 (the bug fix), #3 (rust 1.99.1)), which keeps a yes from granting it; ask again without notes',
+      ['merge'],
+    ],
+    // The condition holds first, so a note in another alternative is not blamed.
+    [
+      'Should I merge #3, or would you rather review #4 (docs fix)? After that, CI will run.',
+      after('After that, CI will run.'),
+      ['merge'],
+    ],
+    [
+      'Merge #3 (rust 1.99.1) and then #4 (jdx/mise-action v5.2.0)?',
+      'their yes answered an offer with a note in parentheses beside a pull request (#3 (rust 1.99.1), #4 (jdx/mise-action v5.2.0)), which keeps a yes from granting it; ask again without notes',
+      ['merge'],
+    ],
+  ])('a yes to %j names why', (offer, why, steps) => {
+    expect(unreadOffer('yes', offer)).toEqual({ why, steps });
+    expect(unreadOffer('Ok, lets do that', offer)).toEqual({ why, steps });
+  });
+  test.each([
+    ['yes', 'Should I merge #130?'],
+    ['yes', 'If that looks right, should I push?'],
+    ['yes', 'Looks good.'],
+    ['yes', ''],
+    ['merge it later', 'Should I push? After that, CI will run.'],
+    ['what do you think?', 'Should I push?'],
+    // Only a yes is read against the offer: a narrowing, a decline, a question
+    // back or other work names nothing.
+    ['yes, but not #4', 'Should I merge #3, then #4?'],
+    ['skip #3', 'Should I merge #3?'],
+    ['is #3 green?', 'Should I merge #3?'],
+    ['no', 'Should I merge #3?'],
+    ['no thanks', 'Should I merge #3?'],
+    ["don't merge", 'Should I merge #3?'],
+    ['never mind', 'Should I merge #3? After that, CI will run.'],
+    ['which one?', 'Should I merge #3, then #4?'],
+    ['fix the parser first', 'Should I merge #3?'],
+    ['what about the tests?', 'Should I push the fix for #3?'],
+    // A note whose removal still grants nothing is not what held the offer.
+    ['yes', 'Merge #3 (rust 1.99.1), or would you rather do it?'],
+    ['yes', 'Should I push the fix for #3 (the crash)?'],
+    // A yes that grants a step needs no reason.
+    ['yes', 'Should I push and comment on #3 (the bug report)?'],
+    ['yes', 'Should I merge the fix for #3 when CI passes?'],
+    ['yes', 'Should I push the fix for #3, if that looks right?'],
+  ])('%j after %j names nothing', (reply, offer) => {
+    expect(unreadOffer(reply, offer)).toBeNull();
   });
 });

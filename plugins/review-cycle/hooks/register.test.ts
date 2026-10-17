@@ -4241,6 +4241,83 @@ describe('the stop-before setting', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
   });
+  test('a refused yes names the sentence that held the offer', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await endTurn(
+      $,
+      'answer',
+      'Should I squash-merge #3, then #4? They touch different files, so neither needs a rebase after the other merges.',
+    );
+    await say($, 'Ok, lets do that');
+    const r = await bash($, 'gh pr merge 3 --squash');
+    expect(denied(r, 'held by a condition word in a sentence after its question')).toBe(true);
+    expect(denied(r, '"They touch different files')).toBe(true);
+    const viaMcp = await mcp($, 'mcp__github__merge_pull_request', {
+      owner: 'o',
+      repo: 'r',
+      pullNumber: 3,
+    });
+    expect(denied(viaMcp, '"They touch different files')).toBe(true);
+    // A prompt queued into the turn keeps the reason; a later message drops it.
+    await queue($, 'also update the docs');
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), '"They touch')).toBe(true);
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), 'held by a condition')).toBe(false);
+  });
+  test('a refused yes names its reason only for the steps the offer named', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('pr') }, git: github('fix/x') });
+    await endTurn($, 'answer', 'Should I open a PR? After that, CI will run.');
+    await say($, 'yes');
+    expect(denied(await bash($, 'gh pr create --fill'), '("After that, CI will run.")')).toBe(true);
+    const merge = await bash($, 'gh pr merge 3 --squash');
+    expect(denied(merge, "doesn't ask for a merge")).toBe(true);
+    expect(denied(merge, 'After that')).toBe(false);
+  });
+  test('a queued retraction drops the reason with the yes', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await endTurn($, 'answer', 'Should I merge #3? After that, CI will run.');
+    await say($, 'yes');
+    await queue($, 'never mind');
+    const r = await bash($, 'gh pr merge 3 --squash');
+    expect(denied(r, "doesn't ask for a merge")).toBe(true);
+    expect(denied(r, '(their')).toBe(false);
+  });
+  test('a queued yes to an offer the gate cannot read gets its reason', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    await endTurn($, 'answer', 'Should I merge #3? After that, CI will run.');
+    await queue($, 'yes');
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), '("After that, CI will run.")')).toBe(
+      true,
+    );
+  });
+  test('a merge offer the gate cannot read names its reason on the release it is', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await endTurn($, 'answer', 'Should I merge #62? After that, CI will run.');
+    await say($, 'yes');
+    expect(denied(await bash($, 'gh pr merge 62'), '("After that, CI will run.")')).toBe(true);
+  });
+  test("a merge offer's reason stays off a push it never offered", async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('push') }, git: remoteSide({}) }));
+    await endTurn($, 'answer', 'Should I merge #3? After that, CI will run.');
+    await say($, 'yes');
+    const r = await bash($, 'git push origin fix/x');
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(r, '(their')).toBe(false);
+  });
+  test('a refused yes to a push or a commit names the condition too', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('commit') }, git: remoteSide({}) }));
+    await review($);
+    await endTurn($, 'answer', 'Should I commit and push? After that, CI will run.');
+    await say($, 'yes');
+    expect(denied(await bash($, 'git commit -am x'), '("After that, CI will run.")')).toBe(true);
+    expect(denied(await bash($, 'git push origin fix/x'), '("After that, CI will run.")')).toBe(
+      true,
+    );
+    expect(
+      denied(await bash($, 'git push origin --delete old'), '("After that, CI will run.")'),
+    ).toBe(true);
+  });
   test('a yes to a squash-merge offer listing pull requests in turn merges each', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Squash-merge #3, then #4?');

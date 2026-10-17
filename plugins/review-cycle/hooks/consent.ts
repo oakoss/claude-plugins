@@ -1097,19 +1097,36 @@ function chosen(question: string): string {
 
 // Read on the raw words, before a rewrite can split a condition from its question.
 function conditional(closing: string): boolean {
-  const said = sentences(closing.replaceAll(/`[^`\n]*`/g, 'it').replaceAll('\n', ' '));
-  const first = said.findIndex((s) => s.trim().endsWith('?'));
-  return (
-    first !== -1 &&
-    said
-      .slice(first)
-      // Only the question itself asks for a merge once ready; a condition after it waits on the work.
-      .some((s) =>
-        OFFER_CONDITION.test(
-          (s.trim().endsWith('?') ? s.replace(READY_MERGE, '$1') : s).replace(APPROVAL, ''),
-        ),
-      )
+  return conditionIn(closing) !== null;
+}
+
+// The offer's sentences from its first question on, as `conditional` reads
+// them, and as the agent wrote them when the two split alike.
+function offerSentences(closing: string): { read: string[]; raw: string[] } | null {
+  const read = sentences(closing.replaceAll(/`[^`\n]*`/g, 'it').replaceAll('\n', ' '));
+  const first = read.findIndex((s) => s.trim().endsWith('?'));
+  if (first === -1) return null;
+  const raw = sentences(closing.replaceAll('\n', ' '));
+  return {
+    read: read.slice(first),
+    raw: raw.length === read.length ? raw.slice(first) : read.slice(first),
+  };
+}
+
+// The sentence whose condition holds the offer, as the agent wrote it; null when none does.
+function conditionIn(closing: string): { sentence: string; question: boolean } | null {
+  const offer = offerSentences(closing);
+  if (offer === null) return null;
+  // Only the question itself asks for a merge once ready; a condition after it waits on the work.
+  const at = offer.read.findIndex((s) =>
+    OFFER_CONDITION.test(
+      (s.trim().endsWith('?') ? s.replace(READY_MERGE, '$1') : s).replace(APPROVAL, ''),
+    ),
   );
+  const sentence = offer.raw[at];
+  return sentence === undefined
+    ? null
+    : { sentence: sentence.trim(), question: sentence.trim().endsWith('?') };
 }
 
 // The answer's last three lines, which an offer is read from.
@@ -1119,6 +1136,43 @@ export const closingOf = (answer: string): string =>
 // What a yes grants: what the offer named, unless it set a condition a yes does not meet.
 function accepted(answer: string, heard?: Set<Family>): Grant {
   return conditional(closingOf(answer)) ? settled(fresh()) : asked(answer, heard);
+}
+
+export type UnreadOffer = Readonly<{ why: string; steps: readonly (HoldStep | 'commit')[] }>;
+
+const NOTE = /(#\d+)\s*\([^()\n]*\)/g;
+
+// Why a yes to the agent's offer granted nothing, and the steps it offered,
+// for their refusals to name so the agent asks again in words the grammar
+// reads; null when nothing explains it.
+export function unreadOffer(reply: string, previousAnswer: string): UnreadOffer | null {
+  if (!isReply(reply) || asksAny(grantOf(reply, previousAnswer))) return null;
+  const closing = closingOf(previousAnswer);
+  const offer = offerSentences(closing);
+  if (offer === null) return null;
+  const offered = offer.read.join(' ');
+  const steps = [
+    ...stepsNamed(offered),
+    ...(/\bcommit(?:ting)?\b/i.test(offered) ? (['commit'] as const) : []),
+  ];
+  if (steps.length === 0) return null;
+  // Checked in the order `accepted` reads them: a condition withholds first.
+  const held = conditionIn(closing);
+  if (held !== null) {
+    const why = held.question
+      ? `their yes answered an offer whose question sets a condition ("${held.sentence}"); ask again once it is met, or without it`
+      : `their yes answered an offer held by a condition word in a sentence after its question ("${held.sentence}"); ask again with any explanation before the question`;
+    return { why, steps };
+  }
+  const notes = offered.match(NOTE) ?? [];
+  // Only notes whose removal lets the yes grant are what held it.
+  if (notes.length > 0 && asksAny(grantOf(reply, previousAnswer.replaceAll(NOTE, '$1')))) {
+    return {
+      why: `their yes answered an offer with a note in parentheses beside a pull request (${notes.join(', ')}), which keeps a yes from granting it; ask again without notes`,
+      steps,
+    };
+  }
+  return null;
 }
 
 // The verbs the previous answer's closing questions offered to do.
