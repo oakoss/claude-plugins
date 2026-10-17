@@ -803,9 +803,8 @@ async function onSessionStart(
   await registerLedger($);
   await registerScratch($);
   await registerCodexLog($);
-  // A reload forgets what was owed, so the line promising a reminder goes too.
+  // A new session owes no reminder for an old one's turns.
   state.owed = null;
-  showStatus($);
   if (!state.gateOn) {
     // Nothing the gate kept before it was switched off holds once it is back on.
     try {
@@ -897,10 +896,7 @@ async function onPromptSubmit(
       );
       // Consumed once the prompt is accepted, and only if nothing has since
       // replaced or retired it: a refused or failed prompt leaves it owed.
-      if (!('drop' in r && r.drop !== undefined) && state.owed === owed) {
-        state.owed = null;
-        showStatus($);
-      }
+      if (!('drop' in r && r.drop !== undefined) && state.owed === owed) state.owed = null;
       return r;
     }
   }
@@ -939,15 +935,6 @@ async function reminderFor($: $, since: string, tree: string | null): Promise<st
   }
 }
 
-// Without text, clears the line.
-function showStatus($: $, text?: string): void {
-  try {
-    $.ui.status(text);
-  } catch {
-    // The reminder does not depend on the line.
-  }
-}
-
 // The nudge as the settings set it. A file that cannot be read sets nothing,
 // so the others decide: the nudge only prompts a review.
 async function nudgeWanted($: $): Promise<boolean> {
@@ -980,36 +967,25 @@ async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<vo
     for (const [id, leg] of pending) if (!live.has(id)) leg.done = true;
     if (pending.some(([, leg]) => !leg.done)) return;
   }
-  // A turn git cannot check still owes a reminder, which the next prompt
-  // rebuilds or reports as unchecked.
-  let unreviewed: number | null = null;
-  // Counted from where the reminder will measure, an older one's tree if owed.
+  // Checked from where the reminder will measure, an older one's tree if owed.
   const owedAtStart = state.owed;
   const from = owedAtStart?.since ?? since;
   try {
     const tree = await worktreeTree(gitOf($), root.top);
     if (tree === since) return;
-    const c = await unreviewedSince($, root.top, from, tree);
-    if (c === null) return;
-    unreviewed = uncoveredOf(c.rows).length;
+    if ((await unreviewedSince($, root.top, from, tree)) === null) return;
   } catch {
-    unreviewed = null;
+    // A turn git cannot check still owes a reminder, which the next prompt
+    // rebuilds or reports as unchecked.
   }
   if (!(await nudgeWanted($))) return;
   // A prompt that arrived meanwhile started from a tree holding these changes,
   // so the reminder is still owed and the next prompt carries it, unless that
-  // prompt reviewed them or settled what was owed when this count began.
+  // prompt reviewed them or settled what was owed when this check began.
   if (state.message !== message && (state.message.nudged || state.owed !== owedAtStart)) return;
   if (state.message === message) message.nudged = true;
   // An older reminder still owed measures from further back, so it stays.
   state.owed ??= { since };
-  const n = unreviewed;
-  showStatus(
-    $,
-    n === null
-      ? 'review-cycle: this turn could not be checked; your next message checks again'
-      : `review-cycle: ${n} ${n === 1 ? 'file' : 'files'} no reviewer has seen; your next message asks Claude to review`,
-  );
 }
 
 function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {
@@ -1018,10 +994,7 @@ function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType
     state.message.prWindow = false;
     // A review already under way needs no reminder to start one.
     state.message.nudged = true;
-    if (state.owed !== null) {
-      state.owed = null;
-      showStatus($);
-    }
+    state.owed = null;
   }
   return next(e);
 }
@@ -2641,10 +2614,7 @@ async function nudgeSet(
   const r = await next(e);
   if (r.deny !== undefined) return r;
   state.nudge = r.value !== false;
-  if (state.owed !== null && !(await nudgeWanted($))) {
-    state.owed = null;
-    showStatus($);
-  }
+  if (state.owed !== null && !(await nudgeWanted($))) state.owed = null;
   return r;
 }
 

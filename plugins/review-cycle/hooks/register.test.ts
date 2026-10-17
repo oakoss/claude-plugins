@@ -2469,13 +2469,15 @@ function nudge(value: boolean) {
   return { pluginConfigs: { 'review-cycle': { options: { nudge: value } } } };
 }
 
-// The status lines announcing a reminder, one per nudge.
-function nudges(w: World): string[] {
-  return (w.statuses ?? []).filter((s): s is string => s?.startsWith('review-cycle:') === true);
-}
-
 function reminders(w: World): string[] {
   return (w.contexts ?? []).filter((c) => c.startsWith('review-cycle: your last turn left'));
+}
+
+// Sends the next message and returns the reminders it carried.
+async function nudges($: any, w: World): Promise<string[]> {
+  const before = reminders(w).length;
+  await say($, 'thanks');
+  return reminders(w).slice(before);
 }
 
 async function endTurn($: any, reason = 'answer', answer = 'done') {
@@ -2510,17 +2512,14 @@ describe('the review nudge', () => {
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toEqual([
-      'review-cycle: 1 file no reviewer has seen; your next message asks Claude to review',
-    ]);
     w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
     expect(w.prompts).toEqual(['fix it']);
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
     expect(reminders(w)[0]).toContain('/review-cycle:review');
-    expect(w.statuses?.at(-1)).toBeUndefined();
+    // The reminder is the agent's alone: nothing shows on the user's screen.
+    expect(w.statuses ?? []).toEqual([]);
   });
   test('the reminder is built when the prompt is sent', async ($, on) => {
     const w = fakeWorld(on);
@@ -2539,7 +2538,6 @@ describe('the review nudge', () => {
     w.settings = { local: nudge(false) };
     await say($, 'thanks');
     expect(reminders(w)).toEqual([]);
-    expect(w.statuses?.at(-1)).toBeUndefined();
   });
   test('a slash command leaves the reminder for the next message', async ($, on) => {
     const w = fakeWorld(on);
@@ -2553,9 +2551,7 @@ describe('the review nudge', () => {
       command: { name: 'config', args: '' },
     });
     expect(reminders(w)).toEqual([]);
-    expect(w.statuses?.at(-1)).toContain('no reviewer has seen');
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
   });
@@ -2570,7 +2566,6 @@ describe('the review nudge', () => {
       wait: false,
       command: { name: 'review-cycle:review', args: '' },
     });
-    expect(w.statuses?.at(-1)).toBeUndefined();
     await say($, 'thanks');
     expect(reminders(w)).toEqual([]);
   });
@@ -2581,7 +2576,6 @@ describe('the review nudge', () => {
     await endTurn($);
     await say($, 'refuse me');
     expect(reminders(w)).toEqual([]);
-    expect(w.statuses?.at(-1)).toContain('no reviewer has seen');
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
   });
@@ -2607,21 +2601,6 @@ describe('the review nudge', () => {
     w.fail = (a) => a.includes('diff-tree');
     await say($, 'thanks');
     expect(w.contexts).toEqual([expect.stringContaining('could not check whether your last turn')]);
-    expect(w.statuses?.at(-1)).toBeUndefined();
-  });
-  test('turning the nudge off in /config clears the status line', async ($, on) => {
-    const w = fakeWorld(on);
-    await say($, 'fix it');
-    w.work = { 'a.ts': 'two' };
-    await endTurn($);
-    await $.config.set({
-      key: 'review-cycle.nudge',
-      value: false,
-      previous: true,
-      provider: { plugin: 'review-cycle', tier: 'user' as const },
-      origin: { kind: 'composer' },
-    });
-    expect(w.statuses?.at(-1)).toBeUndefined();
   });
   test('a slash command does not move the reminder past changes made after it', async ($, on) => {
     const w = fakeWorld(on);
@@ -2636,7 +2615,6 @@ describe('the review nudge', () => {
     });
     w.work = { 'a.ts': 'two', 'b.ts': 'x' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
     await say($, 'thanks');
     expect(reminders(w)).toEqual([expect.stringContaining('a.ts')]);
     expect(reminders(w)[0]).toContain('b.ts');
@@ -2649,7 +2627,7 @@ describe('the review nudge', () => {
     await queue($, 'also this');
     w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('a nudge turned off sends nothing even when the tree cannot be read', async ($, on) => {
     const w = fakeWorld(on);
@@ -2672,7 +2650,6 @@ describe('the review nudge', () => {
       wait: false,
       command: { name: 'review-cycle:review', args: '' },
     });
-    expect(w.statuses?.at(-1)).toContain('no reviewer has seen');
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
   });
@@ -2682,12 +2659,61 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     w.fail = (a) => a.includes('diff-tree');
     await endTurn($);
-    expect(w.statuses?.at(-1)).toBe(
-      'review-cycle: this turn could not be checked; your next message checks again',
-    );
     w.fail = () => false;
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
+  });
+  test('a turn whose tree git cannot read still owes a reminder', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    w.fail = (a) => a === 'git add -A';
+    await endTurn($);
+    w.fail = () => false;
+    expect(await nudges($, w)).toEqual([expect.stringContaining('a.ts')]);
+  });
+  test('a turn git still cannot check at the next prompt says so', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    w.fail = (a) => a.includes('diff-tree');
+    await endTurn($);
+    await say($, 'thanks');
+    expect(w.contexts).toEqual([expect.stringContaining('could not check whether your last turn')]);
+  });
+  test('reviewed changes owe nothing even when the next prompt cannot check', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await review($);
+    await endTurn($);
+    w.fail = (a) => a.includes('diff-tree');
+    await say($, 'thanks');
+    expect(w.contexts ?? []).toEqual([]);
+  });
+  test('a nudge off when the turn ends owes nothing once it is back on', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: nudge(false) } });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    w.settings = { local: nudge(true) };
+    expect(await nudges($, w)).toEqual([]);
+  });
+  test('a message is nudged once, even after the nudge is turned off and on', async ($, on) => {
+    const w = fakeWorld(on);
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    await endTurn($);
+    const change = {
+      key: 'review-cycle.nudge',
+      provider: { plugin: 'review-cycle', tier: 'user' as const },
+      origin: { kind: 'composer' as const },
+    };
+    await $.config.set({ ...change, value: false, previous: true });
+    await $.config.set({ ...change, value: true, previous: false });
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('a prompt sent while the nudge is being decided still carries it', async ($, on) => {
     let sent = false;
@@ -2703,7 +2729,6 @@ describe('the review nudge', () => {
     await endTurn($);
     await say($, 'thanks');
     // The two prompts overlap, so either may carry it, or both.
-    expect(w.statuses?.at(-1)).toBeUndefined();
     expect(reminders(w).length).toBeGreaterThan(0);
   });
   test('a prompt that overtakes the nudge leaves the reminder to the next one', async ($, on) => {
@@ -2718,16 +2743,10 @@ describe('the review nudge', () => {
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
     await say($, 'thanks');
     expect(reminders(w)).toEqual([expect.stringContaining('a.ts')]);
   });
-  test('a new session clears a status line no reminder backs', async ($, on) => {
-    const w = fakeWorld(on);
-    await ($ as any).session.start({ source: 'startup' });
-    expect(w.statuses).toEqual([undefined]);
-  });
-  test('a review that overtakes the nudge leaves no status line', async ($, on) => {
+  test('a review that overtakes the nudge owes no reminder', async ($, on) => {
     let overtaken = false;
     const w = fakeWorld(on, {
       settingsRead: async () => {
@@ -2744,7 +2763,7 @@ describe('the review nudge', () => {
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('a prompt that overtakes and consumes the older reminder arms no second one', async ($, on) => {
     let armed = false;
@@ -2766,9 +2785,8 @@ describe('the review nudge', () => {
     await endTurn($);
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
-    expect(w.statuses?.at(-1)).toBeUndefined();
   });
-  test('the status line counts from where an older reminder measures', async ($, on) => {
+  test('the reminder measures from where an older owed one began', async ($, on) => {
     const w = fakeWorld(on, { dropText: 'refuse me' });
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
@@ -2776,9 +2794,9 @@ describe('the review nudge', () => {
     await say($, 'refuse me');
     w.work = { 'a.ts': 'two', 'b.ts': 'x' };
     await endTurn($);
-    expect(w.statuses?.at(-1)).toBe(
-      'review-cycle: 2 files no reviewer has seen; your next message asks Claude to review',
-    );
+    const sent = await nudges($, w);
+    expect(sent).toEqual([expect.stringContaining('a.ts')]);
+    expect(sent[0]).toContain('b.ts');
   });
   test('a new session forgets the reminder the last one owed', async ($, on) => {
     const w = fakeWorld(on);
@@ -2801,7 +2819,6 @@ describe('the review nudge', () => {
       provider: { plugin: 'review-cycle', tier: 'user' as const },
       origin: { kind: 'composer' },
     });
-    expect(w.statuses?.at(-1)).toContain('no reviewer has seen');
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
   });
@@ -2830,13 +2847,12 @@ describe('the review nudge', () => {
     await say($, 'thanks');
     expect(reminders(w)).toHaveLength(1);
   });
-  test('a review started before the next prompt clears the status line', async ($, on) => {
+  test('a review started before the next prompt clears the reminder', async ($, on) => {
     const w = fakeWorld(on);
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
     await skill($, 'review-cycle:review');
-    expect(w.statuses?.at(-1)).toBeUndefined();
     await say($, 'thanks');
     expect(reminders(w)).toEqual([]);
   });
@@ -2845,36 +2861,39 @@ describe('the review nudge', () => {
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($, 'answer', 'Fixed. Commit the changes to `fix/x`?');
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
+    w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test("a project's settings turn the nudge off; the local file decides", async ($, on) => {
     const w = fakeWorld(on, { settings: { project: nudge(false) } });
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
     w.settings = { project: nudge(false), local: nudge(true) };
+    w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('a settings file that cannot be read sets nothing', async ($, on) => {
     const w = fakeWorld(on, { settings: { project: 'throw' } });
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('one unreadable file leaves the other one in force', async ($, on) => {
     const w = fakeWorld(on, { settings: { project: 'throw', local: nudge(false) } });
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
     w.settings = { project: nudge(false), local: 'throw' };
+    w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('a nudge value that is not a boolean sets nothing', async ($, on) => {
     const w = fakeWorld(on, {
@@ -2883,7 +2902,7 @@ describe('the review nudge', () => {
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('a turn with nothing to nudge reads no settings', async ($, on) => {
     let reads = 0;
@@ -2908,7 +2927,7 @@ describe('the review nudge', () => {
     const w = fakeWorld(on);
     await say($, 'what is next?');
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('reviewed changes are not nudged', async ($, on) => {
     const w = fakeWorld(on);
@@ -2916,7 +2935,7 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await review($);
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('an edit after a finished review is nudged', async ($, on) => {
     const w = fakeWorld(on);
@@ -2925,7 +2944,7 @@ describe('the review nudge', () => {
     await review($);
     w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('no nudge while a reviewer is still running', async ($, on) => {
     const w = fakeWorld(on, { agents: [{ id: 'leg-running', status: 'running' }] });
@@ -2933,7 +2952,7 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await startLeg($);
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('a reviewer that ended without saying so does not hold the nudge off', async ($, on) => {
     const w = fakeWorld(on, { agents: [{ id: 'leg-running', status: 'killed' }] });
@@ -2941,7 +2960,7 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await startLeg($);
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('a review the agent or user already started is not nudged', async ($, on) => {
     const w = fakeWorld(on);
@@ -2949,7 +2968,7 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await $.tool.call({ tool: 'Skill', skill: 'review-cycle:review' });
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test("a subagent's review does not stand in for the main loop's", async ($, on) => {
     const w = fakeWorld(on);
@@ -2957,7 +2976,7 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await skill($, 'review-cycle:review', 'sub');
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('a prompt queued mid-turn keeps the turn’s starting tree', async ($, on) => {
     const w = fakeWorld(on);
@@ -2970,7 +2989,7 @@ describe('the review nudge', () => {
       turnId: 'main',
     });
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toHaveLength(1);
   });
   test('a reviewer whose start could not be recorded still holds the nudge off', async ($, on) => {
     let spawning = false;
@@ -2984,7 +3003,7 @@ describe('the review nudge', () => {
     await startLeg($);
     spawning = false;
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('the reminder names only what the turn changed', async ($, on) => {
     const w = fakeWorld(on);
@@ -3001,7 +3020,7 @@ describe('the review nudge', () => {
     await say($, 'update the tracker');
     w.work = { 'a.ts': 'one', '.beads/issues.jsonl': 'x' };
     await endTurn($);
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('each user message is judged from its own starting tree', async ($, on) => {
     const w = fakeWorld(on);
@@ -3009,15 +3028,16 @@ describe('the review nudge', () => {
     w.work = { 'a.ts': 'two' };
     await endTurn($);
     await say($, 'what is next?');
+    expect(reminders(w)).toHaveLength(1);
     await endTurn($);
-    expect(nudges(w)).toHaveLength(1);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('an interrupted turn is not nudged', async ($, on) => {
     const w = fakeWorld(on);
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($, 'aborted');
-    expect(nudges(w)).toEqual([]);
+    expect(await nudges($, w)).toEqual([]);
   });
   test('the next user message allows another nudge', async ($, on) => {
     const w = fakeWorld(on);
@@ -3027,7 +3047,8 @@ describe('the review nudge', () => {
     await say($, 'and the other one');
     w.work = { 'a.ts': 'three' };
     await endTurn($);
-    expect(nudges(w)).toHaveLength(2);
+    expect(await nudges($, w)).toHaveLength(1);
+    expect(reminders(w)).toHaveLength(2);
   });
 });
 
