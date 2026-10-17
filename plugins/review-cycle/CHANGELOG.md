@@ -4,6 +4,28 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.32.0 (2026-10-17)
+
+### Added
+
+The review nudge no longer submits a visible prompt turn when a turn ends with changes no reviewer has seen. Instead your next message carries a reminder the agent reads but you do not see, telling it to run `/review-cycle:review` first unless that message says not to review or answers a question it asked; nothing shows on your screen. The reminder is built when you send, from what is still unreviewed then, so a review started in between leaves nothing to remind. A slash command, a message typed while the agent is working, or one another hook refuses leaves it for your next message. When git fails while checking a finished turn, your next message checks again; if git still cannot, the reminder says so. The review may now wait until you next write, rather than starting on its own. `review-cycle.nudge` in `/config` still turns it off.
+
+### Fixed
+
+`/review-cycle:review` and `/review-cycle:review-pr` no longer tell the model to pass `run_in_background: true` when spawning reviewer subagents. Claude Code 2.1.302 dropped that field from the Agent tool, whose subagents run in the background by default; the Codex leg's Bash launch still passes it.
+
+The settings guard no longer refuses `claude plugin install …` because the command also names a settings file. It counted the subcommand `install` as a program that writes files, so a test install checked in the same command, such as `CLAUDE_CONFIG_DIR=<dir>/claude claude plugin install x && cat <dir>/.claude/settings.local.json`, was refused with "review-cycle is switched on and off only by the user". A `claude` command's arguments no longer count as writers; its redirects still do, and disabling or removing a plugin is refused as before.
+
+Reviewer legs now keep more of their work inside their own scratch directory. Each reviewer agent makes that directory with `D=$(mktemp -d …) && cd "$D" && …` and stops when `mktemp` fails, where a leg once carried on and wrote its files into the repository under review; it never falls back to a fixed path like `/tmp/x` either. Legs spell that directory's path out in every command, since the Bash tool keeps neither the directory nor `$D` between calls. They edit files there with Edit or Write rather than an interpreter, which the commit gate refuses whenever its code names a git commit, or `sed -i`. And they run any `claude plugin install` from that directory with `CLAUDE_CONFIG_DIR` pointed into it, so a test install no longer lands in your own Claude Code config.
+
+Reviewer legs now have a rule for actions outside the filesystem. Read-only remote calls such as `gh pr view`, `gh api` sent as a GET (a `-f` or `-F` field turns it into a POST unless `-X GET` is passed) or `git ls-remote` are allowed, and the leg's report lists each one; the project's own checks run in the leg's copy, never in your repository; and a leg never creates anything remote (a repository, pull request, release or push) or causes any other side effect. A leg that needs a remote fixture to settle a finding reports it as a question naming what it would test, and you decide from the summary, where legs used to choose between guessing and giving up.
+
+The commit gate now reads more of the ways a merge is asked for and offered. GitHub's merge methods count as a merge: "squash-merge 116", "squash merge it", "rebase and merge 116" and "squash and merge it when ready" grant what "merge 116", "merge it" and "merge it when ready" do, and a yes to "Should I squash-merge #116?" grants that merge. A merge names every pull request listed after it, so "merge 116, then 117", "merge 116, 117 and 118" and a yes to "Should I merge #116, then #117?" cover each, where only the first was covered before. A number that is not a pull request ("merge 116, 100%") and a pull request after another step ("merge 116 and review 117, then 118") are not added to the merge.
+
+When your yes to the agent's offer grants nothing, the gate's refusal now says why, so the agent asks again in a form your next yes covers instead of guessing. An offer whose question sets a condition, or with a condition word in a sentence after the question ("Should I push? After that, CI will run."), is quoted with that sentence in the agent's own words, and the agent is told to put any explanation before the question. An offer held only by notes in parentheses beside its pull requests ("Merge #3 (rust 1.99.1)?") is named with the notes, and the agent is told to ask without them. The reason appears only on the refusal of a step the offer named (a commit, a push, a pull request, a merge or a release), and a retraction or a later message drops it.
+
+`/review-cycle:review` and `/review-cycle:review-pr` now grade their review legs from one shared file, `reference/grading.md`, which each reads before grading the first leg. The two skills used to carry their own copies of the grading table and the Codex receipt rule, and the copies had already drifted. Grading itself is unchanged, except that the review cycle now also states two rules review-pr already had: why a claim a leg labels inferred keeps it out of `partial`, and that a leg that was skipped, failed, dropped or capped carries no execution label, which now names capped legs in both skills.
+
 ## 0.31.0 (2026-10-16)
 
 ### Added
