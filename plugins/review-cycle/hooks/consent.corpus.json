@@ -42,7 +42,7 @@
   },
   {
     "prompt": "squash and merge it when ready",
-    "may": []
+    "may": ["merge"]
   },
   {
     "prompt": "merge it when I say its ready",

@@ -4235,6 +4235,21 @@ describe('the stop-before setting', () => {
     await say($, 'merge #130');
     expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
   });
+  test('a yes to an offer naming the version PR among others releases it', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await endTurn($, 'answer', 'Merge #3 and #130?');
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
+  });
+  test('a yes to a squash-merge offer listing pull requests in turn merges each', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await endTurn($, 'answer', 'Squash-merge #3, then #4?');
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 3 --squash'))).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 4 --squash'))).toBe(true);
+    const other = 'it merges #5, and the user asked to merge #3, #4';
+    expect(denied(await bash($, 'gh pr merge 5 --squash'), other)).toBe(true);
+  });
   test('a merge asked for with a release held off does not release', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
     await say($, "merge #130. don't release yet.");

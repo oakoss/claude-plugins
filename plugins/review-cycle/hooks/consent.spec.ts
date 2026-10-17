@@ -86,7 +86,7 @@ describe('merges, approvals, releases and review replies', () => {
     ['push it when we can review it', NONE],
     ['commit it when we can, then push it', NONE],
     ["merge it when it's ready, but I'll check first", NONE],
-    ['squash and merge it when ready', NONE],
+    ['squash and merge it when ready', AUTO],
     ['merge it when I say its ready', NONE],
     ['merge it once Bob says the PR is ready', NONE],
     ['merge it unless CI passes', NONE],
@@ -704,7 +704,99 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('merge 131 and 132')).toEqual(merging('131', '132'));
     expect(grantOf('merge #131 and then #132')).toEqual(merging('131', '132'));
     expect(grantOf('merge 131. merge 132 too')).toEqual(merging('131', '132'));
+    expect(grantOf('merge 131, then 132')).toEqual(merging('131', '132'));
+    expect(grantOf('merge 131, and then PR 132')).toEqual(merging('131', '132'));
     expect(grantOf('merge it')).toEqual(MERGE);
+  });
+  test("a clause of numbers names pull requests only after a merge's", () => {
+    expect(grantOf('fix it, then 132')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I fix #131, then #132?')).toEqual(NONE);
+    expect(grantOf('yes', 'Should I merge #131, then fix #132?')).toEqual(merging('131'));
+    expect(grantOf('merge 131, fix 133, then 132')).toEqual(merging('131'));
+    expect(grantOf('yes', 'Should I merge #131, fix #133, then #132?')).toEqual(merging('131'));
+    const approving = { ...merging('131'), approve: true };
+    expect(grantOf('merge #131 and approve #132, then #133')).toEqual(approving);
+    expect(grantOf('yes', 'Should I merge #131 and approve #132, then #133?')).toEqual(approving);
+    // A step the grammar does not read still ends the merge, as does a
+    // clause skipped after a description.
+    expect(grantOf('I fixed it, merge 131, and close 132, 133')).toEqual(merging('131'));
+    expect(grantOf('I fixed it, merge 131, and then 132')).toEqual(merging('131', '132'));
+    expect(grantOf('merge 131 and review 132, then 133')).toEqual(merging('131'));
+    expect(grantOf('merge 131 and close 132, 133')).toEqual(merging('131'));
+    expect(grantOf('yes', 'Should I merge #131 and fix #132, then #133?')).toEqual(merging('131'));
+  });
+  test('a comma list after a merge names each pull request', () => {
+    expect(grantOf('merge 131, 132')).toEqual(merging('131', '132'));
+    expect(grantOf('merge 131, 132 and 133')).toEqual(merging('131', '132', '133'));
+    expect(grantOf('merge 131, PR 132')).toEqual(merging('131', '132'));
+    expect(grantOf('merge 131, PR#132')).toEqual(merging('131', '132'));
+    expect(grantOf('yes', 'Should I merge #131, pr132?')).toEqual(merging('131', '132'));
+    // "it" is no number, so only the one named is covered by name.
+    expect(grantOf('merge it, then 132')).toEqual(merging('132'));
+    expect(grantOf('merge, 2')).toEqual(merging('2'));
+    const pasted = `merge 131, ${Array.from({ length: 12 }, (_, i) => 132 + i).join('    ')} please`;
+    expect(grantOf(pasted)).toEqual(merging('131'));
+    expect(grantOf('yes', 'Should I merge #131, #132 and #133?')).toEqual(
+      merging('131', '132', '133'),
+    );
+  });
+  test.each(['merge 131, 100%', 'merge 131, 10:30', 'merge 131, 50/50', 'merge 131, 2 more to go'])(
+    '%j names no number that is not a pull request',
+    (prompt) => {
+      expect(grantOf(prompt)).toEqual(merging('131'));
+    },
+  );
+  test('numbers after a merge once ready never name a merge now', () => {
+    expect(grantOf('merge 46, and merge 62 once CI passes, then 63')).toEqual({
+      ...merging('46'),
+      autoMerge: true,
+      readyNamed: ['62'],
+    });
+  });
+  test.each([
+    ['squash-merge 131', '', merging('131')],
+    ['squash merge it', '', MERGE],
+    ['squash and merge 131', '', merging('131')],
+    ['rebase-merge 131', '', merging('131')],
+    ['rebase --merge it', '', NONE],
+    ['yes', 'Should I rebase and merge #131?', merging('131')],
+    ['squash-merge the release', '', RELEASE],
+    ['yes', 'Should I squash-merge #131?', merging('131')],
+    ['yes', 'Squash and merge #131?', merging('131')],
+    ['yes', 'Should I squash-merge the release?', RELEASE],
+  ])("GitHub's merge methods merge: %j after %j", (prompt, offer, grant) => {
+    expect(grantOf(prompt, offer)).toEqual(grant);
+  });
+  test.each([
+    'Should I merge #131, then #132?',
+    'Should I squash-merge #131, then #132?',
+    'Should I merge #131, #132?',
+    'Merge #131 (and #132)?',
+  ])('a yes to %j merges every pull request it names', (offer) => {
+    expect(grantOf('yes', offer)).toEqual(merging('131', '132'));
+  });
+  // A note can hold, decline or hand back the merge in words no list covers,
+  // so a yes to an offer carrying one grants nothing.
+  test.each([
+    'Merge #131 (the docs fix)?',
+    'Merge #131 (rust 1.99.1) and then #132 (jdx/mise-action v5.2.0)?',
+    'Merge #131 (defer it)?',
+    'Merge #131 (do-not-merge)?',
+    'Merge #131 (once CI passes)?',
+    'Merge #131 (not yet)?',
+    "Merge #130 (don't release yet)?",
+    'Merge #131 (CI still running)?',
+    'Should we merge #131 (or would you rather do it)?',
+    'Do you want to merge #131 (from your terminal)?',
+  ])('a note beside the pull request in %j keeps the offer from a yes', (offer) => {
+    expect(grantOf('yes', offer)).toEqual(NONE);
+  });
+  test('a note naming another step still offers it', () => {
+    expect(grantOf('yes', 'Merge #131 (and release it)?')).toEqual({
+      ...merging('131'),
+      release: true,
+    });
+    expect(grantOf('yes', 'Should I push (and open a PR)?')).toEqual({ ...PUSH, pr: true });
   });
   // "merge it" covers any pull request, unless the message or the offer it
   // answers points elsewhere.

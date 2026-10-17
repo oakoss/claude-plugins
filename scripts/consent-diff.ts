@@ -132,6 +132,14 @@ const VERBS = [
   'merge the version 2 PR',
   'merge the release fixes',
   'open a PR for the docs',
+  // GitHub's merge methods, and pull requests named in turn.
+  'squash-merge 130',
+  'squash merge it',
+  'squash and merge 130',
+  'rebase-merge 130',
+  'squash-merge the release',
+  'merge 131, then 130',
+  'merge 131, and then 130',
 ];
 const CONDITIONS = [
   '',
@@ -295,6 +303,17 @@ const OFFERS = [
   'If CI passes,\nshould I merge #130?',
   'If it looks good, should I push?',
   'If that looks right and CI passes, should I push?',
+  // GitHub's merge methods, pull requests offered in turn, and notes beside them.
+  'Should I squash-merge #130?',
+  'Should I squash merge #130?',
+  'Squash and merge #130?',
+  'Should I squash-merge #131, then #130?',
+  'Should I merge #131, then #130?',
+  'Merge #131 and then #130?',
+  'Merge #131 (rust 1.99.1) and then #130 (jdx/mise-action v5.2.0)?',
+  'Squash-merge #131 (rust 1.99.1) and then #130 (jdx/mise-action v5.2.0)?',
+  'Merge #131 (the docs fix)?',
+  'Should I squash-merge the release?',
 ];
 
 // Which offers each message is read against. Crossing every generated message
