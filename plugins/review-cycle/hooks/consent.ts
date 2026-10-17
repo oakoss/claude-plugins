@@ -221,6 +221,8 @@ function prPhrase(text: string): string {
         /\b(?:(finish|continue|complete)|(finishing|continuing|completing))\s+(?:(?:the|this|that|our)\s+)?(?:current\s+)?merge\b/gi,
         (_m: string, verb?: string) => (verb ? 'finishmerge' : 'finishingmerge'),
       )
+      // GitHub's merge methods merge: "squash-merge #12", "squash and merge it".
+      .replaceAll(/\b(?:squash|rebase)(?:-|\s+(?:and\s+)?)(merg(?:e|ing))\b/gi, '$1')
       .replaceAll(
         /\b(?:(mark)|(marking))\s+(?:(?:it|this|the|pr|pull[\s-]request|draft|#?\d+)\s+)*(?:as\s+)?ready(?:\s+for\s+review)?\b/gi,
         (_m: string, verb?: string) => (verb ? 'markready' : 'markingready'),
@@ -938,6 +940,8 @@ function grammarGrant(
   agreed = false,
   heard?: Set<Family>,
   now = false,
+  // Set when the clause's last part is a merge, so numbers after it name more.
+  ends?: { merging: boolean },
 ): Carry {
   const w = now ? withoutNow(words(clause), verbs, clause) : words(clause);
   if (isReadyMerge(w, verbs, lead, agreed)) {
@@ -1008,11 +1012,26 @@ function grammarGrant(
     const requestShaped = at !== -1 && isLead(part.slice(0, at), lead, agreed);
     if (!requestShaped && part.some((x) => STATEMENT.has(x))) described = true;
   }
+  if (ends) ends.merging = merging;
   return described ? 'described' : 'none';
 }
 
 function continues(clause: string): boolean {
   return /^\s*(and|then)\b/i.test(clause);
+}
+
+// A clause that only names more pull requests ("then #130", "132 and 133")
+// names them for the merge before it; null for any other clause, so "100%"
+// or "10:30" names none. Read token by token: a pasted list stays linear.
+function namesOnly(clause: string): string[] | null {
+  const named: string[] = [];
+  for (const token of clause.replace(/[.!?]+\s*$/, '').split(/[\s,]+/)) {
+    if (token === '' || /^(?:and|then|pr)$/i.test(token)) continue;
+    const n = /^(?:pr)?#?(\d+)$/i.exec(token)?.[1];
+    if (n === undefined) return null;
+    named.push(n);
+  }
+  return named.length > 0 ? named : null;
 }
 
 // Sentences keep their closing mark, so a question can be told from a request.
@@ -1159,10 +1178,21 @@ function asked(answer: string, heard?: Set<Family>): Grant {
     const q = chosen(asked);
     if (words(q).some((x) => HANDBACK.has(x))) continue;
     let carry: Carry = 'none';
+    let merging = false;
     for (const part of clauses(q)) {
       const c = part.replace(CONTRAST, '');
-      if (carry !== 'none' && continues(c)) continue;
-      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g, false, heard);
+      const more = merging ? namesOnly(c) : null;
+      if (more !== null) {
+        g.mergeNamed = [...g.mergeNamed, ...more];
+        continue;
+      }
+      if (carry !== 'none' && continues(c)) {
+        merging = false;
+        continue;
+      }
+      const ends = { merging: false };
+      const left = grammarGrant(c, OFFERED, OFFER_LEAD, g, false, heard, false, ends);
+      merging = ends.merging;
       // "Should I fix it, then push?" offers the push; only a commit or push clause carries.
       if (left !== 'none' && words(c).some((x) => Object.hasOwn(OFFERED, x))) carry = left;
     }
@@ -1348,6 +1378,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     let carry: Carry = 'none';
     let withheld = false;
     let agreed = false;
+    let merging = false;
     // Trimmed, so "But only if CI passes." opens its own sentence rather than a second clause.
     const parts = clauses(sentence.trim());
     for (const [i, part] of parts.entries()) {
@@ -1355,12 +1386,22 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       if (CLAUSE_CONDITION.test(c) || (i === 0 && SENTENCE_CONDITION.test(c))) return NO_GRANT;
       if (HOLD.test(c)) withheld = true;
       if (withheld) break;
-      if (carry === 'described' && continues(c)) continue;
+      const more = merging ? namesOnly(c) : null;
+      if (more !== null) {
+        mine.mergeNamed = [...mine.mergeNamed, ...more];
+        continue;
+      }
+      if (carry === 'described' && continues(c)) {
+        merging = false;
+        continue;
+      }
       // After a ready-merge a clause can still withhold, but grants nothing.
       const into = carry === 'ready' ? fresh() : mine;
       // A condition that means now counts only where it ends the sentence.
       const now = i === parts.length - 1;
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed, undefined, now);
+      const ends = { merging: false };
+      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed, undefined, now, ends);
+      merging = into === mine && ends.merging;
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
       else if (left !== 'none' && carry !== 'ready') carry = left;
