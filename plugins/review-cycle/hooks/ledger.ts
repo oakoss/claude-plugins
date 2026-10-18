@@ -73,7 +73,11 @@ function fnv(text: string, basis: number): string {
 export function keyOf(common: string): string {
   const key = `${PREFIX}${common}`;
   if (key.length <= MAX_KEY) return key;
-  return `${PREFIX}#${fnv(common, 0x81_1c_9d_c5)}${fnv(common, 0x05_0c_5d_1f)}`;
+  return `${PREFIX}${hashOf(common)}`;
+}
+
+export function hashOf(common: string): string {
+  return `#${fnv(common, 0x81_1c_9d_c5)}${fnv(common, 0x05_0c_5d_1f)}`;
 }
 
 // The same finding at the same path gets the same id in every cycle.

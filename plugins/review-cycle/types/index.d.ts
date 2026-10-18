@@ -30,6 +30,8 @@ export type Kept = {
   scratch: string[];
   reviewerChanges: string[];
   held: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }> | null;
+  // Where in `reviews` the next commit's rounds start counting.
+  roundsFrom: number;
 };
 
 declare module 'claude-code' {

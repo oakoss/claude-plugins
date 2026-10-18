@@ -114,6 +114,7 @@ import {
   type Unnamed,
   type Needed,
 } from './push-verdict';
+import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
@@ -257,6 +258,8 @@ type GateState = {
   unaskedNotice: boolean;
   // "don't push yet" makes every step ask until a message asks for one.
   held: Hold;
+  // Where in `reviews` the next commit's rounds start counting.
+  roundsFrom: number;
 };
 
 const state: GateState = {
@@ -287,6 +290,7 @@ const state: GateState = {
   nudge: true,
   unaskedNotice: false,
   held: null,
+  roundsFrom: 0,
 };
 
 // The gate's memory as the host keeps it: module variables start over when the
@@ -295,7 +299,7 @@ const state: GateState = {
 // the user's message granted is not kept: a reload makes the next step ask, so
 // a stale copy can never grant what a later message took back. Bump the shape
 // whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-1' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-2' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -319,6 +323,7 @@ function keptOf(): Kept {
     scratch: state.scratch,
     reviewerChanges: state.reviewerChanges,
     held: state.held,
+    roundsFrom: state.roundsFrom,
   };
 }
 
@@ -484,6 +489,7 @@ async function recall($: $): Promise<void> {
       state.scratch = kept.scratch;
       state.reviewerChanges = kept.reviewerChanges;
       state.held = kept.held;
+      state.roundsFrom = kept.roundsFrom;
       for (const [id, leg] of legs) {
         if (leg.done || leg.capped) continue;
         const left = Math.max(0, LEG_BUDGET_MS - (now - leg.spawnedAt));
@@ -589,7 +595,10 @@ function isKept(k: unknown): k is Kept {
     strings(k.capped) &&
     strings(k.scratch) &&
     strings(k.reviewerChanges) &&
-    isHeld(k.held)
+    isHeld(k.held) &&
+    Number.isInteger(k.roundsFrom) &&
+    (k.roundsFrom as number) >= 0 &&
+    (k.roundsFrom as number) <= k.reviews.length
   );
 }
 
@@ -2178,7 +2187,14 @@ async function watch(
   }
   const stale = message === null ? null : overtaken(message, next.signal, 'command');
   if (stale !== null) return stale;
-  const r = await next(e);
+  const group = root !== null && judgedCommit(checked) ? joinCommits(start?.head ?? null) : null;
+  let r: Output<BashHook>;
+  try {
+    r = await next(e);
+  } catch (error) {
+    if (group !== null) group.running--;
+    throw error;
+  }
   const notes = r.deny === undefined ? unaskedNotes($, ran) : [];
   if (root === null) {
     if (notes.length === 0 || r.deny !== undefined) return r;
@@ -2214,8 +2230,84 @@ async function watch(
       failed('committed', error);
     }
   }
+  // The group stays open until here, so a commit that starts while this one
+  // is still being checked joins it rather than reading this one's HEAD.
+  if (group !== null && --group.running === 0) {
+    try {
+      await recordCommitRounds($, root, group, r.deny !== undefined);
+    } catch (error) {
+      notes.push(
+        `review-cycle could not record this commit's review rounds (${messageOf(error)}).`,
+      );
+    }
+  }
   if (notes.length === 0 || r.deny !== undefined) return r;
   return { ...r, context: [...(r.context ?? []), ...notes] };
+}
+
+// Judged commits whose calls overlap: the rounds before them are the same
+// reviews, so the last to finish records one entry for all of them.
+type CommitGroup = { before: string | null; running: number; size: number };
+let committing: CommitGroup | null = null;
+
+function joinCommits(head: string | null): CommitGroup {
+  if (committing === null || committing.running === 0) {
+    committing = { before: head, running: 0, size: 0 };
+  }
+  committing.running++;
+  committing.size++;
+  return committing;
+}
+
+// Records the rounds reviewed since the last entry, once a group's commits land.
+// A count the store does not take is named in the error and not carried into
+// the next commit's, unless the call was refused and cannot carry the note.
+async function recordCommitRounds(
+  $: $,
+  root: Repo,
+  group: CommitGroup,
+  refused: boolean,
+): Promise<void> {
+  const { before } = group;
+  if (before === null) return;
+  const after = await headOf(gitOf($), root.top);
+  if (after === before || after === EMPTY_TREE) return;
+  const from = state.roundsFrom;
+  const rounds = roundsOf(state.reviews.slice(from));
+  state.roundsFrom = state.reviews.length;
+  void keep($);
+  const now = await $.clock.now();
+  roundsAt = Math.max(now, roundsAt + 1);
+  const tip = after.slice(0, 12);
+  const entry = {
+    commit: group.size > 1 && before !== EMPTY_TREE ? `${before.slice(0, 12)}..${tip}` : tip,
+    rounds,
+    date: new Date(now).toISOString().slice(0, 10),
+  };
+  try {
+    await within(
+      $,
+      recordRounds(storeOf($), root.common, entry, roundsAt, ROUNDS_TAG),
+      'recording review rounds',
+    );
+  } catch (error) {
+    if (refused) {
+      state.roundsFrom = Math.min(state.roundsFrom, from);
+      void keep($);
+    }
+    throw new Error(`${rounds} round${rounds === 1 ? '' : 's'}: ${messageOf(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+// Orders this session's entries even when the clock does not move between
+// them; the tag keeps another session's entry at the same moment apart.
+let roundsAt = 0;
+const ROUNDS_TAG = Math.random().toString(36).slice(2, 10);
+
+function judgedCommit(checked: Checked): boolean {
+  return checked === 'commit' || typeof checked === 'object';
 }
 
 async function commitNotes(
@@ -2321,6 +2413,16 @@ async function onStatus(
     status.changed = c?.rows.length ?? null;
     status.uncovered = c ? uncoveredOf(c.rows) : null;
     status.unreadReviews = c?.unread ?? null;
+    status.roundsSinceCommit = roundsOf(state.reviews.slice(state.roundsFrom));
+    // The newest last: how many rounds each recent commit took to converge.
+    // Unreadable, it is null with the reason; the rest of the status still holds.
+    try {
+      const rounds = await within($, readRounds(storeOf($), root.common), 'reading review rounds');
+      status.rounds = rounds.slice(-10);
+    } catch (error) {
+      status.rounds = null;
+      status.roundsError = messageOf(error);
+    }
     if (c === null) status.error = 'could not diff the working tree';
   } catch (error) {
     status.error = error instanceof Error ? error.message : String(error);
