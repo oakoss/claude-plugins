@@ -2115,20 +2115,93 @@ describe('a reload of the module', () => {
   });
 
   test(
-    'a load with the gate off clears what it kept',
+    'a load with the gate off keeps finished reviews and drops what only watching kept true',
     { options: { enabled: false } },
     async ($, on) => {
-      fakeWorld(on);
-      reloadInto(on, keptRecord({ held: { step: 'push', how: 'declined' } }));
-      let cleared = false;
+      const w = fakeWorld(on);
+      const tree = treeId(w, w.work);
+      const review = {
+        type: 'review-cycle:code-reviewer',
+        trees: [tree, tree],
+        reviewedPaths: ['a.ts'],
+      };
+      const done = { ...runningLeg(w, NOW), done: true, counted: true };
+      const capped = { ...runningLeg(w, NOW), capped: true };
+      const miss = { message: 'ship it', offer: '', steps: ['push'], refusal: 'r' };
+      reloadInto(
+        on,
+        keptRecord({
+          reviews: [review],
+          legs: [
+            ['leg-running', runningLeg(w, NOW)],
+            ['leg-done', done],
+            ['leg-capped', capped],
+          ],
+          message: { tree, nudged: true, prWindow: true },
+          messages: 4,
+          lastAnswer: 'Push it?',
+          misses: [miss],
+          held: { step: 'push', how: 'declined' },
+          roundsFrom: 1,
+        }),
+      );
+      const saved: any[] = [];
       on('state.set', ($$: unknown, e: { key: string; value: any }, next: any) => {
-        if (e.key === 'gate' && e.value?.value === null) cleared = true;
+        if (e.key === 'gate') saved.push(e.value?.value);
         return next(e);
       });
       await startSession($);
-      expect(cleared).toBe(true);
+      expect(saved.at(-1)).toEqual(
+        keptRecord({
+          reviews: [review],
+          legs: [
+            ['leg-done', done],
+            ['leg-capped', capped],
+          ],
+          message: { tree: null, nudged: false, prWindow: false },
+          messages: 4,
+          lastAnswer: '',
+          misses: [miss],
+          held: null,
+          roundsFrom: 1,
+        }),
+      );
     },
   );
+
+  test(
+    'a load with the gate off clears a record it cannot read',
+    { options: { enabled: false } },
+    async ($, on) => {
+      fakeWorld(on);
+      reloadInto(on, { ...keptRecord({}), legs: 'many' });
+      const saved: unknown[] = [];
+      on('state.set', ($$: unknown, e: { key: string; value: any }, next: any) => {
+        if (e.key === 'gate') saved.push(e.value?.value);
+        return next(e);
+      });
+      await startSession($);
+      expect(saved.at(-1)).toBeNull();
+    },
+  );
+
+  test('a review kept across a switch-off still covers its commit', async ($, on) => {
+    const w = fakeWorld(on);
+    const tree = treeId(w, w.work);
+    const review = {
+      type: 'review-cycle:code-reviewer',
+      trees: [tree, tree],
+      reviewedPaths: ['a.ts'],
+    };
+    // What an off-load leaves, as the test above pins it.
+    reloadInto(
+      on,
+      keptRecord({ reviews: [review], message: { tree: null, nudged: false, prWindow: false } }),
+    );
+    await startSession($);
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git add -A && git commit -m x'))).toBe(true);
+  });
 
   test('says once that it cannot keep its record', async ($, on) => {
     fakeWorld(on);
