@@ -414,6 +414,7 @@ const TAIL = new Set([
   'too',
   'again',
   'as',
+  'as-is',
   'well',
   'right',
   'away',
@@ -729,6 +730,8 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
     if (family.packaged && PACKAGE.has(word)) continue;
     // "Publish branch" is a first push in editors, so a publish names no git work.
     if (publish && !PUBLISH_TAIL.has(word)) return false;
+    // "ship it as is": unchanged, not a description.
+    if (word === 'is' && tail[i - 1] === 'as') continue;
     if (!TAIL.has(word)) return false;
     if (word === 'from' && !family.from) return false;
     const next = tail[i + 1] ?? '';
