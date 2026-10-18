@@ -185,6 +185,8 @@ If either differs, name the leg in the summary. The status tool's `reviewerChang
 
 **Ask for the execution receipt in the brief too.** Every leg opens its report with two lines: `execution:` naming the heaviest verification that *succeeded* (build, test suite, typecheck, or the repro its findings rest on) with that command's first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` grades the same as `none`. Phase 4 grades the leg from those two lines. Leave the ask out of the Codex brief: `codex review` prints its own verdict, so Phase 4 reads its receipt from its command log. Instead tell Codex to join verification commands with &&, never ; or a newline, so a failure shows in the exit code.
 
+**Every brief, Codex's included, also asks for three things.** When findings share a cause, report the cause and the change that removes it, not only each instance. Tag a finding `pre-existing` when it reproduces on the base (`HEAD`, or `<ref>`) without this change. Report within 10 minutes: settle the question first, then the most severe findings, and past that report what you have, naming what you did not reach.
+
 In a single conversation turn, invoke ALL of the following:
 
 1. **Codex review (background)**, only when Phase 1 recorded the leg as `eligible`. Run the CLI directly, not the `/codex:review` slash command, with the subagents' scope: `--uncommitted`, or `--base <ref>` when the user gave a base. The scope flags reject a prompt argument, so the brief rides a config override: `-c "developer_instructions=\"<brief>\""`.
@@ -310,6 +312,7 @@ For each finding, apply the fix-vs-defer policy:
 - Defer only if a criterion above is met
 - Critical and high severity findings should almost always be fixed inline; deferring a critical finding requires a strong, defensible justification
 - From iteration 2, also apply Phase 6's bar: a finding below it is deferred, not fixed
+- A finding tagged `pre-existing`, once you confirm it on the base, is not this change's: defer it with that reason, whatever its severity, so Phase 9 records it in the ledger
 - On the iteration that reaches the ceiling, apply no fix: no reviewer would see it, so the gate would refuse the commit. Hold each finding you would have fixed, with its severity and leg, for Phase 10
 
 When fixing, follow the comment policy — do not add comments that restate the code or describe the fix itself.
@@ -425,7 +428,7 @@ Findings fixed inline: X
 
 Findings deferred: Y
   - file:line — issue (source)
-    reason: <criterion from fix-vs-defer policy | held at the ceiling>
+    reason: <criterion from fix-vs-defer policy | held at the ceiling | pre-existing>
   - ...
 
 Spec conformance (iteration 1): <spec source / no spec source found>
@@ -445,7 +448,7 @@ Final state: clean / N findings remain
 
 ### Phase 10: Finish
 
-When the final state is clean, nothing is still held at the ceiling, and every path is covered, commit the reviewed work now, as its own Bash call, unless `mcp__review-cycle__status` reports `mayCommit` false: the user's stop-before setting stops before a commit, so end the summary by asking in plain prose whether to commit, naming the branch ("Commit the changes to `fix/x`?"). Otherwise commit — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). Skip the commit and stop after the summary when the user's message held off a commit ("don't commit", "not yet"), or when findings other than held ones remain that need their decision. When findings are held at the ceiling, skip the commit and end the summary by listing them and asking in plain prose, not a dialog, whether to apply them or commit with them deferred; the user may answer with something else entirely. Applied, they get the re-review Phase 6 gives their class, outside Phase 5's ceiling rule, and that pass's own findings follow Phase 8's rule: one more pass, then stop and list. A clean re-review with every path covered commits as above. Deferred, they leave nothing held: commit as above. The gate admits a commit only if every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command.
+When the final state is clean, nothing is still held at the ceiling, and every path is covered, commit the reviewed work now, as its own Bash call, unless `mcp__review-cycle__status` reports `mayCommit` false: the user's stop-before setting stops before a commit, so end the summary by asking in plain prose whether to commit, naming the branch ("Commit the changes to `fix/x`?"). Otherwise commit — `git add …` then `git commit …`, joined by `&&` (the gate refuses a `git add` followed by `;` or a newline). Skip the commit and stop after the summary when the user's message held off a commit ("don't commit", "not yet"), or when findings other than held ones remain that need their decision. When findings are held at the ceiling, skip the commit and end the summary by listing them and asking in plain prose, not a dialog, whether to apply them or commit with them deferred; the user may answer with something else entirely. When the held findings fall in a function or area an earlier iteration also fixed, offer first to reconsider the approach, naming the smaller design that would remove that area's findings rather than patch them. Applied, they get the re-review Phase 6 gives their class, outside Phase 5's ceiling rule, and that pass's own findings follow Phase 8's rule: one more pass, then stop and list. A clean re-review with every path covered commits as above. Deferred, they leave nothing held: commit as above. The gate admits a commit only if every path it records is covered; a refusal names the paths, and nothing is gained by rephrasing the command.
 
 Push only when the user's latest message asked for one ("push it", "ship it"), or when `mcp__review-cycle__status` reports `mayPush`: their stop-before setting lets a push run without asking. After "ship it", also open the pull request; without a request, open one only when the status reports `mayOpenPr`.
 

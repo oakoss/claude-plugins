@@ -893,6 +893,7 @@ describe('after the command', () => {
     expect(has(context, 'pre-commit')).toBe(false);
   });
   test('the picks a --continue replays after its resolution are not reported', async ($, on) => {
+    fakeStore(on);
     fakeWorld(on, {
       ...quiet,
       commits: resolved,
@@ -1871,7 +1872,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-1');
+    expect(kept?.shape).toBe('gate-2');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     // What a message granted is not kept, so a reload makes the next step ask.
@@ -1915,6 +1916,22 @@ describe('a reload of the module', () => {
     await startSession($);
     await say($, 'commit it');
     expect(ran(await bash($, 'git add -A && git commit -m x'))).toBe(true);
+  });
+
+  test('takes back where the rounds count from', async ($, on) => {
+    fakeStore(on);
+    const w = fakeWorld(on);
+    const tree = treeId(w, w.work);
+    const review = {
+      type: 'review-cycle:code-reviewer',
+      trees: [tree, tree],
+      reviewedPaths: ['a.ts'],
+    };
+    reloadInto(on, keptRecord({ reviews: [review, review], roundsFrom: 2 }));
+    await startSession($);
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any;
+    const status = JSON.parse(r.result);
+    expect(status.roundsSinceCommit).toBe(0);
   });
 
   test('takes back a hold, so a push the user put off still waits', async ($, on) => {
@@ -1980,6 +1997,9 @@ describe('a reload of the module', () => {
     ['a hold on no step', { held: { step: 'tag', how: 'declined' } }],
     ['a message without its flags', { message: {} }],
     ['a miss that is not one', { misses: [null] }],
+    ['a rounds index past its reviews', { roundsFrom: 1 }],
+    ['a rounds index below zero', { roundsFrom: -1 }],
+    ['no rounds index', { roundsFrom: undefined }],
   ] as const) {
     test(`sets aside a record holding ${name}`, async ($, on) => {
       fakeWorld(on);
@@ -2157,6 +2177,7 @@ function keptRecord(over: Record<string, unknown>) {
     scratch: [],
     reviewerChanges: [],
     held: null,
+    roundsFrom: 0,
     ...over,
   };
 }
@@ -2167,7 +2188,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-1', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-2', value: kept }, version: 1 } };
   });
 }
 
@@ -3328,6 +3349,7 @@ describe('a push the user asked for', () => {
     ]);
   });
   test('a reviewed commit beside it is not reported either', async ($, on) => {
+    fakeStore(on);
     fakeWorld(on, {
       commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
       shell(this: World) {
@@ -3339,6 +3361,109 @@ describe('a push the user asked for', () => {
     const r = await bash($, 'git commit -am x');
     expect(ran(r)).toBe(true);
     expect(contextOf(r)).toEqual([]);
+  });
+  test('a commit records the review rounds since the last one', async ($, on) => {
+    fakeStore(on);
+    const w = fakeWorld(on, {
+      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'two' } },
+      shell(this: World) {
+        this.head = 'd'.repeat(40);
+      },
+    });
+    const status = async () =>
+      JSON.parse(((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result);
+    await review($);
+    await review($);
+    w.work = { 'a.ts': 'two' };
+    await review($);
+    const before = await status();
+    expect(before.roundsSinceCommit).toBe(2);
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    const after = await status();
+    expect(after.rounds).toEqual([{ commit: 'd'.repeat(12), rounds: 2, date: expect.any(String) }]);
+    expect(after.roundsSinceCommit).toBe(0);
+  });
+  test('rounds are recorded only for a commit or --continue the gate judged', async ($, on) => {
+    fakeStore(on);
+    let moves = false;
+    let next = 'd';
+    const w = fakeWorld(on, {
+      commits: {
+        ['c'.repeat(40)]: { 'a.ts': 'zero' },
+        ['d'.repeat(40)]: { 'a.ts': 'one' },
+        ['e'.repeat(40)]: { 'a.ts': 'one' },
+        ['f'.repeat(40)]: { 'a.ts': 'one' },
+      },
+      shell(this: World) {
+        if (moves) this.head = next.repeat(40);
+      },
+    });
+    const status = async () => {
+      const r = (await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any;
+      return JSON.parse(r.result);
+    };
+    await review($);
+    await say($, 'commit it');
+    // Nothing to commit: HEAD stays, so the round still waits for its commit.
+    expect(ran(await bash($, 'git commit -m x'))).toBe(true);
+    const held = await status();
+    expect([held.rounds, held.roundsSinceCommit]).toEqual([[], 1]);
+    // A script's commit is not judged, so its rounds go to the next one recorded.
+    moves = true;
+    expect(ran(await bash($, './release.sh'))).toBe(true);
+    const scripted = await status();
+    expect([scripted.rounds, scripted.roundsSinceCommit]).toEqual([[], 1]);
+    // A --continue the gate judged records its rounds.
+    next = 'e';
+    w.work = { 'a.ts': 'one', 'b.ts': 'new' };
+    await review($);
+    w.commits['e'.repeat(40)] = { ...w.work };
+    await say($, 'finish the merge');
+    expect(ran(await bash($, 'git add -A && GIT_EDITOR=true git merge --continue'))).toBe(true);
+    const continued = await status();
+    expect(continued.rounds).toEqual([
+      { commit: 'e'.repeat(12), rounds: 2, date: expect.any(String) },
+    ]);
+  });
+  test('judged commits sent together record one entry for all of them', async ($, on) => {
+    fakeStore(on);
+    fakeWorld(on, {
+      commits: {
+        ['c'.repeat(40)]: { 'a.ts': 'zero' },
+        ['d'.repeat(40)]: { 'a.ts': 'one' },
+        ['e'.repeat(40)]: { 'a.ts': 'one' },
+      },
+      shell(this: World, command: string) {
+        this.head = (command.endsWith(' a') ? 'd' : 'e').repeat(40);
+      },
+    });
+    await review($);
+    await say($, 'commit it');
+    const [a, b] = await Promise.all([bash($, 'git commit -am a'), bash($, 'git commit -am b')]);
+    expect([ran(a), ran(b)]).toEqual([true, true]);
+    expect([contextOf(a), contextOf(b)]).toEqual([[], []]);
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any;
+    const { rounds } = JSON.parse(r.result);
+    expect(rounds.map((x: { commit: string; rounds: number }) => [x.commit, x.rounds])).toEqual([
+      [`${'c'.repeat(12)}..${'e'.repeat(12)}`, 1],
+    ]);
+  });
+  test('a rounds record the store cannot take is named, and the commit still runs', async ($, on) => {
+    fakeStore(on, { refuse: 'disk full' });
+    fakeWorld(on, {
+      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
+      shell(this: World) {
+        this.head = 'd'.repeat(40);
+      },
+    });
+    await review($);
+    await say($, 'fix the parser');
+    const r = await bash($, 'git commit -am x');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), "could not record this commit's review rounds (1 round:")).toBe(true);
+    const s = (await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any;
+    expect(JSON.parse(s.result).roundsSinceCommit).toBe(0);
   });
   test('a message the user sends while the gate reads the repository stops it', async ($, on) => {
     let armed = false;
