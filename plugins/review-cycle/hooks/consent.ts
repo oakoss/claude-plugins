@@ -1331,10 +1331,13 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
 }
 
 // Whether a message typed into the running turn replaces the turn's grant
-// rather than adding to it: a sentence holds, retracts or stops, or it names a
-// step it does not ask for. Anything else the agent reads before its next step.
+// rather than adding to it: a sentence holds, retracts or stops, it names a
+// step it does not ask for, or it picks fewer merges than were offered.
+// Anything else the agent reads before its next step.
 export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
   if (holdOf(prompt, previousAnswer) !== null) return true;
+  const picked = pickedMerges(spoken(prompt.trim()), previousAnswer);
+  if (picked !== null && picked.length < offeredMerges(previousAnswer).length) return true;
   const typed = spoken(unquote(prompt));
   return sentences(typed).some((raw) => {
     const s = raw.replace(FILLER, '');
@@ -1363,8 +1366,56 @@ export function liftsHold(grant: Grant): boolean {
   return covers(grant, 'push') || grant.pr || grant.merge || grant.autoMerge || grant.release;
 }
 
+// The whole replies that pick among offered merges, anchored as a yes is: any
+// other wording is read as any other message. Each says "merge", since
+// "only #4" may answer another question ("Which one should I leave open?").
+const PICK_LEAD = String.raw`^(?:(?:yes|yeah|yep|ok|okay|sure)[\s,]+)?(?:let'?s\s+)?merge\s+`;
+const PICK_END = String.raw`(?:[\s,]+please)?[.!]*$`;
+const PICK_ALL = new RegExp(
+  String.raw`${PICK_LEAD}(both|them(?:\s+(?:both|all))?|all\s+of\s+them)${PICK_END}`,
+  'i',
+);
+const PICK_ONLY = new RegExp(
+  String.raw`${PICK_LEAD}(?:only|just)\s+#?(\d+)(?:\s+of\s+(?:them|both))?(?:\s+for\s+now)?${PICK_END}`,
+  'i',
+);
+const PICK_BUT_NOT = new RegExp(
+  String.raw`${PICK_LEAD}#?(\d+)(?:[\s,]+but)?[\s,]+not\s+#?(\d+)(?:\s+yet)?${PICK_END}`,
+  'i',
+);
+
+// Only a plain offer: one question, no "or", and no number but the pull
+// requests it offers to merge. After any other ("Merge #3 and #4? Docs or
+// tests?") a pick could answer something else.
+function offeredMerges(previousAnswer: string): string[] {
+  const closing = closingOf(previousAnswer);
+  if (closing.split('?').length !== 2 || /\bor\b/i.test(closing)) return [];
+  const offered = [...new Set(asked(closing).mergeNamed.filter((n) => /^\d+$/.test(n)))];
+  return (closing.match(/\d+/g) ?? []).every((n) => offered.includes(n)) ? offered : [];
+}
+
+// The pull requests a reply picks from a merge offer naming them: all
+// ("merge both") or some ("merge only #3", "merge #3 but not #4"); null when
+// it is no such pick.
+function pickedMerges(reply: string, previousAnswer: string): string[] | null {
+  const offered = offeredMerges(previousAnswer);
+  if (offered.length < 2) return null;
+  const text = reply.trim().replaceAll('’', "'");
+  const all = PICK_ALL.exec(text)?.[1];
+  // "both" after three offered is about something else.
+  if (all !== undefined) return /\bboth\b/i.test(all) && offered.length !== 2 ? null : offered;
+  const only = PICK_ONLY.exec(text)?.[1];
+  if (only !== undefined) return offered.includes(only) ? [only] : null;
+  const [, kept, dropped] = PICK_BUT_NOT.exec(text) ?? [];
+  if (kept !== undefined && dropped !== undefined)
+    return kept !== dropped && offered.includes(kept) && offered.includes(dropped) ? [kept] : null;
+  return null;
+}
+
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
   const text = spoken(prompt.trim());
+  const picked = pickedMerges(text, previousAnswer);
+  if (picked !== null) return settled({ ...fresh(), merge: true, mergeNamed: picked });
   if (AFFIRMATIVE.test(text)) {
     const offer = accepted(previousAnswer);
     // Only a bare yes takes the offer's target; a request names its own.

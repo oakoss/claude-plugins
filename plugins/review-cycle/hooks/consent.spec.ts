@@ -1788,3 +1788,147 @@ describe('why a yes to an offer granted nothing', () => {
     expect(unreadOffer(reply, offer)).toBeNull();
   });
 });
+
+describe('a reply picking among the pull requests a merge offer named', () => {
+  const OFFER = 'Should I merge #3, then #4?';
+  test.each([
+    'merge both',
+    'yes, merge both',
+    'merge both please',
+    'merge them',
+    'merge them both',
+    'merge them all',
+    'merge all of them',
+    "let's merge both",
+    'merge #3 and #4.',
+  ])('%j merges each', (reply) => {
+    expect(grantOf(reply, OFFER)).toEqual(merging('3', '4'));
+  });
+  test.each([
+    'merge only #3',
+    'merge only #3 for now',
+    'yes, merge only #3',
+    'merge just #3',
+    'merge #3 but not #4',
+    'merge #3, not #4 yet',
+    'merge #3 but not #4 yet',
+    'merge only #3 of them',
+    'merge just #3 of both',
+  ])('%j merges #3 alone', (reply) => {
+    expect(grantOf(reply, OFFER)).toEqual(merging('3'));
+  });
+  test.each([
+    'no',
+    'not yet',
+    'yes, but not yet',
+    'merge neither',
+    'skip both',
+    'only the first',
+    "merge #3, don't merge #4",
+    'merge both once CI passes',
+    'merge #5',
+  ])('%j picks nothing', (reply) => {
+    expect(grantOf(reply, OFFER).mergeNamed).not.toEqual(['3', '4']);
+    expect(grantOf(reply, OFFER).mergeNamed).not.toEqual(['3']);
+  });
+  test.each([
+    'yes, but wait',
+    'ok wait',
+    'wait, yes',
+    'wait for #3',
+    'yes, but wait for #3 to finish before merging #4',
+    'merge #4 once it lands',
+    'yes, one at a time',
+    'yes, #3 first',
+    'merge both. Wait.',
+    'is 3 merged',
+    'both merged',
+    '"merge both"',
+    '> merge both',
+    '$ merge both',
+    '* merge both',
+    '**merge both**',
+    'thanks for both',
+    'thanks for #3',
+    'not #3 and #4 yet',
+    'not #3 and not #4',
+    'merge #3 to #4',
+    'just #3 ~~#4~~',
+    'both 🛑',
+    'both…',
+    'merge #3 but not #3',
+    'merge both but not yet',
+    'not #9 yet',
+    'only #4',
+    'yes to #4',
+    'just #4',
+    'not #3 yet',
+    'yes, both',
+    'both please',
+  ])('%j grants no merge of both or of #4', (reply) => {
+    const g = grantOf(reply, OFFER);
+    expect(g.merge && (g.mergeNamed.length === 0 || g.mergeNamed.includes('4'))).toBe(false);
+  });
+  test('"both" needs two offered, "them" two or more', () => {
+    expect(grantOf('merge both', 'Merge #3?').mergeNamed).not.toEqual(['3']);
+    expect(grantOf('yes, merge both', 'Should I merge #3, #4 and #5?')).toEqual(NONE);
+    expect(grantOf('merge them', 'Should I merge #3, #4 and #5?')).toEqual(merging('3', '4', '5'));
+    expect(grantOf('merge them', 'Merge #3?')).not.toEqual(merging('3'));
+    expect(grantOf('merge them both', 'Should I merge #3, #4 and #5?')).toEqual(NONE);
+  });
+  test('a bare number, or one kept and dropped at once, is no pick', () => {
+    expect(grantOf('3', OFFER)).toEqual(NONE);
+    expect(grantOf('merge #3 but not #3', OFFER)).not.toEqual(merging('3'));
+    expect(grantOf('merge #3 but not #9', OFFER)).not.toEqual(merging('3'));
+  });
+  test.each([
+    'Merge #3 and #4? Should I update the changelog or the README?',
+    'Should I merge #3 and #4? Which one should I leave open?',
+    'Should I merge #3? Merge #3?',
+    'Should I merge #3 and #4? Then merge #5 and #6?',
+    'Should I merge PRs #3 and #4? Merge #5 and #6?',
+    'Should I merge #3 and #4? Or should I merge #5 and #6?',
+    'Want me to merge #3 and #4, or merge #5 and #6?',
+    'Should I merge #3 and #4? Or 5 and 6?',
+    'Should I merge #3 and #4, or land 5 and 6?',
+    'Should I merge #3 and #4? Or wait?',
+    'Should I merge #3 and #4, or should I merge five and six?',
+    'Should I merge #3 and #4, or hold off?',
+    'I merged #2. Should I merge #3 and #4?',
+  ])('after %j, which is no plain offer, a pick grants no merge', (offer) => {
+    for (const reply of ['merge both', 'merge them', 'merge only #3', 'merge #3 but not #4'])
+      expect(grantOf(reply, offer)).not.toEqual(
+        merging(...(reply.includes('#3') ? ['3'] : ['3', '4'])),
+      );
+  });
+  test('a pick without "merge" may answer another question, so it picks nothing', () => {
+    const open = 'Should I merge #3 and #4? Tell me which one to leave open.';
+    expect(grantOf('only #4', open).mergeNamed).not.toEqual(['4']);
+    expect(grantOf('both', 'Should I merge #3 and #4, else close them?')).toEqual(NONE);
+    expect(grantOf('merge only #3', open)).toEqual(merging('3'));
+  });
+  test('a plain offer may explain itself after the question', () => {
+    const offer = 'Should I merge #3 and #4? CI is green on both.';
+    expect(grantOf('merge both', offer)).toEqual(merging('3', '4'));
+    expect(grantOf('merge only #3', offer)).toEqual(merging('3'));
+  });
+  test('a question back is no pick', () => {
+    expect(grantOf('merge #3?', OFFER).merge).toBe(false);
+    expect(grantOf('merge only #3?', OFFER)).toEqual(NONE);
+    expect(grantOf('merge #3? thanks', OFFER).merge).toBe(false);
+  });
+  test('a number the offer did not name is no pick', () => {
+    expect(grantOf('merge #5', OFFER)).toEqual(merging('5'));
+    expect(grantOf('merge only #5', OFFER)).not.toEqual(merging('3'));
+  });
+  test('a narrowing typed into the turn replaces its grant', () => {
+    expect(dropsGrant('merge only #3', OFFER)).toBe(true);
+    expect(dropsGrant('merge #3 but not #4', OFFER)).toBe(true);
+    expect(dropsGrant('merge both', OFFER)).toBe(false);
+    expect(dropsGrant('and merge #4', OFFER)).toBe(false);
+  });
+  test('with no merge offered, a pick names nothing', () => {
+    expect(grantOf('merge both', 'Should I push?').mergeNamed).toEqual([]);
+    expect(grantOf('only #3')).toEqual(NONE);
+  });
+});
