@@ -4451,6 +4451,58 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh stack modify'), 'is interactive')).toBe(true);
     expect(denied(await bash($, 'gh stack merge 4 --yes --squash'), 'below it')).toBe(true);
   });
+  test('a stack merge reads GitHub, and merges only what the user named', async ($, on) => {
+    const stack = JSON.stringify([
+      {
+        number: 4,
+        pull_requests: [
+          { number: 1, merged_at: '2026-10-18T15:02:11Z' },
+          { number: 2, merged_at: null },
+          { number: 3, merged_at: null },
+        ],
+      },
+    ]);
+    // #3 is no stack's number, so the gate asks for the stack holding it.
+    const answers = (a: string): Partial<Run> | null =>
+      a === 'gh api repos/{owner}/{repo}/stacks/3'
+        ? { exitCode: 1, stderr: 'gh: Not Found (HTTP 404)\n' }
+        : a === 'gh api -X GET repos/{owner}/{repo}/stacks -f pull_request=3'
+          ? { stdout: stack }
+          : github('two')(a);
+    const w = fakeWorld(on, { settings: { local: stops('push') }, git: answers });
+    await say($, 'merge it');
+    expect(denied(await bash($, 'gh stack merge 3 --yes --squash'), 'merges #2, #3 together')).toBe(
+      true,
+    );
+    await say($, 'merge #2 and #3');
+    expect(ran(await bash($, 'gh stack merge 3 --yes --squash'))).toBe(true);
+    const looked = w.calls.map((c) => c.argv.join(' ')).filter((a) => a.startsWith('gh '));
+    // Each layer is bound by the number GitHub resolves, as `gh pr merge` is.
+    expect(looked.some((a) => a.startsWith('gh pr view 2 '))).toBe(true);
+    expect(looked.some((a) => a.startsWith('gh pr view 3 '))).toBe(true);
+  });
+  test('a stack number is read as a stack, and only a 404 reads it as a pull request', async ($, on) => {
+    const stack = JSON.stringify({
+      number: 4,
+      pull_requests: [
+        { number: 2, merged_at: null },
+        { number: 3, merged_at: null },
+      ],
+    });
+    const answers = (a: string): Partial<Run> | null =>
+      a === 'gh api repos/{owner}/{repo}/stacks/4'
+        ? { stdout: stack }
+        : a === 'gh api repos/{owner}/{repo}/stacks/5'
+          ? { exitCode: 1, stderr: 'gh: Server Error (HTTP 500)\n' }
+          : a.includes('pull_request=')
+            ? { stdout: `[${stack}]` }
+            : github('two')(a);
+    const w = fakeWorld(on, { settings: { local: stops('push') }, git: answers });
+    await say($, 'merge #2 and #3');
+    expect(ran(await bash($, 'gh stack merge 4 --yes'))).toBe(true);
+    expect(denied(await bash($, 'gh stack merge 5 --yes'), '(HTTP 500)')).toBe(true);
+    expect(w.calls.some((c) => c.argv.join(' ').includes('pull_request='))).toBe(false);
+  });
   test('a merge asked for covers the version pull request, looked up or not', async ($, on) => {
     const w = fakeWorld(on, {
       settings: { local: stops('release') },

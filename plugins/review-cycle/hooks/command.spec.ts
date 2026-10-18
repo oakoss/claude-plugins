@@ -1747,7 +1747,20 @@ describe('gh steps', () => {
       expect(ghActions('gh stack merge 42 --yes --squash')).toEqual([
         { kind: 'stack-merge', target: '42' },
       ]);
-      expect(ghActions('gh stack merge --yes')).toEqual([{ kind: 'stack-merge', target: null }]);
+      expect(ghActions('gh stack merge --merge-method squash 42')).toEqual([
+        { kind: 'stack-merge', target: '42' },
+      ]);
+      expect(ghActions('gh stack merge --yes')).toEqual([
+        { kind: 'stack-merge', target: { cannot: 'unnamed' } },
+      ]);
+    });
+    test.each([
+      ['cd ../other && gh stack merge 42 --yes', 'beside'],
+      ['GH_REPO=o/other gh stack merge 42 --yes', 'elsewhere'],
+      ['gh -R o/other stack merge 42 --yes', 'elsewhere'],
+      ['gh --hostname ghe.example stack merge 42 --yes', 'elsewhere'],
+    ])('%s merges where the gate does not look: %s', (command, cannot) => {
+      expect(ghActions(command)).toEqual([{ kind: 'stack-merge', target: { cannot } }]);
     });
     test.each([
       'gh stack add -Am "layer two" spike/two',

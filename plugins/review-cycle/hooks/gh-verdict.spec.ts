@@ -11,6 +11,9 @@ import {
 } from './gh-verdict';
 import type { GhAction } from './github';
 import type { StopBefore } from './ladder';
+import type { StackRead } from './stack';
+
+type StackLookup = (n: number) => StackRead | { asks: string; slow?: true };
 
 // GitHub as the lookups see it, recording each lookup made. The pull request
 // lookup answers what gh prints, read as register.ts reads it.
@@ -20,6 +23,7 @@ function world(
     Record<'mergeHead' | 'mergeTarget' | 'repoUrl' | 'pullRequest' | 'defaultBranch', Lookup>
   > = {},
   unreadable?: string,
+  stack?: StackLookup,
 ) {
   const calls: string[] = [];
   const ladder: InForce = { stopBefore, source: 'local', ...(unreadable && { unreadable }) };
@@ -36,7 +40,13 @@ function world(
     mergeTarget: (lookup) =>
       answer(
         `mergeTarget ${lookup.join(' ')}`,
-        answers.mergeTarget ?? { out: 'https://github.com/o/r/pull/1 OPEN BLOCKED' },
+        // A stack's layers are looked up by number, each answering for itself
+        // in the state the test gives.
+        stack === undefined
+          ? (answers.mergeTarget ?? { out: 'https://github.com/o/r/pull/1 OPEN BLOCKED' })
+          : {
+              out: `https://github.com/o/r/pull/${lookup[0]} ${answers.mergeTarget?.out ?? 'OPEN BLOCKED'}`,
+            },
       ),
     repoUrl: () => answer('repoUrl', answers.repoUrl ?? { out: 'https://github.com/o/r' }),
     pullRequest: (head) =>
@@ -46,6 +56,7 @@ function world(
       ),
     defaultBranch: (repo) =>
       answer(`defaultBranch ${repo ?? '-'}`, answers.defaultBranch ?? { out: 'main' }),
+    stack: (n) => answer(`stack ${n}`, stack?.(n) ?? { asks: 'no stack here' }),
   };
   return { calls, lookups };
 }
@@ -846,15 +857,97 @@ describe('gh stack', () => {
       deny: expect.any(String),
     });
   });
+});
 
-  test('a stack merge is not judged yet, so it never runs', async () => {
+const layer = (number: number, merged = false) => ({
+  number,
+  merged_at: merged ? '2026-10-18T15:02:11Z' : null,
+});
+const STACK4 = { number: 4, pull_requests: [layer(1, true), layer(2), layer(3)] };
+const STACKS: StackLookup = (n) =>
+  n === 4
+    ? { by: 'stack', out: JSON.stringify(STACK4) }
+    : { by: 'pr', out: JSON.stringify([1, 2, 3].includes(n) ? [STACK4] : []) };
+const m = (target: string | null): GhAction => ({
+  kind: 'stack-merge',
+  target: target ?? { cannot: 'unnamed' },
+});
+
+describe('gh stack merge', () => {
+  test('a merge of one layer is judged as that pull request', async () => {
+    const w = world('push', {}, undefined, STACKS);
+    expect(await judge([m('2')], w, grant({ merge: true }))).toEqual({ ran: [] });
+    // Named, it is looked up and bound by number, as `gh pr merge 2` is.
+    expect(await judge([m('2')], w, grant({ merge: true, mergeNamed: ['2'] }))).toEqual({
+      ran: [],
+    });
+    expect(w.calls).toContain('mergeTarget 2');
+  });
+
+  test('a merge of several layers needs every one named', async () => {
+    const r = await judge([m('3')], world('push', {}, undefined, STACKS), grant({ merge: true }));
+    expect(r).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
+    expect(
+      await judge(
+        [m('3')],
+        world('push', {}, undefined, STACKS),
+        grant({ merge: true, mergeNamed: ['2', '3'] }),
+      ),
+    ).toEqual({ ran: [] });
+    expect(
+      await judge(
+        [m('4')],
+        world('push', {}, undefined, STACKS),
+        grant({ merge: true, mergeNamed: ['3'] }),
+      ),
+    ).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
+  });
+
+  test('a setting that merges unasked covers several layers', async () => {
+    const r = await judge([m('4')], world('release', {}, undefined, STACKS));
+    expect(r).toMatchObject({ ran: [{ step: 'merge' }, { step: 'merge' }] });
+  });
+
+  test('a layer named for once ready counts as named, and is judged on readiness', async () => {
+    const named = grant({ merge: true, mergeNamed: ['2'], autoMerge: true, readyNamed: ['3'] });
+    expect(await judge([m('3')], world('push', {}, undefined, STACKS), named)).toMatchObject({
+      deny: expect.stringContaining('only once the pull request is ready'),
+    });
+    const ready = world('push', { mergeTarget: { out: 'OPEN CLEAN' } }, undefined, STACKS);
+    expect(await judge([m('3')], ready, named)).toMatchObject({ ran: [{ step: 'merge' }] });
+  });
+
+  test('a layer that is the version pull request is judged as a release', async () => {
     const r = await judge(
-      [{ kind: 'stack-merge', target: '42' }],
-      world('never stop'),
-      grant({ merge: true }),
+      [m('4')],
+      world('release', { mergeHead: { out: 'oakum/version-packages' } }, undefined, STACKS),
     );
-    expect(r).toMatchObject({
-      deny: expect.stringContaining('#42 and every unmerged pull request below it'),
+    expect(r).toMatchObject({ deny: expect.stringContaining('release') });
+  });
+
+  test.each([
+    [m(null), 'the current branch’s stack'],
+    [m('two'), '`two` names no stack or pull request by number'],
+    [m('9'), '#9 is neither a stack nor a pull request in one'],
+    [m('1'), '#1 has already merged'],
+    [{ kind: 'stack-merge', target: { cannot: 'beside' } } as const, 'Run the merge as its own'],
+    [{ kind: 'stack-merge', target: { cannot: 'elsewhere' } } as const, '`GH_REPO=`'],
+  ])('%j asks: %s', async (action, why) => {
+    const w = world('never stop', {}, undefined, STACKS);
+    const r = await judge([action], w, grant({ merge: true }));
+    expect(r).toMatchObject({ deny: expect.stringContaining(why) });
+  });
+
+  test('a stack GitHub cannot read asks, and a slow one is tried again', async () => {
+    const failed = world('never stop', {}, undefined, () => ({
+      asks: 'looking up stack #4 failed (x)',
+    }));
+    expect(await judge([m('4')], failed, grant({ merge: true }))).toMatchObject({
+      deny: expect.stringContaining('failed (x), so nothing ran. Give the user the command'),
+    });
+    const slow = world('never stop', {}, undefined, () => ({ asks: 'timed out', slow: true }));
+    expect(await judge([m('4')], slow, grant({ merge: true }))).toMatchObject({
+      deny: expect.stringContaining('GitHub did not answer in time'),
     });
   });
 });

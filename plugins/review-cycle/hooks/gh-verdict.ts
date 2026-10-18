@@ -10,7 +10,7 @@ import {
   type HoldStep,
   type UnreadOffer,
 } from './consent';
-import type { GhAction, PushRef } from './github';
+import type { GhAction, PushRef, Unlookable } from './github';
 import { asks, type Ladder, type Step } from './ladder';
 import {
   askingReason,
@@ -20,6 +20,7 @@ import {
   type DryRunRef,
   type Unnamed,
 } from './push-verdict';
+import { type MergeSet, mergeSet, type StackRead } from './stack';
 
 // `unreadable` names the settings file that could not be read, and why.
 export type InForce = Ladder & { unreadable?: string };
@@ -58,6 +59,9 @@ export type GhLookups = {
   // The default branch of `repo` (HOST/OWNER/NAME or OWNER/NAME), or of the
   // repository gh picks when it is null.
   defaultBranch: (repo: string | null) => Promise<Lookup>;
+  // Stack <n> from GitHub, or the stacks holding pull request <n> when no
+  // stack has that number.
+  stack: (n: number) => Promise<StackRead | { asks: string; slow?: true }>;
 };
 
 // A read's text without surrounding space; one that printed nothing names
@@ -180,6 +184,31 @@ const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy:
   },
   unnamed: { asks: 'it does not name the pull request', remedy: 'Name it by number.' },
 };
+
+// What `gh stack merge <target>` merges, or why the gate cannot tell and the
+// fix (null: ask the user).
+async function stackSetOf(
+  lookups: GhLookups,
+  target: string | Unlookable,
+): Promise<MergeSet | { asks: string; remedy: null }> {
+  if (typeof target !== 'string') {
+    if (target.cannot !== 'unnamed') return UNTOLD[target.cannot];
+    return {
+      asks: 'with no number it merges the current branch’s stack, which the gate does not look up',
+      remedy: 'Name the stack or pull request: `gh stack merge <number> --yes`.',
+    };
+  }
+  if (!/^\d{1,9}$/.test(target)) {
+    return {
+      asks: `\`${target}\` names no stack or pull request by number`,
+      remedy: 'Name it by number.',
+    };
+  }
+  const n = Number(target);
+  const read = await lookups.stack(n);
+  if (read.asks !== undefined) return { asks: read.asks, remedy: read.slow ? SLOW : null };
+  return mergeSet(n, read);
+}
 
 // A merge the user asked for whose lookup GitHub was too slow to answer is
 // retried, not put back to them.
@@ -570,9 +599,37 @@ export async function judgeGh(
         break;
       }
       case 'stack-merge': {
-        return {
-          deny: `\`gh stack merge\` merges ${action.target === null ? 'the stack' : `#${action.target}`} and every unmerged pull request below it, which the gate does not judge yet, so nothing ran. Give the user the command to run themselves. The command: ${shown}`,
-        };
+        const set = await stackSetOf(lookups, action.target);
+        if ('asks' in set) {
+          const remedy = set.remedy ?? 'Give the user the command to run themselves.';
+          return {
+            deny: `\`gh stack merge\` merges a pull request and every unmerged one below it, and the gate cannot tell which: ${set.asks}, so nothing ran. ${remedy} The command: ${shown}`,
+          };
+        }
+        const listed = set.prs.map((n) => `#${n}`).join(', ');
+        // One "merge it" names one pull request; a stack merge of several
+        // needs each named, now or once ready, unless the setting merges
+        // without asking.
+        const named = new Set([...granted.mergeNamed, ...granted.readyNamed]);
+        const ladderMerges = permitted({ ...granted, merge: false }, ladder, held !== null).merge;
+        if (set.prs.length > 1 && !ladderMerges && !set.prs.every((n) => named.has(String(n)))) {
+          return {
+            deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askThem('every pull request it merges', `"Merge ${listed}?"`, shown)}`,
+          };
+        }
+        const each = await judgeGh(
+          shown,
+          set.prs.map((n) => ({ kind: 'merge', admin: false, auto: false, lookup: [String(n)] })),
+          granted,
+          held,
+          lookups,
+          model,
+          unread,
+        );
+        if ('deny' in each) return each;
+        ran.push(...each.ran);
+        notes.push(...(each.notes ?? []));
+        break;
       }
       default: {
         const unhandled: never = action;

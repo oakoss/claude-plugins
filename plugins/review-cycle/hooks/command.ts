@@ -1203,7 +1203,7 @@ const STACK_PUSHES = new Set(['push', 'sync', 'submit', 'link'] as const);
 // The verbs that rewrite this clone's commits, as `git rebase` does.
 const STACK_REWRITES = new Set(['rebase', 'sync']);
 
-function stackAt(words: Word[], from: number, fed: boolean): GhAction | null {
+function stackAt(words: Word[], from: number, context: GhContext, fed: boolean): GhAction | null {
   const verb = words[from];
   if (verb === undefined)
     return fed ? { kind: 'unread', why: 'its gh stack command comes from its input' } : null;
@@ -1278,8 +1278,12 @@ function stackAt(words: Word[], from: number, fed: boolean): GhAction | null {
         why: 'the arguments of `gh stack merge` are built at run time or come from its input',
       };
     }
-    const target = rest.find((w) => !w.text.startsWith('-'))?.text ?? null;
-    return { kind: 'stack-merge', target };
+    // gh-stack has no `--repo`: it merges where gh finds the repository.
+    if (context !== 'fixed') return { kind: 'stack-merge', target: { cannot: context } };
+    const target = rest.find(
+      (w, i) => !w.text.startsWith('-') && rest[i - 1]?.text !== '--merge-method',
+    );
+    return { kind: 'stack-merge', target: target ? target.text : { cannot: 'unnamed' } };
   }
   return { kind: 'unread', why: `\`gh stack ${v}\` is not a gh-stack command the gate reads` };
 }
@@ -1327,7 +1331,11 @@ function ghAt(
   if (group === undefined) return fed ? fromInput : null;
   if (words[sub]?.dynamic) return { kind: 'unread', why: 'its gh command is built at run time' };
   if (group === 'stack') {
-    return asksHelp(words.slice(at + 1), fed) ? null : stackAt(words, sub + 1, fed);
+    const moved =
+      seen.repo !== null || words.slice(at + 1, sub).some((w) => /^--hostname(=|$)/.test(w.text));
+    return asksHelp(words.slice(at + 1), fed)
+      ? null
+      : stackAt(words, sub + 1, moved ? 'elsewhere' : context, fed);
   }
   if (!GH_COMMANDS.has(group)) {
     return {

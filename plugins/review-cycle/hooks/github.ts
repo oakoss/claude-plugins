@@ -43,9 +43,10 @@ export type GhAction =
   | { kind: 'push'; ref: PushRef }
   // github/gh-stack: `push`, `sync` and `submit` push every active branch of
   // the stack with a per-branch lease; `submit` and `link` also open pull
-  // requests; `merge` merges `target` and every unmerged layer below it.
+  // requests; `merge` merges every unmerged layer of stack `target`, or pull
+  // request `target` and every unmerged one below it.
   | { kind: 'stack'; step: 'push' | 'sync' | 'submit' | 'link' }
-  | { kind: 'stack-merge'; target: string | null }
+  | { kind: 'stack-merge'; target: string | Unlookable }
   | { kind: 'unread'; why: string; remedy?: string };
 
 // `gh api`'s options that take a value (gh 2.102.0's `gh api --help`), and
