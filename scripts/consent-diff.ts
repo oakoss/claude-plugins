@@ -233,6 +233,10 @@ const REPLIES = [
   'no, not the branch. delete it',
   'ok continue',
   'keep going',
+  'Ok, lets ship as is',
+  'ship it as-is',
+  'push it as is',
+  'the branch as is breaks the build',
   // Picking among the pull requests an offer named: all or some.
   'merge both',
   'yes, both',

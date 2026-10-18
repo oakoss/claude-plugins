@@ -315,6 +315,14 @@ describe('merges, approvals, releases and review replies', () => {
     ['address the TODO comments in the code', NONE],
     // Shipping stops at the pull request.
     ['ship it', SHIP],
+    ['Ok, lets ship as is', SHIP],
+    ['ship it as-is', SHIP],
+    ['push it as is', PUSH],
+    ['the branch as is breaks the build', NONE],
+    ['ship it is', NONE],
+    ['push it is', NONE],
+    ['ship this', SHIP],
+    ['ship it now', SHIP],
   ];
   test.each(cases)('%s', (prompt, grant) => {
     expect(grantOf(prompt)).toEqual(grant);
