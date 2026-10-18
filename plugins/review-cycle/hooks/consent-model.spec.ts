@@ -160,8 +160,8 @@ describe('vetoes', () => {
   });
 });
 
-// Sonnet's recorded answers (cpl-r1kj, effort low) for each labeled case the
-// grammar grants nothing, replayed through judge.
+// The model's recorded answers (pnpm consent:model live) for each labeled case
+// the grammar grants nothing, replayed through judge.
 describe('recorded replies', () => {
   // Replies to other rules say nothing about these: `pnpm consent:model live`, then adopt.
   test('were recorded against the current RULES', () => {
@@ -216,6 +216,7 @@ describe('recorded replies', () => {
       'sure, send it up',
       'yep, cut it',
       'yes',
+      'yes, push on',
     ]);
   });
 });

@@ -30,6 +30,8 @@ type Recorded = {
   model: string;
   effort: string;
   recorded: string;
+  // What the run measured, so a claim about latency or tokens can be checked.
+  measured?: { p50Ms: number; p95Ms: number; tokens: number };
   replies: Reply[];
 };
 type Live = Reply & { ms: number; usage: Record<string, number> | null; error?: string };
@@ -214,6 +216,16 @@ export const register: Register = (on) => {
 const pct = (xs: number[], p: number) =>
   xs.toSorted((a, b) => a - b)[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))] ?? 0;
 
+// Latency over the answered calls, and every token a call counted, cached or not.
+function measuredOf(answered: readonly Live[]): NonNullable<Recorded['measured']> {
+  const ms = answered.map((r) => r.ms);
+  const tokens = answered.map((r) =>
+    Object.values(r.usage ?? {}).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0),
+  );
+  const mean = tokens.reduce((a, b) => a + b, 0) / Math.max(1, tokens.length);
+  return { p50Ms: pct(ms, 50), p95Ms: pct(ms, 95), tokens: Math.round(mean) };
+}
+
 const [mode, arg] = process.argv.slice(2);
 if (mode === 'live') {
   const n = arg === undefined ? refused.length : Number(arg);
@@ -248,13 +260,9 @@ if (mode === 'live') {
     results: Live[];
   };
   const answered = live.filter((r) => r.error === undefined);
-  const ms = answered.map((r) => r.ms);
-  const tokens = answered.map((r) =>
-    Object.values(r.usage ?? {}).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0),
-  );
+  const m = measuredOf(answered);
   console.log(
-    `${answered.length} of ${live.length} answered; p50 ${pct(ms, 50)} ms, p95 ${pct(ms, 95)} ms; ` +
-      `${Math.round(tokens.reduce((a, b) => a + b, 0) / Math.max(1, tokens.length))} tokens a call`,
+    `${answered.length} of ${live.length} answered; p50 ${m.p50Ms} ms, p95 ${m.p95Ms} ms; ${m.tokens} tokens a call`,
   );
   for (const r of live.filter((x) => x.error !== undefined)) {
     console.log(`  unanswered ${JSON.stringify(r.prompt)}: ${r.error}`);
@@ -285,6 +293,7 @@ if (mode === 'live') {
     model: CALL.model,
     effort: CALL.effort,
     recorded: new Date().toISOString().slice(0, 10),
+    measured: measuredOf(run.results),
     replies: run.results.map(({ prompt, offer, reply }) =>
       offer === undefined ? { prompt, reply } : { prompt, offer, reply },
     ),
