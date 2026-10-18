@@ -22,6 +22,7 @@ import {
   ghActions,
   possibleAliases,
   shownCommand,
+  stackRewrite,
   type Classification,
 } from './command';
 import {
@@ -1659,6 +1660,14 @@ async function judgeBash(
   if (cls.kind === 'none') {
     const actions = ghActions(e.command, state.shellAliases);
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
+    // It replays commits as `git rebase` does, so it is watched as history,
+    // and alone, so no commit beside it goes unchecked.
+    const rewrite = stackRewrite(e.command, state.shellAliases);
+    if (rewrite === 'joined') {
+      return deny(
+        '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
+      );
+    }
     const first = await judgeGh(
       quote(e.command),
       actions,
@@ -1697,7 +1706,8 @@ async function judgeBash(
       }
     }
     const grant = yes === null ? granted : withModel(granted, yes.added);
-    const watched = watch($, await ensureRoot($), e, next, 'unchecked', grant, since, gh.ran);
+    const checked = rewrite === 'alone' ? 'history' : 'unchecked';
+    const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
     const ran = yes === null ? await watched : await ranByModel($, watched, yes);
     const r =
       gh.notes === undefined || ran.deny !== undefined

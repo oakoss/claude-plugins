@@ -1185,6 +1185,133 @@ function asksHelp(words: Word[], fed: boolean): boolean {
   });
 }
 
+// github/gh-stack 0.2's commands, by what each does beyond this clone
+// (its skill's references/commands.md, read 2026-10-18).
+const STACK_LOCAL = new Set([
+  'view',
+  'checkout',
+  'up',
+  'down',
+  'top',
+  'bottom',
+  'trunk',
+  'init',
+  'alias',
+  'help',
+]);
+const STACK_PUSHES = new Set(['push', 'sync', 'submit', 'link'] as const);
+// The verbs that rewrite this clone's commits, as `git rebase` does.
+const STACK_REWRITES = new Set(['rebase', 'sync']);
+
+function stackAt(words: Word[], from: number, fed: boolean): GhAction | null {
+  const verb = words[from];
+  if (verb === undefined)
+    return fed ? { kind: 'unread', why: 'its gh stack command comes from its input' } : null;
+  if (verb.dynamic) return { kind: 'unread', why: 'its gh stack command is built at run time' };
+  // An option's value could be the word read as the verb (`--remote view push`).
+  if (verb.text.startsWith('-')) {
+    return {
+      kind: 'unread',
+      why: 'an option before the gh stack command can take the next word as its value, which hides the command',
+      remedy: 'Put the options after the command (`gh stack push --remote origin`).',
+    };
+  }
+  const rest = words.slice(from + 1);
+  const v = verb.text;
+  if (STACK_LOCAL.has(v)) return null;
+  if (v === 'rebase') {
+    // A continue commits the conflict's resolution, which no review covers here.
+    return fed || rest.some((w) => w.dynamic || /^--continue(=|$)/.test(w.text))
+      ? {
+          kind: 'unread',
+          why: '`gh stack rebase --continue` commits a conflict resolution, which the gate judges only as `git rebase --continue`',
+          remedy:
+            'Tell the user the stack rebase stopped on a conflict, show them the resolution, and let them run `gh stack rebase --continue`, or run `gh stack rebase --abort`.',
+        }
+      : null;
+  }
+  if (v === 'add') {
+    // Every option of add stages or commits (`-A`, `-u`, `-m`, `-Am"x"`).
+    return fed || rest.some((w) => w.dynamic || w.text.startsWith('-'))
+      ? {
+          kind: 'unread',
+          why: '`gh stack add` with an option stages or commits, which the gate judges only as `git commit`',
+          remedy: 'Commit with `git commit`, then run `gh stack add <branch>` with no options.',
+        }
+      : null;
+  }
+  if (v === 'unstack') {
+    // `--local=false` after `--local` would reach GitHub after all.
+    const local =
+      !fed &&
+      rest.some((w) => w.text === '--local') &&
+      rest.every((w) => !w.dynamic && !w.text.startsWith('--local='));
+    return local
+      ? null
+      : {
+          kind: 'unread',
+          why: '`gh stack unstack` removes the stack on GitHub, which no request of the user reads yet',
+          remedy: 'Give the user the command to run themselves, or run `gh stack unstack --local`.',
+        };
+  }
+  if (v === 'modify' || v === 'switch') {
+    return {
+      kind: 'unread',
+      why: `\`gh stack ${v}\` is interactive, with no path an agent can drive`,
+      remedy:
+        'Use `gh stack up`, `down`, `top` or `bottom` to move, or rebuild with `gh stack unstack --local` and `gh stack init`.',
+    };
+  }
+  if (STACK_PUSHES.has(v as 'push')) {
+    if (fed || rest.some((w) => w.dynamic)) {
+      return {
+        kind: 'unread',
+        why: `the arguments of \`gh stack ${v}\` are built at run time or come from its input`,
+      };
+    }
+    return { kind: 'stack', step: v as 'push' | 'sync' | 'submit' | 'link' };
+  }
+  if (v === 'merge') {
+    if (fed || rest.some((w) => w.dynamic)) {
+      return {
+        kind: 'unread',
+        why: 'the arguments of `gh stack merge` are built at run time or come from its input',
+      };
+    }
+    const target = rest.find((w) => !w.text.startsWith('-'))?.text ?? null;
+    return { kind: 'stack-merge', target };
+  }
+  return { kind: 'unread', why: `\`gh stack ${v}\` is not a gh-stack command the gate reads` };
+}
+
+// Whether the command runs `gh stack rebase` or `gh stack sync`, which rewrite
+// commits as `git rebase` does: `alone` when it is the whole command, so the
+// gate watches it as a history step; `joined` beside anything else.
+export function stackRewrite(
+  command: string,
+  aliases: ShellAliases = new Map(),
+): 'alone' | 'joined' | null {
+  const parsed = parse(command, aliases);
+  if ('error' in parsed) return null;
+  let found = false;
+  let nested = false;
+  every(parsed.statements, (st, inner) => {
+    const at = st.words.findIndex((w) => basename(w.text) === 'gh');
+    if (at === -1) return null;
+    // gh's own options before `stack`, skipped as ghAt skips them.
+    const sub = pastOptions(st.words, at + 1, { repo: null });
+    if (st.words[sub]?.text !== 'stack') return null;
+    if (!STACK_REWRITES.has(st.words[sub + 1]?.text ?? '')) return null;
+    found = true;
+    nested ||= inner;
+    return null;
+  });
+  if (!found) return null;
+  const only = parsed.statements.length === 1 && !nested;
+  const st = parsed.statements[0];
+  return only && st !== undefined && (st.op === '' || st.op === '\n') ? 'alone' : 'joined';
+}
+
 // The gh command at `at`. An alias or extension is not read, so the agent
 // writes gh's own words; `fed` is xargs or parallel supplying the rest.
 function ghAt(
@@ -1199,6 +1326,9 @@ function ghAt(
   const fromInput = { kind: 'unread', why: 'its gh command comes from its input' } as const;
   if (group === undefined) return fed ? fromInput : null;
   if (words[sub]?.dynamic) return { kind: 'unread', why: 'its gh command is built at run time' };
+  if (group === 'stack') {
+    return asksHelp(words.slice(at + 1), fed) ? null : stackAt(words, sub + 1, fed);
+  }
   if (!GH_COMMANDS.has(group)) {
     return {
       kind: 'unread',

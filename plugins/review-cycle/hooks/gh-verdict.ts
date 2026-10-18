@@ -551,6 +551,29 @@ export async function judgeGh(
         if (!asked[step] && setHere[step]) ran.push({ step, ladder });
         break;
       }
+      case 'stack': {
+        if (action.step === 'submit' || action.step === 'link') {
+          if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
+          if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
+        }
+        // `link` pushes plainly; the rest lease every active branch.
+        if (action.step === 'link') {
+          if (!may.push) return refuse('push', null);
+          if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
+          break;
+        }
+        if (!covers(granted, 'lease')) {
+          return {
+            deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${askThem('the stack and that it force-pushes its branches with a lease', '"Push the stack, force-with-lease on its branches?"', shown)}`,
+          };
+        }
+        break;
+      }
+      case 'stack-merge': {
+        return {
+          deny: `\`gh stack merge\` merges ${action.target === null ? 'the stack' : `#${action.target}`} and every unmerged pull request below it, which the gate does not judge yet, so nothing ran. Give the user the command to run themselves. The command: ${shown}`,
+        };
+      }
       default: {
         const unhandled: never = action;
         throw new Error(`no judgment for the gh action ${JSON.stringify(unhandled)}`);

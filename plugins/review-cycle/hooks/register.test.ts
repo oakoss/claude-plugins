@@ -931,6 +931,31 @@ describe('after the command', () => {
     // b.ts came from upstream, so only the rebased change is unreviewed.
     expect(has(context, 'records content no reviewer saw (never reviewed: a.ts)')).toBe(true);
   });
+  test('a gh stack rebase or sync is watched as a history step, so its replayed commits are not reported', async ($, on) => {
+    fakeWorld(on, {
+      ...quiet,
+      commits: {
+        [HEAD]: { 'a.ts': 'zero' },
+        [UP]: { 'a.ts': 'zero', 'b.ts': 'upstream' },
+        [THEIRS]: { 'a.ts': 'one', 'b.ts': 'upstream' },
+      },
+      shell(this: World) {
+        this.head = THEIRS;
+        this.headLog = [
+          `${THEIRS} rebase (finish): returning to refs/heads/topic`,
+          `${THEIRS} rebase (pick): local`,
+          `${UP} rebase (start): checkout ${UP}`,
+        ];
+      },
+    });
+    await say($, 'force push with lease');
+    expect(contextOf(await bash($, 'gh stack rebase --upstack'))).toEqual([]);
+    expect(contextOf(await bash($, 'gh stack sync'))).toEqual([]);
+    expect(contextOf(await bash($, 'gh -R o/r stack sync'))).toEqual([]);
+    expect(
+      denied(await bash($, 'gh stack rebase && ./deploy.sh'), 'only as their own command'),
+    ).toBe(true);
+  });
   test('a commit built with plumbing and reached by a reset is not seen', async ($, on) => {
     fakeWorld(on, {
       ...quiet,
@@ -4415,6 +4440,16 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh pr m 116'), '`gh pr m` is a gh alias')).toBe(true);
     expect(ran(await bash($, 'gh pr view 116'))).toBe(true);
     expect(w.calls.some((c) => c.argv.join(' ') === 'gh alias list')).toBe(false);
+  });
+  test('gh stack is read: moving around runs, a stack push asks for its lease', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'push the stack');
+    expect(ran(await bash($, 'gh stack view --json'))).toBe(true);
+    expect(ran(await bash($, 'gh stack up'))).toBe(true);
+    const r = await bash($, 'gh stack push');
+    expect(denied(r, 'pushes every active branch of the stack with --force-with-lease')).toBe(true);
+    expect(denied(await bash($, 'gh stack modify'), 'is interactive')).toBe(true);
+    expect(denied(await bash($, 'gh stack merge 4 --yes --squash'), 'below it')).toBe(true);
   });
   test('a merge asked for covers the version pull request, looked up or not', async ($, on) => {
     const w = fakeWorld(on, {

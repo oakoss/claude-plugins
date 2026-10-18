@@ -7,6 +7,7 @@ import {
   opensPr,
   possibleAliases,
   shownCommand,
+  stackRewrite,
 } from './command';
 import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
 
@@ -1716,6 +1717,89 @@ describe('gh steps', () => {
     expect(kinds('g pr merge 116', [['g', 'gh']])).toEqual(['merge']);
     expect(kinds('gh co 116')).toEqual(['unread']);
     expect(kinds('gh pr co 116')).toEqual([]);
+  });
+  describe('gh stack', () => {
+    test.each([
+      'gh stack view --json',
+      'gh stack checkout 4',
+      'gh stack up 2',
+      'gh stack bottom',
+      'gh stack trunk',
+      'gh stack init spike/one spike/two',
+      'gh stack add spike/three',
+      'gh stack rebase --upstack',
+      'gh stack unstack --local',
+      'gh stack --help',
+      'gh stack push --help',
+    ])('%s takes no step the gate judges', (command) => {
+      expect(ghActions(command)).toEqual([]);
+    });
+    test.each([
+      ['gh stack push', 'push'],
+      ['gh stack push --remote origin', 'push'],
+      ['gh stack sync --prune', 'sync'],
+      ['gh stack submit --auto --open', 'submit'],
+      ['gh stack link 10 20 30', 'link'],
+    ])('%s pushes the stack', (command, step) => {
+      expect(ghActions(command)).toEqual([{ kind: 'stack', step }]);
+    });
+    test('merge names its target, the pull request or stack below which all merge', () => {
+      expect(ghActions('gh stack merge 42 --yes --squash')).toEqual([
+        { kind: 'stack-merge', target: '42' },
+      ]);
+      expect(ghActions('gh stack merge --yes')).toEqual([{ kind: 'stack-merge', target: null }]);
+    });
+    test.each([
+      'gh stack add -Am "layer two" spike/two',
+      'gh stack add -u -m x spike/two',
+      'gh stack add --message=x spike/two',
+      'gh stack unstack',
+      'gh stack unstack 7',
+      'gh stack modify',
+      'gh stack switch',
+      'gh stack feedback',
+      'gh stack "$VERB"',
+      'gh stack push "$REMOTE"',
+      'echo 4 | xargs gh stack merge',
+      'echo origin | xargs gh stack push',
+      'gh stack add -A spike/two',
+      'gh stack add -u spike/two',
+      'gh stack add --all spike/two',
+      'gh stack add --update spike/two',
+      'gh stack add -m"layer two" spike/two',
+      'gh stack add -Am"layer two" spike/two',
+      'gh stack add "$FLAGS" spike/two',
+      'gh stack unstack --yes',
+      'gh stack unstack --local --local=false',
+      'gh stack unstack --local "$N"',
+      'gh stack merge "$PR"',
+      // `view` is --remote's value here; the command is push.
+      'gh stack --remote view push',
+      'gh stack --remote checkout submit',
+      'gh stack rebase --continue',
+      'gh stack rebase --continue=true',
+      'gh stack rebase "$FLAG"',
+    ])('%s is unread, with a reason', (command) => {
+      expect(kinds(command)).toEqual(['unread']);
+    });
+    test.each([
+      ['gh stack rebase', 'alone'],
+      ['gh stack rebase --upstack', 'alone'],
+      ['gh stack sync --prune', 'alone'],
+      ['gh -R o/r stack sync', 'alone'],
+      ['gh --repo=o/r stack rebase', 'alone'],
+      ['gh --hostname h stack sync', 'alone'],
+      ['gh -R o/r stack sync && ./deploy.sh', 'joined'],
+      ['gh stack rebase && git commit -m x', 'joined'],
+      ['gh stack sync; ./deploy.sh', 'joined'],
+      ['gh stack rebase | tail -1', 'joined'],
+      ['gh stack rebase &', 'joined'],
+      ['bash -c true && gh stack rebase', 'joined'],
+      ['gh stack push', null],
+      ['git rebase main', null],
+    ])('%s rewrites commits: %s', (command, expected) => {
+      expect(stackRewrite(command)).toBe(expected);
+    });
   });
   test('a gh command xargs completes from its input is unread', () => {
     expect(kinds("printf 'merge 116' | xargs gh pr")).toEqual(['unread']);

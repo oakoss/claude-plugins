@@ -803,3 +803,58 @@ test('one write that may not run refuses the whole call', async () => {
   const r = await judge([{ kind: 'pr' }, { kind: 'comment' }], world('never stop'));
   expect(r).toMatchObject({ deny: expect.stringContaining('a comment on GitHub') });
 });
+
+const stack = (step: 'push' | 'sync' | 'submit' | 'link'): GhAction => ({ kind: 'stack', step });
+
+describe('gh stack', () => {
+  test.each(['push', 'sync', 'submit'] as const)(
+    '%s leases every branch, so a plain push grant or the ladder does not cover it',
+    async (step) => {
+      for (const g of [grant({ push: 'push', pr: true }), grant()]) {
+        const r = await judge([stack(step)], world('never stop'), g);
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('with --force-with-lease'),
+        });
+      }
+      expect(await judge([stack(step)], world('push'), grant({ push: 'lease', pr: true }))).toEqual(
+        { ran: [] },
+      );
+    },
+  );
+
+  test('a pull request submit opens unasked is noted as run by the setting', async () => {
+    expect(await judge([stack('submit')], world('never stop'), grant({ push: 'lease' }))).toEqual({
+      ran: [{ step: 'pr', ladder: { stopBefore: 'never stop', source: 'local' } }],
+    });
+  });
+
+  test('submit and link open pull requests too', async () => {
+    for (const step of ['submit', 'link'] as const) {
+      const r = await judge([stack(step)], world('open PR'), grant({ push: 'lease' }));
+      expect(r).toMatchObject({ deny: expect.stringContaining("doesn't ask for a pull request") });
+    }
+  });
+
+  test('link pushes plainly, as a push the ladder lets through', async () => {
+    expect(await judge([stack('link')], world('never stop'))).toEqual({
+      ran: [
+        { step: 'pr', ladder: { stopBefore: 'never stop', source: 'local' } },
+        { step: 'push', ladder: { stopBefore: 'never stop', source: 'local' } },
+      ],
+    });
+    expect(await judge([stack('link')], world('push'), grant({ pr: true }))).toMatchObject({
+      deny: expect.any(String),
+    });
+  });
+
+  test('a stack merge is not judged yet, so it never runs', async () => {
+    const r = await judge(
+      [{ kind: 'stack-merge', target: '42' }],
+      world('never stop'),
+      grant({ merge: true }),
+    );
+    expect(r).toMatchObject({
+      deny: expect.stringContaining('#42 and every unmerged pull request below it'),
+    });
+  });
+});
