@@ -4318,6 +4318,25 @@ describe('the stop-before setting', () => {
       denied(await bash($, 'git push origin --delete old'), '("After that, CI will run.")'),
     ).toBe(true);
   });
+  test('a pick among offered pull requests merges those, across turns', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await endTurn($, 'answer', 'Should I squash-merge #3, then #4?');
+    await say($, 'merge both');
+    expect(ran(await bash($, 'gh pr merge 3 --squash'))).toBe(true);
+    // The agent may end its turn while GitHub recalculates #4; the grant is the message's.
+    await endTurn($, 'answer', '#3 merged; GitHub is still checking #4.');
+    expect(ran(await bash($, 'gh pr merge 4 --squash'))).toBe(true);
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 4 --squash'), "doesn't ask for a merge")).toBe(true);
+  });
+  test('a narrowing pick merges only the pull request it keeps', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await endTurn($, 'answer', 'Should I squash-merge #3, then #4?');
+    await say($, 'merge #3 but not #4');
+    expect(ran(await bash($, 'gh pr merge 3 --squash'))).toBe(true);
+    const other = 'it merges #4, and the user asked to merge #3';
+    expect(denied(await bash($, 'gh pr merge 4 --squash'), other)).toBe(true);
+  });
   test('a yes to a squash-merge offer listing pull requests in turn merges each', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Squash-merge #3, then #4?');
