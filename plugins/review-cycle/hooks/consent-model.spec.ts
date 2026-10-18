@@ -1,9 +1,20 @@
 import { describe, expect, test } from 'vitest';
 
-import { NO_GRANT } from './consent';
-import { askOf, grantOfModel, judge, offerOf, vetoed, type ModelGrant } from './consent-model';
-import replies from './consent-model.replies.json' with { type: 'json' };
+import { grantOf, NO_GRANT } from './consent';
+import {
+  askOf,
+  grantOfModel,
+  judge,
+  offerOf,
+  RULES,
+  vetoed,
+  type ModelGrant,
+} from './consent-model';
+import recorded from './consent-model.replies.json' with { type: 'json' };
 import corpus from './consent.corpus.json' with { type: 'json' };
+import { hashOf } from './ledger';
+
+const { replies } = recorded;
 
 const reply = (steps: object, quote: string) => JSON.stringify({ steps, quote });
 const NOW = { now: true, condition: false, declined: false };
@@ -152,6 +163,11 @@ describe('vetoes', () => {
 // Sonnet's recorded answers (cpl-r1kj, effort low) for each labeled case the
 // grammar grants nothing, replayed through judge.
 describe('recorded replies', () => {
+  // Replies to other rules say nothing about these: `pnpm consent:model live`, then adopt.
+  test('were recorded against the current RULES', () => {
+    expect(recorded.rules).toBe(hashOf(RULES));
+  });
+
   const may = new Map(corpus.map((c) => [`${c.prompt}\u0000${c.offer ?? ''}`, c.may]));
   const labels = (r: (typeof replies)[number]) => may.get(`${r.prompt}\u0000${r.offer ?? ''}`);
 
@@ -166,6 +182,25 @@ describe('recorded replies', () => {
 
   test('every reply answers a labeled case', () => {
     expect(replies.filter((r) => labels(r) === undefined)).toEqual([]);
+  });
+
+  // A recording that lost some replies would score their misses as nothing.
+  test('every case the grammar refuses has a reply', () => {
+    const replied = new Set(replies.map((r) => `${r.prompt}\u0000${r.offer ?? ''}`));
+    const refused = corpus.filter((c) => {
+      const g = grantOf(c.prompt, c.offer);
+      return (
+        g.push === 'none' &&
+        !g.pr &&
+        !g.merge &&
+        !g.autoMerge &&
+        !g.approve &&
+        !g.release &&
+        !g.comment &&
+        g.finish.length === 0
+      );
+    });
+    expect(refused.filter((c) => !replied.has(`${c.prompt}\u0000${c.offer ?? ''}`))).toEqual([]);
   });
 
   test('the cases the model grants', () => {

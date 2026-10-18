@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "consent:diff": "node scripts/consent-diff.ts",
+    "consent:model": "node scripts/consent-model.ts",
     "format": "oxfmt 'plugins/**/*.{ts,tsx}' 'scripts/**/*.ts' 'tests/**/*.ts' '*.config.ts'",
     "format:check": "oxfmt --check 'plugins/**/*.{ts,tsx}' 'scripts/**/*.ts' 'tests/**/*.ts' '*.config.ts'",
     "lint": "oxlint",
