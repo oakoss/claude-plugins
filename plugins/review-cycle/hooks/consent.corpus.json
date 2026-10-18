@@ -185,6 +185,16 @@
     "may": []
   },
   {
+    "prompt": "Looks good, push on.",
+    "may": []
+  },
+  {
+    "prompt": "yes, push on",
+    "offer": "Want me to push?",
+    "may": ["push"],
+    "missed": true
+  },
+  {
     "prompt": "commit on it",
     "may": []
   },
