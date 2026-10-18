@@ -150,6 +150,15 @@ claude --plugin-dir ./plugins/<name>
 
 Use `/reload-plugins` to pick up edits without restarting the session; saving a hooks module reloads it on its own.
 
+To have every session in this repository run the working tree's plugins instead of the released installs, set `CLAUDE_CODE_PLUGIN_DIRS` while the shell is here, for example in a gitignored `mise.local.toml` at the root:
+
+```toml
+[env]
+CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/prose:{{config_root}}/plugins/review-cycle"
+```
+
+With it set, an edit to a hooks module takes effect in the session that made it, so a change to the commit gate or the consent grammar judges that session's own next commit and push. `CLAUDE_CODE_PLUGIN_DIRS= claude` starts a session on the released plugins.
+
 ```bash
 pnpm test          # vitest: modules' pure logic and prose anchors
 pnpm test:hooks    # claude plugin test: the modules' hooks

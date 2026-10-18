@@ -559,6 +559,18 @@ function isHeld(h: unknown): boolean {
   );
 }
 
+// While off, a running leg finishes and a hold or question is answered unseen;
+// a finished or capped leg is already settled.
+function offKept(k: Kept): Kept {
+  return {
+    ...k,
+    legs: k.legs.filter(([, leg]) => leg.done || leg.capped),
+    message: { tree: null, nudged: false, prWindow: false },
+    lastAnswer: '',
+    held: null,
+  };
+}
+
 // Every field the gate reads, element by element, so taking a record back
 // cannot throw or leave a field unset; the shape tag declines one an older
 // Kept wrote.
@@ -820,16 +832,18 @@ async function onSessionStart(
   // A new session owes no reminder for an old one's turns.
   state.owed = null;
   if (!state.gateOn) {
-    // Nothing the gate kept before it was switched off holds once it is back on.
+    // Switched off, the gate watches nothing, so what only watching kept true
+    // goes; a completed review stays true of the tree it saw.
     try {
+      const kept = await within($, read($, gate), 'reading the gate');
       await within(
         $,
-        update($, gate, () => null),
+        update($, gate, () => (isKept(kept) ? offKept(kept) : null)),
         'clearing the gate',
       );
     } catch (error) {
       $.ui.toast(
-        `review-cycle could not clear the reviews it kept, so switching it back on may bring back old ones: ${error instanceof Error ? error.message : String(error)}`,
+        `review-cycle could not clear what it was watching, so switching it back on may bring back a stale question or hold: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     return next(e);
