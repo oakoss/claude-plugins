@@ -100,6 +100,8 @@ Carry the evidence rule into the brief, in one sentence: a claim about what a co
 
 Ask for the execution receipt in the same breath: every leg opens its report with two lines — `execution:` naming the heaviest verification that *succeeded* against this checkout with its first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. The subagents carry this in their bodies. Leave the ask out of the Codex brief: `codex review` prints its own verdict, so Phase 4 reads its receipt from its command log. Instead tell Codex to join verification commands with &&, never ; or a newline, so a failure shows in the exit code.
 
+Every brief, Codex's included, also asks for three things: when findings share a cause, report the cause and the change that removes it, not only each instance; tag a finding `pre-existing` when it reproduces on the base without this pull request; and report within 10 minutes, settling the question first, then the most severe findings, naming what you did not reach.
+
 **The review scope is the merge-base diff**: `git diff <REMOTE>/<baseRefName>...HEAD` (three dots), matching what GitHub shows as the PR diff. A two-dot diff against the base *tip* would also show the inverse of everything merged since the PR branched, and reviewers would flag files the PR never touched.
 
 For the Codex flag, **reshape the brief**: the `-c` value is parsed as TOML and passes through one layer of shell quoting, so flatten it to a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare.
@@ -155,7 +157,7 @@ Collect findings from every reviewer. Attribute each to its source, group by fil
 
 **The coverage floor is the point of this phase.** Every dispatched reviewer appears in the report with an outcome: `reported`, `skipped (<reason>)`, `failed (<error>)`, `dropped (stalled, nudged once)`, or `capped (over budget, stopped)`. "No findings" and "nobody looked" must never read the same: if any dispatched leg is `failed`, `dropped` or `capped`, the verdict says `partial coverage` and never `clean`, regardless of how few findings arrived.
 
-**Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. This is deliberately broader than the working-tree cycle, and the difference is the class of claim rather than the leg: there, demotion covers claims about external tool behavior; here it covers any finding whose only support is a declaration, because the finding leaves as a public comment with no fix loop and no author turn behind it. Neither is gated on the leg's grade. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file.
+**Evidence grade survives aggregation.** A finding a reviewer labeled inferred keeps that label here and in the posted body — you are the last edit before it becomes a public comment on someone's PR, and this cycle has no fix loop and no author turn to catch a claim that arrives stripped of its caveat. A finding whose only support is a manifest, a config file, or a script entry is posted as a question, not as a finding: reading a declaration is not evidence for what the tool does with it. This is deliberately broader than the working-tree cycle, and the difference is the class of claim rather than the leg: there, demotion covers claims about external tool behavior; here it covers any finding whose only support is a declaration, because the finding leaves as a public comment with no fix loop and no author turn behind it. Neither is gated on the leg's grade. A leg that could not build says so in the report by name, rather than contributing a short findings list that reads as a clean file. A `pre-existing` tag survives too: such a finding is reported, and posted, apart from the pull request's own findings, says the defect predates it, and does not count toward the verdict.
 
 **Grade each leg that reported, from its two receipt lines**, by `${CLAUDE_PLUGIN_ROOT}/reference/grading.md`: read it before grading the first leg. It defines a verification, the four labels and their table, and how to write the Codex leg's receipt from its command log.
 
@@ -182,8 +184,10 @@ Findings: <count>
 
 Spec conformance (report-only): <spec source | no spec source found | not run — light tier>
 Structural suggestions (report-only): <items | not run — diff too small | not run — light tier>
+Pre-existing (predates this PR, not counted): <items | none>
 
 Verdict: clean (full coverage) | <N> findings | partial coverage — not reviewable as clean
+  (<N> counts only the PR's own findings: a report whose only findings are pre-existing reads clean under full coverage)
 ```
 
 The worktree's fate isn't known yet — cleanup is Phase 7 — so the report gains its `Worktree:` line there, after cleanup actually runs.
@@ -201,7 +205,7 @@ Post only when the argument parse found post intent, or the user asks after seei
 
 2. **Fingerprint each finding**: `sha256sum` (or `shasum -a 256` on macOS) over `<file>|<severity>|<claim with whitespace collapsed>`. Append `<!-- review-cycle:f:<hash> -->` to the finding's text — invisible when rendered. Skip any finding whose fingerprint already exists on the PR, wherever it appeared.
 
-3. **Post one review, event `COMMENT`** — never `APPROVE` or `REQUEST_CHANGES`; the user owns verdicts. If nothing survived deduplication — every finding already on the PR, or none to begin with — post nothing and say so in conversation; the reviews API rejects an empty review. Inline comments only for findings on lines present in the PR diff (`path` + `line` + `side: RIGHT`); everything else — coverage, findings on unchanged lines, report-only sections — goes in the review body, each finding carrying its fingerprint. Build the JSON payload at `<TMP>/payload.json` — never in the user's repo, where an untracked file reads as unreviewed drift — and send it:
+3. **Post one review, event `COMMENT`** — never `APPROVE` or `REQUEST_CHANGES`; the user owns verdicts. If nothing survived deduplication — every finding already on the PR, or none to begin with — post nothing and say so in conversation; the reviews API rejects an empty review. Inline comments only for findings on lines present in the PR diff (`path` + `line` + `side: RIGHT`); everything else — coverage, findings on unchanged lines, report-only sections, pre-existing findings wherever they sit — goes in the review body, each finding carrying its fingerprint. Build the JSON payload at `<TMP>/payload.json` — never in the user's repo, where an untracked file reads as unreviewed drift — and send it:
 
    ```bash
    gh api "repos/<OWNER>/<REPO>/pulls/<n>/reviews" --method POST --input <TMP>/payload.json

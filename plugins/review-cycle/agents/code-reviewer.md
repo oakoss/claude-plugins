@@ -31,13 +31,15 @@ By default, review unstaged changes from `git diff`. The user may specify differ
 
 Rate each issue from 0-100:
 
-- **0-25**: Likely false positive or pre-existing issue
+- **0-25**: Likely false positive
 - **26-50**: Minor nitpick not explicitly in CLAUDE.md
 - **51-75**: Valid but low-impact issue
 - **76-90**: Important issue requiring attention
 - **91-100**: Critical bug or explicit CLAUDE.md violation
 
 **Only report issues with confidence ≥ 80**
+
+An issue that reproduces on the base without this change is scored on its own merits and reported tagged `pre-existing`.
 
 ## Verify Empirically
 
