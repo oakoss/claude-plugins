@@ -4748,6 +4748,31 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh stack merge 5 --yes'), '(HTTP 500)')).toBe(true);
     expect(w.calls.some((c) => c.argv.join(' ').includes('pull_request='))).toBe(false);
   });
+  test('"merge the stack" and "merge up to #N" merge the stack, and nothing else', async ($, on) => {
+    const stack = JSON.stringify({
+      number: 4,
+      pull_requests: [
+        { number: 2, merged_at: null },
+        { number: 3, merged_at: null },
+      ],
+    });
+    const answers = (a: string): Partial<Run> | null =>
+      a === 'gh api repos/{owner}/{repo}/stacks/4'
+        ? { stdout: stack }
+        : a === 'gh api repos/{owner}/{repo}/stacks/3'
+          ? { exitCode: 1, stderr: 'gh: Not Found (HTTP 404)\n' }
+          : a.includes('pull_request=3')
+            ? { stdout: `[${stack}]` }
+            : github('two')(a);
+    fakeWorld(on, { settings: { local: stops('push') }, git: answers });
+    await say($, 'merge the stack');
+    expect(ran(await bash($, 'gh stack merge 4 --yes'))).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 7'), '')).toBe(true);
+    await say($, 'merge up to #3');
+    expect(ran(await bash($, 'gh stack merge 3 --yes'))).toBe(true);
+    await say($, 'merge up to #2');
+    expect(denied(await bash($, 'gh stack merge 3 --yes'), 'merges #2, #3 together')).toBe(true);
+  });
   test('a merge asked for covers the version pull request, looked up or not', async ($, on) => {
     const w = fakeWorld(on, {
       settings: { local: stops('release') },

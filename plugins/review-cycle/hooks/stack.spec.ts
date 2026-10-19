@@ -68,11 +68,11 @@ describe('readStack', () => {
 
 describe('mergeSet', () => {
   test('a stack merges every unmerged layer', () => {
-    expect(mergeSet(4, byStack)).toEqual({ prs: [2, 3] });
+    expect(mergeSet(4, byStack)).toEqual({ prs: [2, 3], stack: true });
   });
   test('a pull request merges with every unmerged one below it', () => {
-    expect(mergeSet(3, byPr([STACK]))).toEqual({ prs: [2, 3] });
-    expect(mergeSet(2, byPr([STACK]))).toEqual({ prs: [2] });
+    expect(mergeSet(3, byPr([STACK]))).toEqual({ prs: [2, 3], stack: false });
+    expect(mergeSet(2, byPr([STACK]))).toEqual({ prs: [2], stack: false });
   });
   test.each([
     ['a merged pull request', 1, byPr([STACK]), '#1 has already merged'],

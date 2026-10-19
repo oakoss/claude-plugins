@@ -925,6 +925,14 @@ const STACKS: StackLookup = (n) =>
   n === 4
     ? { by: 'stack', out: JSON.stringify(STACK4) }
     : { by: 'pr', out: JSON.stringify([1, 2, 3].includes(n) ? [STACK4] : []) };
+// A request naming gh-stack merges: "merge the stack", "merge up to #3".
+const stackAsked = (...stack: string[]) => grant({ mergeStack: stack });
+const plain = (lookup: string[]): GhAction => ({
+  kind: 'merge',
+  admin: false,
+  auto: false,
+  lookup,
+});
 const m = (target: number | null): GhAction => ({
   kind: 'stack-merge',
   target: target ?? { cannot: 'unnamed' },
@@ -972,6 +980,43 @@ describe('gh stack merge', () => {
     });
     const ready = world('push', { mergeTarget: { out: 'OPEN CLEAN' } }, undefined, STACKS);
     expect(await judge([m(3)], ready, named)).toMatchObject({ ran: [{ step: 'merge' }] });
+  });
+
+  test('a request to merge the stack, or up to a layer, names each layer it merges', async () => {
+    // Stack #4 holds #2 and #3, unmerged.
+    for (const [action, stack] of [
+      [m(4), 'stack'],
+      [m(3), 'stack'],
+      [m(4), 'stack:4'],
+      [m(3), 'upto:3'],
+      [m(4), 'upto:3'],
+      [m(2), 'upto:2'],
+    ] as const) {
+      const w = world('push', {}, undefined, STACKS);
+      expect(await judge([action], w, stackAsked(stack))).toEqual({ ran: [] });
+    }
+    for (const [action, stack] of [
+      [m(3), 'stack:4'],
+      // #3 is a pull request in stack #4, not a stack.
+      [m(3), 'stack:3'],
+      [m(3), 'upto:2'],
+      [m(4), 'upto:2'],
+    ] as const) {
+      const r = await judge([action], world('push', {}, undefined, STACKS), stackAsked(stack));
+      expect(r).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
+    }
+  });
+
+  test('a stack request covers no other merge, before it or after it', async () => {
+    const w = world('push', {}, undefined, STACKS);
+    // #2 is one of the stack's layers, so a grant leaking from them would cover it.
+    for (const lookup of [['5'], ['2'], []]) {
+      for (const actions of [[plain(lookup)], [m(4), plain(lookup)], [plain(lookup), m(4)]]) {
+        expect(await judge(actions, w, grant({ mergeStack: ['stack'] }))).toMatchObject({
+          deny: expect.any(String),
+        });
+      }
+    }
   });
 
   test('a layer that is the version pull request is judged as a release', async () => {

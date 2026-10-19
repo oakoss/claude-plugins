@@ -28,6 +28,7 @@ const SHIP = { ...BOTH, pr: true };
 const MERGE = { ...NONE, merge: true };
 // A merge request that names its pull requests: "merge 116".
 const merging = (...named: string[]) => ({ ...MERGE, mergeNamed: named });
+const stacking = (...stack: string[]) => ({ ...NONE, mergeStack: stack });
 const AUTO = { ...NONE, autoMerge: true };
 const autoNamed = (...numbers: string[]) => ({ ...AUTO, readyNamed: numbers });
 const APPROVE = { ...NONE, approve: true };
@@ -45,6 +46,27 @@ describe('merges, approvals, releases and review replies', () => {
     ['release it first', RELEASE],
     ['merge the first PR', NONE],
     ['merge the first', NONE],
+    // A gh-stack stack: whole, by its number, or up to a layer. They cover
+    // `gh stack merge` alone, so they grant no `gh pr merge`.
+    ['merge the stack', stacking('stack')],
+    ['merge the whole stack please', stacking('stack')],
+    ['merge stack #4', stacking('stack:4')],
+    ['merge up to #131', stacking('upto:131')],
+    ['merge everything up to 131', stacking('upto:131')],
+    ['merge all up to #4', stacking('upto:4')],
+    ['merge the entire stack', stacking('stack')],
+    ["merge the stack. once it's ready, don't merge it", NONE],
+    // The stack's words name nothing a release or a merge of a branch takes.
+    ['release the stack', NONE],
+    ['release the entire branch', NONE],
+    ['merge the stack, then release it', { ...stacking('stack'), release: true }],
+    ["don't merge the stack", NONE],
+    ['merge the stack into main', NONE],
+    ['merge up to the version PR', NONE],
+    ['push the stack', PUSH],
+    ['push the whole stack', PUSH],
+    ['ship the stack', SHIP],
+    ["don't push the stack yet", NONE],
     ['approve the first', NONE],
     ["don't merge it first", NONE],
     // A condition auto-merge waits on grants only `gh pr merge --auto`.
@@ -650,6 +672,22 @@ describe('an affirmative grants what the previous answer asked', () => {
   });
   test('go ahead to commit-and-push', () => {
     expect(grantOf('go ahead', 'Shall I commit and push?')).toEqual(BOTH);
+  });
+  test('yes to an offer for a gh-stack stack', () => {
+    // The two the gate makes.
+    expect(grantOf('yes', 'Force-push the stack with a lease?')).toEqual(LEASE);
+    expect(grantOf('go ahead', 'Merge #2, #3?')).toEqual(merging('2', '3'));
+    // And one an agent may.
+    expect(grantOf('yes', 'Merge the stack?')).toEqual(stacking('stack'));
+  });
+  test('a stack merge is a merge to holds and conditions', () => {
+    expect(holdsOf('merge the stack')).toBe(false);
+    expect(holdsOf("merge the stack. once it's ready, don't merge it")).toBe(true);
+    expect(liftsHold(grantOf('merge the stack'))).toBe(true);
+    // Held off when offered, as a merge is.
+    expect(holdOf('not yet', 'Merge the stack?')).toEqual({ step: 'merge', how: 'declined' });
+    // A leading condition waits on every merge after it, the stack's included.
+    expect(grantOf('once CI passes, merge the stack, then merge #3').mergeStack).toEqual([]);
   });
   // Seen in another session: an offer to delete a branch by name granted
   // nothing, whatever the reply.

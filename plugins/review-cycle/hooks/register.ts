@@ -828,9 +828,9 @@ function refusedStep(refusal: string): HoldStep | null {
 
 function grants(grant: Grant, step: HoldStep): boolean {
   if (step === 'push') return covers(grant, 'push');
-  if (step === 'merge') return grant.merge || grant.autoMerge;
+  if (step === 'merge') return grant.merge || grant.autoMerge || grant.mergeStack.length > 0;
   // A merge the user asked for covers the version pull request too.
-  if (step === 'release') return grant.release || grant.merge;
+  if (step === 'release') return grant.release || grant.merge || grant.mergeStack.length > 0;
   return grant.pr;
 }
 

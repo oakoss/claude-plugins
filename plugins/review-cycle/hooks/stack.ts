@@ -23,7 +23,10 @@ export async function readStack(
   );
   return held.asks === undefined ? { by: 'pr', out: held.out } : held;
 }
-export type MergeSet = { prs: [number, ...number[]] } | { asks: string; remedy: string };
+// `stack` when GitHub read the number as a stack's, not a pull request's.
+export type MergeSet =
+  | { prs: [number, ...number[]]; stack: boolean }
+  | { asks: string; remedy: string };
 
 type Layer = { number: number; merged: boolean };
 
@@ -98,7 +101,7 @@ export function mergeSet(n: number, read: StackRead): MergeSet {
         asks: `stack #${n} has merged every layer`,
         remedy: 'Tell the user; nothing is left to merge.',
       }
-    : { prs: [first, ...rest] };
+    : { prs: [first, ...rest], stack: read.by === 'stack' };
 }
 
 // A stack in gh-stack's local catalog, `<git common dir>/gh-stack`.

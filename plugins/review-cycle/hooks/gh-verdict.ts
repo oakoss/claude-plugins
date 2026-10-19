@@ -385,7 +385,7 @@ export type GhVerdict =
 export async function judgeGh(
   shown: string,
   actions: readonly GhAction[],
-  granted: Grant,
+  asked: Grant,
   held: Hold,
   lookups: GhLookups,
   model: ModelSteps = {},
@@ -395,15 +395,18 @@ export async function judgeGh(
   const notes: string[] = [];
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const may = permitted(granted, ladder, held !== null, model);
-  // Only a step the setting let through is noted as run unasked.
-  const bySetting = permitted(granted, ladder, held !== null);
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread),
   });
-  // A stack merge is judged as the merges it expands to, in its place.
-  const queue = [...actions];
-  for (let action = queue.shift(); action !== undefined; action = queue.shift()) {
+  // A stack merge is judged as the merges it expands to, in its place, each
+  // under the grant that covered the stack.
+  const queue: { action: GhAction; granted?: Grant }[] = actions.map((action) => ({ action }));
+  for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+    const { action } = item;
+    const granted = item.granted ?? asked;
+    const may = permitted(granted, ladder, held !== null, model);
+    // Only a step the setting let through is noted as run unasked.
+    const bySetting = permitted(granted, ladder, held !== null);
     switch (action.kind) {
       case 'pr': {
         if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
@@ -599,7 +602,7 @@ export async function judgeGh(
         if (covers(granted, 'lease')) break;
         const ask = askThem(
           'the stack and that it force-pushes its branches with a lease',
-          '"Push the stack, force-with-lease on its branches?"',
+          '"Force-push the stack with a lease?"',
           shown,
         );
         if (!may.push) {
@@ -630,23 +633,43 @@ export async function judgeGh(
           };
         }
         const listed = set.prs.map((n) => `#${n}`).join(', ');
+        // "merge the stack", "merge stack 4" or "merge up to #3" names every
+        // layer it merges, each still judged as its own merge.
+        const top = set.prs.at(-1);
+        const stacked = granted.mergeStack.some(
+          (t) =>
+            t === 'stack' ||
+            (set.stack && typeof action.target === 'number' && t === `stack:${action.target}`) ||
+            t === `upto:${top}`,
+        );
+        const layerGrant = stacked
+          ? { ...granted, merge: true, mergeNamed: set.prs.map(String) }
+          : granted;
         // One "merge it" names one pull request; a stack merge of several
         // needs each named, now or once ready, unless the setting merges
         // without asking.
         const { now, ready } = namedOf(granted);
         const named = new Set([...now, ...ready]);
         const ladderMerges = permitted({ ...granted, merge: false }, ladder, held !== null).merge;
-        if (set.prs.length > 1 && !ladderMerges && !set.prs.every((n) => named.has(String(n)))) {
+        if (
+          !stacked &&
+          set.prs.length > 1 &&
+          !ladderMerges &&
+          !set.prs.every((n) => named.has(String(n)))
+        ) {
           return {
             deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askThem('every pull request it merges', `"Merge ${listed}?"`, shown)}`,
           };
         }
         queue.unshift(
           ...set.prs.map((n) => ({
-            kind: 'merge' as const,
-            admin: false,
-            auto: false,
-            lookup: [String(n)],
+            action: {
+              kind: 'merge' as const,
+              admin: false,
+              auto: false,
+              lookup: [String(n)],
+            },
+            granted: layerGrant,
           })),
         );
         break;
