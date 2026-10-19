@@ -315,6 +315,8 @@ describe('stackLease', () => {
       'config remote.pushDefault',
       'config branch.spike/two.remote',
       'config gh-stack.remote',
+      'config remote.origin.receivepack',
+      'config remote.origin.uploadpack',
       'heads origin',
     ]);
     const sync = io();
@@ -324,7 +326,11 @@ describe('stackLease', () => {
   test('takes the remote named, or the first configured one', async () => {
     const named = io();
     await stackLease('push', 'origin', named);
-    expect(named.asked).toEqual(['heads origin']);
+    expect(named.asked).toEqual([
+      'config remote.origin.receivepack',
+      'config remote.origin.uploadpack',
+      'heads origin',
+    ]);
     const configured = io({
       config: (key) => Promise.resolve(key === 'remote.pushDefault' ? 'fork' : null),
     });
@@ -393,6 +399,16 @@ describe('stackLease', () => {
     expect(await stackLease('push', null, twice)).toMatchObject({
       asks: expect.stringContaining('a URL other than'),
     });
+  });
+  test.each(['receivepack', 'uploadpack'])('asks when the remote sets its own %s', async (pack) => {
+    const own = io({
+      config: (key) =>
+        Promise.resolve(key === `remote.origin.${pack}` ? 'git -C /other receive-pack' : null),
+    });
+    expect(await stackLease('push', null, own)).toEqual({
+      asks: `\`origin\` sets its own ${pack} program`,
+    });
+    expect(own.asked).not.toContain('heads origin');
   });
   test('sync asks when GitHub cannot be read', async () => {
     const r = await stackLease(

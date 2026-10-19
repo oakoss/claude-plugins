@@ -301,6 +301,12 @@ export async function stackLease(
   if (urls.fetch.trim() !== urls.push.trim() || urls.push.trim().includes('\n')) {
     return { asks: `\`${remote}\` pushes to a URL other than the one it lists branches from` };
   }
+  // A pack program of its own can serve either side from another repository.
+  for (const pack of ['receivepack', 'uploadpack']) {
+    const set = await io.config(`remote.${remote}.${pack}`);
+    if (failed(set)) return set;
+    if (set !== null) return { asks: `\`${remote}\` sets its own ${pack} program` };
+  }
   const base = await io.defaultBranch();
   if (base.asks !== undefined) return base;
   const listed = await io.heads(remote);
