@@ -827,6 +827,11 @@ const stack = (step: 'push' | 'sync' | 'submit' | 'link'): GhAction => ({
   where: { remote: null },
 });
 
+const link = (
+  where: { remote: string | null } | { unread: string },
+  ...branches: string[]
+): GhAction => ({ kind: 'stack', step: 'link', where, branches });
+
 describe('gh stack', () => {
   test.each(['push', 'sync', 'submit'] as const)(
     '%s leases every branch, so a plain push grant or the ladder does not cover it',
@@ -913,6 +918,70 @@ describe('gh stack', () => {
     expect(await judge([stack('link')], world('push'), grant({ pr: true }))).toMatchObject({
       deny: expect.any(String),
     });
+  });
+
+  test('link pushing the default branch needs the request to name it', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const r = await judge([link({ remote: null }, 'main', 'feat/a')], world('push'), asked);
+    expect(r).toMatchObject({ deny: expect.stringContaining('`main`, the default branch') });
+    expect(r).toMatchObject({ deny: expect.stringContaining('"Push to `main`?"') });
+    const ladder = await judge([link({ remote: null }, 'main')], world('never stop'));
+    expect(ladder).toMatchObject({ deny: expect.stringContaining('the default branch') });
+    const named = grant({ push: 'push', pr: true, pushNamed: ['main'] });
+    expect(await judge([link({ remote: null }, 'main')], world('push'), named)).toEqual({
+      ran: [],
+    });
+    expect(await judge([link({ remote: null }, 'feat/a')], world('push'), asked)).toEqual({
+      ran: [],
+    });
+  });
+
+  test('link checks the default branch it looks up, not main', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const w = world('push', { defaultBranch: { out: 'develop' } });
+    expect(await judge([link({ remote: null }, 'develop')], w, asked)).toMatchObject({
+      deny: expect.stringContaining('`develop`, the default branch'),
+    });
+    expect(await judge([link({ remote: null }, 'main')], w, asked)).toEqual({ ran: [] });
+  });
+
+  test('link to a named remote does not read its default branch', async () => {
+    const w = world('never stop');
+    const r = await judge([link({ remote: 'fork' }, 'feat/a')], w);
+    expect(r).toMatchObject({ deny: expect.stringContaining('`fork`, whose default branch') });
+    expect(w.calls).not.toContain('defaultBranch -');
+    const asked = grant({ push: 'push', pr: true });
+    expect(await judge([link({ remote: 'fork' }, 'feat/a')], w, asked)).toMatchObject({
+      ran: [],
+      notes: [expect.stringContaining('`fork`')],
+    });
+  });
+
+  test('link the setting lets through asks when the default branch is unreadable', async () => {
+    const w = world('never stop', { defaultBranch: { asks: 'gh failed' } });
+    expect(await judge([link({ remote: null }, 'feat/a')], w)).toMatchObject({
+      deny: expect.stringContaining('the default branch could not be read (gh failed)'),
+    });
+  });
+
+  test('link with an unreadable default branch runs with a note, unless it pushes main', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const w = world('push', { defaultBranch: { asks: 'gh failed' } });
+    const r = await judge([link({ remote: null }, 'feat/a')], w, asked);
+    expect(r).toMatchObject({ ran: [], notes: [expect.stringContaining('gh failed')] });
+    expect(await judge([link({ remote: null }, 'main')], w, asked)).toMatchObject({
+      deny: expect.stringContaining('the default branch'),
+    });
+  });
+
+  test('link where the gate cannot tell which repository it pushes to asks', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const r = await judge(
+      [link({ unread: 'it runs beside other commands' }, 'feat/a')],
+      world('push'),
+      asked,
+    );
+    expect(r).toMatchObject({ deny: expect.stringContaining('Run it on its own') });
   });
 });
 

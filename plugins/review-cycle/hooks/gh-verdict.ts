@@ -596,6 +596,44 @@ export async function judgeGh(
         // `link` pushes plainly; the rest lease every active branch.
         if (action.step === 'link') {
           if (!may.push) return refuse('push', null);
+          if ('unread' in action.where) {
+            return {
+              deny: `\`gh stack link\` pushes the branches it names, and ${action.where.unread}, so the gate cannot tell whether one is the default branch, and nothing ran. Run it on its own, from this repository, with at most one \`--remote\`. The command: ${shown}`,
+            };
+          }
+          const branches = action.branches ?? [];
+          if (branches.length > 0) {
+            const { remote } = action.where;
+            // The default branch gh reads is this repository's, not a named remote's.
+            const r =
+              remote === null
+                ? read(await lookups.defaultBranch(null), 'the default branch')
+                : {
+                    asks: `it pushes to \`${remote}\`, whose default branch the gate does not read`,
+                  };
+            const defaults = new Map(r.asks === undefined ? [['', { branch: r.out }]] : []);
+            const refs = branches.map((b) => ({ flag: ' ', to: `refs/heads/${b}`, url: '' }));
+            const u = unnamedTarget(refs, defaults, granted.pushNamed, null);
+            if (u !== null) {
+              const then =
+                u.offer === null
+                  ? `Give the user the command to run themselves. The command: ${shown}`
+                  : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
+              return {
+                deny: `\`gh stack link\` pushes the branches it names, and ${u.why}, so nothing ran. ${then}`,
+              };
+            }
+            // As for `git push`: a push the setting let through asks when its
+            // target is unchecked; one the user asked for runs with a note.
+            if (r.asks !== undefined && !covers(granted, 'push')) {
+              return refuse('push', `the default branch could not be read (${r.asks})`);
+            }
+            if (r.asks !== undefined) {
+              notes.push(
+                `review-cycle ran \`gh stack link\` without checking whether a branch it pushes is the default branch: ${r.asks}. If it may have pushed one the user did not name, tell them.`,
+              );
+            }
+          }
           if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
           break;
         }

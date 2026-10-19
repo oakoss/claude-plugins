@@ -1747,7 +1747,6 @@ describe('gh steps', () => {
       ],
       ['gh stack sync --prune', 'sync', { remote: null }],
       ['gh stack submit --auto --open', 'submit', { remote: null }],
-      ['gh stack link 10 20 30', 'link', { remote: null }],
       [
         'cd ../other && gh stack push',
         'push',
@@ -1757,6 +1756,28 @@ describe('gh steps', () => {
       ['gh stack push && ls', 'push', { unread: expect.stringContaining('beside other commands') }],
     ])('%s pushes the stack', (command, step, where) => {
       expect(ghActions(command)).toEqual([{ kind: 'stack', step, where }]);
+    });
+    test.each([
+      ['gh stack link 10 20 30', { remote: null }, []],
+      ['gh stack link main feat/a', { remote: null }, ['main', 'feat/a']],
+      ['gh stack link refs/heads/main HEAD', { remote: null }, ['refs/heads/main', 'HEAD']],
+      [
+        'gh stack link --base develop --remote fork 7 feat/a --open',
+        { remote: 'fork' },
+        ['feat/a'],
+      ],
+      ['gh stack link --base=develop --remote=fork a@b', { remote: 'fork' }, ['a@b']],
+      ['gh stack link HTTPS://github.com/o/r/pull/41 ui', { remote: null }, ['ui']],
+    ])('%s pushes its branch arguments', (command, where, branches) => {
+      expect(ghActions(command)).toEqual([{ kind: 'stack', step: 'link', where, branches }]);
+    });
+    test.each([
+      ['cd ../other && gh stack link feat/a', 'beside other commands'],
+      ['gh stack link --remote a --remote b feat/a', 'more than once'],
+    ])('%s cannot be checked', (command, why) => {
+      expect(ghActions(command)).toEqual([
+        { kind: 'stack', step: 'link', where: { unread: expect.stringContaining(why) } },
+      ]);
     });
     test('merge names its target, the pull request or stack below which all merge', () => {
       expect(ghActions('gh stack merge 42 --yes --squash')).toEqual([

@@ -4464,6 +4464,15 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh stack modify'), 'is interactive')).toBe(true);
     expect(denied(await bash($, 'gh stack merge 4 --yes --squash'), 'below it')).toBe(true);
   });
+  test('gh stack link pushes its branches: the default one needs naming', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'ship it');
+    expect(denied(await bash($, 'gh stack link main feat/a'), '`main`, the default branch')).toBe(
+      true,
+    );
+    expect(ran(await bash($, 'gh stack link feat/a feat/b'))).toBe(true);
+    expect(denied(await bash($, 'cd .. && gh stack link feat/a'), 'Run it on its own')).toBe(true);
+  });
   test('a stack merge reads GitHub, and merges only what the user named', async ($, on) => {
     const stack = JSON.stringify([
       {

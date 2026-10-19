@@ -46,10 +46,12 @@ export type GhAction =
   // requests; `merge` merges every unmerged layer of stack `target`, or pull
   // request `target` and every unmerged one below it. `where` is the
   // `--remote` it names, or why the gate cannot tell where it pushes.
+  // `branches` are the branch arguments `link` pushes plainly.
   | {
       kind: 'stack';
       step: 'push' | 'sync' | 'submit' | 'link';
       where: { remote: string | null } | { unread: string };
+      branches?: string[];
     }
   | { kind: 'stack-merge'; target: number | Unlookable }
   | { kind: 'unread'; why: string; remedy?: string };

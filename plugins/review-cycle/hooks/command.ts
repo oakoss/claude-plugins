@@ -1200,6 +1200,8 @@ const STACK_LOCAL = new Set([
   'help',
 ]);
 const STACK_PUSHES = new Set(['push', 'sync', 'submit', 'link'] as const);
+// `gh stack link`'s options that take the next word (v0.2.1's `--help`).
+const LINK_VALUED = new Set(['--base', '--remote']);
 // The verbs that rewrite this clone's commits, as `git rebase` does.
 const STACK_REWRITES = new Set(['rebase', 'sync']);
 
@@ -1297,7 +1299,20 @@ function stackAt(words: Word[], from: number, context: GhContext, fed: boolean):
         where: { unread: '`--remote` is given more than once or with no remote' },
       };
     }
-    return { kind: 'stack', step, where: { remote: remote ?? null } };
+    if (step !== 'link') return { kind: 'stack', step, where: { remote: remote ?? null } };
+    // Any other argument is a branch `link` pushes as `refs/heads/<name>`.
+    // A URL is a pull request. A number is read as one too, though gh-stack
+    // also pushes a local branch of that name: one only a digits-only default
+    // branch would make matter.
+    const branches = rest
+      .filter(
+        (w, i) =>
+          !w.text.startsWith('-') &&
+          !LINK_VALUED.has(rest[i - 1]?.text ?? '') &&
+          !/^(https?:\/\/|\d+$)/i.test(w.text),
+      )
+      .map((w) => w.text);
+    return { kind: 'stack', step, where: { remote: remote ?? null }, branches };
   }
   if (v === 'merge') {
     if (fed || rest.some((w) => w.dynamic)) {
