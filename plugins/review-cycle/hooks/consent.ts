@@ -756,17 +756,19 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
   return true;
 }
 
-// "we can push" after an agreement ("ok, we can push") answers, rather than
-// describes ("CI is green, we can push").
-function isLead(lead: string[], allowed: Set<string>, agreed: boolean): boolean {
+// "we can push" after an agreement ("ok, we can push") or as the whole message
+// ("We can merge 91") answers, rather than describes ("CI is green, we can
+// push"); a "we could" message only weighs an option.
+function isLead(lead: string[], allowed: Set<string>, agreed: boolean, opens = false): boolean {
   if (!lead.every((x) => allowed.has(x) || x === 'to')) return false;
   // The user's own plan unless addressed to the agent: "I want you to push".
   if (allowed === REQUEST_LEAD) {
     if (lead.some((x) => x === 'i' || x === "i'd") && !lead.includes('you')) return false;
     const we = lead.indexOf('we');
     const agreeing =
-      (agreed || (we > 0 && lead.slice(0, we).every((x) => AGREE_WORD.has(x)))) &&
-      /^(can|could)$/.test(lead[we + 1] ?? '');
+      (opens && we === 0 && lead[1] === 'can') ||
+      ((agreed || (we > 0 && lead.slice(0, we).every((x) => AGREE_WORD.has(x)))) &&
+        /^(can|could)$/.test(lead[we + 1] ?? ''));
     if (we !== -1 && !agreeing && !/^(can|could|let'?s?)$/.test(lead[we - 1] ?? '')) return false;
   }
   // "Should we push?" offers; other "we" questions only as HOW_WE's whole sentences.
@@ -797,6 +799,7 @@ function isReadyMerge(
   verbs: Readonly<Record<string, Family>>,
   lead: Set<string>,
   agreed: boolean,
+  opens: boolean,
 ): boolean {
   const soon = asSoonAs(w);
   const k = soon === -1 ? w.findIndex((x) => SUBORDINATE.has(x)) : soon;
@@ -811,7 +814,7 @@ function isReadyMerge(
   const family = verbs[request[at] ?? ''];
   return (
     family?.forms[0] === 'merge' &&
-    isLead([...before, ...request.slice(0, at)], lead, agreed) &&
+    isLead([...before, ...request.slice(0, at)], lead, agreed, opens) &&
     namesPullRequest(request.slice(at + 1)) &&
     samePullRequest(w.slice(after).join(' '), request.join(' '))
   );
@@ -959,9 +962,10 @@ function grammarGrant(
   now = false,
   // Set when the clause's last part is a merge, so numbers after it name more.
   ends?: { merging: boolean },
+  opens = false,
 ): Carry {
   const w = now ? withoutNow(words(clause), verbs, clause) : words(clause);
-  if (isReadyMerge(w, verbs, lead, agreed)) {
+  if (isReadyMerge(w, verbs, lead, agreed, opens)) {
     into.autoMerge = true;
     into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
     return 'ready';
@@ -994,7 +998,7 @@ function grammarGrant(
     const asks =
       family !== undefined &&
       !described &&
-      isLead(part.slice(0, at), lead, agreed) &&
+      isLead(part.slice(0, at), lead, agreed, opens) &&
       (stack !== null ||
         (isTail(tail, family, verbs === REQUESTED) && (family.object?.(tail) ?? true)));
     if (asks) {
@@ -1499,7 +1503,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
   const retractions: { at: number; keeps: MutableGrant | null }[] = [];
   const asking = new Set<number>();
   let semicolon = false;
-  for (const [at, raw] of sentences(prPhrase(unquote(forcePhrase(typed)))).entries()) {
+  const all = sentences(prPhrase(unquote(forcePhrase(typed))));
+  for (const [at, raw] of all.entries()) {
     const semicolonBefore = semicolon;
     if (raw.trim().endsWith(';')) semicolon = true;
     const flipped = leadingReady(raw);
@@ -1541,6 +1546,15 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     let merging = false;
     // Trimmed, so "But only if CI passes." opens its own sentence rather than a second clause.
     const parts = clauses(sentence.trim());
+    // "We can merge 91" asks only as the whole message: anything beside it can
+    // make it an option or a question ("We can wait. We can merge 91.", "We can
+    // merge 91 and I'd rather wait", "We can merge 91.\n- Or close it.", "?!").
+    const alone =
+      flipped === null &&
+      all.length === 1 &&
+      parts.length === 1 &&
+      !/[\n?]/.test(text.trim()) &&
+      !words(sentence).some((x) => x === 'and' || x === 'then');
     for (const [i, part] of parts.entries()) {
       const c = part.replace(CONTRAST, '');
       if (CLAUSE_CONDITION.test(c) || (i === 0 && SENTENCE_CONDITION.test(c))) return NO_GRANT;
@@ -1560,7 +1574,17 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       // A condition that means now counts only where it ends the sentence.
       const now = i === parts.length - 1;
       const ends = { merging: false };
-      const left = grammarGrant(c, REQUESTED, REQUEST_LEAD, into, agreed, undefined, now, ends);
+      const left = grammarGrant(
+        c,
+        REQUESTED,
+        REQUEST_LEAD,
+        into,
+        agreed,
+        undefined,
+        now,
+        ends,
+        alone,
+      );
       merging = into === mine && ends.merging;
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;

@@ -72,6 +72,10 @@ const LEADS = [
   '(not yet) ',
   'don’t ',
   'ok :), ',
+  'we can ',
+  'we could ',
+  'CI is green, we can ',
+  'fix it and we can ',
 ];
 const VERBS = [
   'merge it',
