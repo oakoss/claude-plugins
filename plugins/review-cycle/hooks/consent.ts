@@ -926,6 +926,12 @@ function offeredTargets(answer: string): string[] {
 // "then". `ready` withholds the rest, which may wait on its condition too.
 type Carry = 'none' | 'mood' | 'described' | 'ready';
 
+// Where "we can <step>" may ask: as the whole message, or as the last part of a
+// SUGGESTS message when it merges a named pull request, read as "let's leave it
+// and merge 47" is.
+type Opens = 'none' | 'alone' | 'chained';
+const SUGGESTS = /^(lets|let's|just)$/;
+
 const MEANS_NOW =
   / (?:(?:when|once|after) (?:you are|you're) (?:done|finished)(?: with (?:it|that|this|them))?|(?:when|whenever) (?:you|we) can|as soon as (?:you can|we can|possible)|before (?:the )?(?:checks|ci|tests) (?:pass|passes|finish|finishes|complete|completes))$/;
 
@@ -962,10 +968,10 @@ function grammarGrant(
   now = false,
   // Set when the clause's last part is a merge, so numbers after it name more.
   ends?: { merging: boolean },
-  opens = false,
+  opens: Opens = 'none',
 ): Carry {
   const w = now ? withoutNow(words(clause), verbs, clause) : words(clause);
-  if (isReadyMerge(w, verbs, lead, agreed, opens)) {
+  if (isReadyMerge(w, verbs, lead, agreed, opens === 'alone')) {
     into.autoMerge = true;
     into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
     return 'ready';
@@ -984,7 +990,7 @@ function grammarGrant(
   }
   let described = false;
   let merging = false;
-  for (const part of parts) {
+  for (const [i, part] of parts.entries()) {
     // "merge 131 and 130": a list of numbers after a merge names them too.
     if (merging && part.every((x) => /^\d+$/.test(x) || x === 'pr')) {
       into.mergeNamed = [...into.mergeNamed, ...part.filter((x) => /^\d+$/.test(x))];
@@ -995,10 +1001,16 @@ function grammarGrant(
     const family = verbs[part[at] ?? ''];
     const tail = part.slice(at + 1);
     const stack = family?.grants.includes('merge') ? stackMergeOf(tail) : null;
+    const open =
+      opens === 'alone' ||
+      (opens === 'chained' &&
+        i === parts.length - 1 &&
+        family?.forms[0] === 'merge' &&
+        tail.some((x) => /^\d+$/.test(x)));
     const asks =
       family !== undefined &&
       !described &&
-      isLead(part.slice(0, at), lead, agreed, opens) &&
+      isLead(part.slice(0, at), lead, agreed, open) &&
       (stack !== null ||
         (isTail(tail, family, verbs === REQUESTED) && (family.object?.(tail) ?? true)));
     if (asks) {
@@ -1546,15 +1558,21 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     let merging = false;
     // Trimmed, so "But only if CI passes." opens its own sentence rather than a second clause.
     const parts = clauses(sentence.trim());
-    // "We can merge 91" asks only as the whole message: anything beside it can
-    // make it an option or a question ("We can wait. We can merge 91.", "We can
-    // merge 91 and I'd rather wait", "We can merge 91.\n- Or close it.", "?!").
-    const alone =
-      flipped === null &&
-      all.length === 1 &&
-      parts.length === 1 &&
-      !/[\n?]/.test(text.trim()) &&
-      !words(sentence).some((x) => x === 'and' || x === 'then');
+    // "We can merge 91" asks only as the whole message, or ending "Let's leave it
+    // and we can merge 91": anything else beside it can make it an option or a
+    // question ("We can wait. We can merge 91.", "We can merge 91 and I'd rather
+    // wait", "We can merge 91.\n- Or close it.", "?!").
+    const said = words(sentence);
+    const opener = said.find((x) => !AGREE_WORD.has(x));
+    const joined = said.some((x) => x === 'and' || x === 'then');
+    const opens: Opens =
+      flipped !== null || all.length > 1 || parts.length > 1 || /[\n?]/.test(text.trim())
+        ? 'none'
+        : !joined
+          ? 'alone'
+          : SUGGESTS.test(opener ?? '')
+            ? 'chained'
+            : 'none';
     for (const [i, part] of parts.entries()) {
       const c = part.replace(CONTRAST, '');
       if (CLAUSE_CONDITION.test(c) || (i === 0 && SENTENCE_CONDITION.test(c))) return NO_GRANT;
@@ -1583,7 +1601,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
         undefined,
         now,
         ends,
-        alone,
+        opens,
       );
       merging = into === mine && ends.merging;
       agreed = AGREE.test(c);

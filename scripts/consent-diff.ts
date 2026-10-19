@@ -76,6 +76,8 @@ const LEADS = [
   'we could ',
   'CI is green, we can ',
   'fix it and we can ',
+  'lets leave it and we can ',
+  'lets wait and we can ',
 ];
 const VERBS = [
   'merge it',
