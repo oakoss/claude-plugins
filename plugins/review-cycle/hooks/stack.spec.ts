@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { mergeSet } from './stack';
+import type { Lookup } from './gh-verdict';
+import { mergeSet, readStack } from './stack';
 
 // Stack #4 as `GET repos/{o}/{r}/stacks/4` answered in the 2026-10-18 spike
 // (oakoss/stack-spike-2), trimmed: #1 merged, then #2 and #3.
@@ -14,6 +15,45 @@ const pr = (number: number, merged = false) => ({
 const STACK = { number: 4, open: true, pull_requests: [pr(1, true), pr(2), pr(3)] };
 const byStack = { by: 'stack', out: JSON.stringify(STACK) } as const;
 const byPr = (stacks: unknown[]) => ({ by: 'pr', out: JSON.stringify(stacks) }) as const;
+
+// gh answering by endpoint, recording what was asked.
+function gh(answers: Record<string, Lookup>) {
+  const asked: string[] = [];
+  const ghApi = (args: string[]) => {
+    const call = args.join(' ');
+    asked.push(call);
+    return Promise.resolve(answers[call] ?? { asks: `unexpected ${call}` });
+  };
+  return { asked, ghApi };
+}
+
+describe('readStack', () => {
+  const STACK_4 = 'repos/{owner}/{repo}/stacks/4';
+  const HOLDING_4 = '-X GET repos/{owner}/{repo}/stacks -f pull_request=4';
+  const NOT_FOUND = { asks: 'looking up stack #4 failed (gh: Not Found (HTTP 404))' };
+
+  test('a stack number is read as that stack', async () => {
+    const { asked, ghApi } = gh({ [STACK_4]: { out: '{}' } });
+    expect(await readStack(4, ghApi)).toEqual({ by: 'stack', out: '{}' });
+    expect(asked).toEqual([STACK_4]);
+  });
+  test('a 404 reads the stack holding that pull request', async () => {
+    const { asked, ghApi } = gh({ [STACK_4]: NOT_FOUND, [HOLDING_4]: { out: '[]' } });
+    expect(await readStack(4, ghApi)).toEqual({ by: 'pr', out: '[]' });
+    expect(asked).toEqual([STACK_4, HOLDING_4]);
+  });
+  test('any other failure asks, without reading it as a pull request', async () => {
+    const failed = { asks: 'looking up stack #4 failed (gh: Server Error (HTTP 500))' };
+    const { asked, ghApi } = gh({ [STACK_4]: failed, [HOLDING_4]: { out: '[]' } });
+    expect(await readStack(4, ghApi)).toEqual(failed);
+    expect(asked).toEqual([STACK_4]);
+  });
+  test('a failed second read asks, slow included', async () => {
+    const slow = { asks: 'timed out', slow: true } as const;
+    const { ghApi } = gh({ [STACK_4]: NOT_FOUND, [HOLDING_4]: slow });
+    expect(await readStack(4, ghApi)).toEqual(slow);
+  });
+});
 
 describe('mergeSet', () => {
   test('a stack merges every unmerged layer', () => {

@@ -46,7 +46,7 @@ export type GhAction =
   // requests; `merge` merges every unmerged layer of stack `target`, or pull
   // request `target` and every unmerged one below it.
   | { kind: 'stack'; step: 'push' | 'sync' | 'submit' | 'link' }
-  | { kind: 'stack-merge'; target: string | Unlookable }
+  | { kind: 'stack-merge'; target: number | Unlookable }
   | { kind: 'unread'; why: string; remedy?: string };
 
 // `gh api`'s options that take a value (gh 2.102.0's `gh api --help`), and

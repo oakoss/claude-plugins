@@ -1745,20 +1745,26 @@ describe('gh steps', () => {
     });
     test('merge names its target, the pull request or stack below which all merge', () => {
       expect(ghActions('gh stack merge 42 --yes --squash')).toEqual([
-        { kind: 'stack-merge', target: '42' },
+        { kind: 'stack-merge', target: 42 },
       ]);
       expect(ghActions('gh stack merge --merge-method squash 42')).toEqual([
-        { kind: 'stack-merge', target: '42' },
+        { kind: 'stack-merge', target: 42 },
       ]);
       expect(ghActions('gh stack merge --yes')).toEqual([
         { kind: 'stack-merge', target: { cannot: 'unnamed' } },
       ]);
+      for (const target of ['two', '4x', 'x4', '1234567890']) {
+        expect(ghActions(`gh stack merge ${target} --yes`)).toEqual([
+          expect.objectContaining({ kind: 'unread', why: expect.stringContaining('by number') }),
+        ]);
+      }
     });
     test.each([
       ['cd ../other && gh stack merge 42 --yes', 'beside'],
       ['GH_REPO=o/other gh stack merge 42 --yes', 'elsewhere'],
       ['gh -R o/other stack merge 42 --yes', 'elsewhere'],
       ['gh --hostname ghe.example stack merge 42 --yes', 'elsewhere'],
+      ['gh --hostname=ghe.example stack merge 42 --yes', 'elsewhere'],
     ])('%s merges where the gate does not look: %s', (command, cannot) => {
       expect(ghActions(command)).toEqual([{ kind: 'stack-merge', target: { cannot } }]);
     });

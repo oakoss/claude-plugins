@@ -20,7 +20,7 @@ import {
   type DryRunRef,
   type Unnamed,
 } from './push-verdict';
-import { type MergeSet, mergeSet, type StackRead } from './stack';
+import { type MergeSet, mergeSet, type readStack } from './stack';
 
 // `unreadable` names the settings file that could not be read, and why.
 export type InForce = Ladder & { unreadable?: string };
@@ -59,9 +59,7 @@ export type GhLookups = {
   // The default branch of `repo` (HOST/OWNER/NAME or OWNER/NAME), or of the
   // repository gh picks when it is null.
   defaultBranch: (repo: string | null) => Promise<Lookup>;
-  // Stack <n> from GitHub, or the stacks holding pull request <n> when no
-  // stack has that number.
-  stack: (n: number) => Promise<StackRead | { asks: string; slow?: true }>;
+  stack: (n: number) => ReturnType<typeof readStack>;
 };
 
 // A read's text without surrounding space; one that printed nothing names
@@ -189,26 +187,26 @@ const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy:
 // fix (null: ask the user).
 async function stackSetOf(
   lookups: GhLookups,
-  target: string | Unlookable,
+  target: number | Unlookable,
 ): Promise<MergeSet | { asks: string; remedy: null }> {
-  if (typeof target !== 'string') {
+  if (typeof target !== 'number') {
     if (target.cannot !== 'unnamed') return UNTOLD[target.cannot];
     return {
       asks: 'with no number it merges the current branch’s stack, which the gate does not look up',
       remedy: 'Name the stack or pull request: `gh stack merge <number> --yes`.',
     };
   }
-  if (!/^\d{1,9}$/.test(target)) {
-    return {
-      asks: `\`${target}\` names no stack or pull request by number`,
-      remedy: 'Name it by number.',
-    };
-  }
-  const n = Number(target);
-  const read = await lookups.stack(n);
+  const read = await lookups.stack(target);
   if (read.asks !== undefined) return { asks: read.asks, remedy: read.slow ? SLOW : null };
-  return mergeSet(n, read);
+  return mergeSet(target, read);
 }
+
+// The pull requests the user named to merge now and once ready. One the gate
+// cannot tell (`?`) names none.
+function namedOf(granted: Grant): { now: string[]; ready: string[] } {
+  return { now: knownOf(granted.mergeNamed), ready: knownOf(granted.readyNamed) };
+}
+const knownOf = (named: readonly string[]) => named.filter((n) => n !== NAMED_ELSEWHERE);
 
 // A merge the user asked for whose lookup GitHub was too slow to answer is
 // retried, not put back to them.
@@ -397,7 +395,9 @@ export async function judgeGh(
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread),
   });
-  for (const action of actions) {
+  // A stack merge is judged as the merges it expands to, in its place.
+  const queue = [...actions];
+  for (let action = queue.shift(); action !== undefined; action = queue.shift()) {
     switch (action.kind) {
       case 'pr': {
         if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
@@ -467,8 +467,7 @@ export async function judgeGh(
         }
         // Named pull requests bind by the number GitHub resolves, whatever the
         // setting. One the gate cannot tell (`?`) binds `--auto` to none.
-        const nowNamed = granted.mergeNamed.filter((n) => n !== NAMED_ELSEWHERE);
-        const readyNamed = granted.readyNamed.filter((n) => n !== NAMED_ELSEWHERE);
+        const { now: nowNamed, ready: readyNamed } = namedOf(granted);
         // An unnamed merge now never covers one named for once ready ("merge
         // it, and merge 62 once CI passes").
         const nowAny = granted.merge && nowNamed.length === 0;
@@ -610,25 +609,22 @@ export async function judgeGh(
         // One "merge it" names one pull request; a stack merge of several
         // needs each named, now or once ready, unless the setting merges
         // without asking.
-        const named = new Set([...granted.mergeNamed, ...granted.readyNamed]);
+        const { now, ready } = namedOf(granted);
+        const named = new Set([...now, ...ready]);
         const ladderMerges = permitted({ ...granted, merge: false }, ladder, held !== null).merge;
         if (set.prs.length > 1 && !ladderMerges && !set.prs.every((n) => named.has(String(n)))) {
           return {
             deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askThem('every pull request it merges', `"Merge ${listed}?"`, shown)}`,
           };
         }
-        const each = await judgeGh(
-          shown,
-          set.prs.map((n) => ({ kind: 'merge', admin: false, auto: false, lookup: [String(n)] })),
-          granted,
-          held,
-          lookups,
-          model,
-          unread,
+        queue.unshift(
+          ...set.prs.map((n) => ({
+            kind: 'merge' as const,
+            admin: false,
+            auto: false,
+            lookup: [String(n)],
+          })),
         );
-        if ('deny' in each) return each;
-        ran.push(...each.ran);
-        notes.push(...(each.notes ?? []));
         break;
       }
       default: {

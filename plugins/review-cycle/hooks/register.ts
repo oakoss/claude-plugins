@@ -119,6 +119,7 @@ import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
+import { readStack } from './stack';
 import { sweep } from './sweep';
 import {
   EMPTY_TREE,
@@ -2118,24 +2119,7 @@ function ghLookups($: $): GhLookups {
         ],
         'the default branch',
       ),
-    stack: async (n) => {
-      const whole = await ghRead(
-        $,
-        ['api', `repos/{owner}/{repo}/stacks/${n}`],
-        `stack #${n}`,
-        MERGE_LOOKUP_MS,
-      );
-      if (whole.asks === undefined) return { by: 'stack', out: whole.out };
-      // gh 2.x prints `gh: Not Found (HTTP 404)` for a number that is no stack.
-      if (!whole.asks.includes('(HTTP 404)')) return whole;
-      const held = await ghRead(
-        $,
-        ['api', '-X', 'GET', 'repos/{owner}/{repo}/stacks', '-f', `pull_request=${n}`],
-        `the stack holding #${n}`,
-        MERGE_LOOKUP_MS,
-      );
-      return held.asks === undefined ? { by: 'pr', out: held.out } : held;
-    },
+    stack: (n) => readStack(n, (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS)),
   };
 }
 

@@ -1283,7 +1283,15 @@ function stackAt(words: Word[], from: number, context: GhContext, fed: boolean):
     const target = rest.find(
       (w, i) => !w.text.startsWith('-') && rest[i - 1]?.text !== '--merge-method',
     );
-    return { kind: 'stack-merge', target: target ? target.text : { cannot: 'unnamed' } };
+    if (target === undefined) return { kind: 'stack-merge', target: { cannot: 'unnamed' } };
+    if (!/^\d{1,9}$/.test(target.text)) {
+      return {
+        kind: 'unread',
+        why: `\`gh stack merge ${target.text}\` names no stack or pull request by number`,
+        remedy: 'Name it by number.',
+      };
+    }
+    return { kind: 'stack-merge', target: Number(target.text) };
   }
   return { kind: 'unread', why: `\`gh stack ${v}\` is not a gh-stack command the gate reads` };
 }
@@ -1330,9 +1338,10 @@ function ghAt(
   const fromInput = { kind: 'unread', why: 'its gh command comes from its input' } as const;
   if (group === undefined) return fed ? fromInput : null;
   if (words[sub]?.dynamic) return { kind: 'unread', why: 'its gh command is built at run time' };
+  // `gh --hostname h …` sends it to another host.
+  const host = words.slice(at + 1, sub).some((w) => /^--hostname(=|$)/.test(w.text));
   if (group === 'stack') {
-    const moved =
-      seen.repo !== null || words.slice(at + 1, sub).some((w) => /^--hostname(=|$)/.test(w.text));
+    const moved = host || seen.repo !== null;
     return asksHelp(words.slice(at + 1), fed)
       ? null
       : stackAt(words, sub + 1, moved ? 'elsewhere' : context, fed);
@@ -1345,8 +1354,6 @@ function ghAt(
   }
   if (asksHelp(words.slice(at + 1), fed)) return null;
   if (group === 'api') {
-    // `gh --hostname h api …` sends it to another host.
-    const host = words.slice(at + 1, sub).some((w) => /^--hostname(=|$)/.test(w.text));
     return apiActions(words.slice(sub + 1), host ? 'elsewhere' : context, fed);
   }
   const verbs = GH_VERBS[group];

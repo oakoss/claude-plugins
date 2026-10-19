@@ -1,9 +1,28 @@
-// What `gh stack merge <n>` merges, read from GitHub's stacks API. Pure;
-// register.ts makes the reads.
+// What `gh stack merge <n>` merges, read from GitHub's stacks API through
+// the gh reads register.ts passes in.
+
+import type { Lookup } from './gh-verdict';
 
 // `stack`: `GET repos/{o}/{r}/stacks/<n>`, one stack. `pr`: `GET
 // repos/{o}/{r}/stacks?pull_request=<n>`, the stacks holding that pull request.
 export type StackRead = { by: 'stack' | 'pr'; out: string; asks?: never };
+
+// gh-stack reads a bare number as a stack first, then as a pull request; any
+// failure but a 404 cannot tell the two apart, so it asks.
+export async function readStack(
+  n: number,
+  ghApi: (args: string[], what: string) => Promise<Lookup>,
+): Promise<StackRead | Exclude<Lookup, { out: string }>> {
+  const whole = await ghApi([`repos/{owner}/{repo}/stacks/${n}`], `stack #${n}`);
+  if (whole.asks === undefined) return { by: 'stack', out: whole.out };
+  // gh 2.x prints `gh: Not Found (HTTP 404)` for a number that is no stack.
+  if (!whole.asks.includes('(HTTP 404)')) return whole;
+  const held = await ghApi(
+    ['-X', 'GET', 'repos/{owner}/{repo}/stacks', '-f', `pull_request=${n}`],
+    `the stack holding #${n}`,
+  );
+  return held.asks === undefined ? { by: 'pr', out: held.out } : held;
+}
 export type MergeSet = { prs: [number, ...number[]] } | { asks: string; remedy: string };
 
 type Layer = { number: number; merged: boolean };

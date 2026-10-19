@@ -75,6 +75,7 @@ describe('gh api', () => {
     ['GH_REPO=o/r gh api -X PUT repos/{owner}/{repo}/pulls/1/merge', 'elsewhere'],
     ['gh api --hostname h -X PUT repos/o/r/pulls/1/merge', 'elsewhere'],
     ['gh --hostname h api -X PUT repos/o/r/pulls/1/merge', 'elsewhere'],
+    ['gh --hostname=h api -X PUT repos/o/r/pulls/1/merge', 'elsewhere'],
     ['gh api -X PUT https://ghe.example.com/api/v3/repos/o/r/pulls/1/merge', 'elsewhere'],
     ['gh api -X PUT repos/{owner}/r/pulls/1/merge', 'elsewhere'],
     ['gh api -X PUT repos/{owner}/{repo}/pulls/1/merge && echo ok', 'beside'],

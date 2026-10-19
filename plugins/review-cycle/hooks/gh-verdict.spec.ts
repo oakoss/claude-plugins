@@ -868,7 +868,7 @@ const STACKS: StackLookup = (n) =>
   n === 4
     ? { by: 'stack', out: JSON.stringify(STACK4) }
     : { by: 'pr', out: JSON.stringify([1, 2, 3].includes(n) ? [STACK4] : []) };
-const m = (target: string | null): GhAction => ({
+const m = (target: number | null): GhAction => ({
   kind: 'stack-merge',
   target: target ?? { cannot: 'unnamed' },
 });
@@ -876,27 +876,27 @@ const m = (target: string | null): GhAction => ({
 describe('gh stack merge', () => {
   test('a merge of one layer is judged as that pull request', async () => {
     const w = world('push', {}, undefined, STACKS);
-    expect(await judge([m('2')], w, grant({ merge: true }))).toEqual({ ran: [] });
+    expect(await judge([m(2)], w, grant({ merge: true }))).toEqual({ ran: [] });
     // Named, it is looked up and bound by number, as `gh pr merge 2` is.
-    expect(await judge([m('2')], w, grant({ merge: true, mergeNamed: ['2'] }))).toEqual({
+    expect(await judge([m(2)], w, grant({ merge: true, mergeNamed: ['2'] }))).toEqual({
       ran: [],
     });
     expect(w.calls).toContain('mergeTarget 2');
   });
 
   test('a merge of several layers needs every one named', async () => {
-    const r = await judge([m('3')], world('push', {}, undefined, STACKS), grant({ merge: true }));
+    const r = await judge([m(3)], world('push', {}, undefined, STACKS), grant({ merge: true }));
     expect(r).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
     expect(
       await judge(
-        [m('3')],
+        [m(3)],
         world('push', {}, undefined, STACKS),
         grant({ merge: true, mergeNamed: ['2', '3'] }),
       ),
     ).toEqual({ ran: [] });
     expect(
       await judge(
-        [m('4')],
+        [m(4)],
         world('push', {}, undefined, STACKS),
         grant({ merge: true, mergeNamed: ['3'] }),
       ),
@@ -904,22 +904,22 @@ describe('gh stack merge', () => {
   });
 
   test('a setting that merges unasked covers several layers', async () => {
-    const r = await judge([m('4')], world('release', {}, undefined, STACKS));
+    const r = await judge([m(4)], world('release', {}, undefined, STACKS));
     expect(r).toMatchObject({ ran: [{ step: 'merge' }, { step: 'merge' }] });
   });
 
   test('a layer named for once ready counts as named, and is judged on readiness', async () => {
     const named = grant({ merge: true, mergeNamed: ['2'], autoMerge: true, readyNamed: ['3'] });
-    expect(await judge([m('3')], world('push', {}, undefined, STACKS), named)).toMatchObject({
+    expect(await judge([m(3)], world('push', {}, undefined, STACKS), named)).toMatchObject({
       deny: expect.stringContaining('only once the pull request is ready'),
     });
     const ready = world('push', { mergeTarget: { out: 'OPEN CLEAN' } }, undefined, STACKS);
-    expect(await judge([m('3')], ready, named)).toMatchObject({ ran: [{ step: 'merge' }] });
+    expect(await judge([m(3)], ready, named)).toMatchObject({ ran: [{ step: 'merge' }] });
   });
 
   test('a layer that is the version pull request is judged as a release', async () => {
     const r = await judge(
-      [m('4')],
+      [m(4)],
       world('release', { mergeHead: { out: 'oakum/version-packages' } }, undefined, STACKS),
     );
     expect(r).toMatchObject({ deny: expect.stringContaining('release') });
@@ -927,9 +927,8 @@ describe('gh stack merge', () => {
 
   test.each([
     [m(null), 'the current branch’s stack'],
-    [m('two'), '`two` names no stack or pull request by number'],
-    [m('9'), '#9 is neither a stack nor a pull request in one'],
-    [m('1'), '#1 has already merged'],
+    [m(9), '#9 is neither a stack nor a pull request in one'],
+    [m(1), '#1 has already merged'],
     [{ kind: 'stack-merge', target: { cannot: 'beside' } } as const, 'Run the merge as its own'],
     [{ kind: 'stack-merge', target: { cannot: 'elsewhere' } } as const, '`GH_REPO=`'],
   ])('%j asks: %s', async (action, why) => {
@@ -942,11 +941,11 @@ describe('gh stack merge', () => {
     const failed = world('never stop', {}, undefined, () => ({
       asks: 'looking up stack #4 failed (x)',
     }));
-    expect(await judge([m('4')], failed, grant({ merge: true }))).toMatchObject({
+    expect(await judge([m(4)], failed, grant({ merge: true }))).toMatchObject({
       deny: expect.stringContaining('failed (x), so nothing ran. Give the user the command'),
     });
     const slow = world('never stop', {}, undefined, () => ({ asks: 'timed out', slow: true }));
-    expect(await judge([m('4')], slow, grant({ merge: true }))).toMatchObject({
+    expect(await judge([m(4)], slow, grant({ merge: true }))).toMatchObject({
       deny: expect.stringContaining('GitHub did not answer in time'),
     });
   });
