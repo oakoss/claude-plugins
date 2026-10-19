@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest';
 
 import type { Lookup } from './gh-verdict';
 import {
+  anonymized,
   type LeaseIo,
+  layerOf,
   leaseHolds,
   mergeSet,
   parseCatalog,
@@ -176,6 +178,34 @@ describe('parseCatalog', () => {
     }),
   ])('refuses what it cannot read: %s', (text) => {
     expect(parseCatalog(text)).toBeNull();
+  });
+});
+
+describe('anonymized', () => {
+  // Each pair is what `git remote get-url` and the dry run's `To` line printed
+  // (git 2.56.0), as the 2026-10-19 review measured them.
+  test.each([
+    ['git@github.com:o/r.git', 'github.com:o/r.git'],
+    ['ssh://git@github.com/o/r.git', 'ssh://github.com/o/r.git'],
+    ['ssh://git:pw@github.com/o/r.git', 'ssh://github.com/o/r.git'],
+    ['https://github.com/o/r.git', 'https://github.com/o/r.git'],
+    ['../bare.git', '../bare.git'],
+    ['/srv/git/r.git', '/srv/git/r.git'],
+    ['file:///srv/git/r.git', 'file:///srv/git/r.git'],
+    ['github.com:o/r.git', 'github.com:o/r.git'],
+  ])('%s prints as %s', (url, shown) => {
+    expect(anonymized(url)).toBe(shown);
+  });
+});
+
+describe('layerOf', () => {
+  const stacks = parseCatalog(CATALOG) ?? [];
+  test('names the first unmerged layer a push updates', () => {
+    expect(layerOf(stacks, ['fix/x', 'spike/three', 'spike/two'])).toBe('spike/three');
+  });
+  test('a merged layer, the trunk and a branch in no stack are not layers', () => {
+    expect(layerOf(stacks, ['spike/one', 'main', 'fix/x'])).toBeNull();
+    expect(layerOf([], ['spike/two'])).toBeNull();
   });
 });
 

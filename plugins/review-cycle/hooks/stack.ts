@@ -137,6 +137,26 @@ export function parseCatalog(text: string): CatalogStack[] | null {
   return stacks;
 }
 
+// A remote URL as git prints it after `To`: without its user and password
+// (`git@github.com:o/r.git` prints as `github.com:o/r.git`).
+export function anonymized(url: string): string {
+  const scheme = /^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@(.*)$/i.exec(url);
+  if (scheme) return `${scheme[1]}${scheme[2]}`;
+  const scp = /^[^/:@]+@([^/:]+:.*)$/.exec(url);
+  return scp?.[1] ?? url;
+}
+
+// The first branch of `pushed` that is an unmerged layer of a stack, which
+// `gh stack push` keeps in step with its pull request and the stack on GitHub.
+export function layerOf(stacks: readonly CatalogStack[], pushed: readonly string[]): string | null {
+  const layers = new Set(
+    stacks.flatMap((s) =>
+      s.branches.filter((b) => !b.merged && b.branch !== s.trunk).map((b) => b.branch),
+    ),
+  );
+  return pushed.find((b) => layers.has(b)) ?? null;
+}
+
 // The stack `gh stack push`, `sync` and `submit` act on: the one holding the
 // current branch, its trunk included.
 export function stackOf(
@@ -243,7 +263,10 @@ export type LeaseIo = Readonly<{
 }>;
 
 // The remote gh-stack pushes to unprompted (`pickRemote`, v0.2.1).
-async function remoteOf(branch: string, io: LeaseIo): Promise<string | Failed> {
+export async function remoteOf(
+  branch: string,
+  io: Pick<LeaseIo, 'config' | 'remotes'>,
+): Promise<string | Failed> {
   const keys = [
     `branch.${branch}.pushRemote`,
     'remote.pushDefault',

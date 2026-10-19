@@ -119,7 +119,15 @@ import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
-import { readStack, stackLease } from './stack';
+import {
+  anonymized,
+  layerOf,
+  type LeaseIo,
+  parseCatalog,
+  readStack,
+  remoteOf,
+  stackLease,
+} from './stack';
 import { sweep } from './sweep';
 import {
   EMPTY_TREE,
@@ -1783,6 +1791,13 @@ async function judgeBash(
       if ('deny' in verdict) return deny(verdict.deny);
       yes = second;
     }
+    // Only a push that would run is steered, so its own refusals come first.
+    const layer = await stackLayerPushed($, root, cls.push);
+    if (layer !== null) {
+      return deny(
+        `\`${layer}\` is a layer of a gh-stack stack, and a plain \`git push\` of it leaves gh-stack's record of the stack behind, so nothing ran. Push the stack with \`gh stack push\`, which runs on the user's push request while each of its branches is where this agent last pushed it. The command: ${quote(e.command)}`,
+      );
+    }
     if (verdict.ran !== null) ran.push(verdict.ran);
     if (verdict.note !== undefined) note = verdict.note;
   }
@@ -1919,10 +1934,46 @@ async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | n
   return askingReason(targets.refs, targets.defaults);
 }
 
+// The unmerged stack layer a `git push` updates, when this clone tracks a
+// gh-stack stack. A catalog or dry run it cannot read leaves the push to the
+// other checks: this steers to `gh stack push`, and guards nothing they miss.
+async function stackLayerPushed($: $, root: Repo, spec: PushSpec): Promise<string | null> {
+  if (spec.argv === null) return null;
+  const io = leaseIoOf($, root);
+  const text = await io.catalog();
+  const stacks = typeof text === 'string' ? parseCatalog(text) : null;
+  if (stacks === null || stacks.length === 0) return null;
+  const { refs } = await pushTargets($, root.top, spec.argv);
+  // A deleted ref, or one pushed to a remote other than the one gh-stack
+  // pushes the layer to, leaves the stack's record as it was.
+  for (const r of refs) {
+    if (r.flag === '-' || !r.to.startsWith('refs/heads/')) continue;
+    const layer = layerOf(stacks, [r.to.slice('refs/heads/'.length)]);
+    if (layer === null) continue;
+    const remote = await remoteOf(layer, io);
+    if (typeof remote !== 'string') continue;
+    const urls = await io.urls(remote);
+    if ('asks' in urls) continue;
+    if (urls.push.split('\n').some((u) => anonymized(u.trim()) === r.url)) return layer;
+  }
+  return null;
+}
+
+// One dry run per push judged, shared by every check that reads its targets.
+const targetsRead = new WeakMap<object, ReturnType<typeof readPushTargets>>();
+
+function pushTargets($: $, top: string, argv: NonNullable<PushSpec['argv']>) {
+  const known = targetsRead.get(argv);
+  if (known !== undefined) return known;
+  const read = readPushTargets($, top, argv);
+  targetsRead.set(argv, read);
+  return read;
+}
+
 // The refs a push updates, from a dry run with git's own push config applied,
 // and the default branch of each remote it goes to. A dry run that fails
 // still lists the refs it would update: one ref rejected does not stop the rest.
-async function pushTargets(
+async function readPushTargets(
   $: $,
   top: string,
   argv: NonNullable<PushSpec['argv']>,
@@ -2154,6 +2205,11 @@ async function stackLeaseOf(
 ): Promise<{ ok: true } | { asks: string }> {
   const root = await ensureRoot($);
   if (root === null) return { asks: 'the gate cannot find the repository' };
+  return stackLease(step, remote, leaseIoOf($, root));
+}
+
+// The clone, its remotes and GitHub as gh-stack's lease boundary reads them.
+function leaseIoOf($: $, root: Repo): LeaseIo {
   const git = async (args: string[], timeoutMs = 10_000) => {
     try {
       const r = await run($, ['git', ...args], {
@@ -2172,7 +2228,7 @@ async function stackLeaseOf(
       .filter(([k]) => k.startsWith(prefix))
       .map(([k, id]) => [k.slice(prefix.length), id]),
   );
-  return stackLease(step, remote, {
+  return {
     catalog: async () => {
       try {
         return await within(
@@ -2223,7 +2279,7 @@ async function stackLeaseOf(
       ),
     ghApi: (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS),
     pushed,
-  });
+  };
 }
 
 // The gate does not ask: the agent asks in its reply, so the user can answer
