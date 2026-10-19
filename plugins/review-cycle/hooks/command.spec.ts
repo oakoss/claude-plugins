@@ -1735,13 +1735,23 @@ describe('gh steps', () => {
       expect(ghActions(command)).toEqual([]);
     });
     test.each([
-      ['gh stack push', 'push'],
-      ['gh stack push --remote origin', 'push'],
-      ['gh stack sync --prune', 'sync'],
-      ['gh stack submit --auto --open', 'submit'],
-      ['gh stack link 10 20 30', 'link'],
-    ])('%s pushes the stack', (command, step) => {
-      expect(ghActions(command)).toEqual([{ kind: 'stack', step }]);
+      ['gh stack push', 'push', { remote: null }],
+      ['gh stack push --remote origin', 'push', { remote: 'origin' }],
+      ['gh stack push --remote=fork', 'push', { remote: 'fork' }],
+      ['gh stack push --remote', 'push', { unread: expect.stringContaining('no remote') }],
+      ['gh stack push --remote=', 'push', { unread: expect.stringContaining('no remote') }],
+      [
+        'gh stack push --remote a --remote b',
+        'push',
+        { unread: expect.stringContaining('more than once') },
+      ],
+      ['gh stack sync --prune', 'sync', { remote: null }],
+      ['gh stack submit --auto --open', 'submit', { remote: null }],
+      ['gh stack link 10 20 30', 'link', { remote: null }],
+      ['cd ../other && gh stack push', 'push', { unread: expect.stringContaining('directory') }],
+      ['GIT_DIR=x gh stack push', 'push', { unread: expect.stringContaining('directory') }],
+    ])('%s pushes the stack', (command, step, where) => {
+      expect(ghActions(command)).toEqual([{ kind: 'stack', step, where }]);
     });
     test('merge names its target, the pull request or stack below which all merge', () => {
       expect(ghActions('gh stack merge 42 --yes --squash')).toEqual([

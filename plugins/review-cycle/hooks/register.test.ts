@@ -1897,7 +1897,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-2');
+    expect(kept?.shape).toBe('gate-3');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     // What a message granted is not kept, so a reload makes the next step ask.
@@ -2025,6 +2025,13 @@ describe('a reload of the module', () => {
     ['a rounds index past its reviews', { roundsFrom: 1 }],
     ['a rounds index below zero', { roundsFrom: -1 }],
     ['no rounds index', { roundsFrom: undefined }],
+    ['no pushes', { pushed: undefined }],
+    ['a push that names no commit', { pushed: [['/repo/.git\torigin/x', 'zz']] }],
+    [
+      'a push whose commit is not a string',
+      { pushed: [['/repo/.git\torigin/x', ['a'.repeat(40)]]] },
+    ],
+    ['a push keyed without its repository', { pushed: [['origin/x', 'a'.repeat(40)]] }],
   ] as const) {
     test(`sets aside a record holding ${name}`, async ($, on) => {
       fakeWorld(on);
@@ -2276,6 +2283,7 @@ function keptRecord(over: Record<string, unknown>) {
     reviewerChanges: [],
     held: null,
     roundsFrom: 0,
+    pushed: [],
     ...over,
   };
 }
@@ -2286,7 +2294,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-2', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-3', value: kept }, version: 1 } };
   });
 }
 
@@ -4480,6 +4488,125 @@ describe('the stop-before setting', () => {
     // Each layer is bound by the number GitHub resolves, as `gh pr merge` is.
     expect(looked.some((a) => a.startsWith('gh pr view 2 '))).toBe(true);
     expect(looked.some((a) => a.startsWith('gh pr view 3 '))).toBe(true);
+  });
+  test('a stack push runs on a push request while it overwrites only what this agent pushed', async ($, on) => {
+    const MINE = 'a'.repeat(40);
+    const THEIRS_TIP = 'b'.repeat(40);
+    const catalog = JSON.stringify({
+      schemaVersion: 1,
+      stacks: [
+        {
+          number: 4,
+          trunk: { branch: 'main' },
+          branches: [{ branch: 'spike/two', pullRequest: { number: 2 } }],
+        },
+      ],
+    });
+    let onRemote = MINE;
+    const answers = (a: string): Partial<Run> | null => {
+      if (a === 'git symbolic-ref --quiet --short HEAD') return { stdout: 'spike/two\n' };
+      if (a.startsWith('git config --get ')) return { exitCode: 1 };
+      if (a === 'git remote') return { stdout: 'origin\n' };
+      if (a.startsWith('git remote get-url ')) return { stdout: 'git@github.com:o/r.git\n' };
+      if (a === 'git ls-remote --heads origin') {
+        return { stdout: `${onRemote}\trefs/heads/spike/two\n` };
+      }
+      return github('spike/two')(a);
+    };
+    const w = fakeWorld(on, {
+      settings: { local: stops('push') },
+      git: answers,
+      files: { '/repo/.git/gh-stack': catalog },
+      shell(this: World, command: string) {
+        if (!command.startsWith('git push')) return;
+        this.refs = { 'refs/remotes/origin/spike/two': MINE };
+        this.reflogs = { 'refs/remotes/origin/spike/two': [`${MINE} update by push`] };
+      },
+    });
+    await say($, 'push it');
+    expect(denied(await bash($, 'gh stack push'), 'never saw this agent push')).toBe(true);
+    expect(ran(await bash($, 'git push origin spike/two'))).toBe(true);
+    expect(ran(await bash($, 'gh stack push'))).toBe(true);
+    // Someone else pushed to the branch since.
+    onRemote = THEIRS_TIP;
+    expect(
+      denied(await bash($, 'gh stack push'), 'which the gate did not see this agent push'),
+    ).toBe(true);
+    const listing = w.calls.find((c) => c.argv.join(' ') === 'git ls-remote --heads origin');
+    expect(listing?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+  test('a push followed by a fetch records the commit the push set', async ($, on) => {
+    const MINE = 'a'.repeat(40);
+    const FETCHED = 'b'.repeat(40);
+    fakeWorld(on, {
+      refs: {},
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/spike/two': FETCHED };
+        this.reflogs = {
+          'refs/remotes/origin/spike/two': [
+            `${FETCHED} fetch: fast-forward`,
+            `${MINE} update by push`,
+          ],
+        };
+      },
+    });
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await say($, 'push it');
+    await bash($, './push-then-fetch.sh');
+    await settle();
+    expect(kept?.value.pushed).toEqual([['/repo/.git\torigin/spike/two', MINE]]);
+  });
+  test('the pushes the gate saw are kept, and read back after a reload', async ($, on) => {
+    const MINE = 'a'.repeat(40);
+    fakeWorld(on, {
+      refs: {},
+      shell(this: World) {
+        this.refs = { 'refs/remotes/origin/spike/two': MINE };
+        this.reflogs = { 'refs/remotes/origin/spike/two': [`${MINE} update by push`] };
+      },
+    });
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await say($, 'push it');
+    await bash($, 'git push origin spike/two');
+    await settle();
+    expect(kept?.value.pushed).toEqual([['/repo/.git\torigin/spike/two', MINE]]);
+  });
+  test('a kept push lets a stack push run after a reload', async ($, on) => {
+    const MINE = 'a'.repeat(40);
+    const catalog = JSON.stringify({
+      schemaVersion: 1,
+      stacks: [{ trunk: { branch: 'main' }, branches: [{ branch: 'spike/two' }] }],
+    });
+    fakeWorld(on, {
+      settings: { local: stops('push') },
+      files: { '/repo/.git/gh-stack': catalog },
+      git: (a) =>
+        a === 'git symbolic-ref --quiet --short HEAD'
+          ? { stdout: 'spike/two\n' }
+          : a.startsWith('git config --get ')
+            ? { exitCode: 1 }
+            : a === 'git remote'
+              ? { stdout: 'origin\n' }
+              : a.startsWith('git remote get-url ')
+                ? { stdout: 'git@github.com:o/r.git\n' }
+                : a === 'git ls-remote --heads origin'
+                  ? { stdout: `${MINE}\trefs/heads/spike/two\n` }
+                  : github('spike/two')(a),
+    });
+    reloadInto(on, keptRecord({ pushed: [['/repo/.git\torigin/spike/two', MINE]] }));
+    await startSession($);
+    await say($, 'push it');
+    expect(ran(await bash($, 'gh stack push'))).toBe(true);
   });
   test('a stack number is read as a stack, and only a 404 reads it as a pull request', async ($, on) => {
     const stack = JSON.stringify({

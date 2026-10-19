@@ -60,6 +60,12 @@ export type GhLookups = {
   // repository gh picks when it is null.
   defaultBranch: (repo: string | null) => Promise<Lookup>;
   stack: (n: number) => ReturnType<typeof readStack>;
+  // Whether gh-stack's leased push of the current stack to `remote` (null:
+  // the one gh-stack picks) can only overwrite what this agent pushed.
+  stackLease: (
+    step: 'push' | 'sync' | 'submit',
+    remote: string | null,
+  ) => Promise<{ ok: true } | { asks: string }>;
 };
 
 // A read's text without surrounding space; one that printed nothing names
@@ -590,11 +596,29 @@ export async function judgeGh(
           if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
           break;
         }
-        if (!covers(granted, 'lease')) {
+        if (covers(granted, 'lease')) break;
+        const ask = askThem(
+          'the stack and that it force-pushes its branches with a lease',
+          '"Push the stack, force-with-lease on its branches?"',
+          shown,
+        );
+        if (!may.push) {
           return {
-            deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${askThem('the stack and that it force-pushes its branches with a lease', '"Push the stack, force-with-lease on its branches?"', shown)}`,
+            deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${ask}`,
           };
         }
+        // A push request covers gh-stack's own leased push while it can only
+        // overwrite what this agent pushed.
+        const bound =
+          'unread' in action.where
+            ? { asks: action.where.unread }
+            : await lookups.stackLease(action.step, action.where.remote);
+        if ('asks' in bound) {
+          return {
+            deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease. A push request covers that only while each branch is where this agent last pushed it, and ${bound.asks}, so nothing ran. If they want it, ${ask}`,
+          };
+        }
+        if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
         break;
       }
       case 'stack-merge': {

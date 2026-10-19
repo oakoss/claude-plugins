@@ -1,5 +1,5 @@
-// What `gh stack merge <n>` merges, read from GitHub's stacks API through
-// the gh reads register.ts passes in.
+// github/gh-stack: what `gh stack merge <n>` merges, and when its own leased
+// pushes may run. register.ts passes in the reads.
 
 import type { Lookup } from './gh-verdict';
 
@@ -99,4 +99,216 @@ export function mergeSet(n: number, read: StackRead): MergeSet {
         remedy: 'Tell the user; nothing is left to merge.',
       }
     : { prs: [first, ...rest] };
+}
+
+// A stack in gh-stack's local catalog, `<git common dir>/gh-stack`.
+export type CatalogStack = Readonly<{
+  number: number | null;
+  trunk: string;
+  branches: readonly Readonly<{ branch: string; merged: boolean }>[];
+}>;
+
+// The stacks the catalog lists, or null when it is not one this reads
+// (schemaVersion 1, gh-stack 0.2).
+export function parseCatalog(text: string): CatalogStack[] | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc) || doc.schemaVersion !== 1 || !Array.isArray(doc.stacks)) return null;
+  const stacks: CatalogStack[] = [];
+  for (const s of doc.stacks) {
+    if (!isRecord(s) || !isRecord(s.trunk) || typeof s.trunk.branch !== 'string') return null;
+    if (!Array.isArray(s.branches)) return null;
+    const branches: { branch: string; merged: boolean }[] = [];
+    for (const b of s.branches) {
+      if (!isRecord(b) || typeof b.branch !== 'string') return null;
+      const pr = isRecord(b.pullRequest) ? b.pullRequest : null;
+      branches.push({ branch: b.branch, merged: pr?.merged === true });
+    }
+    if (s.number !== undefined && !(Number.isSafeInteger(s.number) && (s.number as number) > 0)) {
+      return null;
+    }
+    const number = s.number === undefined ? null : (s.number as number);
+    stacks.push({ number, trunk: s.trunk.branch, branches });
+  }
+  return stacks;
+}
+
+// The stack `gh stack push`, `sync` and `submit` act on: the one holding the
+// current branch, its trunk included.
+export function stackOf(
+  stacks: readonly CatalogStack[],
+  current: string,
+): CatalogStack | { asks: string } {
+  const holding = stacks.filter(
+    (s) => s.trunk === current || s.branches.some((b) => b.branch === current),
+  );
+  const [only, ...more] = holding;
+  if (only === undefined) return { asks: `\`${current}\` is in no stack this clone tracks` };
+  if (more.length > 0) return { asks: `\`${current}\` is in more than one stack` };
+  return only;
+}
+
+// The head branches GitHub lists for stack <n>, or none when GitHub has no
+// such stack.
+export async function stackHeads(
+  n: number,
+  ghApi: (args: string[], what: string) => Promise<Lookup>,
+): Promise<string[] | { asks: string }> {
+  const r = await ghApi([`repos/{owner}/{repo}/stacks/${n}`], `stack #${n} on GitHub`);
+  if (r.asks !== undefined) return r.asks.includes('(HTTP 404)') ? [] : { asks: r.asks };
+  let doc: unknown;
+  try {
+    doc = JSON.parse(r.out);
+  } catch {
+    return { asks: UNREAD.asks };
+  }
+  if (!isRecord(doc) || !Array.isArray(doc.pull_requests)) return { asks: UNREAD.asks };
+  const heads: string[] = [];
+  for (const p of doc.pull_requests) {
+    if (!isRecord(p) || !isRecord(p.head) || typeof p.head.ref !== 'string') {
+      return { asks: UNREAD.asks };
+    }
+    heads.push(p.head.ref);
+  }
+  return heads;
+}
+
+export type LeaseFacts = Readonly<{
+  stack: CatalogStack;
+  defaultBranch: string;
+  remote: string;
+  // Each branch's tip on the remote now, from `git ls-remote`: every branch
+  // on the URL gh-stack pushes to, since one it lacks reads as new there.
+  tips: ReadonlyMap<string, string>;
+  // `<remote>/<branch>` to the commit the gate last saw this agent push there.
+  pushed: ReadonlyMap<string, string>;
+  // The heads GitHub lists for the stack, read for `sync`, which pulls any
+  // the catalog lacks and pushes them rebased.
+  github: readonly string[] | null;
+}>;
+
+// Whether gh-stack's own `--force-with-lease` push may run on a plain push
+// grant: every branch it pushes is in the catalog, none is the trunk or the
+// default branch, and each is absent from the remote or still at the commit
+// this agent pushed. gh-stack fetches before it pushes and leases against what
+// it fetched (gitops.go, v0.2.1), so its lease alone keeps nothing it did not
+// see.
+export function leaseHolds(f: LeaseFacts): { ok: true } | { asks: string } {
+  const listed = new Set(f.stack.branches.map((b) => b.branch));
+  const extra = (f.github ?? []).filter((h) => !listed.has(h));
+  if (extra.length > 0) {
+    return {
+      asks: `GitHub's stack holds ${extra.map((b) => `\`${b}\``).join(', ')}, which this clone's catalog lacks`,
+    };
+  }
+  for (const { branch, merged } of f.stack.branches) {
+    if (merged) continue;
+    if (branch === f.stack.trunk || branch === f.defaultBranch) {
+      return { asks: `\`${branch}\` is the stack's trunk or the default branch` };
+    }
+    const tip = f.tips.get(branch);
+    if (tip === undefined) continue;
+    const mine = f.pushed.get(`${f.remote}/${branch}`);
+    if (mine !== tip) {
+      return {
+        asks: `\`${f.remote}/${branch}\` is at ${tip.slice(0, 7)}, which the gate ${mine === undefined ? 'never saw this agent push' : `did not see this agent push (it pushed ${mine.slice(0, 7)})`}`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+type Failed = { asks: string };
+const failed = (x: unknown): x is Failed => typeof x === 'object' && x !== null && 'asks' in x;
+
+// The reads `stackLease` makes; each failure says why.
+export type LeaseIo = Readonly<{
+  // `<git common dir>/gh-stack`, null when there is none.
+  catalog: () => Promise<string | null | Failed>;
+  branch: () => Promise<string | Failed>;
+  // A git config value, null when unset.
+  config: (key: string) => Promise<string | null | Failed>;
+  remotes: () => Promise<string[] | Failed>;
+  // What `git remote get-url --all` and `--push --all` print for `remote`.
+  urls: (remote: string) => Promise<{ fetch: string; push: string } | Failed>;
+  // What `git ls-remote --heads <remote>` printed.
+  heads: (remote: string) => Promise<string | Failed>;
+  defaultBranch: () => Promise<Lookup>;
+  ghApi: (args: string[], what: string) => Promise<Lookup>;
+  pushed: ReadonlyMap<string, string>;
+}>;
+
+// The remote gh-stack pushes to unprompted (`pickRemote`, v0.2.1).
+async function remoteOf(branch: string, io: LeaseIo): Promise<string | Failed> {
+  const keys = [
+    `branch.${branch}.pushRemote`,
+    'remote.pushDefault',
+    `branch.${branch}.remote`,
+    'gh-stack.remote',
+  ];
+  for (const key of keys) {
+    const value = await io.config(key);
+    if (value !== null) return value;
+  }
+  const remotes = await io.remotes();
+  if (failed(remotes)) return remotes;
+  const [only, ...more] = remotes;
+  if (only === undefined) return { asks: 'the clone has no remote' };
+  if (more.length > 0) return { asks: 'gh-stack would have to pick among several remotes' };
+  return only;
+}
+
+// Each branch's tip in `git ls-remote --heads` output, SHA-1 or SHA-256, or
+// null when a line is neither.
+function tipsOf(listed: string): Map<string, string> | null {
+  const tips = new Map<string, string>();
+  for (const line of listed.split('\n')) {
+    if (line === '') continue;
+    const m = /^([0-9a-f]{40}(?:[0-9a-f]{24})?)\trefs\/heads\/(.+)$/.exec(line);
+    if (m?.[1] === undefined || m[2] === undefined) return null;
+    tips.set(m[2], m[1]);
+  }
+  return tips;
+}
+
+// Whether gh-stack's leased push of the current branch's stack may run on a
+// plain push grant, read as `leaseHolds` needs it.
+export async function stackLease(
+  step: 'push' | 'sync' | 'submit',
+  named: string | null,
+  io: LeaseIo,
+): Promise<{ ok: true } | Failed> {
+  const text = await io.catalog();
+  if (text === null) return { asks: 'this clone tracks no stack' };
+  if (failed(text)) return text;
+  const stacks = parseCatalog(text);
+  if (stacks === null) return { asks: "gh-stack's catalog is in a shape the gate does not read" };
+  const branch = await io.branch();
+  if (failed(branch)) return branch;
+  const stack = stackOf(stacks, branch);
+  if ('asks' in stack) return stack;
+  const remote = named ?? (await remoteOf(branch, io));
+  if (failed(remote)) return remote;
+  if (remote.startsWith('-')) return { asks: `the remote \`${remote}\` reads as an option` };
+  // `ls-remote` lists the first URL the remote fetches from; a `pushurl`,
+  // `pushInsteadOf` or second `url` sends the push elsewhere too.
+  const urls = await io.urls(remote);
+  if (failed(urls)) return urls;
+  if (urls.fetch.trim() !== urls.push.trim() || urls.push.trim().includes('\n')) {
+    return { asks: `\`${remote}\` pushes to a URL other than the one it lists branches from` };
+  }
+  const base = await io.defaultBranch();
+  if (base.asks !== undefined) return base;
+  const listed = await io.heads(remote);
+  if (failed(listed)) return listed;
+  const tips = tipsOf(listed);
+  if (tips === null) return { asks: `\`git ls-remote\` printed a line the gate does not read` };
+  const github =
+    step === 'sync' && stack.number !== null ? await stackHeads(stack.number, io.ghApi) : null;
+  if (failed(github)) return github;
+  return leaseHolds({ stack, defaultBranch: base.out, remote, tips, pushed: io.pushed, github });
 }

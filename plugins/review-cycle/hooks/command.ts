@@ -1269,7 +1269,32 @@ function stackAt(words: Word[], from: number, context: GhContext, fed: boolean):
         why: `the arguments of \`gh stack ${v}\` are built at run time or come from its input`,
       };
     }
-    return { kind: 'stack', step: v as 'push' | 'sync' | 'submit' | 'link' };
+    const step = v as 'push' | 'sync' | 'submit' | 'link';
+    if (context !== 'fixed') {
+      return {
+        kind: 'stack',
+        step,
+        where: {
+          unread: 'it runs in another directory or repository, which the gate does not read',
+        },
+      };
+    }
+    const named = rest.flatMap((w, i) =>
+      w.text === '--remote'
+        ? [rest[i + 1]?.text ?? '']
+        : w.text.startsWith('--remote=')
+          ? [w.text.slice(9)]
+          : [],
+    );
+    const [remote, ...more] = named;
+    if (more.length > 0 || remote === '') {
+      return {
+        kind: 'stack',
+        step,
+        where: { unread: '`--remote` is given more than once or with no remote' },
+      };
+    }
+    return { kind: 'stack', step, where: { remote: remote ?? null } };
   }
   if (v === 'merge') {
     if (fed || rest.some((w) => w.dynamic)) {

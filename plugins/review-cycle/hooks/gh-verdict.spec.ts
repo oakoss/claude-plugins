@@ -24,6 +24,7 @@ function world(
   > = {},
   unreadable?: string,
   stack?: StackLookup,
+  lease?: { ok: true } | { asks: string },
 ) {
   const calls: string[] = [];
   const ladder: InForce = { stopBefore, source: 'local', ...(unreadable && { unreadable }) };
@@ -57,6 +58,11 @@ function world(
     defaultBranch: (repo) =>
       answer(`defaultBranch ${repo ?? '-'}`, answers.defaultBranch ?? { out: 'main' }),
     stack: (n) => answer(`stack ${n}`, stack?.(n) ?? { asks: 'no stack here' }),
+    stackLease: (step, remote) =>
+      answer(
+        `stackLease ${step} ${remote ?? '-'}`,
+        lease ?? { asks: 'this clone tracks no stack' },
+      ),
   };
   return { calls, lookups };
 }
@@ -815,7 +821,11 @@ test('one write that may not run refuses the whole call', async () => {
   expect(r).toMatchObject({ deny: expect.stringContaining('a comment on GitHub') });
 });
 
-const stack = (step: 'push' | 'sync' | 'submit' | 'link'): GhAction => ({ kind: 'stack', step });
+const stack = (step: 'push' | 'sync' | 'submit' | 'link'): GhAction => ({
+  kind: 'stack',
+  step,
+  where: { remote: null },
+});
 
 describe('gh stack', () => {
   test.each(['push', 'sync', 'submit'] as const)(
@@ -832,6 +842,53 @@ describe('gh stack', () => {
       );
     },
   );
+
+  test.each(['push', 'sync', 'submit'] as const)(
+    '%s runs on a push request when its lease can only overwrite what this agent pushed',
+    async (step) => {
+      const w = world('push', {}, undefined, undefined, { ok: true });
+      expect(await judge([stack(step)], w, grant({ push: 'push', pr: true }))).toEqual({ ran: [] });
+      expect(w.calls).toContain(`stackLease ${step} -`);
+      const free = world('never stop', {}, undefined, undefined, { ok: true });
+      expect(await judge([stack(step)], free, grant({ pr: true }))).toEqual({
+        ran: [{ step: 'push', ladder: { stopBefore: 'never stop', source: 'local' } }],
+      });
+    },
+  );
+
+  test('a push request does not cover a lease that could overwrite another push', async () => {
+    const w = world('push', {}, undefined, undefined, {
+      asks: '`origin/b` is at 1234567, which the gate never saw this agent push',
+    });
+    expect(await judge([stack('push')], w, grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining(
+        'only while each branch is where this agent last pushed it, and `origin/b` is at 1234567',
+      ),
+    });
+  });
+
+  test('without a push request the boundary is not read', async () => {
+    const w = world('push', {}, undefined, undefined, { ok: true });
+    expect(await judge([stack('push')], w, grant())).toMatchObject({
+      deny: expect.stringContaining("doesn't ask for a forced push"),
+    });
+    expect(w.calls.some((c) => c.startsWith('stackLease'))).toBe(false);
+  });
+
+  test('a stack push run elsewhere, or to a named remote, is read where it pushes', async () => {
+    const w = world('push', {}, undefined, undefined, { ok: true });
+    const elsewhere: GhAction = {
+      kind: 'stack',
+      step: 'push',
+      where: { unread: 'it runs in another directory or repository, which the gate does not read' },
+    };
+    expect(await judge([elsewhere], w, grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('another directory or repository'),
+    });
+    const named: GhAction = { kind: 'stack', step: 'sync', where: { remote: 'fork' } };
+    expect(await judge([named], w, grant({ push: 'push' }))).toEqual({ ran: [] });
+    expect(w.calls).toContain('stackLease sync fork');
+  });
 
   test('a pull request submit opens unasked is noted as run by the setting', async () => {
     expect(await judge([stack('submit')], world('never stop'), grant({ push: 'lease' }))).toEqual({
