@@ -11,6 +11,9 @@ import {
 } from './gh-verdict';
 import type { GhAction } from './github';
 import type { StopBefore } from './ladder';
+import type { StackRead } from './stack';
+
+type StackLookup = (n: number) => StackRead | { asks: string; slow?: true };
 
 // GitHub as the lookups see it, recording each lookup made. The pull request
 // lookup answers what gh prints, read as register.ts reads it.
@@ -20,6 +23,8 @@ function world(
     Record<'mergeHead' | 'mergeTarget' | 'repoUrl' | 'pullRequest' | 'defaultBranch', Lookup>
   > = {},
   unreadable?: string,
+  stack?: StackLookup,
+  lease?: { ok: true } | { asks: string },
 ) {
   const calls: string[] = [];
   const ladder: InForce = { stopBefore, source: 'local', ...(unreadable && { unreadable }) };
@@ -36,7 +41,13 @@ function world(
     mergeTarget: (lookup) =>
       answer(
         `mergeTarget ${lookup.join(' ')}`,
-        answers.mergeTarget ?? { out: 'https://github.com/o/r/pull/1 OPEN BLOCKED' },
+        // A stack's layers are looked up by number, each answering for itself
+        // in the state the test gives.
+        stack === undefined
+          ? (answers.mergeTarget ?? { out: 'https://github.com/o/r/pull/1 OPEN BLOCKED' })
+          : {
+              out: `https://github.com/o/r/pull/${lookup[0]} ${answers.mergeTarget?.out ?? 'OPEN BLOCKED'}`,
+            },
       ),
     repoUrl: () => answer('repoUrl', answers.repoUrl ?? { out: 'https://github.com/o/r' }),
     pullRequest: (head) =>
@@ -46,6 +57,12 @@ function world(
       ),
     defaultBranch: (repo) =>
       answer(`defaultBranch ${repo ?? '-'}`, answers.defaultBranch ?? { out: 'main' }),
+    stack: (n) => answer(`stack ${n}`, stack?.(n) ?? { asks: 'no stack here' }),
+    stackLease: (step, remote) =>
+      answer(
+        `stackLease ${step} ${remote ?? '-'}`,
+        lease ?? { asks: 'this clone tracks no stack' },
+      ),
   };
   return { calls, lookups };
 }
@@ -802,4 +819,305 @@ describe('a merge', () => {
 test('one write that may not run refuses the whole call', async () => {
   const r = await judge([{ kind: 'pr' }, { kind: 'comment' }], world('never stop'));
   expect(r).toMatchObject({ deny: expect.stringContaining('a comment on GitHub') });
+});
+
+const stack = (step: 'push' | 'sync' | 'submit' | 'link'): GhAction => ({
+  kind: 'stack',
+  step,
+  where: { remote: null },
+});
+
+const link = (
+  where: { remote: string | null } | { unread: string },
+  ...branches: string[]
+): GhAction => ({ kind: 'stack', step: 'link', where, branches });
+
+describe('gh stack', () => {
+  test.each(['push', 'sync', 'submit'] as const)(
+    '%s leases every branch, so a plain push grant or the ladder does not cover it',
+    async (step) => {
+      for (const g of [grant({ push: 'push', pr: true }), grant()]) {
+        const r = await judge([stack(step)], world('never stop'), g);
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('with --force-with-lease'),
+        });
+      }
+      expect(await judge([stack(step)], world('push'), grant({ push: 'lease', pr: true }))).toEqual(
+        { ran: [] },
+      );
+    },
+  );
+
+  test.each(['push', 'sync', 'submit'] as const)(
+    '%s runs on a push request when its lease can only overwrite what this agent pushed',
+    async (step) => {
+      const w = world('push', {}, undefined, undefined, { ok: true });
+      expect(await judge([stack(step)], w, grant({ push: 'push', pr: true }))).toEqual({ ran: [] });
+      expect(w.calls).toContain(`stackLease ${step} -`);
+      const free = world('never stop', {}, undefined, undefined, { ok: true });
+      expect(await judge([stack(step)], free, grant({ pr: true }))).toEqual({
+        ran: [{ step: 'push', ladder: { stopBefore: 'never stop', source: 'local' } }],
+      });
+    },
+  );
+
+  test('a push request does not cover a lease that could overwrite another push', async () => {
+    const w = world('push', {}, undefined, undefined, {
+      asks: '`origin/b` is at 1234567, which the gate never saw this agent push',
+    });
+    expect(await judge([stack('push')], w, grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining(
+        'only while each branch is where this agent last pushed it, and `origin/b` is at 1234567',
+      ),
+    });
+  });
+
+  test('without a push request the boundary is not read', async () => {
+    const w = world('push', {}, undefined, undefined, { ok: true });
+    expect(await judge([stack('push')], w, grant())).toMatchObject({
+      deny: expect.stringContaining("doesn't ask for a forced push"),
+    });
+    expect(w.calls.some((c) => c.startsWith('stackLease'))).toBe(false);
+  });
+
+  test('a stack push run elsewhere, or to a named remote, is read where it pushes', async () => {
+    const w = world('push', {}, undefined, undefined, { ok: true });
+    const elsewhere: GhAction = {
+      kind: 'stack',
+      step: 'push',
+      where: { unread: 'it runs in another directory or repository, which the gate does not read' },
+    };
+    expect(await judge([elsewhere], w, grant({ push: 'push' }))).toMatchObject({
+      deny: expect.stringContaining('another directory or repository'),
+    });
+    const named: GhAction = { kind: 'stack', step: 'sync', where: { remote: 'fork' } };
+    expect(await judge([named], w, grant({ push: 'push' }))).toEqual({ ran: [] });
+    expect(w.calls).toContain('stackLease sync fork');
+  });
+
+  test('a pull request submit opens unasked is noted as run by the setting', async () => {
+    expect(await judge([stack('submit')], world('never stop'), grant({ push: 'lease' }))).toEqual({
+      ran: [{ step: 'pr', ladder: { stopBefore: 'never stop', source: 'local' } }],
+    });
+  });
+
+  test('submit and link open pull requests too', async () => {
+    for (const step of ['submit', 'link'] as const) {
+      const r = await judge([stack(step)], world('open PR'), grant({ push: 'lease' }));
+      expect(r).toMatchObject({ deny: expect.stringContaining("doesn't ask for a pull request") });
+    }
+  });
+
+  test('link pushes plainly, as a push the ladder lets through', async () => {
+    expect(await judge([stack('link')], world('never stop'))).toEqual({
+      ran: [
+        { step: 'pr', ladder: { stopBefore: 'never stop', source: 'local' } },
+        { step: 'push', ladder: { stopBefore: 'never stop', source: 'local' } },
+      ],
+    });
+    expect(await judge([stack('link')], world('push'), grant({ pr: true }))).toMatchObject({
+      deny: expect.any(String),
+    });
+  });
+
+  test('link pushing the default branch needs the request to name it', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const r = await judge([link({ remote: null }, 'main', 'feat/a')], world('push'), asked);
+    expect(r).toMatchObject({ deny: expect.stringContaining('`main`, the default branch') });
+    expect(r).toMatchObject({ deny: expect.stringContaining('"Push to `main`?"') });
+    const ladder = await judge([link({ remote: null }, 'main')], world('never stop'));
+    expect(ladder).toMatchObject({ deny: expect.stringContaining('the default branch') });
+    const named = grant({ push: 'push', pr: true, pushNamed: ['main'] });
+    expect(await judge([link({ remote: null }, 'main')], world('push'), named)).toEqual({
+      ran: [],
+    });
+    expect(await judge([link({ remote: null }, 'feat/a')], world('push'), asked)).toEqual({
+      ran: [],
+    });
+  });
+
+  test('link checks the default branch it looks up, not main', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const w = world('push', { defaultBranch: { out: 'develop' } });
+    expect(await judge([link({ remote: null }, 'develop')], w, asked)).toMatchObject({
+      deny: expect.stringContaining('`develop`, the default branch'),
+    });
+    expect(await judge([link({ remote: null }, 'main')], w, asked)).toEqual({ ran: [] });
+  });
+
+  test('link to a named remote does not read its default branch', async () => {
+    const w = world('never stop');
+    const r = await judge([link({ remote: 'fork' }, 'feat/a')], w);
+    expect(r).toMatchObject({ deny: expect.stringContaining('`fork`, whose default branch') });
+    expect(w.calls).not.toContain('defaultBranch -');
+    const asked = grant({ push: 'push', pr: true });
+    expect(await judge([link({ remote: 'fork' }, 'feat/a')], w, asked)).toMatchObject({
+      ran: [],
+      notes: [expect.stringContaining('`fork`')],
+    });
+  });
+
+  test('link the setting lets through asks when the default branch is unreadable', async () => {
+    const w = world('never stop', { defaultBranch: { asks: 'gh failed' } });
+    expect(await judge([link({ remote: null }, 'feat/a')], w)).toMatchObject({
+      deny: expect.stringContaining('the default branch could not be read (gh failed)'),
+    });
+  });
+
+  test('link with an unreadable default branch runs with a note, unless it pushes main', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const w = world('push', { defaultBranch: { asks: 'gh failed' } });
+    const r = await judge([link({ remote: null }, 'feat/a')], w, asked);
+    expect(r).toMatchObject({ ran: [], notes: [expect.stringContaining('gh failed')] });
+    expect(await judge([link({ remote: null }, 'main')], w, asked)).toMatchObject({
+      deny: expect.stringContaining('the default branch'),
+    });
+  });
+
+  test('link where the gate cannot tell which repository it pushes to asks', async () => {
+    const asked = grant({ push: 'push', pr: true });
+    const r = await judge(
+      [link({ unread: 'it runs beside other commands' }, 'feat/a')],
+      world('push'),
+      asked,
+    );
+    expect(r).toMatchObject({ deny: expect.stringContaining('Run it on its own') });
+  });
+});
+
+const layer = (number: number, merged = false) => ({
+  number,
+  merged_at: merged ? '2026-10-18T15:02:11Z' : null,
+});
+const STACK4 = { number: 4, pull_requests: [layer(1, true), layer(2), layer(3)] };
+const STACKS: StackLookup = (n) =>
+  n === 4
+    ? { by: 'stack', out: JSON.stringify(STACK4) }
+    : { by: 'pr', out: JSON.stringify([1, 2, 3].includes(n) ? [STACK4] : []) };
+// A request naming gh-stack merges: "merge the stack", "merge up to #3".
+const stackAsked = (...stack: string[]) => grant({ mergeStack: stack });
+const plain = (lookup: string[]): GhAction => ({
+  kind: 'merge',
+  admin: false,
+  auto: false,
+  lookup,
+});
+const m = (target: number | null): GhAction => ({
+  kind: 'stack-merge',
+  target: target ?? { cannot: 'unnamed' },
+});
+
+describe('gh stack merge', () => {
+  test('a merge of one layer is judged as that pull request', async () => {
+    const w = world('push', {}, undefined, STACKS);
+    expect(await judge([m(2)], w, grant({ merge: true }))).toEqual({ ran: [] });
+    // Named, it is looked up and bound by number, as `gh pr merge 2` is.
+    expect(await judge([m(2)], w, grant({ merge: true, mergeNamed: ['2'] }))).toEqual({
+      ran: [],
+    });
+    expect(w.calls).toContain('mergeTarget 2');
+  });
+
+  test('a merge of several layers needs every one named', async () => {
+    const r = await judge([m(3)], world('push', {}, undefined, STACKS), grant({ merge: true }));
+    expect(r).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
+    expect(
+      await judge(
+        [m(3)],
+        world('push', {}, undefined, STACKS),
+        grant({ merge: true, mergeNamed: ['2', '3'] }),
+      ),
+    ).toEqual({ ran: [] });
+    expect(
+      await judge(
+        [m(4)],
+        world('push', {}, undefined, STACKS),
+        grant({ merge: true, mergeNamed: ['3'] }),
+      ),
+    ).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
+  });
+
+  test('a setting that merges unasked covers several layers', async () => {
+    const r = await judge([m(4)], world('release', {}, undefined, STACKS));
+    expect(r).toMatchObject({ ran: [{ step: 'merge' }, { step: 'merge' }] });
+  });
+
+  test('a layer named for once ready counts as named, and is judged on readiness', async () => {
+    const named = grant({ merge: true, mergeNamed: ['2'], autoMerge: true, readyNamed: ['3'] });
+    expect(await judge([m(3)], world('push', {}, undefined, STACKS), named)).toMatchObject({
+      deny: expect.stringContaining('only once the pull request is ready'),
+    });
+    const ready = world('push', { mergeTarget: { out: 'OPEN CLEAN' } }, undefined, STACKS);
+    expect(await judge([m(3)], ready, named)).toMatchObject({ ran: [{ step: 'merge' }] });
+  });
+
+  test('a request to merge the stack, or up to a layer, names each layer it merges', async () => {
+    // Stack #4 holds #2 and #3, unmerged.
+    for (const [action, stack] of [
+      [m(4), 'stack'],
+      [m(3), 'stack'],
+      [m(4), 'stack:4'],
+      [m(3), 'upto:3'],
+      [m(4), 'upto:3'],
+      [m(2), 'upto:2'],
+    ] as const) {
+      const w = world('push', {}, undefined, STACKS);
+      expect(await judge([action], w, stackAsked(stack))).toEqual({ ran: [] });
+    }
+    for (const [action, stack] of [
+      [m(3), 'stack:4'],
+      // #3 is a pull request in stack #4, not a stack.
+      [m(3), 'stack:3'],
+      [m(3), 'upto:2'],
+      [m(4), 'upto:2'],
+    ] as const) {
+      const r = await judge([action], world('push', {}, undefined, STACKS), stackAsked(stack));
+      expect(r).toMatchObject({ deny: expect.stringContaining('merges #2, #3 together') });
+    }
+  });
+
+  test('a stack request covers no other merge, before it or after it', async () => {
+    const w = world('push', {}, undefined, STACKS);
+    // #2 is one of the stack's layers, so a grant leaking from them would cover it.
+    for (const lookup of [['5'], ['2'], []]) {
+      for (const actions of [[plain(lookup)], [m(4), plain(lookup)], [plain(lookup), m(4)]]) {
+        expect(await judge(actions, w, grant({ mergeStack: ['stack'] }))).toMatchObject({
+          deny: expect.any(String),
+        });
+      }
+    }
+  });
+
+  test('a layer that is the version pull request is judged as a release', async () => {
+    const r = await judge(
+      [m(4)],
+      world('release', { mergeHead: { out: 'oakum/version-packages' } }, undefined, STACKS),
+    );
+    expect(r).toMatchObject({ deny: expect.stringContaining('release') });
+  });
+
+  test.each([
+    [m(null), 'the current branch’s stack'],
+    [m(9), '#9 is neither a stack nor a pull request in one'],
+    [m(1), '#1 has already merged'],
+    [{ kind: 'stack-merge', target: { cannot: 'beside' } } as const, 'Run the merge as its own'],
+    [{ kind: 'stack-merge', target: { cannot: 'elsewhere' } } as const, '`GH_REPO=`'],
+  ])('%j asks: %s', async (action, why) => {
+    const w = world('never stop', {}, undefined, STACKS);
+    const r = await judge([action], w, grant({ merge: true }));
+    expect(r).toMatchObject({ deny: expect.stringContaining(why) });
+  });
+
+  test('a stack GitHub cannot read asks, and a slow one is tried again', async () => {
+    const failed = world('never stop', {}, undefined, () => ({
+      asks: 'looking up stack #4 failed (x)',
+    }));
+    expect(await judge([m(4)], failed, grant({ merge: true }))).toMatchObject({
+      deny: expect.stringContaining('failed (x), so nothing ran. Give the user the command'),
+    });
+    const slow = world('never stop', {}, undefined, () => ({ asks: 'timed out', slow: true }));
+    expect(await judge([m(4)], slow, grant({ merge: true }))).toMatchObject({
+      deny: expect.stringContaining('GitHub did not answer in time'),
+    });
+  });
 });

@@ -228,6 +228,24 @@ describe('ship: what it may do unasked', () => {
     expect(text).toContain('When the user asked for auto-merge, arm it after creating');
   });
 
+  test('a gh-stack stack submits every layer, and readies none that is a draft', () => {
+    const stack = section(text, 'Stack path', 'ship');
+    expect(shellLines).toContain('gh stack view --json');
+    expect(shellLines).toContain('gh pr view <number> --json isDraft');
+    expect(shellLines).toContain('gh stack submit --auto --open');
+    expect(stack).toContain(
+      "Leave it off when any layer's pull request is a draft, or when the user asked for drafts.",
+    );
+    expect(stack).toContain('Merge nothing into a layer');
+    expect(stack).toContain('exits 0 even after printing `⚠ failed to create PR for <branch>`');
+    expect(stack).toContain("pass the gate's question to the user as written");
+    expect(stack).toContain('name those layers and ask before pushing');
+    expect(stack).toContain('On a no, stop before pushing');
+    expect(stack).toContain('return with `git checkout <branch>` whether they pass or fail');
+    expect(stack).toContain("so each layer's pull request closes only what that layer finishes");
+    expect(text).toContain('one of its `branches` has `isCurrent: true`');
+  });
+
   // Every fence of any tag or indent, plus inline code, so an unasked step
   // cannot hide outside a bash fence.
   const anyFenceLines = [...text.matchAll(/^[ \t]*```[\w-]*\n([\s\S]*?)^[ \t]*```$/gm)]
@@ -238,8 +256,14 @@ describe('ship: what it may do unasked', () => {
 
   test('no command merges, readies, forces, rebases, skips hooks or closes an issue', () => {
     const forbidden =
-      /gh pr (merge|ready)\b|gh issue close\b|--auto\b|--no-verify\b|--force\b|(?<!no-)\brebase\b/;
-    for (const line of [...anyFenceLines, ...inlineCode]) expect(line).not.toMatch(forbidden);
+      /gh pr (merge|ready)\b|gh stack merge\b|gh issue close\b|--auto\b|--open\b|--no-verify\b|--force\b|(?<!no-)\brebase\b/;
+    // gh-stack's `submit --auto` generates titles, `--open` is guarded by its
+    // draft rule, and the rebases are only offered.
+    const stacked =
+      /^(gh stack submit --auto( --open)?|gh stack rebase (--no-trunk|--continue|--abort)|--open)$/;
+    for (const line of [...anyFenceLines, ...inlineCode]) {
+      if (!stacked.test(line)) expect(line).not.toMatch(forbidden);
+    }
     for (const line of anyFenceLines) expect(line).not.toMatch(/--draft\b/);
   });
 

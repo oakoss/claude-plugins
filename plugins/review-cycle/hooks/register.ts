@@ -22,6 +22,7 @@ import {
   ghActions,
   possibleAliases,
   shownCommand,
+  stackRewrite,
   type Classification,
 } from './command';
 import {
@@ -118,6 +119,15 @@ import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
+import {
+  anonymized,
+  layerOf,
+  type LeaseIo,
+  parseCatalog,
+  readStack,
+  remoteOf,
+  stackLease,
+} from './stack';
 import { sweep } from './sweep';
 import {
   EMPTY_TREE,
@@ -260,6 +270,9 @@ type GateState = {
   held: Hold;
   // Where in `reviews` the next commit's rounds start counting.
   roundsFrom: number;
+  // `<git common dir>\t<remote>/<branch>` and the commit this agent last
+  // pushed there, newest last: what gh-stack's leased push may overwrite.
+  pushed: [string, string][];
 };
 
 const state: GateState = {
@@ -291,6 +304,7 @@ const state: GateState = {
   unaskedNotice: false,
   held: null,
   roundsFrom: 0,
+  pushed: [],
 };
 
 // The gate's memory as the host keeps it: module variables start over when the
@@ -299,7 +313,7 @@ const state: GateState = {
 // the user's message granted is not kept: a reload makes the next step ask, so
 // a stale copy can never grant what a later message took back. Bump the shape
 // whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-2' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-3' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -324,6 +338,7 @@ function keptOf(): Kept {
     reviewerChanges: state.reviewerChanges,
     held: state.held,
     roundsFrom: state.roundsFrom,
+    pushed: state.pushed,
   };
 }
 
@@ -490,6 +505,7 @@ async function recall($: $): Promise<void> {
       state.reviewerChanges = kept.reviewerChanges;
       state.held = kept.held;
       state.roundsFrom = kept.roundsFrom;
+      state.pushed = kept.pushed;
       for (const [id, leg] of legs) {
         if (leg.done || leg.capped) continue;
         const left = Math.max(0, LEG_BUDGET_MS - (now - leg.spawnedAt));
@@ -610,9 +626,22 @@ function isKept(k: unknown): k is Kept {
     isHeld(k.held) &&
     Number.isInteger(k.roundsFrom) &&
     (k.roundsFrom as number) >= 0 &&
-    (k.roundsFrom as number) <= k.reviews.length
+    (k.roundsFrom as number) <= k.reviews.length &&
+    Array.isArray(k.pushed) &&
+    k.pushed.every(
+      (x) =>
+        Array.isArray(x) &&
+        x.length === 2 &&
+        typeof x[0] === 'string' &&
+        x[0].includes('\t') &&
+        typeof x[1] === 'string' &&
+        OBJECT_ID.test(x[1]),
+    )
   );
 }
+
+// A SHA-1 or SHA-256 object name.
+const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 // Each kept field matches the gate's own type exactly, so a field added to one
 // and not the other fails the typecheck; the rest start over on a reload.
@@ -648,7 +677,7 @@ const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]>
 async function run(
   $: $,
   argv: string[],
-  opts: { cwd?: string; env?: Record<string, string>; stdin?: string } = {},
+  opts: { cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number } = {},
 ): Promise<Run> {
   // git's messages are matched in English, so its locale is pinned.
   const env = { LC_ALL: 'C', LANGUAGE: 'C', ...opts.env };
@@ -799,9 +828,9 @@ function refusedStep(refusal: string): HoldStep | null {
 
 function grants(grant: Grant, step: HoldStep): boolean {
   if (step === 'push') return covers(grant, 'push');
-  if (step === 'merge') return grant.merge || grant.autoMerge;
+  if (step === 'merge') return grant.merge || grant.autoMerge || grant.mergeStack.length > 0;
   // A merge the user asked for covers the version pull request too.
-  if (step === 'release') return grant.release || grant.merge;
+  if (step === 'release') return grant.release || grant.merge || grant.mergeStack.length > 0;
   return grant.pr;
 }
 
@@ -1659,6 +1688,14 @@ async function judgeBash(
   if (cls.kind === 'none') {
     const actions = ghActions(e.command, state.shellAliases);
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
+    // It replays commits as `git rebase` does, so it is watched as history,
+    // and alone, so no commit beside it goes unchecked.
+    const rewrite = stackRewrite(e.command, state.shellAliases);
+    if (rewrite === 'joined') {
+      return deny(
+        '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
+      );
+    }
     const first = await judgeGh(
       quote(e.command),
       actions,
@@ -1697,7 +1734,8 @@ async function judgeBash(
       }
     }
     const grant = yes === null ? granted : withModel(granted, yes.added);
-    const watched = watch($, await ensureRoot($), e, next, 'unchecked', grant, since, gh.ran);
+    const checked = rewrite === 'alone' ? 'history' : 'unchecked';
+    const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
     const ran = yes === null ? await watched : await ranByModel($, watched, yes);
     const r =
       gh.notes === undefined || ran.deny !== undefined
@@ -1752,6 +1790,13 @@ async function judgeBash(
       verdict = await judgePush($, root.top, e.command, commits, cls.push, granted, second.steps);
       if ('deny' in verdict) return deny(verdict.deny);
       yes = second;
+    }
+    // Only a push that would run is steered, so its own refusals come first.
+    const layer = await stackLayerPushed($, root, cls.push);
+    if (layer !== null) {
+      return deny(
+        `\`${layer}\` is a layer of a gh-stack stack, and a plain \`git push\` of it leaves gh-stack's record of the stack behind, so nothing ran. Push the stack with \`gh stack push\`, which runs on the user's push request while each of its branches is where this agent last pushed it. The command: ${quote(e.command)}`,
+      );
     }
     if (verdict.ran !== null) ran.push(verdict.ran);
     if (verdict.note !== undefined) note = verdict.note;
@@ -1889,10 +1934,46 @@ async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | n
   return askingReason(targets.refs, targets.defaults);
 }
 
+// The unmerged stack layer a `git push` updates, when this clone tracks a
+// gh-stack stack. A catalog or dry run it cannot read leaves the push to the
+// other checks: this steers to `gh stack push`, and guards nothing they miss.
+async function stackLayerPushed($: $, root: Repo, spec: PushSpec): Promise<string | null> {
+  if (spec.argv === null) return null;
+  const io = leaseIoOf($, root);
+  const text = await io.catalog();
+  const stacks = typeof text === 'string' ? parseCatalog(text) : null;
+  if (stacks === null || stacks.length === 0) return null;
+  const { refs } = await pushTargets($, root.top, spec.argv);
+  // A deleted ref, or one pushed to a remote other than the one gh-stack
+  // pushes the layer to, leaves the stack's record as it was.
+  for (const r of refs) {
+    if (r.flag === '-' || !r.to.startsWith('refs/heads/')) continue;
+    const layer = layerOf(stacks, [r.to.slice('refs/heads/'.length)]);
+    if (layer === null) continue;
+    const remote = await remoteOf(layer, io);
+    if (typeof remote !== 'string') continue;
+    const urls = await io.urls(remote);
+    if ('asks' in urls) continue;
+    if (urls.push.split('\n').some((u) => anonymized(u.trim()) === r.url)) return layer;
+  }
+  return null;
+}
+
+// One dry run per push judged, shared by every check that reads its targets.
+const targetsRead = new WeakMap<object, ReturnType<typeof readPushTargets>>();
+
+function pushTargets($: $, top: string, argv: NonNullable<PushSpec['argv']>) {
+  const known = targetsRead.get(argv);
+  if (known !== undefined) return known;
+  const read = readPushTargets($, top, argv);
+  targetsRead.set(argv, read);
+  return read;
+}
+
 // The refs a push updates, from a dry run with git's own push config applied,
 // and the default branch of each remote it goes to. A dry run that fails
 // still lists the refs it would update: one ref rejected does not stop the rest.
-async function pushTargets(
+async function readPushTargets(
   $: $,
   top: string,
   argv: NonNullable<PushSpec['argv']>,
@@ -2108,6 +2189,96 @@ function ghLookups($: $): GhLookups {
         ],
         'the default branch',
       ),
+    stack: (n) => readStack(n, (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS)),
+    stackLease: (step, remote) => stackLeaseOf($, step, remote),
+  };
+}
+
+// How long the remote may take to list its branches before the push asks.
+const LS_REMOTE_MS = 15_000;
+
+// gh-stack's lease boundary, read from this clone, its remote and GitHub.
+async function stackLeaseOf(
+  $: $,
+  step: 'push' | 'sync' | 'submit',
+  remote: string | null,
+): Promise<{ ok: true } | { asks: string }> {
+  const root = await ensureRoot($);
+  if (root === null) return { asks: 'the gate cannot find the repository' };
+  return stackLease(step, remote, leaseIoOf($, root));
+}
+
+// The clone, its remotes and GitHub as gh-stack's lease boundary reads them.
+function leaseIoOf($: $, root: Repo): LeaseIo {
+  const git = async (args: string[], timeoutMs = 10_000) => {
+    try {
+      const r = await run($, ['git', ...args], {
+        cwd: root.top,
+        env: { GIT_TERMINAL_PROMPT: '0' },
+        timeoutMs,
+      });
+      return { code: r.exitCode, out: r.stdout, why: firstLine(r.stderr) || `exit ${r.exitCode}` };
+    } catch (error) {
+      return { code: -1, out: '', why: messageOf(error) };
+    }
+  };
+  const prefix = `${root.common}\t`;
+  const pushed = new Map(
+    state.pushed
+      .filter(([k]) => k.startsWith(prefix))
+      .map(([k, id]) => [k.slice(prefix.length), id]),
+  );
+  return {
+    catalog: async () => {
+      try {
+        return await within(
+          $,
+          currentText($, `${root.common}/gh-stack`),
+          'reading the stack catalog',
+        );
+      } catch (error) {
+        return { asks: `gh-stack's catalog could not be read (${messageOf(error)})` };
+      }
+    },
+    branch: async () => {
+      const r = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+      return r.code === 0 ? r.out.trim() : { asks: 'HEAD is on no branch' };
+    },
+    config: async (key) => {
+      const r = await git(['config', '--get', key]);
+      // git config exits 1 for a key that is not set.
+      if (r.code === 1) return null;
+      if (r.code !== 0) return { asks: `reading ${key} failed (${r.why})` };
+      return r.out.trim() === '' ? null : r.out.trim();
+    },
+    urls: async (name) => {
+      const fetch = await git(['remote', 'get-url', '--all', name]);
+      const push = await git(['remote', 'get-url', '--push', '--all', name]);
+      if (fetch.code !== 0 || push.code !== 0) {
+        return {
+          asks: `reading ${name}'s URLs failed (${fetch.code === 0 ? push.why : fetch.why})`,
+        };
+      }
+      return { fetch: fetch.out, push: push.out };
+    },
+    remotes: async () => {
+      const r = await git(['remote']);
+      return r.code === 0
+        ? r.out.split(/\s+/).filter(Boolean)
+        : { asks: `listing remotes failed (${r.why})` };
+    },
+    heads: async (name) => {
+      const r = await git(['ls-remote', '--heads', name], LS_REMOTE_MS);
+      return r.code === 0 ? r.out : { asks: `listing ${name}'s branches failed (${r.why})` };
+    },
+    defaultBranch: () =>
+      ghRead(
+        $,
+        ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
+        'the default branch',
+      ),
+    ghApi: (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS),
+    pushed,
   };
 }
 
@@ -2224,7 +2395,9 @@ async function watch(
     failed('committed or pushed', startError);
   } else {
     try {
-      const pushed = await pushedRefs(git, root.top, start.refs, await remoteRefs(git, root.top));
+      const after = await remoteRefs(git, root.top);
+      const pushed = await pushedRefs(git, root.top, start.refs, after);
+      notePushed(root, pushed);
       // A push the gate judged was told already; one from a script was not.
       const judged = ran.some((step) => step.step === 'push');
       if (pushed.length > 0 && !covers(granted, 'push') && !judged) {
@@ -2232,7 +2405,7 @@ async function watch(
         notes.push(
           permitted(granted, ladder, state.held !== null).push
             ? ranUnasked($, { step: 'push', ladder })
-            : `review-cycle: this command pushed to ${pushed.join(', ')} without the user asking for a push. Tell the user.`,
+            : `review-cycle: this command pushed to ${pushed.map((p) => p.name).join(', ')} without the user asking for a push. Tell the user.`,
         );
       }
     } catch (error) {
@@ -2257,6 +2430,17 @@ async function watch(
   }
   if (notes.length === 0 || r.deny !== undefined) return r;
   return { ...r, context: [...(r.context ?? []), ...notes] };
+}
+
+// The most pushed branches the gate remembers, across repositories.
+const PUSHED_MAX = 200;
+
+function notePushed(root: Repo, pushed: readonly { name: string; id: string }[]): void {
+  for (const { name, id } of pushed) {
+    const key = `${root.common}\t${name}`;
+    state.pushed = [...state.pushed.filter(([k]) => k !== key), [key, id]];
+  }
+  state.pushed = state.pushed.slice(-PUSHED_MAX);
 }
 
 // Judged commits whose calls overlap: the rounds before them are the same

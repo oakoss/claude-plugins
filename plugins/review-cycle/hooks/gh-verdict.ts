@@ -10,7 +10,7 @@ import {
   type HoldStep,
   type UnreadOffer,
 } from './consent';
-import type { GhAction, PushRef } from './github';
+import type { GhAction, PushRef, Unlookable } from './github';
 import { asks, type Ladder, type Step } from './ladder';
 import {
   askingReason,
@@ -20,6 +20,7 @@ import {
   type DryRunRef,
   type Unnamed,
 } from './push-verdict';
+import { type MergeSet, mergeSet, type readStack } from './stack';
 
 // `unreadable` names the settings file that could not be read, and why.
 export type InForce = Ladder & { unreadable?: string };
@@ -58,6 +59,13 @@ export type GhLookups = {
   // The default branch of `repo` (HOST/OWNER/NAME or OWNER/NAME), or of the
   // repository gh picks when it is null.
   defaultBranch: (repo: string | null) => Promise<Lookup>;
+  stack: (n: number) => ReturnType<typeof readStack>;
+  // Whether gh-stack's leased push of the current stack to `remote` (null:
+  // the one gh-stack picks) can only overwrite what this agent pushed.
+  stackLease: (
+    step: 'push' | 'sync' | 'submit',
+    remote: string | null,
+  ) => Promise<{ ok: true } | { asks: string }>;
 };
 
 // A read's text without surrounding space; one that printed nothing names
@@ -180,6 +188,31 @@ const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy:
   },
   unnamed: { asks: 'it does not name the pull request', remedy: 'Name it by number.' },
 };
+
+// What `gh stack merge <target>` merges, or why the gate cannot tell and the
+// fix (null: ask the user).
+async function stackSetOf(
+  lookups: GhLookups,
+  target: number | Unlookable,
+): Promise<MergeSet | { asks: string; remedy: null }> {
+  if (typeof target !== 'number') {
+    if (target.cannot !== 'unnamed') return UNTOLD[target.cannot];
+    return {
+      asks: 'with no number it merges the current branch’s stack, which the gate does not look up',
+      remedy: 'Name the stack or pull request: `gh stack merge <number> --yes`.',
+    };
+  }
+  const read = await lookups.stack(target);
+  if (read.asks !== undefined) return { asks: read.asks, remedy: read.slow ? SLOW : null };
+  return mergeSet(target, read);
+}
+
+// The pull requests the user named to merge now and once ready. One the gate
+// cannot tell (`?`) names none.
+function namedOf(granted: Grant): { now: string[]; ready: string[] } {
+  return { now: knownOf(granted.mergeNamed), ready: knownOf(granted.readyNamed) };
+}
+const knownOf = (named: readonly string[]) => named.filter((n) => n !== NAMED_ELSEWHERE);
 
 // A merge the user asked for whose lookup GitHub was too slow to answer is
 // retried, not put back to them.
@@ -352,7 +385,7 @@ export type GhVerdict =
 export async function judgeGh(
   shown: string,
   actions: readonly GhAction[],
-  granted: Grant,
+  asked: Grant,
   held: Hold,
   lookups: GhLookups,
   model: ModelSteps = {},
@@ -362,13 +395,18 @@ export async function judgeGh(
   const notes: string[] = [];
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const may = permitted(granted, ladder, held !== null, model);
-  // Only a step the setting let through is noted as run unasked.
-  const bySetting = permitted(granted, ladder, held !== null);
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread),
   });
-  for (const action of actions) {
+  // A stack merge is judged as the merges it expands to, in its place, each
+  // under the grant that covered the stack.
+  const queue: { action: GhAction; granted?: Grant }[] = actions.map((action) => ({ action }));
+  for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
+    const { action } = item;
+    const granted = item.granted ?? asked;
+    const may = permitted(granted, ladder, held !== null, model);
+    // Only a step the setting let through is noted as run unasked.
+    const bySetting = permitted(granted, ladder, held !== null);
     switch (action.kind) {
       case 'pr': {
         if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
@@ -438,8 +476,7 @@ export async function judgeGh(
         }
         // Named pull requests bind by the number GitHub resolves, whatever the
         // setting. One the gate cannot tell (`?`) binds `--auto` to none.
-        const nowNamed = granted.mergeNamed.filter((n) => n !== NAMED_ELSEWHERE);
-        const readyNamed = granted.readyNamed.filter((n) => n !== NAMED_ELSEWHERE);
+        const { now: nowNamed, ready: readyNamed } = namedOf(granted);
         // An unnamed merge now never covers one named for once ready ("merge
         // it, and merge 62 once CI passes").
         const nowAny = granted.merge && nowNamed.length === 0;
@@ -549,6 +586,130 @@ export async function judgeGh(
         const step = which.step;
         if (!mayHere[step]) return refuse(step, null);
         if (!asked[step] && setHere[step]) ran.push({ step, ladder });
+        break;
+      }
+      case 'stack': {
+        if (action.step === 'submit' || action.step === 'link') {
+          if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
+          if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
+        }
+        // `link` pushes plainly; the rest lease every active branch.
+        if (action.step === 'link') {
+          if (!may.push) return refuse('push', null);
+          if ('unread' in action.where) {
+            return {
+              deny: `\`gh stack link\` pushes the branches it names, and ${action.where.unread}, so the gate cannot tell whether one is the default branch, and nothing ran. Run it on its own, from this repository, with at most one \`--remote\`. The command: ${shown}`,
+            };
+          }
+          const branches = action.branches ?? [];
+          if (branches.length > 0) {
+            const { remote } = action.where;
+            // The default branch gh reads is this repository's, not a named remote's.
+            const r =
+              remote === null
+                ? read(await lookups.defaultBranch(null), 'the default branch')
+                : {
+                    asks: `it pushes to \`${remote}\`, whose default branch the gate does not read`,
+                  };
+            const defaults = new Map(r.asks === undefined ? [['', { branch: r.out }]] : []);
+            const refs = branches.map((b) => ({ flag: ' ', to: `refs/heads/${b}`, url: '' }));
+            const u = unnamedTarget(refs, defaults, granted.pushNamed, null);
+            if (u !== null) {
+              const then =
+                u.offer === null
+                  ? `Give the user the command to run themselves. The command: ${shown}`
+                  : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
+              return {
+                deny: `\`gh stack link\` pushes the branches it names, and ${u.why}, so nothing ran. ${then}`,
+              };
+            }
+            // As for `git push`: a push the setting let through asks when its
+            // target is unchecked; one the user asked for runs with a note.
+            if (r.asks !== undefined && !covers(granted, 'push')) {
+              return refuse('push', `the default branch could not be read (${r.asks})`);
+            }
+            if (r.asks !== undefined) {
+              notes.push(
+                `review-cycle ran \`gh stack link\` without checking whether a branch it pushes is the default branch: ${r.asks}. If it may have pushed one the user did not name, tell them.`,
+              );
+            }
+          }
+          if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
+          break;
+        }
+        if (covers(granted, 'lease')) break;
+        const ask = askThem(
+          'the stack and that it force-pushes its branches with a lease',
+          '"Force-push the stack with a lease?"',
+          shown,
+        );
+        if (!may.push) {
+          return {
+            deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${ask}`,
+          };
+        }
+        // A push request covers gh-stack's own leased push while it can only
+        // overwrite what this agent pushed.
+        const bound =
+          'unread' in action.where
+            ? { asks: action.where.unread }
+            : await lookups.stackLease(action.step, action.where.remote);
+        if ('asks' in bound) {
+          return {
+            deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease. A push request covers that only while each branch is where this agent last pushed it, and ${bound.asks}, so nothing ran. If they want it, ${ask}`,
+          };
+        }
+        if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
+        break;
+      }
+      case 'stack-merge': {
+        const set = await stackSetOf(lookups, action.target);
+        if ('asks' in set) {
+          const remedy = set.remedy ?? 'Give the user the command to run themselves.';
+          return {
+            deny: `\`gh stack merge\` merges a pull request and every unmerged one below it, and the gate cannot tell which: ${set.asks}, so nothing ran. ${remedy} The command: ${shown}`,
+          };
+        }
+        const listed = set.prs.map((n) => `#${n}`).join(', ');
+        // "merge the stack", "merge stack 4" or "merge up to #3" names every
+        // layer it merges, each still judged as its own merge.
+        const top = set.prs.at(-1);
+        const stacked = granted.mergeStack.some(
+          (t) =>
+            t === 'stack' ||
+            (set.stack && typeof action.target === 'number' && t === `stack:${action.target}`) ||
+            t === `upto:${top}`,
+        );
+        const layerGrant = stacked
+          ? { ...granted, merge: true, mergeNamed: set.prs.map(String) }
+          : granted;
+        // One "merge it" names one pull request; a stack merge of several
+        // needs each named, now or once ready, unless the setting merges
+        // without asking.
+        const { now, ready } = namedOf(granted);
+        const named = new Set([...now, ...ready]);
+        const ladderMerges = permitted({ ...granted, merge: false }, ladder, held !== null).merge;
+        if (
+          !stacked &&
+          set.prs.length > 1 &&
+          !ladderMerges &&
+          !set.prs.every((n) => named.has(String(n)))
+        ) {
+          return {
+            deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askThem('every pull request it merges', `"Merge ${listed}?"`, shown)}`,
+          };
+        }
+        queue.unshift(
+          ...set.prs.map((n) => ({
+            action: {
+              kind: 'merge' as const,
+              admin: false,
+              auto: false,
+              lookup: [String(n)],
+            },
+            granted: layerGrant,
+          })),
+        );
         break;
       }
       default: {

@@ -29,7 +29,9 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // only `gh pr merge --auto` leaves to GitHub. `mergeNamed` holds the pull
 // request numbers a merge request named ("merge 131"), empty for "merge it";
 // `readyNamed` those a merge asked for once ready named, kept apart so they
-// never cover a merge now.
+// never cover a merge now. `mergeStack` holds the gh-stack merges a request
+// named, which cover `gh stack merge` alone: `stack` for the whole stack,
+// `stack:<n>` for stack <n>, `upto:<n>` for the layers up to pull request <n>.
 // `finish` holds the history commands a request to finish named ("finish the
 // rebase"): a commit of that command's `--continue` only.
 export type Grant = Readonly<{
@@ -42,6 +44,7 @@ export type Grant = Readonly<{
   mergeNamed: readonly string[];
   autoMerge: boolean;
   readyNamed: readonly string[];
+  mergeStack: readonly string[];
   approve: boolean;
   release: boolean;
   comment: boolean;
@@ -57,6 +60,7 @@ export const NO_GRANT: Grant = Object.freeze({
   mergeNamed: [],
   autoMerge: false,
   readyNamed: [],
+  mergeStack: [],
   approve: false,
   release: false,
   comment: false,
@@ -394,6 +398,9 @@ const TAIL = new Set([
   'diff',
   'stuff',
   'branch',
+  'stack',
+  'whole',
+  'entire',
   'tag',
   'tags',
   'up',
@@ -435,6 +442,8 @@ const TAIL = new Set([
   'comments',
   'comment',
 ]);
+
+const STACKED = new Set(['stack', 'whole', 'entire']);
 
 // What a publish or release may also name: "publish the package to npm". Kept
 // out of TAIL, so "push to npm" asks for no git push.
@@ -733,6 +742,10 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
     // "ship it as is": unchanged, not a description.
     if (word === 'is' && tail[i - 1] === 'as') continue;
     if (!TAIL.has(word)) return false;
+    // "push the stack", "ship the whole stack": no other verb's object.
+    if (STACKED.has(word) && !family.grants.some((g) => g === 'push' || g === 'force')) {
+      return false;
+    }
     if (word === 'from' && !family.from) return false;
     const next = tail[i + 1] ?? '';
     if (TOWARD.has(word) && !DESTINATION.has(next) && !(family.packaged && PACKAGE.has(after))) {
@@ -843,6 +856,7 @@ function onlyAutoMerge(g: MutableGrant): boolean {
     g.autoMerge &&
     g.push === 'none' &&
     g.finish.length === 0 &&
+    g.mergeStack.length === 0 &&
     STEPS.every((s) => s === 'autoMerge' || !g[s])
   );
 }
@@ -976,12 +990,13 @@ function grammarGrant(
     const at = part.findIndex((x) => Object.hasOwn(verbs, x));
     const family = verbs[part[at] ?? ''];
     const tail = part.slice(at + 1);
+    const stack = family?.grants.includes('merge') ? stackMergeOf(tail) : null;
     const asks =
       family !== undefined &&
       !described &&
       isLead(part.slice(0, at), lead, agreed) &&
-      isTail(tail, family, verbs === REQUESTED) &&
-      (family.object?.(tail) ?? true);
+      (stack !== null ||
+        (isTail(tail, family, verbs === REQUESTED) && (family.object?.(tail) ?? true)));
     if (asks) {
       heard?.add(family);
       const granted = family.grants;
@@ -991,7 +1006,9 @@ function grammarGrant(
       if (granted.includes('push')) raise(into, 'push');
       if (granted.includes('force')) raise(into, 'lease');
       if (granted.includes('pr')) into.pr = true;
-      if (granted.includes('merge')) {
+      if (stack !== null) {
+        into.mergeStack = [...new Set([...into.mergeStack, stack])];
+      } else if (granted.includes('merge')) {
         into.merge = true;
         into.mergeNamed = [...into.mergeNamed, ...tail.filter((x) => /^\d+$/.test(x))];
         merging = true;
@@ -1017,6 +1034,24 @@ function grammarGrant(
   }
   if (ends) ends.merging = merging;
   return described ? 'described' : 'none';
+}
+
+// The gh-stack merge a merge's tail names: the whole stack ("merge the
+// stack"), stack <n> ("merge stack 4"), or the layers up to pull request <n>
+// ("merge everything up to #131"); null for any other tail.
+function stackMergeOf(tail: string[]): string | null {
+  const t = tail.filter((x) => x !== 'the' && !COURTESY.has(x));
+  const [a, b] = t;
+  const whole = a === 'whole' || a === 'entire';
+  if ((t.length === 1 && a === 'stack') || (t.length === 2 && whole && b === 'stack')) {
+    return 'stack';
+  }
+  if (t.length === 2 && a === 'stack' && /^\d+$/.test(b ?? '')) return `stack:${b}`;
+  const up = a === 'everything' || a === 'all' ? t.slice(1) : t;
+  if (up.length === 3 && up[0] === 'up' && up[1] === 'to' && /^\d+$/.test(up[2] ?? '')) {
+    return `upto:${up[2]}`;
+  }
+  return null;
 }
 
 function continues(clause: string): boolean {
@@ -1074,16 +1109,24 @@ function merged(into: MutableGrant, from: MutableGrant): void {
   into.pushNamed = [...new Set([...into.pushNamed, ...from.pushNamed])];
   into.mergeNamed = [...into.mergeNamed, ...from.mergeNamed];
   into.readyNamed = [...into.readyNamed, ...from.readyNamed];
+  into.mergeStack = [...new Set([...into.mergeStack, ...from.mergeStack])];
   raise(into, from.push);
 }
 
 function asksAny(g: Grant): boolean {
-  return STEPS.some((step) => g[step]) || g.push !== 'none' || g.finish.length > 0;
+  return (
+    STEPS.some((step) => g[step]) ||
+    g.push !== 'none' ||
+    g.finish.length > 0 ||
+    g.mergeStack.length > 0
+  );
 }
 
 // Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
-  return g.pr || g.merge || g.autoMerge || g.approve || g.release || g.comment;
+  return (
+    g.pr || g.merge || g.autoMerge || g.mergeStack.length > 0 || g.approve || g.release || g.comment
+  );
 }
 
 // A yes takes the first alternative only when the agent offers it ("Should I
@@ -1310,7 +1353,9 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
   if (PUSH_WORD.test(text) && !covers(grant, 'push')) return mentioned('push');
   if (PR_WORD.test(text) && !grant.pr) return mentioned('pr');
-  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge) return mentioned('merge');
+  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge && grant.mergeStack.length === 0) {
+    return mentioned('merge');
+  }
   if (APPROVE_WORD.test(text) && !grant.approve) return mentioned('approve');
   if (RELEASE_WORD.test(text) && !grant.release) return mentioned('release');
   if (!HOLD.test(text) || covers(grant, 'push') || asksBeyondPush(grant)) return null;
@@ -1319,7 +1364,7 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   const offered = asked(previousAnswer);
   const step: HoldStep | null = offered.release
     ? 'release'
-    : offered.merge || offered.autoMerge
+    : offered.merge || offered.autoMerge || offered.mergeStack.length > 0
       ? 'merge'
       : offered.approve
         ? 'approve'
@@ -1366,7 +1411,14 @@ export function holdsOf(prompt: string, previousAnswer = ''): boolean {
 // Whether a message asks for a step on the way out: a push, a pull request, a
 // merge or a release. An approval or a reply asks for none of them.
 export function liftsHold(grant: Grant): boolean {
-  return covers(grant, 'push') || grant.pr || grant.merge || grant.autoMerge || grant.release;
+  return (
+    covers(grant, 'push') ||
+    grant.pr ||
+    grant.merge ||
+    grant.autoMerge ||
+    grant.release ||
+    grant.mergeStack.length > 0
+  );
 }
 
 // The whole replies that pick among offered merges, anchored as a yes is: any
@@ -1543,6 +1595,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       mergeNamed: [],
       autoMerge: false,
       readyNamed: [],
+      mergeStack: [],
       release: false,
     });
   }

@@ -140,6 +140,33 @@ const VERBS = [
   'squash-merge the release',
   'merge 131, then 130',
   'merge 131, and then 130',
+  // A gh-stack stack, whole or up to a layer, and its pushes.
+  'push the stack',
+  'push the whole stack',
+  'ship the stack',
+  'submit the stack',
+  'merge the stack',
+  'merge the whole stack',
+  'merge the entire stack',
+  'merge stack 4',
+  'merge stack #4',
+  'merge the stack into main',
+  'merge up to #131',
+  'merge up to 131',
+  'merge everything up to #131',
+  'merge all up to 131',
+  'merge up to the version PR',
+  'merge it up to main',
+  'merge the stack of #12',
+  'merge the PRs',
+  'stack the PRs',
+  'push the stack of PRs',
+  // The stack's words on other verbs.
+  'release the stack',
+  'release the entire branch',
+  'ship the whole branch',
+  'commit the whole stack',
+  'force push the stack',
 ];
 const CONDITIONS = [
   '',
@@ -270,6 +297,12 @@ const REPLIES = [
   'yes, but not yet',
   'merge both once CI passes',
   "merge 131, don't merge 130",
+  // Answers to a stack's offers.
+  'merge the stack',
+  'push the stack',
+  "don't merge the stack",
+  'merge the stack, not 131',
+  'merge up to 131',
 ];
 const OFFERS = [
   '',
@@ -353,6 +386,11 @@ const OFFERS = [
   'Squash-merge #131 (rust 1.99.1) and then #130 (jdx/mise-action v5.2.0)?',
   'Merge #131 (the docs fix)?',
   'Should I squash-merge the release?',
+  // A gh-stack stack's offers.
+  'Force-push the stack with a lease?',
+  'Merge #2, #3?',
+  'Merge the stack?',
+  'Merge stack #4 (#2 and #3)?',
 ];
 
 // Which offers each message is read against. Crossing every generated message

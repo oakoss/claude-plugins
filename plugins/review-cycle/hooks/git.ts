@@ -246,7 +246,7 @@ export async function remoteRefs(git: Git, root: string): Promise<Refs> {
   return refs;
 }
 
-// The reflog messages the command added to `ref`, newest first: the entries
+// The reflog entries the command added to `ref`, newest first: the entries
 // after the one that set its starting value `was`. A fresh clone logs nothing
 // before a ref's first move, so a log that never reaches `was` is all new. A
 // ref the command created stops at `remote: renamed`: a renamed remote keeps
@@ -256,41 +256,42 @@ async function reflogSince(
   root: string,
   ref: string,
   was: string | undefined,
-): Promise<string[]> {
+): Promise<{ id: string; message: string }[]> {
   const r = await git(['git', 'log', '-g', '-n', '50', '--format=%H %gs', ref, '--'], {
     cwd: root,
   });
   if (r.exitCode !== 0) {
     throw new Error(`git log -g ${ref} failed: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`);
   }
-  const messages: string[] = [];
+  const entries: { id: string; message: string }[] = [];
   for (const line of r.stdout.split('\n')) {
     const space = line.indexOf(' ');
     if (space === -1) break;
+    const id = line.slice(0, space);
     const message = line.slice(space + 1);
-    if (line.slice(0, space) === was) break;
+    if (id === was) break;
     if (was === undefined && message.startsWith('remote: renamed ')) break;
-    messages.push(message);
+    entries.push({ id, message });
   }
-  return messages;
+  return entries;
 }
 
-// Remote-tracking refs a push moved, by name: git logs those moves as
-// `update by push`. A push that updates no remote-tracking ref, deletes one,
-// or leaves no reflog is not seen.
+// Remote-tracking refs a push moved, by name, and the commit the latest push
+// set: git logs those moves as `update by push`, and a fetch after it can move
+// the ref on. A push that updates no remote-tracking ref, deletes one, or
+// leaves no reflog is not seen.
 export async function pushedRefs(
   git: Git,
   root: string,
   before: Refs,
   after: Refs,
-): Promise<string[]> {
-  const pushed: string[] = [];
+): Promise<{ name: string; id: string }[]> {
+  const pushed: { name: string; id: string }[] = [];
   for (const [ref, id] of after) {
     if (before.get(ref) === id) continue;
     const log = await reflogSince(git, root, ref, before.get(ref));
-    if (log.some((m) => m.startsWith('update by push'))) {
-      pushed.push(ref.slice('refs/remotes/'.length));
-    }
+    const push = log.find((e) => e.message.startsWith('update by push'));
+    if (push) pushed.push({ name: ref.slice('refs/remotes/'.length), id: push.id });
   }
   return pushed;
 }

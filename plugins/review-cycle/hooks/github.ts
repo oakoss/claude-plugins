@@ -41,6 +41,19 @@ export type GhAction =
   | { kind: 'comment' }
   | { kind: 'release' }
   | { kind: 'push'; ref: PushRef }
+  // github/gh-stack: `push`, `sync` and `submit` push every active branch of
+  // the stack with a per-branch lease; `submit` and `link` also open pull
+  // requests; `merge` merges every unmerged layer of stack `target`, or pull
+  // request `target` and every unmerged one below it. `where` is the
+  // `--remote` it names, or why the gate cannot tell where it pushes.
+  // `branches` are the branch arguments `link` pushes plainly.
+  | {
+      kind: 'stack';
+      step: 'push' | 'sync' | 'submit' | 'link';
+      where: { remote: string | null } | { unread: string };
+      branches?: string[];
+    }
+  | { kind: 'stack-merge'; target: number | Unlookable }
   | { kind: 'unread'; why: string; remedy?: string };
 
 // `gh api`'s options that take a value (gh 2.102.0's `gh api --help`), and

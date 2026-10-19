@@ -79,10 +79,15 @@ async function made(repo: string, act: () => void, unborn = false) {
   return madeBy(entries, head);
 }
 
-async function pushed(repo: string, act: () => void): Promise<string[]> {
+async function pushedWith(repo: string, act: () => void) {
   const before = await remoteRefs(git, repo);
   act();
   return pushedRefs(git, repo, before, await remoteRefs(git, repo));
+}
+
+async function pushed(repo: string, act: () => void): Promise<string[]> {
+  const seen = await pushedWith(repo, act);
+  return seen.map((p) => p.name);
 }
 
 let a = '';
@@ -266,6 +271,20 @@ describe('pushes, from remote-tracking reflogs', () => {
     g(b, 'pull', '-q', '--no-rebase', '--no-edit');
     g(b, 'push', '-q');
     expect(await pushed(a, () => g(a, 'fetch', '-q'))).toEqual([]);
+  });
+  test('a push keeps the commit it set, though a fetch after it moves the ref on', async () => {
+    let mine = '';
+    const seen = await pushedWith(a, () => {
+      commit(a, 'x', 'x');
+      g(a, 'push', '-q');
+      mine = g(a, 'rev-parse', 'HEAD').trim();
+      commit(b, 'y', 'y');
+      g(b, 'pull', '-q', '--no-rebase', '--no-edit');
+      g(b, 'push', '-q');
+      g(a, 'fetch', '-q');
+    });
+    expect(seen).toEqual([{ name: 'origin/main', id: mine }]);
+    expect(g(a, 'rev-parse', 'origin/main').trim()).not.toBe(mine);
   });
   test('a push that creates a branch is seen', async () => {
     expect(

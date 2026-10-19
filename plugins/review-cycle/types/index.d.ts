@@ -32,6 +32,8 @@ export type Kept = {
   held: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }> | null;
   // Where in `reviews` the next commit's rounds start counting.
   roundsFrom: number;
+  // `<git common dir>\t<remote>/<branch>` and the commit this agent last pushed there.
+  pushed: [string, string][];
 };
 
 declare module 'claude-code' {
