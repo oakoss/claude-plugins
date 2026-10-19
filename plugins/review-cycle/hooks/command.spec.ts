@@ -1748,8 +1748,13 @@ describe('gh steps', () => {
       ['gh stack sync --prune', 'sync', { remote: null }],
       ['gh stack submit --auto --open', 'submit', { remote: null }],
       ['gh stack link 10 20 30', 'link', { remote: null }],
-      ['cd ../other && gh stack push', 'push', { unread: expect.stringContaining('directory') }],
+      [
+        'cd ../other && gh stack push',
+        'push',
+        { unread: expect.stringContaining('beside other commands') },
+      ],
       ['GIT_DIR=x gh stack push', 'push', { unread: expect.stringContaining('directory') }],
+      ['gh stack push && ls', 'push', { unread: expect.stringContaining('beside other commands') }],
     ])('%s pushes the stack', (command, step, where) => {
       expect(ghActions(command)).toEqual([{ kind: 'stack', step, where }]);
     });

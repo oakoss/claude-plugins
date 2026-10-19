@@ -1275,7 +1275,10 @@ function stackAt(words: Word[], from: number, context: GhContext, fed: boolean):
         kind: 'stack',
         step,
         where: {
-          unread: 'it runs in another directory or repository, which the gate does not read',
+          unread:
+            context === 'beside'
+              ? 'it runs beside other commands, which can change where it runs or what it pushes'
+              : 'it runs in another directory or repository, which the gate does not read',
         },
       };
     }
