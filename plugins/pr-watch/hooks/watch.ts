@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Held, Job, Pull, Watch, Workflow } from '../types';
+import type { Activity, Commit, Held, Job, Pull, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -426,6 +426,55 @@ function mergedVerdict(
   return { kind: 'merged-passed' };
 }
 
+const isFailedRun = (w: Workflow) => w.status === 'done' && failed(w.conclusion);
+
+// A push to the trunk runs CI on its newest commit only, so a merge commit
+// landed beneath another, as a stack's lower layer is, never gets runs.
+export function needsTrunk(pull: Pull, now: number): boolean {
+  const runs = pull.mergeRuns;
+  if (pull.state !== 'MERGED' || !runs || pull.mergeOid === undefined) return false;
+  // Outside a stack, a merge commit with no runs was skipped on purpose, as by
+  // a path filter, and a later commit's runs are someone else's.
+  if (runs.workflows.length === 0)
+    return typeof pull.trunk === 'string' && !isMergeFresh(pull, now);
+  return runs.workflows.some(isFailedRun);
+}
+
+// `trunk` is newest first, in git log order, so a commit above the merge
+// commit holds it only when the merge commit is among its ancestors there.
+export function followTrunk(pull: Pull, trunk: readonly Commit[]): Pull {
+  const at = trunk.findIndex((c) => c.oid === pull.mergeOid);
+  if (at === -1) return pull;
+  const holds = new Set([trunk[at]!.oid]);
+  const later: Commit[] = [];
+  for (const c of trunk.slice(0, at).toReversed()) {
+    if (!c.parents.some((p) => holds.has(p))) continue;
+    holds.add(c.oid);
+    later.push(c);
+  }
+  let runs = pull.mergeRuns ?? { workflows: [], isTruncated: false };
+  let from = -1;
+  if (runs.workflows.length === 0) {
+    from = later.findIndex((c) => c.runs.workflows.length > 0);
+    if (from === -1) return pull;
+    runs = later[from]!.runs;
+  }
+  const newer = later.slice(from + 1).flatMap((c) => c.runs.workflows);
+  const since: string[] = [];
+  const workflows = runs.workflows.map((w) => {
+    if (!isFailedRun(w)) return w;
+    // A skipped run, as from an `if:` on every job, passed nothing.
+    const last = newer.findLast(
+      (n) => n.id === w.id && n.status === 'done' && n.conclusion !== 'SKIPPED',
+    );
+    if (!last || !PASSED.has(last.conclusion ?? '')) return w;
+    since.push(w.name);
+    return last;
+  });
+  if (from === -1 && since.length === 0) return pull;
+  return { ...pull, mergeRuns: { ...runs, workflows }, followed: { isLater: from !== -1, since } };
+}
+
 // What stops a merge on the pull request itself; a draft's line says it too.
 function blockerOf(pull: Pull): string | null {
   if (pull.merge === 'DIRTY') return 'conflicts';
@@ -463,7 +512,7 @@ export function verdictOf(
 const PASSED_STAYS_MS = 5000;
 
 // Every run on the merge commit passed, and the grace for a late one is over.
-// A failed merge never settles: it is read until a re-run passes.
+// A failed merge settles once a re-run, or a later run on the trunk, passes.
 export function isSettled(verdict: Verdict, pull: Pull, now: number): boolean {
   if (verdict.kind !== 'merged-passed') return false;
   const isDone = pull.mergeRuns?.workflows.every((w) => w.status === 'done') ?? true;
@@ -525,6 +574,16 @@ export function shownOf(verdict: Verdict): string {
     return `${verdict.kind}:${JSON.stringify([verdict.workflow, verdict.job])}`;
   }
   return verdict.kind;
+}
+
+function passedOn({ followed, base }: Pull): string {
+  if (followed?.since.length) {
+    const on = followed.isLater ? 'a later commit' : 'the merge commit';
+    return `${followed.since.join(', ')} failed on ${on} and since passed on ${base}`;
+  }
+  return followed?.isLater
+    ? `a later commit's checks on ${base} passed`
+    : "the merge commit's checks passed";
 }
 
 export function toastOf(
@@ -670,7 +729,7 @@ function conditionsOf(
   if (verdict.kind === 'merged-passed' && !isEarly) {
     const text = watch.push
       ? `The checks on ${name} passed.`
-      : `${name} merged into ${pull.base}, and the merge commit's checks passed.`;
+      : `${name} merged into ${pull.base}, and ${passedOn(pull)}.`;
     found.push({ key: keyOf(watch, 'passed'), text, isPassed: true });
   }
   if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
@@ -683,7 +742,8 @@ function conditionsOf(
   }
   const isMerged = verdict.kind.startsWith('merged-');
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
-  const where = isMerged && !watch.push ? ' on the merge commit' : '';
+  const commit = pull.followed?.isLater ? ' on a later commit' : ' on the merge commit';
+  const where = isMerged && !watch.push ? commit : '';
   for (const w of workflows) {
     const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
     if (bad.length === 0) continue;
@@ -966,7 +1026,14 @@ export function lineOf(
     return [...lead, ...ready, ...others(null), ...tail];
   }
   if (v.kind === 'merged-passed') {
-    return [...lead, icon(' ✓', 'green'), { text: ' checks passed' }, ...tail];
+    const since = pull.followed?.since ?? [];
+    const passed =
+      since.length > 0
+        ? ` ${since.join(', ')} failed, since passed`
+        : pull.followed?.isLater
+          ? ' checks passed on a later commit'
+          : ' checks passed';
+    return [...lead, icon(' ✓', 'green'), { text: passed }, ...tail];
   }
   if (v.kind === 'merged-waiting') {
     return [...lead, { text: ' ○ waiting on checks', isDim: true }, ...tail];

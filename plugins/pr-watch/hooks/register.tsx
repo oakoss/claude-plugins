@@ -19,9 +19,11 @@ import {
   parsePush,
   parseQuota,
   parseStackBase,
+  parseTrunk,
   pullArgs,
   pushArgs,
   stackArgs,
+  trunkArgs,
   viewArgs,
   type Quota,
 } from './github';
@@ -35,6 +37,8 @@ import {
   pushedPull,
   delayOf,
   errorLine,
+  followTrunk,
+  needsTrunk,
   estimateKey,
   rerunKey,
   lineOf,
@@ -510,7 +514,22 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     }
     // Asked until the stacks API answers, then kept.
     const trunk = w.pull?.trunk !== undefined ? w.pull.trunk : await trunkOf($, w);
-    return { kind: 'pull', pull: { ...merged, trunk, base: trunk ?? merged.base } };
+    const onTrunk = { ...merged, trunk, base: trunk ?? merged.base };
+    // Until the stacks API answers, the base may be the layer below, whose
+    // history never holds the merge commit.
+    if (trunk === undefined || !needsTrunk(onTrunk, await $.clock.now())) {
+      return { kind: 'pull', pull: onTrunk };
+    }
+    try {
+      const commits = await readGh($, w.host, trunkArgs(w.host, w.repo, onTrunk.base), parseTrunk);
+      return { kind: 'pull', pull: followTrunk(onTrunk, commits) };
+    } catch (error) {
+      // The merge commit's own runs, a failure among them, stand; with none,
+      // the line would read as closed and leave. A rate limit has already
+      // paused the host for the next read.
+      if ((onTrunk.mergeRuns?.workflows.length ?? 0) === 0) throw error;
+      return { kind: 'pull', pull: onTrunk };
+    }
   }
   const { branch, pushedAt } = w.push;
   const pushed = await readGh($, w.host, pushArgs(w.host, w.repo, branch), parsePush);

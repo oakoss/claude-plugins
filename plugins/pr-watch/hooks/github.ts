@@ -1,10 +1,10 @@
 // The gh calls pr-watch makes and what it reads from their output. Pure:
 // register.tsx runs the commands.
-import type { Activity, Job, Pull, RunStatus, Workflow } from '../types';
+import type { Activity, Commit, Job, Pull, Runs, RunStatus, Workflow } from '../types';
 
 // Whether a check is required is asked only of the head commit: the base
 // branch's runs after a merge gate nothing.
-const suites = (required: string) => `checkSuites(first: 100) {
+const suites = (required: string, first = 100) => `checkSuites(first: ${first}) {
       pageInfo { hasNextPage }
       nodes {
         status conclusion
@@ -27,7 +27,7 @@ const pullQuery = (isMerged: boolean) => `query($o: String!, $r: String!, $n: In
     headRefName headRepository { nameWithOwner }
     ${
       isMerged
-        ? `mergeCommit { ${suites('')} }`
+        ? `mergeCommit { oid ${suites('')} }`
         : `commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }`
     }
     comments(last: 10) { nodes { author { login __typename } createdAt url } }
@@ -42,6 +42,18 @@ const PUSH_QUERY = `query($o: String!, $r: String!, $b: String!) {
     associatedPullRequests(states: OPEN, first: 100) {
       nodes { number url repository { nameWithOwner } headRepository { nameWithOwner } }
     }
+  } }
+}`;
+
+// 2 points, where 25 commits cost 5 (measured). A commit's committed time can
+// precede its pull request's merge by a second, so the merge commit is found by
+// oid, not `since`.
+const TRUNK_QUERY = `query($o: String!, $r: String!, $b: String!) {
+  ${RATE}
+  repository(owner: $o, name: $r) { ref(qualifiedName: $b) {
+    target { ... on Commit { history(first: 10) { nodes {
+      oid parents(first: 2) { nodes { oid } } ${suites('', 20)}
+    } } } }
   } }
 }`;
 
@@ -90,6 +102,24 @@ export function pushArgs(host: string, repo: string, branch: string): string[] {
     ...onHost(host),
     '-f',
     `query=${PUSH_QUERY}`,
+    '-f',
+    `o=${owner}`,
+    '-f',
+    `r=${name}`,
+    '-f',
+    `b=refs/heads/${branch}`,
+  ];
+}
+
+export function trunkArgs(host: string, repo: string, branch: string): string[] {
+  const [owner = '', name = ''] = repo.split('/');
+  return [
+    'gh',
+    'api',
+    'graphql',
+    ...onHost(host),
+    '-f',
+    `query=${TRUNK_QUERY}`,
     '-f',
     `o=${owner}`,
     '-f',
@@ -247,7 +277,7 @@ function checksOf(suites: any): Checks {
 }
 
 // Nothing on the base branch is required, so a merge keeps only its runs.
-function runsOf({ workflows, isTruncated }: Checks): Pull['mergeRuns'] {
+function runsOf({ workflows, isTruncated }: Checks): Runs {
   return { workflows, isTruncated };
 }
 
@@ -309,6 +339,7 @@ export function parsePull(stdout: string): Pull {
   if (number === null) throw new Error('pull request has no number');
   const headBranch = str(pr.headRefName);
   const headRepo = str(pr.headRepository?.nameWithOwner);
+  const mergeOid = str(pr.mergeCommit?.oid);
   return {
     number,
     ...(headBranch === null || headRepo === null
@@ -324,6 +355,7 @@ export function parsePull(stdout: string): Pull {
     mergedAt: isTime(pr.mergedAt) ? pr.mergedAt : null,
     ...checksOf(pr.commits?.nodes?.[0]?.commit?.checkSuites),
     mergeRuns: pr.mergeCommit ? runsOf(checksOf(pr.mergeCommit.checkSuites)) : null,
+    ...(mergeOid === null ? {} : { mergeOid }),
     activity: activityOf(pr, str(body?.data?.viewer?.login)),
     activityAt: windowNewest(pr),
   };
@@ -375,6 +407,23 @@ export function parsePush(stdout: string): Pushed {
   const repo = str(open?.repository?.nameWithOwner);
   if (number !== null && repo !== null) return { kind: 'pr', repo, number, url: str(open.url) };
   return { kind: 'runs', runs: runsOf(checksOf(ref.target?.checkSuites)) };
+}
+
+// Newest first; none when the branch is gone.
+export function parseTrunk(stdout: string): Commit[] {
+  const body: any = parse(stdout);
+  const problem = str(body?.errors?.[0]?.message);
+  if (problem) throw new Error(problem);
+  const repository = body?.data?.repository;
+  if (!repository) throw new Error('repository not found');
+  const commits: Commit[] = [];
+  for (const node of list(repository.ref?.target?.history?.nodes)) {
+    const oid = str(node?.oid);
+    if (oid === null) continue;
+    const parents = list(node.parents?.nodes).flatMap((p) => str(p?.oid) ?? []);
+    commits.push({ oid, parents, runs: runsOf(checksOf(node.checkSuites)) });
+  }
+  return commits;
 }
 
 // The median length of the recent successful first attempts: one run off a
