@@ -361,6 +361,9 @@ const OFFERS = [
   'I can merge #131 next, or leave it. Merge the version PR?',
   '#134 merged\nMerge the version PR?',
   'Merged #134\nMerge #130?',
+  '- **Release PR #130:** it should not trigger Visual.\n\nSay the word to merge.',
+  '#130 is the version PR. Merge it?',
+  '#131 is green. Release PR #130 can wait. Merge it?',
   'Can we push `--dry-run` to main?',
   'Why do we merge #130 first?',
   // Conditions an offer sets: in the question, before it, or after it.

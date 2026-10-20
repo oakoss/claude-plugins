@@ -922,6 +922,23 @@ describe('an affirmative grants what the previous answer asked', () => {
     ['merge it', 'Merged #134.\nThe version PR is green.\nMerge it to release?', MERGE],
     ['merge it', '#131 is green. The version PR is separate. Merge it?', merging('131')],
     ['merge it', '#134 is green. Merge it before the release?', merging('134')],
+    // The words alone cannot tell an offered pull request from one mentioned
+    // beside an unnumbered offer, so the grammar names it in both; the gate's
+    // model check reads which it was.
+    [
+      'ok, lets merge',
+      'The branch is current.\n- **Release PR #52:** it should not trigger Visual.\n\nSay the word to merge.',
+      merging('52'),
+    ],
+    ['merge it', 'Release PR #52 is ready. Merge it?', merging('52')],
+    ['merge it', 'Version PR #52 is green. Say the word to merge.', merging('52')],
+    ['merge it', '`#52` is the **version PR**. Merge it?', merging('52')],
+    ['merge it', '#74 is the release PR guard fix. Merge it?', merging('74')],
+    [
+      'merge it',
+      'CI is green.\n- PR #60 is still waiting on review.\n\nSay the word to merge.',
+      merging('60'),
+    ],
   ])('"%s" after "%s" names %j', (prompt, offer, grant) => {
     expect(grantOf(prompt, offer)).toEqual(grant);
   });
