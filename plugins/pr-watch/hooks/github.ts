@@ -93,7 +93,7 @@ export function viewArgs(pull: string, repo: string | null): string[] {
   ];
 }
 
-export function pushArgs(host: string, repo: string, branch: string): string[] {
+function branchArgs(query: string, host: string, repo: string, branch: string): string[] {
   const [owner = '', name = ''] = repo.split('/');
   return [
     'gh',
@@ -101,7 +101,7 @@ export function pushArgs(host: string, repo: string, branch: string): string[] {
     'graphql',
     ...onHost(host),
     '-f',
-    `query=${PUSH_QUERY}`,
+    `query=${query}`,
     '-f',
     `o=${owner}`,
     '-f',
@@ -111,22 +111,12 @@ export function pushArgs(host: string, repo: string, branch: string): string[] {
   ];
 }
 
+export function pushArgs(host: string, repo: string, branch: string): string[] {
+  return branchArgs(PUSH_QUERY, host, repo, branch);
+}
+
 export function trunkArgs(host: string, repo: string, branch: string): string[] {
-  const [owner = '', name = ''] = repo.split('/');
-  return [
-    'gh',
-    'api',
-    'graphql',
-    ...onHost(host),
-    '-f',
-    `query=${TRUNK_QUERY}`,
-    '-f',
-    `o=${owner}`,
-    '-f',
-    `r=${name}`,
-    '-f',
-    `b=refs/heads/${branch}`,
-  ];
+  return branchArgs(TRUNK_QUERY, host, repo, branch);
 }
 
 // The github/gh-stack stacks a pull request belongs to.

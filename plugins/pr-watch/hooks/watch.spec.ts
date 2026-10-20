@@ -1414,6 +1414,24 @@ describe('needsTrunk and followTrunk', () => {
     );
   });
 
+  test("the merge commit's own read stands over the trunk read's runs for it", () => {
+    const p = onMerge([release('SUCCESS')]);
+    const trunk = [
+      commit('a', [runOf(2, release('SUCCESS'))]),
+      commit('m', [runOf(9, release('FAILURE'))]),
+    ];
+    expect(follow(p, trunk)).toBe(p);
+  });
+
+  test('a later commit with more checks than read says so', () => {
+    const more = {
+      ...commit('a', [release('SUCCESS')]),
+      runs: { workflows: [release('SUCCESS')], isTruncated: true },
+    };
+    const p = follow(onMerge([]), [more, commit('m', [])]);
+    expect(textOf(watched(p))).toContain('more checks not shown');
+  });
+
   test('a merge commit with no runs and none later is left as it was', () => {
     const p = onMerge([]);
     expect(follow(p, [commit('later', []), commit('m', [])])).toBe(p);
