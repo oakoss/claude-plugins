@@ -30,9 +30,11 @@ import {
   combine,
   covers,
   dropsGrant,
+  EPIC_ID,
   grantOf,
   holdOf,
   liftsHold,
+  mandateOf,
   NO_GRANT,
   isReply,
   stepsNamed,
@@ -102,6 +104,7 @@ import {
   effective,
   stopBeforeOf,
   where,
+  withMandate,
   type Step,
   type StopBefore,
 } from './ladder';
@@ -284,6 +287,8 @@ type GateState = {
   unaskedNotice: boolean;
   // "don't push yet" makes every step ask until a message asks for one.
   held: Hold;
+  // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
+  mandate: Kept['mandate'];
   // Where in `reviews` the next commit's rounds start counting.
   roundsFrom: number;
   // `<git common dir>\t<remote>/<branch>` and the commit this agent last
@@ -327,6 +332,7 @@ const state: GateState = {
   nudge: true,
   unaskedNotice: false,
   held: null,
+  mandate: null,
   roundsFrom: 0,
   pushed: [],
 };
@@ -337,7 +343,7 @@ const state: GateState = {
 // the user's message granted is not kept: a reload makes the next step ask, so
 // a stale copy can never grant what a later message took back. Bump the shape
 // whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-3' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-4' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -361,6 +367,7 @@ function keptOf(): Kept {
     scratch: state.scratch,
     reviewerChanges: state.reviewerChanges,
     held: state.held,
+    mandate: state.mandate,
     roundsFrom: state.roundsFrom,
     pushed: state.pushed,
   };
@@ -528,6 +535,7 @@ async function recall($: $): Promise<void> {
       state.scratch = kept.scratch;
       state.reviewerChanges = kept.reviewerChanges;
       state.held = kept.held;
+      state.mandate = kept.mandate;
       state.roundsFrom = kept.roundsFrom;
       state.pushed = kept.pushed;
       for (const [id, leg] of legs) {
@@ -608,6 +616,7 @@ function offKept(k: Kept): Kept {
     message: { tree: null, nudged: false, prWindow: false },
     lastAnswer: '',
     held: null,
+    mandate: null,
   };
 }
 
@@ -648,6 +657,10 @@ function isKept(k: unknown): k is Kept {
     strings(k.scratch) &&
     strings(k.reviewerChanges) &&
     isHeld(k.held) &&
+    (k.mandate === null ||
+      (isRecord(k.mandate) &&
+        typeof k.mandate.epic === 'string' &&
+        EPIC_ID.test(k.mandate.epic))) &&
     Number.isInteger(k.roundsFrom) &&
     (k.roundsFrom as number) >= 0 &&
     (k.roundsFrom as number) <= k.reviews.length &&
@@ -948,6 +961,11 @@ async function onPromptSubmit(
     const hold = holdOf(e.text, state.lastAnswer);
     if (hold !== null) state.held = hold;
     else if (liftsHold(grant)) state.held = null;
+    // A hold or a retraction ends the job rather than pausing it.
+    const ends = hold !== null || dropsGrant(e.text, state.lastAnswer);
+    const epic = ends ? null : mandateOf(e.text, state.lastAnswer);
+    if (epic !== null) state.mandate = { epic };
+    else if (ends) state.mandate = null;
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
@@ -2011,7 +2029,8 @@ async function ladderOf($: $): Promise<InForce> {
       return { stopBefore: STRICTEST, source: 'default', unreadable };
     }
   }
-  return effective(state.stopBefore, rungs.project ?? null, rungs.local ?? null);
+  const set = effective(state.stopBefore, rungs.project ?? null, rungs.local ?? null);
+  return withMandate(set, state.mandate?.epic ?? null);
 }
 
 // Told to the agent, so the step is never silent. Worded as having run, not
@@ -2727,7 +2746,13 @@ async function onStatus(
   const ladder = await ladderOf($);
   const may = permitted(state.message.grant, ladder, state.held !== null);
   const from = ladder.unreadable === undefined ? where(ladder.source) : 'unreadable settings';
-  status.stopBefore = { ...ladder, from, held: state.held !== null, heldBy: state.held };
+  status.stopBefore = {
+    ...ladder,
+    from,
+    held: state.held !== null,
+    heldBy: state.held,
+    mandate: state.mandate,
+  };
   status.mayCommit = may.commit;
   status.mayPush = may.push;
   status.mayOpenPr = may.pr;

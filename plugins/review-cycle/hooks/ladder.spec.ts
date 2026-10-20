@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
-import { asks, configured, effective, stopBeforeOf, type StopBefore } from './ladder';
+import {
+  asks,
+  configured,
+  effective,
+  stopBeforeOf,
+  where,
+  withMandate,
+  type StopBefore,
+} from './ladder';
 
 const ladder = (stopBefore: StopBefore) => ({ stopBefore, source: 'user' }) as const;
 
@@ -80,5 +88,25 @@ describe('which steps ask', () => {
     expect(asks(ladder('commit'), 'commit')).toBe(true);
     expect(asks(ladder('commit'), 'push')).toBe(true);
     expect(asks(ladder('push'), 'commit')).toBe(false);
+  });
+});
+
+describe('an epic mandate', () => {
+  test('raises a lower rung to merge, so commits, pushes and pull requests run', () => {
+    const raised = withMandate(ladder('commit'), 'cpl-czgp');
+    expect(raised).toEqual({ stopBefore: 'merge', source: 'mandate' });
+    expect(asks(raised, 'push')).toBe(false);
+    expect(asks(raised, 'pr')).toBe(false);
+    expect(asks(raised, 'merge')).toBe(true);
+    expect(asks(raised, 'approve')).toBe(true);
+    expect(asks(raised, 'release')).toBe(true);
+  });
+  test('leaves a rung at or past merge, and none without a job', () => {
+    expect(withMandate(ladder('merge'), 'cpl-czgp')).toEqual(ladder('merge'));
+    expect(withMandate(ladder('never stop'), 'cpl-czgp')).toEqual(ladder('never stop'));
+    expect(withMandate(ladder('commit'), null)).toEqual(ladder('commit'));
+  });
+  test('names where it came from', () => {
+    expect(where('mandate')).toBe('raised by the user\'s "do epic" request');
   });
 });
