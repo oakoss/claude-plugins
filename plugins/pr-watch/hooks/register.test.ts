@@ -22,6 +22,11 @@ type Gh = {
   // The pushed-branch query's answer.
   push?: string;
   estimate?: string;
+  // GitHub's stacks API answer for the pull request; `[]` (no stack) when unset.
+  // That many stacks calls fail first, with this stderr when set.
+  stack?: string;
+  stackFails?: number;
+  stackError?: string;
   // gh pr view's answer; it fails when unset.
   view?: string;
   // The tool whose registration the host refuses.
@@ -309,6 +314,14 @@ function world(
     }
     if (gh.partial && argv.includes('graphql')) {
       return { value: { exitCode: 1, stdout: gh.pr, stderr: 'gh: Resource not accessible' } };
+    }
+    if (argv.includes('/stacks')) {
+      if ((gh.stackFails ?? 0) > 0) {
+        gh.stackFails = (gh.stackFails ?? 0) - 1;
+        if (gh.stackError === undefined) return failed;
+        return { value: { exitCode: 1, stdout: '', stderr: gh.stackError } };
+      }
+      return { value: { exitCode: 0, stdout: gh.stack ?? '[]', stderr: '' } };
     }
     if (argv.includes('/attempts/')) {
       if (gh.attemptError !== undefined) {
@@ -1744,6 +1757,107 @@ describe('the query', () => {
     await clock.advance(10_000);
     expect(reads(seen.runs)).toBe(3);
     expect(seen.runs.filter(isMergedRead)).toHaveLength(2);
+  });
+
+  test("a merged stack layer names the stack's trunk, not the layer below it", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ number: 236, base: { ref: 'main' }, pull_requests: [] }]);
+    const seen = world(on, { pr: JSON.stringify(merged), stack });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m11s');
+    // Asked once, on the read that finds it merged, and kept by the reads after.
+    await clock.advance(10_000);
+    expect(seen.runs.filter(isMergedRead)).toHaveLength(2);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m21s');
+  });
+
+  test('a merged pull request in no stack keeps its base, and is asked once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    const seen = world(on, { pr: JSON.stringify(merged), stack: '[]' });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into develop · ● Release 0m11s');
+    await clock.advance(10_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+  });
+
+  test('a stacks lookup that fails keeps the base, and is asked again after a minute', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const seen = world(on, { pr: JSON.stringify(merged), stack, stackFails: 1 });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into docs/lower-layer · ● Release 0m11s');
+    await clock.advance(10_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+    await clock.advance(50_000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 1m11s');
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(2);
+  });
+
+  test('a host with no stacks API is asked once, and the base stands', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    const stackError = 'gh: Not Found (HTTP 404)\n';
+    const seen = world(on, { pr: JSON.stringify(merged), stackFails: 9, stackError });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    await clock.advance(120_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+    expect(await lineIn(await band($))).toMatch(/^#128 merged into develop · /);
+  });
+
+  test("a rate-limited stacks lookup pauses none of the host's reads", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    const stackError = 'gh: API rate limit exceeded for user ID 1. (HTTP 403)\n';
+    const seen = world(on, { pr: JSON.stringify(merged), stackFails: 9, stackError });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const before = seen.runs.filter(isMergedRead).length;
+    await clock.advance(30_000);
+    expect(seen.runs.filter(isMergedRead).length).toBeGreaterThan(before);
+    expect(await lineIn(await band($))).toBe('#128 merged into develop · ● Release 0m41s');
+  });
+
+  test('a stacks answer that is no list keeps the base and the runs', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    world(on, { pr: JSON.stringify(merged), stack: '<html>' });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into develop · ● Release 0m11s');
+  });
+
+  test("a stack layer whose merge commit's runs cannot be read yet still finds its trunk", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    world(on, { pr: JSON.stringify(merged), stack, mergedFails: 1 });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ○ waiting on checks');
+    await clock.advance(10_000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m21s');
   });
 
   test('a pull request found merged whose runs cannot be read yet shows as merged', async ($, on) => {

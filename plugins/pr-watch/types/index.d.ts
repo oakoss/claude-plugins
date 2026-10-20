@@ -55,6 +55,9 @@ export type Pull = {
   head?: { branch: string; repo: string };
   mergedAt: string | null;
   mergeRuns: { workflows: Workflow[]; isTruncated: boolean } | null;
+  // Once merged, the stack trunk `base` names: null in no stack, unset until
+  // GitHub's stacks API has answered.
+  trunk?: string | null;
   // The latest comments and reviews by others, oldest first; null when the
   // reply lacks the viewer or either list.
   activity: Activity[] | null;

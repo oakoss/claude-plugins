@@ -7,8 +7,10 @@ import {
   parseEstimate,
   parsePull,
   parseQuota,
+  parseStackBase,
   pullArgs,
   pushArgs,
+  stackArgs,
 } from './github';
 
 const queryOf = (args: string[]) => args.find((a) => a.startsWith('query=')) ?? '';
@@ -378,6 +380,42 @@ const took = (s: number, attempt = 1) => ({
   updated_at: new Date(Date.parse('2026-10-03T22:00:00Z') + s * 1000).toISOString(),
 });
 const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
+
+describe('parseStackBase', () => {
+  test("a stack layer's trunk", () => {
+    const stacks = [{ number: 236, base: { ref: 'main' }, pull_requests: [{ number: 235 }] }];
+    expect(parseStackBase(JSON.stringify(stacks))).toBe('main');
+  });
+  test('the first stack it is in', () => {
+    const stacks = [{ base: { ref: 'main' } }, { base: { ref: 'develop' } }];
+    expect(parseStackBase(JSON.stringify(stacks))).toBe('main');
+  });
+  test.each(['[]', '[{"base":{}}]', '[{"base":{"ref":""}}]'])('%s names no trunk', (stdout) => {
+    expect(parseStackBase(stdout)).toBeNull();
+  });
+  test.each(['{"message":"Not Found","status":"404"}', '{"0":{"base":{"ref":"x"}}}'])(
+    '%s is no answer, not no stack',
+    (stdout) => {
+      expect(() => parseStackBase(stdout)).toThrow('gh printed no list of stacks');
+    },
+  );
+  test('throws on what is not JSON', () => {
+    expect(() => parseStackBase('nope')).toThrow('gh printed something other than JSON');
+  });
+  test('asks the stacks API by pull request, on the host', () => {
+    expect(stackArgs('ghe.example.com', 'o/r', 235)).toEqual([
+      'gh',
+      'api',
+      '--hostname',
+      'ghe.example.com',
+      '-X',
+      'GET',
+      'repos/o/r/stacks',
+      '-f',
+      'pull_request=235',
+    ]);
+  });
+});
 
 describe('parseQuota', () => {
   test('reads the quota a query reported', () => {

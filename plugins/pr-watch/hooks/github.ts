@@ -99,6 +99,29 @@ export function pushArgs(host: string, repo: string, branch: string): string[] {
   ];
 }
 
+// The github/gh-stack stacks a pull request belongs to.
+export function stackArgs(host: string, repo: string, number: number): string[] {
+  return [
+    'gh',
+    'api',
+    ...onHost(host),
+    '-X',
+    'GET',
+    `repos/${repo}/stacks`,
+    '-f',
+    `pull_request=${number}`,
+  ];
+}
+
+// A merged stack layer keeps the layer below as its base, though its commit
+// landed on the stack's trunk. Null for a pull request in no stack; an error
+// body is not a list, so it throws rather than read as no stack.
+export function parseStackBase(stdout: string): string | null {
+  const stacks = parse(stdout);
+  if (!Array.isArray(stacks)) throw new Error('gh printed no list of stacks');
+  return str(stacks[0]?.base?.ref);
+}
+
 // Over three repositories' history, 10 runs predicted the next run as well as
 // 20 or better; a median of 20 lagged a CI slowdown by about 10 runs.
 const ESTIMATE_RUNS = 10;
