@@ -1930,7 +1930,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-3');
+    expect(kept?.shape).toBe('gate-4');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     // What a message granted is not kept, so a reload makes the next step ask.
@@ -1939,6 +1939,11 @@ describe('a reload of the module', () => {
       nudged: false,
       prWindow: false,
     });
+    expect(kept?.value.mandate).toBeNull();
+    // A job outlives a reload, unlike a message's grant.
+    await say($, 'do epic cpl-czgp');
+    await settle();
+    expect(kept?.value.mandate).toEqual({ epic: 'cpl-czgp' });
   });
 
   test('keeps nothing before the session start has taken back what a reload left', async ($, on) => {
@@ -1999,6 +2004,13 @@ describe('a reload of the module', () => {
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
   });
 
+  test('takes back an epic mandate, so the job keeps pushing', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    reloadInto(on, keptRecord({ mandate: { epic: 'cpl-czgp' } }));
+    await startSession($);
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+  });
+
   test('takes back a scratch directory, so the sweep still removes it', async ($, on) => {
     const w = fakeWorld(on, { git: (a) => (a.startsWith('test -e') ? { exitCode: 1 } : null) });
     reloadInto(on, keptRecord({ scratch: ['/tmp/review-cycle.abc123'] }));
@@ -2053,6 +2065,8 @@ describe('a reload of the module', () => {
   for (const [name, fields] of [
     ['a review without its paths', { reviews: [{ type: 'code-reviewer', trees: ['a', 'b'] }] }],
     ['a hold on no step', { held: { step: 'tag', how: 'declined' } }],
+    ['a mandate on no epic', { mandate: { epic: '' } }],
+    ['a mandate that is not one', { mandate: 'cpl-czgp' }],
     ['a message without its flags', { message: {} }],
     ['a miss that is not one', { misses: [null] }],
     ['a rounds index past its reviews', { roundsFrom: 1 }],
@@ -2207,6 +2221,7 @@ describe('a reload of the module', () => {
           lastAnswer: 'Push it?',
           misses: [miss],
           held: { step: 'push', how: 'declined' },
+          mandate: { epic: 'cpl-czgp' },
           roundsFrom: 1,
         }),
       );
@@ -2315,6 +2330,7 @@ function keptRecord(over: Record<string, unknown>) {
     scratch: [],
     reviewerChanges: [],
     held: null,
+    mandate: null,
     roundsFrom: 0,
     pushed: [],
     ...over,
@@ -2327,7 +2343,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-3', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-4', value: kept }, version: 1 } };
   });
 }
 
@@ -5529,6 +5545,7 @@ describe('the stop-before setting', () => {
       from: '.claude/settings.local.json',
       held: false,
       heldBy: null,
+      mandate: null,
     });
     await say($, 'anything else before we merge?');
     const held = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
@@ -5967,6 +5984,104 @@ describe('reviewer containment', () => {
       );
     });
   }
+});
+
+const pushRan = async ($: any) => ran(await bash($, 'git push origin fix/x'));
+
+describe('an epic mandate', () => {
+  const START = 'ok, lets do epic cpl-czgp';
+
+  test('"do epic <id>" lets pushes and pull requests run, never a merge', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, START);
+    expect(await pushRan($)).toBe(true);
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 5 --squash'), 'merge')).toBe(true);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore).toMatchObject({ stopBefore: 'merge', source: 'mandate' });
+    expect(status.stopBefore.mandate).toEqual({ epic: 'cpl-czgp' });
+  });
+  test('it lasts past a message that does not touch it', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, START);
+    await say($, 'how is the parser coming along?');
+    expect(await pushRan($)).toBe(true);
+  });
+  test('a hold ends it, and it stays ended', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, START);
+    await say($, 'hold off on pushing for now');
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off')).toBe(true);
+    // "push it" lifts the hold for itself; the job does not come back.
+    await say($, 'push it');
+    expect(await pushRan($)).toBe(true);
+    await say($, 'how is the parser coming along?');
+    expect(await pushRan($)).toBe(false);
+  });
+  test('a start that holds, declines or waits starts nothing', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    for (const text of ["don't do epic cpl-czgp yet", 'do epic cpl-czgp after lunch']) {
+      await say($, text);
+      expect(await pushRan($)).toBe(false);
+    }
+  });
+  test('a decline of the offer it answers starts none', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await endTurn($, 'answer', 'Push it?');
+    await say($, 'Not yet. Do epic cpl-czgp.');
+    await say($, 'push it');
+    expect(await pushRan($)).toBe(true);
+    await say($, 'how is the parser coming along?');
+    expect(await pushRan($)).toBe(false);
+  });
+  test('a hold on any step ends it, a merge mentioned beside a stop included', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, START);
+    await say($, 'did the merge of 41 go through?');
+    await say($, 'push it');
+    expect(await pushRan($)).toBe(true);
+    await say($, 'how is the parser coming along?');
+    expect(await pushRan($)).toBe(false);
+    await say($, START);
+    await say($, 'Stop the epic. Do not merge anything.');
+    await say($, 'push it');
+    await say($, 'how is the parser coming along?');
+    expect(await pushRan($)).toBe(false);
+  });
+  test('a retraction ends it', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, START);
+    await say($, 'stop the epic');
+    expect(await pushRan($)).toBe(false);
+  });
+  test('the Agent SDK starts one, and the agent is told why a step ran', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, START, 'sdk');
+    const r = await bash($, 'git push origin fix/x');
+    expect(ran(r)).toBe(true);
+    expect(contextOf(r).join('\n')).toContain('raised by the user\'s "do epic" request');
+  });
+  test('a prompt no person typed neither starts nor ends it', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await say($, 'do epic cpl-czgp', 'task-notification');
+    expect(await pushRan($)).toBe(false);
+    await say($, START);
+    await say($, 'hold off on pushing', 'task-notification');
+    expect(await pushRan($)).toBe(true);
+  });
+  test('a push to the default branch still asks', async ($, on) => {
+    const main = { 'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'] };
+    fakeWorld(on, pushing({ git: remoteSide(main) }));
+    await say($, START);
+    const r = await bash($, 'git push origin main');
+    expect(denied(r, 'it pushes to `main`, the default branch.')).toBe(true);
+  });
+  test('a setting that stops later stands', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('release') }, git: remoteSide({}) }));
+    await say($, START);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore).toMatchObject({ stopBefore: 'release', source: 'local' });
+  });
 });
 
 describe('the model check', () => {

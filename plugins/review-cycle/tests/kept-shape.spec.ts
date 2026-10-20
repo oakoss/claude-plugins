@@ -10,7 +10,7 @@ import { expect, test } from 'vitest';
 
 import { REPO_ROOT } from './agents';
 
-const PINNED = { shape: 'gate-3', contract: 'dd54597868ad4c02' };
+const PINNED = { shape: 'gate-4', contract: 'a08c507c2b305047' };
 
 const read = (file: string) =>
   readFileSync(path.join(REPO_ROOT, 'plugins/review-cycle', file), 'utf8');

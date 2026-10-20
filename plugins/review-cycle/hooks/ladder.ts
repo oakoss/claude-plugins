@@ -23,8 +23,11 @@ const STEP_RUNG: Record<Step, StopBefore> = {
   release: 'release',
 };
 
-export type Source = 'default' | 'user' | 'project' | 'local';
-export type Ladder = Readonly<{ stopBefore: StopBefore; source: Source }>;
+export type Source = 'default' | 'user' | 'project' | 'local' | 'mandate';
+// A job's rung is always merge; a setting's is any.
+export type Ladder =
+  | Readonly<{ stopBefore: StopBefore; source: Exclude<Source, 'mandate'> }>
+  | Readonly<{ stopBefore: typeof MANDATE; source: 'mandate' }>;
 
 const PLUGIN = /^review-cycle(@|$)/;
 
@@ -73,14 +76,26 @@ export function effective(
   return mine;
 }
 
+// "do epic <id>" lets commits, pushes and pull requests run until it ends, as
+// a setting of merge would; a setting that stops later stands.
+export const MANDATE = 'merge' satisfies StopBefore;
+
+export function withMandate(ladder: Ladder, epic: string | null): Ladder {
+  if (epic === null || rank(ladder.stopBefore) >= rank(MANDATE)) return ladder;
+  return { stopBefore: MANDATE, source: 'mandate' };
+}
+
 // Whether the step needs the user's request under this ladder.
 export function asks(ladder: Ladder, step: Step): boolean {
   return rank(STEP_RUNG[step]) >= rank(ladder.stopBefore);
 }
 
-export function where(source: Source): string {
-  if (source === 'default') return 'the default';
-  if (source === 'project') return '.claude/settings.json';
-  if (source === 'local') return '.claude/settings.local.json';
-  return '/config';
-}
+const WHERE: Record<Source, string> = {
+  default: 'the default',
+  user: '/config',
+  project: '.claude/settings.json',
+  local: '.claude/settings.local.json',
+  mandate: 'raised by the user\'s "do epic" request',
+};
+
+export const where = (source: Source): string => WHERE[source];

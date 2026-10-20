@@ -1361,6 +1361,35 @@ export function stepsNamed(text: string): HoldStep[] {
 }
 export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
 
+const ID = String.raw`[a-z][a-z0-9-]*-[a-z0-9]+(?:\.\d+)*`;
+export const EPIC_ID = new RegExp(`^${ID}$`, 'i');
+const EPIC = new RegExp(String.raw`\b(?:do|run)\s+(?:the\s+)?epic\s+#?(${ID})\b`, 'i');
+
+// Read as the same message asking to push would be, so "don't do epic cpl-x
+// yet" and "do epic cpl-x after lunch" start nothing; the push must come from
+// the phrase itself, not another sentence ("Don't do epic cpl-x. Push it.").
+export function mandateOf(prompt: string, previousAnswer = ''): string | null {
+  const m = EPIC.exec(prompt);
+  if (m === null || grantOf(prompt, previousAnswer).push !== 'none') return null;
+  const asked = grantOf(prompt.replace(m[0], 'push it'), previousAnswer);
+  if (asked.push !== 'push' || holdOf(prompt, previousAnswer) !== null) return null;
+  return m[1] ?? null;
+}
+
+export type Mandate = Readonly<{ epic: string }>;
+
+// The job a typed message leaves running: a hold or a retraction ends it
+// rather than pausing it, and "do epic <id>" starts or replaces it.
+export function mandateAfter(
+  current: Mandate | null,
+  prompt: string,
+  previousAnswer = '',
+): Mandate | null {
+  if (dropsGrant(prompt, previousAnswer)) return null;
+  const epic = mandateOf(prompt, previousAnswer);
+  return epic === null ? current : { epic };
+}
+
 // A step mentioned without being asked for holds every step but a commit, read
 // by mention rather than grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
