@@ -103,6 +103,8 @@ type World = {
   onModel?: () => void;
   // Each prompt the model check was sent.
   modelPrompts?: string[];
+  // Each call's instructions and token budget, by prompt.
+  modelCalls?: { prompt: string; system: string; maxTokens: number }[];
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -404,8 +406,13 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     (w.logs ??= []).push(e.text);
     return { value: undefined };
   });
-  on('model.complete', ($: unknown, e: { prompt: string }) => {
+  on('model.complete', ($: unknown, e: { prompt: string; maxTokens?: number; system?: string }) => {
     (w.modelPrompts ??= []).push(e.prompt);
+    (w.modelCalls ??= []).push({
+      prompt: e.prompt,
+      system: e.system ?? '',
+      maxTokens: e.maxTokens ?? 0,
+    });
     w.onModel?.();
     const usage = { input_tokens: 0, output_tokens: 0 };
     if (e.prompt.startsWith("The agent's answer ends:")) {
@@ -427,7 +434,13 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     if (w.model === 'aborted') return { value: { isAnswered: false, reason: 'aborted', usage } };
     if (w.model === 'error') {
       return {
-        value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage },
+        value: {
+          isAnswered: false,
+          reason: 'api-error',
+          status: 529,
+          error: 'overloaded',
+          usage,
+        },
       };
     }
     return { value: { isAnswered: true, text: w.model ?? NOTHING_ASKED, usage } };
@@ -4962,6 +4975,10 @@ describe('the stop-before setting', () => {
     expect(ran(r)).toBe(true);
     expect(r.context?.join('\n')).toContain('the model check read #52 as mentioned');
     expect(w.modelPrompts?.at(-1)).toContain('The candidate: pull request #52.');
+    expect(w.modelCalls?.at(-1)).toMatchObject({
+      system: expect.stringContaining("Decide whether the agent's answer offers to merge"),
+      maxTokens: 100,
+    });
   });
   test('a merge of the pull request the answer offered runs no other', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x'), target: OFFERED });
@@ -5967,6 +5984,12 @@ describe('the model check', () => {
     expect(has(contextOf(r), 'without the user asking')).toBe(false);
     expect(has(contextOf(r), 'without asking, since')).toBe(false);
     expect(w.logs).toEqual([LINE]);
+    expect(w.modelCalls).toMatchObject([
+      {
+        system: expect.stringContaining('does it ask the agent to take any of these steps now'),
+        maxTokens: 300,
+      },
+    ]);
     const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
     expect(JSON.parse((misses as { result: string }).result).misses).toEqual([
       {

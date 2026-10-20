@@ -166,17 +166,14 @@ export function mentionedOf(reply: string): boolean | null {
   return !a.offers && a.sure;
 }
 
-// The pull requests a message names for a merge as typed, without the answer,
-// and any number it holds: "merge only #52" picks from the offer it answers.
-export function typedOf(message: string): string[] {
-  const g = grantOf(message);
-  return [...g.mergeNamed, ...g.readyNamed, ...(message.match(/\d+/g) ?? [])];
-}
-
-// The one pull request a merge names when the message typed none, or null.
-export function closingNamed(granted: Grant, typed: readonly string[]): string | null {
+// The one pull request a merge names when the message, read without the
+// answer, names none and holds no number ("merge only #52" picks from the
+// offer it answers), or null.
+export function closingNamed(granted: Grant, message: string): string | null {
+  const typed = grantOf(message);
+  if (typed.mergeNamed.length + typed.readyNamed.length > 0 || /\d/.test(message)) return null;
   const named = new Set([...granted.mergeNamed, ...granted.readyNamed]);
-  if (named.size !== 1 || typed.length > 0) return null;
+  if (named.size !== 1) return null;
   const [n] = named;
   return n !== undefined && /^\d+$/.test(n) ? n : null;
 }

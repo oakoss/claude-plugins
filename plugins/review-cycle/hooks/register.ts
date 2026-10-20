@@ -50,7 +50,6 @@ import {
   RULES,
   TARGET,
   targetAskOf,
-  typedOf,
   unnamed,
   type Judged,
   type ModelGrant,
@@ -871,9 +870,7 @@ function noteMiss(refusal: string): void {
   const named = steps.includes(step) || (step === 'release' && steps.includes('merge'));
   // A message queued while the gate judged may grant what an older one did not.
   if (!named || grants(grantOf(text, before), step)) return;
-  const miss = { message: clip(text), offer: clip(offer), steps, refusal: clip(refusal) };
-  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
-  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
+  recordMiss({ message: clip(text), offer: clip(offer), steps, refusal: clip(refusal) });
 }
 
 async function onSessionStart(
@@ -1585,27 +1582,45 @@ function modelRead($: $): ModelAsk | null {
   return state.model;
 }
 
-async function askModel($: $, text: string, before: string): Promise<ModelRead> {
+// One model check call: its reply, or why it got none.
+async function complete(
+  $: $,
+  system: string,
+  prompt: string,
+  maxTokens: number,
+): Promise<{ text: string } | { why: string }> {
   try {
     const r = await $.model.complete({
       model: 'sonnet',
       effort: 'low',
-      maxTokens: 300,
+      maxTokens,
       timeoutMs: 15_000,
-      system: [{ text: RULES, cache: true }],
-      prompt: askOf(text, offerOf(before)),
+      system: [{ text: system, cache: true }],
+      prompt,
     });
-    if (r.isAnswered) return judge(r.text, text);
-    const why =
-      r.reason === 'api-error'
-        ? `an API error, ${r.error}`
-        : r.reason === 'aborted'
-          ? 'it ran out of time or was interrupted'
-          : 'an empty reply';
-    return { kind: 'unanswered', why };
+    if (r.isAnswered) return { text: r.text };
+    return {
+      why:
+        r.reason === 'api-error'
+          ? `an API error, ${r.error}`
+          : r.reason === 'aborted'
+            ? 'it ran out of time or was interrupted'
+            : 'an empty reply',
+    };
   } catch (error) {
-    return { kind: 'unanswered', why: error instanceof Error ? error.message : String(error) };
+    return { why: error instanceof Error ? error.message : String(error) };
   }
+}
+
+async function askModel($: $, text: string, before: string): Promise<ModelRead> {
+  const r = await complete($, RULES, askOf(text, offerOf(before)), 300);
+  return 'why' in r ? { kind: 'unanswered', why: r.why } : judge(r.text, text);
+}
+
+// Kept with the misses, replacing an earlier one of the same message and refusal.
+function recordMiss(miss: Miss): void {
+  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
+  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
 }
 
 // The model's yes, with the message it read.
@@ -1659,14 +1674,12 @@ function modelRan($: $, yes: ModelYes): string {
   const steps = MODEL_STEPS.filter((s) => yes.steps[s] === true);
   const line = `review-cycle: the model check read "${yes.quote}" as asking for ${steps.map((s) => STEP_NAME[s]).join(' and ')}.`;
   $.ui.log(line);
-  const miss = {
+  recordMiss({
     message: clip(yes.text),
     offer: clip(offerOf(yes.before)),
     steps: [...steps],
     refusal: clip(`granted by the model check: "${yes.quote}"`),
-  };
-  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
-  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
+  });
   return line;
 }
 
@@ -1688,11 +1701,12 @@ async function offeredUnnamed(
   $: $,
   granted: Grant,
 ): Promise<{ grant: Grant; n: string } | { why: string; n: string } | null> {
-  const { text, before, origin } = state.said;
-  if (!state.modelCheck || origin === 'sdk' || text.trim() === '') return null;
+  const { before, origin } = state.said;
   // A grant a queued message joined is not one message the model can be shown.
-  if (state.held?.how === 'declined' || state.message.said === null) return null;
-  const n = closingNamed(granted, typedOf(text));
+  const text = state.message.said;
+  if (!state.modelCheck || origin === 'sdk' || text === null || text.trim() === '') return null;
+  if (state.held?.how === 'declined') return null;
+  const n = closingNamed(granted, text);
   if (n === null) return null;
   if (state.target?.message !== state.messages || state.target.n !== n) {
     const ask = { message: state.messages, n, read: askTarget($, before, n, text) };
@@ -1708,22 +1722,22 @@ async function offeredUnnamed(
 }
 
 // A refused GitHub step judged again with the grant naming no pull request in
-// place of one the answer only mentioned, or why the model could not say.
+// place of one the answer only mentioned; the refusal says why when the model
+// could not tell.
 async function ghUnnamed(
   $: $,
   shown: string,
   actions: Parameters<typeof judgeGh>[1],
   granted: Grant,
-): Promise<
-  { gh: Awaited<ReturnType<typeof judgeGh>>; grant: Grant; told: string } | { why: string } | null
-> {
-  if (actions.length === 0) return null;
+  first: { deny: string },
+): Promise<{ gh: Awaited<ReturnType<typeof judgeGh>>; granted: Grant; told: string | null }> {
+  const kept = { gh: first, granted, told: null };
+  if (actions.length === 0) return kept;
   const read = await offeredUnnamed($, granted);
-  if (read === null) return null;
+  if (read === null) return kept;
   if ('why' in read) {
-    return {
-      why: ` The model check could not judge whether the answer offered #${read.n} (${read.why}).`,
-    };
+    const why = ` The model check could not judge whether the answer offered #${read.n} (${read.why}).`;
+    return { ...kept, gh: { ...first, deny: first.deny + why } };
   }
   const gh = await judgeGh(
     shown,
@@ -1734,7 +1748,7 @@ async function ghUnnamed(
     {},
     state.message.unread,
   );
-  return 'deny' in gh ? null : { gh, grant: read.grant, told: targetRan($, read.n) };
+  return 'deny' in gh ? kept : { gh, granted: read.grant, told: targetRan($, read.n) };
 }
 
 type TargetRead =
@@ -1742,45 +1756,24 @@ type TargetRead =
   | { kind: 'unanswered' | 'unread'; why: string };
 
 async function askTarget($: $, before: string, n: string, text: string): Promise<TargetRead> {
-  try {
-    const r = await $.model.complete({
-      model: 'sonnet',
-      effort: 'low',
-      maxTokens: 100,
-      timeoutMs: 15_000,
-      system: [{ text: TARGET, cache: true }],
-      prompt: targetAskOf(before, n, text),
-    });
-    if (!r.isAnswered) {
-      const why =
-        r.reason === 'api-error'
-          ? `an API error, ${r.error}`
-          : r.reason === 'aborted'
-            ? 'it ran out of time or was interrupted'
-            : 'an empty reply';
-      return { kind: 'unanswered', why };
-    }
-    const mentioned = mentionedOf(r.text);
-    return mentioned === null
-      ? { kind: 'unread', why: 'its reply could not be read' }
-      : { kind: 'read', mentioned };
-  } catch (error) {
-    return { kind: 'unanswered', why: error instanceof Error ? error.message : String(error) };
-  }
+  const r = await complete($, TARGET, targetAskOf(before, n, text), 100);
+  if ('why' in r) return { kind: 'unanswered', why: r.why };
+  const mentioned = mentionedOf(r.text);
+  return mentioned === null
+    ? { kind: 'unread', why: 'its reply could not be read' }
+    : { kind: 'read', mentioned };
 }
 
 function targetRan($: $, n: string): string {
   const line = `review-cycle: the model check read #${n} as mentioned beside the merge the answer offered, not offered itself, so the merge names no pull request and oakum's version pull request still asks.`;
   $.ui.log(line);
   const { text, before } = state.said;
-  const miss = {
+  recordMiss({
     message: clip(text),
     offer: clip(offerOf(before)),
-    steps: ['merge' as const],
+    steps: ['merge'],
     refusal: clip(`#${n} read by the model check as mentioned, not offered`),
-  };
-  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
-  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
+  });
   return line;
 }
 
@@ -1815,7 +1808,7 @@ async function judgeBash(
 ): Promise<Output<BashHook>> {
   // A newer message overtakes anything decided from this one.
   const message = state.messages;
-  let granted = state.message.grant;
+  const granted = state.message.grant;
   if (bashTouchesGate(e.command)) return deny(SWITCHED_BY_USER);
   await loadShellAliases($);
   const cls = classify(e.command, state.shellAliases);
@@ -1832,7 +1825,7 @@ async function judgeBash(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
       );
     }
-    let first = await judgeGh(
+    const typed = await judgeGh(
       quote(e.command),
       actions,
       granted,
@@ -1842,20 +1835,13 @@ async function judgeBash(
       state.message.unread,
     );
     const read =
-      'deny' in first && !first.final
-        ? await ghUnnamed($, quote(e.command), actions, granted)
-        : null;
-    if (read !== null && 'why' in read && 'deny' in first) {
-      first = { ...first, deny: first.deny + read.why };
-    }
-    const mentioned = read !== null && 'gh' in read ? read : null;
-    if (mentioned !== null) {
-      first = mentioned.gh;
-      granted = mentioned.grant;
-    }
+      'deny' in typed && !typed.final
+        ? await ghUnnamed($, quote(e.command), actions, granted, typed)
+        : { gh: typed, granted, told: null };
+    const first = read.gh;
     const { gh, yes } =
       'deny' in first && !first.final
-        ? await ghWithModel($, quote(e.command), actions, granted, first)
+        ? await ghWithModel($, quote(e.command), actions, read.granted, first)
         : { gh: first, yes: null };
     if ('deny' in gh) return deny(gh.deny);
     // Only a GitHub step is stopped by a newer message; other commands run.
@@ -1881,11 +1867,11 @@ async function judgeBash(
         }
       }
     }
-    const grant = yes === null ? granted : withModel(granted, yes.added);
+    const grant = yes === null ? read.granted : withModel(read.granted, yes.added);
     const checked = rewrite === 'alone' ? 'history' : 'unchecked';
     const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
     const ran = yes === null ? await watched : await ranByModel($, watched, yes);
-    const notes = [...(mentioned === null ? [] : [mentioned.told]), ...(gh.notes ?? [])];
+    const notes = [...(read.told === null ? [] : [read.told]), ...(gh.notes ?? [])];
     const r =
       notes.length === 0 || ran.deny !== undefined
         ? ran

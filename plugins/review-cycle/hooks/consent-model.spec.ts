@@ -10,7 +10,6 @@ import {
   offerOf,
   RULES,
   targetAskOf,
-  typedOf,
   unnamed,
   vetoed,
   type ModelGrant,
@@ -148,8 +147,7 @@ describe("a merge's pull request", () => {
   ])('reads %j as mentioned: %j', (reply, mentioned) => {
     expect(mentionedOf(reply)).toBe(mentioned);
   });
-  const named = (message: string, offer = answer) =>
-    closingNamed(grantOf(message, offer), typedOf(message));
+  const named = (message: string, offer = answer) => closingNamed(grantOf(message, offer), message);
   test('is the one number the message did not type', () => {
     expect(named('ok, lets merge')).toBe('52');
     expect(named('merge it when ready')).toBe('52');
