@@ -237,6 +237,9 @@ describe('ship: what it may do unasked', () => {
       "Leave it off when any layer's pull request is a draft, or when the user asked for drafts.",
     );
     expect(stack).toContain('Merge nothing into a layer');
+    expect(stack).toContain(
+      'read its output, since a diverged stack prints `Sync aborted` and exits 0',
+    );
     expect(stack).toContain('exits 0 even after printing `⚠ failed to create PR for <branch>`');
     expect(stack).toContain("pass the gate's question to the user as written");
     expect(stack).toContain('name those layers and ask before pushing');
@@ -419,6 +422,88 @@ describe('ship: the pull request body reference', () => {
     expect(rules).toContain('A related item the branch leaves open gets a `Refs` line instead.');
     expect(rules).toContain('or a question stays open');
     expect(rules).toContain("**Title:** the repository's convention");
+  });
+});
+
+describe('merge: only what was asked, and a stack as one', () => {
+  const text = skillText('pr-kit', 'merge');
+  const stack = section(text, 'Stack', 'merge');
+  const lines = fenceLines(shellFences(text, 'merge')).map((line) => line.trim());
+  const stackLines = fenceLines(shellFences(stack, 'merge Stack')).map((line) => line.trim());
+
+  test('each write runs alone, and a refusal is reported, not reshaped', () => {
+    expect(text).toContain('Run every command that writes as its own Bash call.');
+    expect(text).toContain('a refusal is never retried in another shape');
+  });
+
+  test('it merges only on an ask, and adds --auto or --admin only when asked', () => {
+    expect(text).toContain('this skill runs only on an explicit ask, never offers a merge itself');
+    expect(text).toContain('arms auto-merge (`--auto`) only when the user asked');
+    expect(text).toContain('Pass `--admin` only when the user asked for it in so many words.');
+    for (const line of lines) expect(line).not.toMatch(/--auto\b|--admin\b/);
+  });
+
+  test('a stack layer merges with gh stack merge, never gh pr merge', () => {
+    expect(text).toContain('Any stack it lists makes this a stack merge');
+    expect(stackLines).toContain('gh stack merge <number> --yes --<method>');
+    for (const line of stackLines) expect(line).not.toMatch(/gh pr merge\b/);
+    expect(lines.filter((line) => /gh (pr|stack) merge\b/.test(line))).toEqual([
+      'gh pr merge <number> --<method> --delete-branch',
+      'gh stack merge <number> --yes --<method>',
+    ]);
+  });
+
+  test('a pull request merges only when it is ready, and a stack only when every layer is', () => {
+    expect(lines).toContain(
+      'gh pr view <number> --json number,state,isDraft,mergeStateStatus,baseRefName,headRefName,url',
+    );
+    expect(lines).toContain("gh api -X GET 'repos/{owner}/{repo}/stacks' -f pull_request=<number>");
+    expect(text).toContain('the stacks call answers `[]` for a pull request in no stack');
+    expect(text).toContain(
+      'stop and say why when `state` is not `OPEN`, `isDraft` is true, or `mergeStateStatus` is `BLOCKED`, `BEHIND` or `DIRTY`',
+    );
+    expect(text).toContain(
+      '`UNSTABLE` means a check that is not required failed: name it and ask before merging.',
+    );
+    expect(text).toContain('would merge it into the layer below, not into the trunk');
+    expect(stack).toContain('apply its stops to each');
+  });
+
+  test('the set is named, and the number is checked against stack numbers', () => {
+    expect(stack).toContain('an unmerged one has `merged_at: null`');
+    expect(stack).toContain('naming every one ("Merge #41 and #42?"), and end the turn');
+    expect(stack).toContain("reads a bare number as a stack's number first");
+    expect(stack).toContain('For "merge the stack", pass the stack\'s own `number`');
+    expect(stack).toContain('must fail with `HTTP 404`');
+    expect(stack).toContain('run `gh stack merge` with no number in their own terminal');
+    expect(stack).toContain('where it cannot prompt it merges the whole stack');
+    expect(stack).toContain('it takes no `--auto` and no `--admin`');
+  });
+
+  test('a refusal is reported in its own words, and the report says what landed', () => {
+    expect(text).toContain('report its words and stop, or ask the question it names');
+    expect(text).toContain('`gh pr view <number> --json mergeCommit,mergedAt`');
+    expect(text).toContain("is the top pull request of the set, never the stack's number");
+    expect(text).toContain('say so rather than report it merged');
+  });
+
+  test('sync is offered, not run, and read by its output, not its exit code', () => {
+    for (const line of lines) expect(line).not.toMatch(/gh stack sync\b/);
+    expect(stack).toContain('offer it rather than run it');
+    expect(stack).toContain(
+      'read its output, not its exit code: a diverged stack prints `Sync aborted` and exits 0',
+    );
+    expect(stack).toContain('so report that');
+    expect(stack).toContain(
+      "(`gh stack modify`, `gh stack switch`) only from the user's own terminal",
+    );
+  });
+
+  test("the method is the repository's, asked when it allows several", () => {
+    expect(lines).toContain(
+      'gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed,deleteBranchOnMerge,defaultBranchRef',
+    );
+    expect(text).toContain('When several are allowed and the user named none, ask once which.');
   });
 });
 

@@ -11,7 +11,7 @@ A pull-request workflow toolkit for Claude Code.
 
 Every skill that would touch the remote or rewrite history is **gate-aware**: nothing commits, pushes, or force-pushes unreviewed. If you also run `review-cycle`, fixes route through `/review-cycle:review` before they are committed.
 
-`ship` pushes and opens the pull request because asking it to ship is the request for both; with review-cycle installed, "ship it" is what lets its gate allow them. `fix-ci` is the other exception, and deliberately so: getting CI green requires pushing, so invoking it authorizes committing and pushing each round. With review-cycle installed, its gate needs your yes before the first push, so fix-ci asks once. Every fix still goes through review first, and the loop stops after three rounds, or two on the same check. `make-pr-easy-to-review` rewrites history only after an explicit yes.
+`ship` pushes and opens the pull request because asking it to ship is the request for both; with review-cycle installed, "ship it" is what lets its gate allow them. `fix-ci` is the other exception, and deliberately so: getting CI green requires pushing, so invoking it authorizes committing and pushing each round. With review-cycle installed, its gate needs your yes before the first push, so fix-ci asks once. Every fix still goes through review first, and the loop stops after three rounds, or two on the same check. `merge` merges only what your message asked to merge. `make-pr-easy-to-review` rewrites history only after an explicit yes.
 
 All skills are invoked as bare slash commands and take natural-language arguments — no flags.
 
@@ -39,9 +39,15 @@ Takes the current branch to a pull request. Say "ship it" to publish, or "push i
 
 On a layer of a [github/gh-stack](https://github.com/github/gh-stack) stack, it merges nothing into the layer, offers `gh stack rebase --no-trunk` when a layer is missing commits from the one below, runs the checks on the top layer, then pushes every layer and opens each missing pull request with `gh stack submit`. It asks first when that would open pull requests for layers above yours, leaves new layers as drafts when any layer is a draft or you asked for drafts, and writes each new pull request's title, body, closed beads and known issues from that layer's own commits.
 
+### `/pr-kit:merge`
+
+Merges the pull request you asked to merge ("merge 47", "lets merge it") with the one merge method the repository allows, asking which when several are and you named none, and reports the merge commit and what is left. It stops on a closed or draft pull request and on one GitHub reports blocked, behind or conflicted, and asks before merging past a failing check that is not required. It never offers a merge itself, and passes `--auto` or `--admin` only when you asked for them.
+
+On a [github/gh-stack](https://github.com/github/gh-stack) layer it merges with `gh stack merge`, which takes every unmerged layer below too, so it names them all and asks when your message did not, and checks each of them is ready. "Merge the stack" merges every open layer, wherever you are checked out. A stack merges now: it has no auto-merge and no `--admin`. It checks the number names no stack, since `gh stack merge` reads a stack's number first. It offers `gh stack sync` for the layers left open, and reports a sync that printed `Sync aborted`, since that exits 0. It leaves `gh stack modify` and `switch` to your terminal.
+
 ## Requirements
 
-- **GitHub CLI (`gh`)**, authenticated — four of the five skills resolve the active PR and read checks/comments through `gh`. `fix-merge-conflicts` is purely local and needs no `gh`.
+- **GitHub CLI (`gh`)**, authenticated — five of the six skills resolve the active PR and read checks/comments through `gh`, and `merge` needs github/gh-stack only to merge a stack. `fix-merge-conflicts` is purely local and needs no `gh`.
 - **`review-cycle`** is recommended but not required. When present, `fix-ci` routes fixes through `/review-cycle:review`; without it, `fix-ci` shows you each diff and waits for your OK before pushing.
 
 ## Relationship to other tools
