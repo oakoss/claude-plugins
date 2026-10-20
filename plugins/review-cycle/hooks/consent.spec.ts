@@ -7,6 +7,7 @@ import {
   holdOf,
   holdsOf,
   liftsHold,
+  mandateAfter,
   mandateOf,
   NAMED_ELSEWHERE,
   NO_GRANT,
@@ -2099,5 +2100,35 @@ describe('a job started on an epic', () => {
   test('starting one asks for no step itself', () => {
     expect(grantOf('do epic cpl-czgp')).toEqual(NONE);
     expect(holdOf('do epic cpl-czgp')).toBeNull();
+  });
+});
+
+describe('the job a message leaves running', () => {
+  const JOB = { epic: 'cpl-czgp' };
+  test.each([
+    ['fix the typo in the README', '', JOB],
+    ['looks good', '', JOB],
+    ['do epic cpl-czgp', '', JOB],
+    ['do epic cpl-x1y2', '', { epic: 'cpl-x1y2' }],
+    ['Do epic cpl-czgp.', 'Push it?', JOB],
+    ["don't push yet", '', null],
+    ['stop', '', null],
+    ['never mind', '', null],
+    ['did the merge go through?', '', null],
+    ['not yet', 'Push it?', null],
+    ['do epic cpl-x1y2, but hold off on pushing', '', null],
+    ['Stop. Do epic cpl-x1y2.', '', null],
+    ['Not yet. Do epic cpl-czgp.', '', null],
+    ['merge both', 'Should I merge #131, pr132?', JOB],
+  ])('%j after %j leaves %j', (message, offer, job) => {
+    expect(mandateAfter(JOB, message, offer)).toEqual(job);
+  });
+  test.each([
+    ['do epic cpl-czgp', JOB],
+    ['fix the typo in the README', null],
+    ["don't do epic cpl-czgp yet", null],
+    ['Not yet. Do epic cpl-czgp.', null],
+  ])('%j with no job leaves %j', (message, job) => {
+    expect(mandateAfter(null, message)).toEqual(job);
   });
 });

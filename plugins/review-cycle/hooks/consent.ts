@@ -1376,6 +1376,20 @@ export function mandateOf(prompt: string, previousAnswer = ''): string | null {
   return m[1] ?? null;
 }
 
+export type Mandate = Readonly<{ epic: string }>;
+
+// The job a typed message leaves running: a hold or a retraction ends it
+// rather than pausing it, and "do epic <id>" starts or replaces it.
+export function mandateAfter(
+  current: Mandate | null,
+  prompt: string,
+  previousAnswer = '',
+): Mandate | null {
+  if (dropsGrant(prompt, previousAnswer)) return null;
+  const epic = mandateOf(prompt, previousAnswer);
+  return epic === null ? current : { epic };
+}
+
 // A step mentioned without being asked for holds every step but a commit, read
 // by mention rather than grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {

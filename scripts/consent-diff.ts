@@ -20,6 +20,9 @@ type Grammar = {
   // Whether a message typed into a running turn replaces its grant; absent
   // before #182.
   dropsGrant?: (prompt: string, previousAnswer?: string) => boolean;
+  // The epic a typed message starts a job on; absent before review-cycle's
+  // epic mandate.
+  mandateOf?: (prompt: string, previousAnswer?: string) => string | null;
 };
 
 const CONSENT = 'plugins/review-cycle/hooks/consent.ts';
@@ -435,8 +438,15 @@ for (const lead of LEADS) {
 }
 
 // A verdict as one comparable line: the grant's non-default fields in key
-// order, and whether it holds (the reason a hold gives is wording, not a verdict).
-function verdict(g: Grammar, prompt: string, offer: string, queued: boolean): string {
+// order, whether it holds (the reason a hold gives is wording, not a verdict)
+// and the epic it starts a job on.
+function verdict(
+  g: Grammar,
+  prompt: string,
+  offer: string,
+  queued: boolean,
+  jobs: boolean,
+): string {
   const out: string[] = [];
   const fields = Object.entries(g.grantOf(prompt, offer)).toSorted(([a], [b]) =>
     a.localeCompare(b),
@@ -450,6 +460,8 @@ function verdict(g: Grammar, prompt: string, offer: string, queued: boolean): st
   }
   if (g.holdsOf(prompt, offer)) out.push('held');
   if (queued && g.dropsGrant?.(prompt, offer)) out.push('drops a queued grant');
+  const epic = jobs ? (g.mandateOf?.(prompt, offer) ?? null) : null;
+  if (epic !== null) out.push(`starts a job on ${epic}`);
   return out.join(', ') || 'nothing';
 }
 
@@ -475,11 +487,13 @@ async function compare(base: string, current: string): Promise<void> {
     const queued = before.dropsGrant !== undefined && after.dropsGrant !== undefined;
     if (!queued)
       console.log(`dropsGrant is missing at ${ref} or here: queued messages not compared`);
+    const jobs = before.mandateOf !== undefined && after.mandateOf !== undefined;
+    if (!jobs) console.log(`mandateOf is missing at ${ref} or here: epic jobs not compared`);
     for (const [prompt, offers] of offered) {
       for (const offer of offers) {
         cases++;
-        const was = verdict(before, prompt, offer, queued);
-        const now = verdict(after, prompt, offer, queued);
+        const was = verdict(before, prompt, offer, queued, jobs);
+        const now = verdict(after, prompt, offer, queued, jobs);
         if (was === now) continue;
         const key = `${was}  →  ${now}`;
         const examples = groups.get(key) ?? [];

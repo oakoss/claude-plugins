@@ -34,13 +34,14 @@ import {
   grantOf,
   holdOf,
   liftsHold,
-  mandateOf,
+  mandateAfter,
   NO_GRANT,
   isReply,
   stepsNamed,
   unreadOffer,
   type Grant,
   type HoldStep,
+  type Mandate,
   type UnreadOffer,
 } from './consent';
 import {
@@ -706,6 +707,7 @@ const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
 const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
 const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
 const _keptHold: Equal<Hold, Kept['held']> = true;
+const _keptMandate: Equal<Mandate | null, Kept['mandate']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
 const _keptMessage: Equal<Omit<Message, 'grant' | 'unread' | 'said'>, Kept['message']> = true;
 const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
@@ -961,11 +963,7 @@ async function onPromptSubmit(
     const hold = holdOf(e.text, state.lastAnswer);
     if (hold !== null) state.held = hold;
     else if (liftsHold(grant)) state.held = null;
-    // A hold or a retraction ends the job rather than pausing it.
-    const ends = hold !== null || dropsGrant(e.text, state.lastAnswer);
-    const epic = ends ? null : mandateOf(e.text, state.lastAnswer);
-    if (epic !== null) state.mandate = { epic };
-    else if (ends) state.mandate = null;
+    state.mandate = mandateAfter(state.mandate, e.text, state.lastAnswer);
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
