@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Commit, Held, Job, Pull, Watch, Workflow } from '../types';
+import type { Activity, Commit, Held, Job, Pull, Runs, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -76,7 +76,7 @@ export function isGone(w: Watch, estimates: Record<string, number>, now: number)
 }
 
 // A push follows its branch's runs as a merge follows its merge commit's.
-export function pushedPull(branch: string, pushedAt: number, runs: Pull['mergeRuns']): Pull {
+export function pushedPull(branch: string, pushedAt: number, runs: Runs | null): Pull {
   return {
     number: 0,
     title: '',
@@ -333,16 +333,16 @@ export function isMergeFresh(pull: Pick<Pull, 'mergedAt'>, now: number): boolean
 const gates = (w: Workflow) => w.jobs.some((j) => j.isRequired);
 const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
 
-type Runs = Pick<Pull, 'workflows' | 'isGated'>;
+type Gated = Pick<Pull, 'workflows' | 'isGated'>;
 
 // Whether the merge waits on this workflow: one holding a required check, or
 // any when nothing on the commit is required.
-function counts(runs: Runs): (w: Workflow) => boolean {
+function counts(runs: Gated): (w: Workflow) => boolean {
   return (w) => !runs.isGated || gates(w);
 }
 
 // The job that failed, not the summary job that failed on it.
-function failure(runs: Runs): Verdict | null {
+function failure(runs: Gated): Verdict | null {
   const isCounted = counts(runs);
   for (const w of runs.workflows) {
     if (!isCounted(w)) continue;
@@ -398,7 +398,7 @@ function gateTextOf(gate: Workflow): string {
 }
 
 // Null once every counted workflow has passed.
-function runsVerdict(runs: Runs, estimates: Record<string, number>, host: string): Verdict | null {
+function runsVerdict(runs: Gated, estimates: Record<string, number>, host: string): Verdict | null {
   const fail = failure(runs);
   if (fail) return fail;
   const isCounted = counts(runs);
@@ -445,21 +445,20 @@ export function needsTrunk(pull: Pull, now: number): boolean {
 export function followTrunk(pull: Pull, trunk: readonly Commit[]): Pull {
   const at = trunk.findIndex((c) => c.oid === pull.mergeOid);
   if (at === -1) return pull;
-  const holds = new Set([trunk[at]!.oid]);
-  const later: Commit[] = [];
+  // The merge commit heads the chain with its own read's runs, which see 100
+  // check suites to the trunk read's 20.
+  const merge = { ...trunk[at]!, runs: pull.mergeRuns ?? { workflows: [], isTruncated: false } };
+  const chain: Commit[] = [merge];
+  const holds = new Set([merge.oid]);
   for (const c of trunk.slice(0, at).toReversed()) {
     if (!c.parents.some((p) => holds.has(p))) continue;
     holds.add(c.oid);
-    later.push(c);
+    chain.push(c);
   }
-  let runs = pull.mergeRuns ?? { workflows: [], isTruncated: false };
-  let from = -1;
-  if (runs.workflows.length === 0) {
-    from = later.findIndex((c) => c.runs.workflows.length > 0);
-    if (from === -1) return pull;
-    runs = later[from]!.runs;
-  }
-  const newer = later.slice(from + 1).flatMap((c) => c.runs.workflows);
+  const base = chain.findIndex((c) => c.runs.workflows.length > 0);
+  if (base === -1) return pull;
+  const { runs } = chain[base]!;
+  const newer = chain.slice(base + 1).flatMap((c) => c.runs.workflows);
   const since: string[] = [];
   const workflows = runs.workflows.map((w) => {
     if (!isFailedRun(w)) return w;
@@ -471,8 +470,8 @@ export function followTrunk(pull: Pull, trunk: readonly Commit[]): Pull {
     since.push(w.name);
     return last;
   });
-  if (from === -1 && since.length === 0) return pull;
-  return { ...pull, mergeRuns: { ...runs, workflows }, followed: { isLater: from !== -1, since } };
+  if (base === 0 && since.length === 0) return pull;
+  return { ...pull, mergeRuns: { ...runs, workflows }, followed: { isLater: base > 0, since } };
 }
 
 // What stops a merge on the pull request itself; a draft's line says it too.
@@ -576,10 +575,13 @@ export function shownOf(verdict: Verdict): string {
   return verdict.kind;
 }
 
+// The commit a merged line's runs came from.
+const commitOf = (followed: Pull['followed']) =>
+  followed?.isLater ? 'a later commit' : 'the merge commit';
+
 function passedOn({ followed, base }: Pull): string {
   if (followed?.since.length) {
-    const on = followed.isLater ? 'a later commit' : 'the merge commit';
-    return `${followed.since.join(', ')} failed on ${on} and since passed on ${base}`;
+    return `${followed.since.join(', ')} failed on ${commitOf(followed)} and since passed on ${base}`;
   }
   return followed?.isLater
     ? `a later commit's checks on ${base} passed`
@@ -742,8 +744,7 @@ function conditionsOf(
   }
   const isMerged = verdict.kind.startsWith('merged-');
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
-  const commit = pull.followed?.isLater ? ' on a later commit' : ' on the merge commit';
-  const where = isMerged && !watch.push ? commit : '';
+  const where = isMerged && !watch.push ? ` on ${commitOf(pull.followed)}` : '';
   for (const w of workflows) {
     const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
     if (bad.length === 0) continue;
