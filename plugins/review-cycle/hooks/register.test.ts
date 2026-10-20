@@ -97,6 +97,8 @@ type World = {
   logs?: string[];
   // The model check's reply text; 'error', 'aborted' or 'throw' fail the call.
   model?: string;
+  // Its reply to whether the answer offered a merge's pull request; 'error' or 'throw' fails it.
+  target?: string;
   // Runs while the model check is asked.
   onModel?: () => void;
   // Each prompt the model check was sent.
@@ -406,6 +408,21 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     (w.modelPrompts ??= []).push(e.prompt);
     w.onModel?.();
     const usage = { input_tokens: 0, output_tokens: 0 };
+    if (e.prompt.startsWith("The agent's answer ends:")) {
+      if (w.target === 'throw') return { deny: 'model blocked' };
+      if (w.target === 'error') {
+        return {
+          value: {
+            isAnswered: false,
+            reason: 'api-error',
+            status: 529,
+            error: 'overloaded',
+            usage,
+          },
+        };
+      }
+      return { value: { isAnswered: true, text: w.target ?? OFFERED, usage } };
+    }
     if (w.model === 'throw') return { deny: 'model blocked' };
     if (w.model === 'aborted') return { value: { isAnswered: false, reason: 'aborted', usage } };
     if (w.model === 'error') {
@@ -420,6 +437,9 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
 
 // The model check's answers: nothing asked, and a push asked for now.
 const NOTHING_ASKED = '{"steps": {}, "quote": ""}';
+// Its answers on a merge's pull request: offered by the answer, or only mentioned.
+const OFFERED = '{"offers": true, "sure": true}';
+const MENTIONED = 'The offer names no PR.\n\n{"offers": false, "sure": true}';
 const verdictFor = (step: string, quote: string, flags = {}) =>
   JSON.stringify({
     steps: { [step]: { now: true, condition: false, declined: false, ...flags } },
@@ -4927,6 +4947,158 @@ describe('the stop-before setting', () => {
     await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
   });
+  // The answer offers an unnumbered merge; its last bullet only mentions release PR #52.
+  const mentioned =
+    'The branch is current.\n- **Release PR #52:** it should not trigger Visual.\n\nSay the word to merge.';
+  test('a merge of a pull request the answer only mentioned runs another', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    const r = await bash($, 'gh pr merge 74 --squash');
+    expect(ran(r)).toBe(true);
+    expect(r.context?.join('\n')).toContain('the model check read #52 as mentioned');
+    expect(w.modelPrompts?.at(-1)).toContain('The candidate: pull request #52.');
+  });
+  test('a merge of the pull request the answer offered runs no other', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x'), target: OFFERED });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    const other = 'it merges #74, and the user asked to merge #52';
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), other)).toBe(true);
+  });
+  test('an unanswered reading refuses, says why, and is asked again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: 'error',
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    const r = await bash($, 'gh pr merge 74 --squash');
+    expect(denied(r, 'the user asked to merge #52')).toBe(true);
+    expect(
+      denied(r, 'could not judge whether the answer offered #52 (an API error, overloaded)'),
+    ).toBe(true);
+    w.target = 'throw';
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'model blocked')).toBe(true);
+    w.target = MENTIONED;
+    expect(ran(await bash($, 'gh pr merge 74 --squash'))).toBe(true);
+  });
+  test('an unread or unsure reading refuses and is not asked again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: '{"offers": "no", "sure": true}',
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'its reply could not be read')).toBe(
+      true,
+    );
+    w.target = MENTIONED;
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+      true,
+    );
+    w.target = '{"offers": false, "sure": false}';
+    await say($, 'ok, lets merge');
+    const r = await bash($, 'gh pr merge 74 --squash');
+    expect(denied(r, 'the user asked to merge #52')).toBe(true);
+    expect(denied(r, 'could not judge')).toBe(false);
+  });
+  test('a reading belongs to its message', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    expect(ran(await bash($, 'gh pr merge 74 --squash'))).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 74 --squash'))).toBe(true);
+    await endTurn($, 'answer', mentioned);
+    w.target = OFFERED;
+    await say($, 'ok, lets merge');
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+      true,
+    );
+    expect(w.modelPrompts?.filter((p) => p.includes('The candidate:'))).toHaveLength(2);
+  });
+  test('a pull request an earlier queued message typed is not read again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'merge 52');
+    await queue($, 'ok, lets merge');
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+      true,
+    );
+    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
+  });
+  test('a merge a queued message joined is not read again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    await queue($, 'push it');
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+      true,
+    );
+    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
+  });
+  test('a merge from the Agent SDK is not read again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge', 'sdk');
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+      true,
+    );
+    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
+  });
+  test('a pull request the message named is not read again', async ($, on) => {
+    const w = fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, merge 52');
+    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+      true,
+    );
+    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
+  });
+  test(
+    'with the model check off, the pull request the answer named stands',
+    {
+      options: { modelCheck: false },
+    },
+    async ($, on) => {
+      fakeWorld(on, {
+        settings: { local: stops('release') },
+        git: github('fix/x'),
+        target: MENTIONED,
+      });
+      await endTurn($, 'answer', mentioned);
+      await say($, 'ok, lets merge');
+      expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
+        true,
+      );
+    },
+  );
   test('a merge once ready whose lookup fails asks for a release too', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
     await say($, 'merge it when its ready');

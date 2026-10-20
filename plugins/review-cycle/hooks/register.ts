@@ -41,7 +41,20 @@ import {
   type HoldStep,
   type UnreadOffer,
 } from './consent';
-import { askOf, judge, offerOf, RULES, type Judged, type ModelGrant } from './consent-model';
+import {
+  askOf,
+  closingNamed,
+  judge,
+  offerOf,
+  mentionedOf,
+  RULES,
+  TARGET,
+  targetAskOf,
+  typedOf,
+  unnamed,
+  type Judged,
+  type ModelGrant,
+} from './consent-model';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
@@ -210,6 +223,8 @@ type Message = {
   prWindow: boolean;
   // Why the reply granted nothing the agent's offer named, for refusals.
   unread: UnreadOffer | null;
+  // The one message its grant came from; null once a queued one joined it.
+  said: string | null;
 };
 
 type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
@@ -233,6 +248,8 @@ type GateState = {
   said: { text: string; before: string; origin: PromptOrigin['kind'] | null };
   // The model check's reading of message number `message`, asked once.
   model: ModelAsk | null;
+  // Whether that message's answer offered pull request `n`, asked once.
+  target: { message: number; n: string; read: Promise<TargetRead> } | null;
   // The user's /config value for asking a model when the grammar refuses.
   modelCheck: boolean;
   // Refusals of a step the user's message or the offer it answered named:
@@ -280,12 +297,20 @@ const state: GateState = {
   reviews: [],
   legs: new Map(),
   // No message yet, so nothing to nudge about.
-  message: { grant: NO_GRANT, tree: null, nudged: true, prWindow: false, unread: null },
+  message: {
+    grant: NO_GRANT,
+    tree: null,
+    nudged: true,
+    prWindow: false,
+    unread: null,
+    said: null,
+  },
   owed: null,
   messages: 0,
   lastAnswer: '',
   said: { text: '', before: '', origin: null },
   model: null,
+  target: null,
   modelCheck: true,
   misses: [],
   shellAliases: new Map(),
@@ -495,7 +520,7 @@ async function recall($: $): Promise<void> {
       );
       state.reviews = kept.reviews;
       state.legs = legs;
-      state.message = { ...kept.message, grant: NO_GRANT, unread: null };
+      state.message = { ...kept.message, grant: NO_GRANT, unread: null, said: null };
       state.messages = kept.messages;
       state.lastAnswer = kept.lastAnswer;
       state.misses = kept.misses;
@@ -652,6 +677,7 @@ type Unkept =
   | 'root'
   | 'said'
   | 'model'
+  | 'target'
   | 'modelCheck'
   | 'shellAliases'
   | 'aliasError'
@@ -669,7 +695,7 @@ const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
 const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
 const _keptHold: Equal<Hold, Kept['held']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
-const _keptMessage: Equal<Omit<Message, 'grant' | 'unread'>, Kept['message']> = true;
+const _keptMessage: Equal<Omit<Message, 'grant' | 'unread' | 'said'>, Kept['message']> = true;
 const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -932,6 +958,7 @@ async function onPromptSubmit(
       state.message.grant = drops ? grant : combine(state.message.grant, grant);
       // A retraction takes the reason with the yes it explained.
       state.message.unread = drops ? null : (state.message.unread ?? unread);
+      state.message.said = drops ? e.text : null;
       // An owed reminder already covers this turn's changes.
       state.message.nudged = state.owed !== null;
     } else {
@@ -948,7 +975,14 @@ async function onPromptSubmit(
       // A slash command may never reach the agent, so the reminder waits for
       // the next message; typing the review skill is the review itself.
       const waits = owed !== null && e.command !== undefined && !reviews;
-      state.message = { grant, tree, nudged: waits || reviews, prWindow: false, unread };
+      state.message = {
+        grant,
+        tree,
+        nudged: waits || reviews,
+        prWindow: false,
+        unread,
+        said: e.text,
+      };
       if (owed === null || waits) return next(e);
       const reminder = reviews ? null : await reminderFor($, owed.since, tree);
       const r = await next(
@@ -1648,6 +1682,108 @@ async function ranByModel(
 
 const couldNotJudge = (why: string) => ` The model check could not judge the message (${why}).`;
 
+// The merge's grant naming no pull request, when the model check reads the
+// one the grammar took from the answer as mentioned rather than offered.
+async function offeredUnnamed(
+  $: $,
+  granted: Grant,
+): Promise<{ grant: Grant; n: string } | { why: string; n: string } | null> {
+  const { text, before, origin } = state.said;
+  if (!state.modelCheck || origin === 'sdk' || text.trim() === '') return null;
+  // A grant a queued message joined is not one message the model can be shown.
+  if (state.held?.how === 'declined' || state.message.said === null) return null;
+  const n = closingNamed(granted, typedOf(text));
+  if (n === null) return null;
+  if (state.target?.message !== state.messages || state.target.n !== n) {
+    const ask = { message: state.messages, n, read: askTarget($, before, n, text) };
+    state.target = ask;
+    // One that got no answer is asked again by the next step.
+    void ask.read.then((r) => {
+      if (r.kind === 'unanswered' && state.target === ask) state.target = null;
+    });
+  }
+  const read = await state.target.read;
+  if (read.kind !== 'read') return { why: read.why, n };
+  return read.mentioned ? { grant: unnamed(granted, n), n } : null;
+}
+
+// A refused GitHub step judged again with the grant naming no pull request in
+// place of one the answer only mentioned, or why the model could not say.
+async function ghUnnamed(
+  $: $,
+  shown: string,
+  actions: Parameters<typeof judgeGh>[1],
+  granted: Grant,
+): Promise<
+  { gh: Awaited<ReturnType<typeof judgeGh>>; grant: Grant; told: string } | { why: string } | null
+> {
+  if (actions.length === 0) return null;
+  const read = await offeredUnnamed($, granted);
+  if (read === null) return null;
+  if ('why' in read) {
+    return {
+      why: ` The model check could not judge whether the answer offered #${read.n} (${read.why}).`,
+    };
+  }
+  const gh = await judgeGh(
+    shown,
+    actions,
+    read.grant,
+    state.held,
+    ghLookups($),
+    {},
+    state.message.unread,
+  );
+  return 'deny' in gh ? null : { gh, grant: read.grant, told: targetRan($, read.n) };
+}
+
+type TargetRead =
+  | { kind: 'read'; mentioned: boolean }
+  | { kind: 'unanswered' | 'unread'; why: string };
+
+async function askTarget($: $, before: string, n: string, text: string): Promise<TargetRead> {
+  try {
+    const r = await $.model.complete({
+      model: 'sonnet',
+      effort: 'low',
+      maxTokens: 100,
+      timeoutMs: 15_000,
+      system: [{ text: TARGET, cache: true }],
+      prompt: targetAskOf(before, n, text),
+    });
+    if (!r.isAnswered) {
+      const why =
+        r.reason === 'api-error'
+          ? `an API error, ${r.error}`
+          : r.reason === 'aborted'
+            ? 'it ran out of time or was interrupted'
+            : 'an empty reply';
+      return { kind: 'unanswered', why };
+    }
+    const mentioned = mentionedOf(r.text);
+    return mentioned === null
+      ? { kind: 'unread', why: 'its reply could not be read' }
+      : { kind: 'read', mentioned };
+  } catch (error) {
+    return { kind: 'unanswered', why: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function targetRan($: $, n: string): string {
+  const line = `review-cycle: the model check read #${n} as mentioned beside the merge the answer offered, not offered itself, so the merge names no pull request and oakum's version pull request still asks.`;
+  $.ui.log(line);
+  const { text, before } = state.said;
+  const miss = {
+    message: clip(text),
+    offer: clip(offerOf(before)),
+    steps: ['merge' as const],
+    refusal: clip(`#${n} read by the model check as mentioned, not offered`),
+  };
+  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
+  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
+  return line;
+}
+
 // A refused GitHub step judged again with the model check's yes letting steps
 // through, as the stop-before setting would.
 async function ghWithModel(
@@ -1679,7 +1815,7 @@ async function judgeBash(
 ): Promise<Output<BashHook>> {
   // A newer message overtakes anything decided from this one.
   const message = state.messages;
-  const granted = state.message.grant;
+  let granted = state.message.grant;
   if (bashTouchesGate(e.command)) return deny(SWITCHED_BY_USER);
   await loadShellAliases($);
   const cls = classify(e.command, state.shellAliases);
@@ -1696,7 +1832,7 @@ async function judgeBash(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
       );
     }
-    const first = await judgeGh(
+    let first = await judgeGh(
       quote(e.command),
       actions,
       granted,
@@ -1705,6 +1841,18 @@ async function judgeBash(
       {},
       state.message.unread,
     );
+    const read =
+      'deny' in first && !first.final
+        ? await ghUnnamed($, quote(e.command), actions, granted)
+        : null;
+    if (read !== null && 'why' in read && 'deny' in first) {
+      first = { ...first, deny: first.deny + read.why };
+    }
+    const mentioned = read !== null && 'gh' in read ? read : null;
+    if (mentioned !== null) {
+      first = mentioned.gh;
+      granted = mentioned.grant;
+    }
     const { gh, yes } =
       'deny' in first && !first.final
         ? await ghWithModel($, quote(e.command), actions, granted, first)
@@ -1737,10 +1885,11 @@ async function judgeBash(
     const checked = rewrite === 'alone' ? 'history' : 'unchecked';
     const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
     const ran = yes === null ? await watched : await ranByModel($, watched, yes);
+    const notes = [...(mentioned === null ? [] : [mentioned.told]), ...(gh.notes ?? [])];
     const r =
-      gh.notes === undefined || ran.deny !== undefined
+      notes.length === 0 || ran.deny !== undefined
         ? ran
-        : { ...ran, context: [...(ran.context ?? []), ...gh.notes] };
+        : { ...ran, context: [...(ran.context ?? []), ...notes] };
     if (state.aliasError === null || state.aliasErrorShown || r.deny !== undefined) return r;
     state.aliasErrorShown = true;
     return {

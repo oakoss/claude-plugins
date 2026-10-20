@@ -1,12 +1,17 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, NO_GRANT } from './consent';
+import { grantOf, NAMED_ELSEWHERE, NO_GRANT } from './consent';
 import {
   askOf,
+  closingNamed,
   grantOfModel,
   judge,
+  mentionedOf,
   offerOf,
   RULES,
+  targetAskOf,
+  typedOf,
+  unnamed,
   vetoed,
   type ModelGrant,
 } from './consent-model';
@@ -120,6 +125,48 @@ describe('judge', () => {
     const all: ModelGrant = { push: 'push', pr: true, approve: true, release: true };
     const carrying = { ...all, merge: true, commit: true, comment: true };
     expect(grantOfModel(carrying)).toEqual({ ...NO_GRANT, ...all });
+  });
+});
+
+describe("a merge's pull request", () => {
+  const answer = 'Release PR #52 is unaffected.\n\nSay the word to merge.';
+  test('is asked about with the closing, the candidate and the message', () => {
+    const ask = targetAskOf(`${'filler\n'.repeat(9)}${answer}`, '52', 'ok, lets merge');
+    expect(ask).toContain(`<answer>\n${offerOf(`${'filler\n'.repeat(9)}${answer}`)}\n</answer>`);
+    expect(ask).toContain('The candidate: pull request #52.');
+    expect(ask).toContain('<message>\nok, lets merge\n</message>');
+  });
+  test.each([
+    ['{"offers": false, "sure": true}', true],
+    ['It is mentioned only.\n\n{"offers": false, "sure": true}', true],
+    ['{"offers": false, "sure": false}', false],
+    ['```json\n{"offers": true, "sure": true}\n```', false],
+    ['{"offers": false}', null],
+    ['{"offers": "no", "sure": true}', null],
+    ['{"offers": false, "sure": true} {"offers": true, "sure": true}', null],
+    ['no JSON', null],
+  ])('reads %j as mentioned: %j', (reply, mentioned) => {
+    expect(mentionedOf(reply)).toBe(mentioned);
+  });
+  const named = (message: string, offer = answer) =>
+    closingNamed(grantOf(message, offer), typedOf(message));
+  test('is the one number the message did not type', () => {
+    expect(named('ok, lets merge')).toBe('52');
+    expect(named('merge it when ready')).toBe('52');
+    expect(named('merge 52')).toBeNull();
+    expect(named('merge it; do not merge 130')).toBeNull();
+    expect(named('merge it', 'Merge #3 and #4?')).toBeNull();
+    expect(named('merge it', 'Merge the version PR?')).toBeNull();
+    expect(named('push it')).toBeNull();
+    // A pick from the offer it answers types the number too.
+    expect(named('merge only #52', 'Merge #52 and #53?')).toBeNull();
+    expect(named('merge #52 but not #53', 'Merge #52 and #53?')).toBeNull();
+  });
+  test('unnamed, it names none in its place', () => {
+    const g = grantOf('ok, lets merge', answer);
+    expect(unnamed(g, '52')).toEqual({ ...g, mergeNamed: [NAMED_ELSEWHERE] });
+    const ready = grantOf('merge it when ready', answer);
+    expect(unnamed(ready, '52')).toEqual({ ...ready, readyNamed: [NAMED_ELSEWHERE] });
   });
 });
 
