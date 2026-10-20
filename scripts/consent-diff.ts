@@ -176,6 +176,15 @@ const VERBS = [
   'ship the whole branch',
   'commit the whole stack',
   'force push the stack',
+  // A job on an epic, by phrase or by the skill's slash command.
+  'do epic cpl-czgp',
+  'do epic cpl-czgp as drafts',
+  'do epic cpl-czgp, as a draft',
+  'run the epic cpl-czgp in drafts',
+  'do epic cpl-czgp as draft PRs',
+  '/pr-kit:do-epic cpl-czgp',
+  '/do-epic cpl-czgp as drafts',
+  '/pr-kit:do-epic',
 ];
 const CONDITIONS = [
   '',

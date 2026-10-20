@@ -2064,6 +2064,17 @@ describe('a job started on an epic', () => {
     ['yes, do epic cpl-czgp please', 'cpl-czgp'],
     ['do epic #cpl-czgp', 'cpl-czgp'],
     ['can you do epic cpl-czgp?', 'cpl-czgp'],
+    ['do epic cpl-czgp as drafts', 'cpl-czgp'],
+    ['do epic cpl-czgp, as a draft', 'cpl-czgp'],
+    ['do epic cpl-czgp as a draft', 'cpl-czgp'],
+    ['do epic cpl-czgp in a draft', 'cpl-czgp'],
+    ['do epic cpl-czgp as draft PRs', 'cpl-czgp'],
+    ['do epic cpl-czgp as draft pull requests', 'cpl-czgp'],
+    ['lets do epic cpl-czgp in draft', 'cpl-czgp'],
+    // The skill typed by its slash command, which is the text the hook sees.
+    ['/pr-kit:do-epic cpl-czgp', 'cpl-czgp'],
+    ['/do-epic cpl-czgp', 'cpl-czgp'],
+    ['/pr-kit:do-epic cpl-czgp as drafts', 'cpl-czgp'],
   ])('%j starts one on %j', (message, epic) => {
     expect(mandateOf(message)).toBe(epic);
   });
@@ -2084,6 +2095,22 @@ describe('a job started on an epic', () => {
     'do epic',
     'do epic 42',
     'do the cpl-czgp epic',
+    'do epic cpl-czgp as drafts after lunch',
+    'do epic cpl-czgp as drafts, but hold off on pushing',
+    '/pr-kit:do-epic',
+    '/pr-kit:do-epic cpl-czgp after lunch',
+    '/pr-kit:do-epic cpl-czgp, but hold off on pushing',
+    'what does /pr-kit:do-epic cpl-czgp do',
+    // Only a draft says how the job opens pull requests; anything else is a condition.
+    'do epic cpl-czgp in a minute',
+    'do epic cpl-czgp as ready',
+    'do epic cpl-czgp as draft PRs later',
+    // The slash command counts only as the message's start, from pr-kit.
+    'ok, /do-epic cpl-czgp',
+    'see the README.\n/do-epic cpl-czgp',
+    '/other:do-epic cpl-czgp',
+    '/pr-kit:do-epic-later cpl-czgp',
+    '/pr-kit:ship do epic',
   ])('%j starts none', (message) => {
     expect(mandateOf(message)).toBeNull();
   });

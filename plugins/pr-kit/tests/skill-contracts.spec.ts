@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { describe, expect, test } from 'vitest';
 
-import { REPO_ROOT, section, skillText } from '../../../tests/skills';
+import { expectAnchors, REPO_ROOT, section, skillText } from '../../../tests/skills';
 
 const PR_KIT = path.join(REPO_ROOT, 'plugins/pr-kit');
 
@@ -111,6 +111,95 @@ describe('fix-ci: the push question', () => {
     expect(skillText('pr-kit', 'fix-ci')).toContain(
       'end your answer with this question, word for word and unquoted: Should I commit and push the fixes?',
     );
+  });
+  test('a job that may push does not stop to ask', () => {
+    expect(skillText('pr-kit', 'fix-ci')).toContain(
+      'Skip the question when the `mcp__review-cycle__status` tool reports `mayPush` true, as under a job started with "do epic <id>"',
+    );
+  });
+});
+
+// Nobody answers mid-run, so each of these is what keeps a job from stopping,
+// guessing, or doing what only the user may.
+describe('do-epic: a job runs to its report', () => {
+  const text = skillText('pr-kit', 'do-epic');
+
+  test('it starts only on the job the gate started', () => {
+    expectAnchors(section(text, '1. Confirm the job', 'do-epic'), 'do-epic confirm', [
+      ['`stopBefore.mandate.epic` must name the epic the user asked for.', 'the mandate check'],
+      ['Stop, and ask the user to type `do epic <id>` on its own', 'no job stops'],
+      ['nothing reviews or gates the job. Stop and say so.', 'no gate stops'],
+    ]);
+  });
+  test('the plan sees every bead and records itself before anything is built', () => {
+    expectAnchors(section(text, '2. Plan', 'do-epic'), 'do-epic plan', [
+      ['--status open,in_progress,blocked --limit 0 --json', 'no 50-bead cutoff'],
+      ['bd dep list <ids…> --type blocks --json', 'only blocking dependencies order'],
+      [
+        "Done when every bead in scope is in exactly one branch, every branch is a lane or one layer of one stack, and the plan is in the epic's notes.",
+        'completion',
+      ],
+    ]);
+  });
+  test('branches build one after another, and stop when the job ends', () => {
+    const build = section(text, '3. Build each branch', 'do-epic');
+    expectAnchors(build, 'do-epic build', [
+      [
+        'Build lanes one after another, then each stack bottom up, all in this checkout',
+        'sequential lanes',
+      ],
+      [
+        'when the mandate is gone, the user ended the job, so stop building and go to the report',
+        'job end',
+      ],
+      ['git stash push --include-untracked -m "do-epic <id>: <why>"', 'shelve keeps the work'],
+      ['Every bead that depends on a shelved bead is shelved too', 'dependents shelve'],
+      [
+        '**A refusal stops the branch.** When the gate refuses a command, the job does not reshape it',
+        'refusals are not reshaped',
+      ],
+    ]);
+  });
+  test('a stack ships from its top and fixes CI from its bottom, each on its own branch', () => {
+    const ship = section(text, '4. Ship', 'do-epic');
+    expect(ship).toContain('plus `as drafts` when the user asked for drafts');
+    // Adopting only built layers keeps a shelved, empty layer out of gh-stack's record.
+    expect(ship).toContain(
+      '**A stack:** once every layer is built, adopt the layers that have commits, bottom first, then ship from the top layer.',
+    );
+    expect(section(text, '3. Build each branch', 'do-epic')).toContain(
+      'The stack itself is made at Ship, from the layers that have commits.',
+    );
+    expectAnchors(section(text, '5. Get CI green', 'do-epic'), 'do-epic CI', [
+      ['bottom layer first in a stack, check out its branch', 'order and branch'],
+      ['git switch <headRefName>', 'the checkout'],
+    ]);
+  });
+  test('fix-ci pushes a stack layer through gh stack', () => {
+    expect(skillText('pr-kit', 'fix-ci')).toContain(
+      'On a layer of a github/gh-stack stack (`gh stack view --json` lists the branch), push with `gh stack push` instead, after `gh stack rebase --upstack` as its own command when layers sit above it',
+    );
+  });
+  test('the report carries every outcome', () => {
+    expectAnchors(section(text, '6. Report', 'do-epic'), 'do-epic report', [
+      ['Not shipped:', 'ship failures'],
+      ['Shelved:', 'shelved beads'],
+      ['Left out of scope:', 'out-of-scope beads'],
+      ['Deferred findings and questions:', 'ledger'],
+      ['Refusals:', 'refusals'],
+      ['Review rounds: <per commit', 'rounds'],
+    ]);
+  });
+  test('it never merges or asks', () => {
+    expectAnchors(section(text, 'Do NOT', 'do-epic'), 'do-epic never', [
+      [
+        'Do NOT merge, arm auto-merge, mark a draft ready, release, push to the default branch, or force push without a lease.',
+        'user-only steps',
+      ],
+      ['Do NOT stop to ask mid-run. A question goes in the report.', 'no mid-run asks'],
+      ['Do NOT work on a bead outside the epic', 'epic scope'],
+      ['never `git checkout --` or `git reset --hard`', 'shelved work kept'],
+    ]);
   });
 });
 
@@ -524,7 +613,7 @@ describe('every skill', () => {
   });
 
   test("the README's gh claim matches the skills that call gh", () => {
-    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'];
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
     const skills = prKitSkills();
     const withGh = skills.filter((skill) =>
       shellFences(skillText('pr-kit', skill), skill).some((f) => /^\s*gh /m.test(f)),

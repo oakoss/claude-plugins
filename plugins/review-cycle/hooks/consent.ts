@@ -1363,12 +1363,18 @@ export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined
 
 const ID = String.raw`[a-z][a-z0-9-]*-[a-z0-9]+(?:\.\d+)*`;
 export const EPIC_ID = new RegExp(`^${ID}$`, 'i');
-const EPIC = new RegExp(String.raw`\b(?:do|run)\s+(?:the\s+)?epic\s+#?(${ID})\b`, 'i');
+// "as drafts" says how the job opens its pull requests, not whether it may.
+const EPIC = new RegExp(
+  String.raw`\b(?:do|run)\s+(?:the\s+)?epic\s+#?(${ID})\b(?:,?\s+(?:as|in)\s+(?:a\s+)?drafts?(?:\s+(?:PRs?|pull\s+requests?))?\b)?`,
+  'i',
+);
+const DO_EPIC_COMMAND = /^\s*\/(?:pr-kit:)?do-epic\b/i;
 
 // Read as the same message asking to push would be, so "don't do epic cpl-x
 // yet" and "do epic cpl-x after lunch" start nothing; the push must come from
 // the phrase itself, not another sentence ("Don't do epic cpl-x. Push it.").
-export function mandateOf(prompt: string, previousAnswer = ''): string | null {
+export function mandateOf(typed: string, previousAnswer = ''): string | null {
+  const prompt = typed.replace(DO_EPIC_COMMAND, 'do epic');
   const m = EPIC.exec(prompt);
   if (m === null || grantOf(prompt, previousAnswer).push !== 'none') return null;
   const asked = grantOf(prompt.replace(m[0], 'push it'), previousAnswer);
