@@ -1250,7 +1250,6 @@
   {
     "prompt": "Lets just leave it and we can merge PR 47",
     "offer": "- **So:** keep the ignore rule as it is. Clearing the old files is optional, and safe whenever you like.\n**The lock-file branch:** Renovate didn't close #42; your account did. GitHub's history for the PR shows `closed jbabin91 2026-10-11T22:55:00Z`, the same minute #46 merged. That's why the branch is still there:\n- **GitHub:** its \"delete branch\" setting is on for this repo, but it deletes head branches only when a PR merges, not when one closes.\n- **Renovate:** it deletes its own branches when it decides they're stale, and appends \" - autoclosed\" to any open PR it closes. #42 has no such suffix, which confirms Renovate didn't close it.\n- **What happens next:** Renovate will likely prune the branch on its next run, since it no longer needs it. That last point is my inference from its docs, which say it prunes branches it has no use for. Deleting it now is also safe, since nothing references it.\nWant me to delete `renovate/lock-file-maintenance` from `origin`, or leave it for Renovate?",
-    "may": ["merge", "release"],
-    "missed": true
+    "may": ["merge", "release"]
   }
 ]
