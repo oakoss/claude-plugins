@@ -24,6 +24,10 @@ export type Workflow = {
   jobs: Job[];
 };
 
+export type Runs = { workflows: Workflow[]; isTruncated: boolean };
+
+export type Commit = { oid: string; parents: string[]; runs: Runs };
+
 // A comment or review on a pull request by someone other than the viewer.
 export type Activity = {
   author: string;
@@ -54,7 +58,14 @@ export type Pull = {
   // The branch and repository it merges from, which a push line of it matches.
   head?: { branch: string; repo: string };
   mergedAt: string | null;
-  mergeRuns: { workflows: Workflow[]; isTruncated: boolean } | null;
+  mergeRuns: Runs | null;
+  mergeOid?: string;
+  // Set when `mergeRuns` holds later trunk commits' runs: one later commit's
+  // in place of none (`isLater`), newer passing runs of `since`, or both.
+  followed?: { isLater: boolean; since: string[] };
+  // Once merged, the stack trunk `base` names: null in no stack, unset until
+  // GitHub's stacks API has answered.
+  trunk?: string | null;
   // The latest comments and reviews by others, oldest first; null when the
   // reply lacks the viewer or either list.
   activity: Activity[] | null;

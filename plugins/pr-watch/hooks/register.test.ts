@@ -22,6 +22,15 @@ type Gh = {
   // The pushed-branch query's answer.
   push?: string;
   estimate?: string;
+  // GitHub's stacks API answer for the pull request; `[]` (no stack) when unset.
+  // That many stacks calls fail first, with this stderr when set.
+  stack?: string;
+  stackFails?: number;
+  stackError?: string;
+  // The trunk history query's answer; a branch that is gone when unset. Only
+  // that query is refused for GitHub's rate limit.
+  trunk?: string;
+  trunkLimited?: boolean;
   // gh pr view's answer; it fails when unset.
   view?: string;
   // The tool whose registration the host refuses.
@@ -309,6 +318,23 @@ function world(
     }
     if (gh.partial && argv.includes('graphql')) {
       return { value: { exitCode: 1, stdout: gh.pr, stderr: 'gh: Resource not accessible' } };
+    }
+    if (argv.includes('/stacks')) {
+      if ((gh.stackFails ?? 0) > 0) {
+        gh.stackFails = (gh.stackFails ?? 0) - 1;
+        if (gh.stackError === undefined) return failed;
+        return { value: { exitCode: 1, stdout: '', stderr: gh.stackError } };
+      }
+      return { value: { exitCode: 0, stdout: gh.stack ?? '[]', stderr: '' } };
+    }
+    if (argv.includes('history(first')) {
+      if (gh.trunkLimited) {
+        const message = 'API rate limit exceeded for user ID 1.';
+        const stdout = JSON.stringify({ errors: [{ type: 'RATE_LIMITED', message }] });
+        return { value: { exitCode: 1, stdout, stderr: `gh: ${message}\n` } };
+      }
+      const gone = JSON.stringify({ data: { repository: { ref: null } } });
+      return { value: { exitCode: 0, stdout: gh.trunk ?? gone, stderr: '' } };
     }
     if (argv.includes('/attempts/')) {
       if (gh.attemptError !== undefined) {
@@ -1729,6 +1755,49 @@ function withQuota(json: string, remaining: number, resetAt = '2026-10-03T23:00:
 }
 
 const isMergedRead = (run: string) => run.includes('graphql') && run.includes('mergeCommit {');
+const isTrunkRead = (run: string) => run.includes('history(first');
+
+// A merged answer whose merge commit is `m`, with these suites when given.
+function onMerge(json: string, suites?: unknown[]) {
+  const body = JSON.parse(json);
+  const commit = body.data.repository.pullRequest.mergeCommit;
+  commit.oid = 'm';
+  if (suites) commit.checkSuites.nodes = suites;
+  return body;
+}
+
+// Release's run `n` on a later commit.
+function releaseSuite(status: string, conclusion: string | null, n: number) {
+  return {
+    status,
+    conclusion,
+    workflowRun: {
+      runAttempt: 1,
+      createdAt: '2026-10-03T22:01:00Z',
+      url: `https://github.com/o/r/actions/runs/${n}`,
+      workflow: { databaseId: 9, name: 'Release' },
+    },
+    checkRuns: { nodes: [{ name: 'Publish', status, conclusion, detailsUrl: '' }] },
+  };
+}
+
+// A linear trunk's commits, newest first, as `[oid, suites]`.
+function trunkJson(commits: [string, unknown[]][]): string {
+  const nodes = commits.map(([oid, suites], i) => ({
+    oid,
+    parents: { nodes: commits[i + 1] ? [{ oid: commits[i + 1]![0] }] : [] },
+    checkSuites: { pageInfo: { hasNextPage: false }, nodes: suites },
+  }));
+  return JSON.stringify({ data: { repository: { ref: { target: { history: { nodes } } } } } });
+}
+
+// The trunk after a stack merge: the layer above's commit, with Release, over `m`.
+function above(status: string, conclusion: string | null): string {
+  return trunkJson([
+    ['upper', [releaseSuite(status, conclusion, 12)]],
+    ['m', []],
+  ]);
+}
 
 describe('the query', () => {
   test('a pull request found merged is read again for its merge commit, and so on after', async ($, on) => {
@@ -1744,6 +1813,107 @@ describe('the query', () => {
     await clock.advance(10_000);
     expect(reads(seen.runs)).toBe(3);
     expect(seen.runs.filter(isMergedRead)).toHaveLength(2);
+  });
+
+  test("a merged stack layer names the stack's trunk, not the layer below it", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ number: 236, base: { ref: 'main' }, pull_requests: [] }]);
+    const seen = world(on, { pr: JSON.stringify(merged), stack });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m11s');
+    // Asked once, on the read that finds it merged, and kept by the reads after.
+    await clock.advance(10_000);
+    expect(seen.runs.filter(isMergedRead)).toHaveLength(2);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m21s');
+  });
+
+  test('a merged pull request in no stack keeps its base, and is asked once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    const seen = world(on, { pr: JSON.stringify(merged), stack: '[]' });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into develop · ● Release 0m11s');
+    await clock.advance(10_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+  });
+
+  test('a stacks lookup that fails keeps the base, and is asked again after a minute', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const seen = world(on, { pr: JSON.stringify(merged), stack, stackFails: 1 });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into docs/lower-layer · ● Release 0m11s');
+    await clock.advance(10_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+    await clock.advance(50_000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 1m11s');
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(2);
+  });
+
+  test('a host with no stacks API is asked once, and the base stands', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    const stackError = 'gh: Not Found (HTTP 404)\n';
+    const seen = world(on, { pr: JSON.stringify(merged), stackFails: 9, stackError });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    await clock.advance(120_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+    expect(await lineIn(await band($))).toMatch(/^#128 merged into develop · /);
+  });
+
+  test("a rate-limited stacks lookup pauses none of the host's reads", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    const stackError = 'gh: API rate limit exceeded for user ID 1. (HTTP 403)\n';
+    const seen = world(on, { pr: JSON.stringify(merged), stackFails: 9, stackError });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const before = seen.runs.filter(isMergedRead).length;
+    await clock.advance(30_000);
+    expect(seen.runs.filter(isMergedRead).length).toBeGreaterThan(before);
+    expect(await lineIn(await band($))).toBe('#128 merged into develop · ● Release 0m41s');
+  });
+
+  test('a stacks answer that is no list keeps the base and the runs', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    world(on, { pr: JSON.stringify(merged), stack: '<html>' });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into develop · ● Release 0m11s');
+  });
+
+  test("a stack layer whose merge commit's runs cannot be read yet still finds its trunk", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    world(on, { pr: JSON.stringify(merged), stack, mergedFails: 1 });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ○ waiting on checks');
+    await clock.advance(10_000);
+    expect(await lineIn(await band($))).toBe('#128 merged into main · ● Release 0m21s');
   });
 
   test('a pull request found merged whose runs cannot be read yet shows as merged', async ($, on) => {
@@ -1977,6 +2147,145 @@ describe('a merged pull request', () => {
     expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed');
     await clock.advance(5000);
     expect(await lineIn(ui)).toBeUndefined();
+  });
+
+  test("a stack's lower layer, whose merge commit gets no runs, follows the layer above's", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const lower = onMerge(mergedJson('IN_PROGRESS', null), []);
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const gh: Gh = { pr: JSON.stringify(lower), stack, trunk: above('IN_PROGRESS', null) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ○ waiting on checks');
+    // A merge commit's own runs may start late, so the trunk waits out the grace.
+    expect(seen.runs.filter(isTrunkRead)).toEqual([]);
+    await clock.advance(80_000);
+    expect(await lineIn(ui)).toMatch(/^#128 merged into main · ● Release /);
+    expect(seen.runs.filter(isTrunkRead).every((r) => r.includes('b=refs/heads/main'))).toBe(true);
+    gh.trunk = above('COMPLETED', 'SUCCESS');
+    await clock.advance(10_000);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ checks passed on a later commit');
+    expect(seen.toasts.at(-1)).toBe('#128 merged: its checks passed');
+    await clock.advance(5000);
+    expect(await lineIn(ui)).toBeUndefined();
+  });
+
+  test('a failed merge run settles once a later run of it on the trunk passed', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = JSON.stringify(onMerge(mergedJson('COMPLETED', 'FAILURE')));
+    const later = (conclusion: string) =>
+      trunkJson([
+        ['next', [releaseSuite('COMPLETED', conclusion, 12)]],
+        ['m', []],
+      ]);
+    const gh: Gh = { pr, trunk: later('FAILURE') };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
+    expect(seen.runs.filter(isTrunkRead).length).toBeGreaterThan(0);
+    // Its later run failed too, and then none has run yet: it stays failing.
+    await clock.advance(600_000);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
+    // The failure told is still the merge commit's own run.
+    expect(seen.wakes.join('\n')).toContain('actions/runs/9');
+    expect(seen.wakes.join('\n')).not.toContain('actions/runs/12');
+    gh.trunk = trunkJson([['m', []]]);
+    await clock.advance(300_000);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
+    gh.trunk = later('SUCCESS');
+    for (let s = 0; s < 300 && seen.toasts.at(-1) !== '#128 merged: its checks passed'; s++) {
+      await clock.advance(1000);
+    }
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✓ Release failed, since passed');
+    await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as any);
+    expect(seen.contexts.at(-1)?.[0]).toContain(
+      'o/r#128 merged into main, and Release failed on the merge commit and since passed on main.',
+    );
+    await clock.advance(5000);
+    expect(await lineIn(ui)).toBeUndefined();
+  });
+
+  test("a stack layer's failed run waits for its trunk before reading the trunk", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = onMerge(mergedJson('COMPLETED', 'FAILURE'));
+    pr.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const trunk = trunkJson([
+      ['next', [releaseSuite('COMPLETED', 'SUCCESS', 12)]],
+      ['m', []],
+    ]);
+    const seen = world(on, { pr: JSON.stringify(pr), stack, stackFails: 1, trunk });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe(
+      '#128 merged into docs/lower-layer · ✗ Release: Publish failed',
+    );
+    expect(seen.runs.filter(isTrunkRead)).toEqual([]);
+    await clock.advance(60_000);
+    expect(seen.runs.filter(isTrunkRead).every((r) => r.includes('b=refs/heads/main'))).toBe(true);
+    expect(await lineIn(await band($))).toBe(
+      '#128 merged into main · ✓ Release failed, since passed',
+    );
+  });
+
+  test('a merge outside a stack whose commit gets no runs leaves, whatever ran later', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = JSON.stringify(onMerge(mergedJson('IN_PROGRESS', null), []));
+    const seen = world(on, { pr, stack: '[]', trunk: above('COMPLETED', 'FAILURE') });
+    await start($);
+    await create($);
+    await clock.advance(81_000);
+    expect(await lineIn(await band($))).toBeUndefined();
+    expect(seen.runs.filter(isTrunkRead)).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+  });
+
+  test('a stack layer with no runs whose trunk cannot be read says so, rather than leave', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = JSON.stringify(onMerge(mergedJson('IN_PROGRESS', null), []));
+    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const trunk = JSON.stringify({ errors: [{ message: 'Something went wrong' }] });
+    world(on, { pr, stack, trunk });
+    await start($);
+    await create($);
+    await clock.advance(81_000);
+    expect(await lineIn(await band($))).toMatch(/Something went wrong/);
+  });
+
+  test('a failed merge whose trunk cannot be read keeps its failure, and is not given up', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = JSON.stringify(onMerge(mergedJson('COMPLETED', 'FAILURE')));
+    const trunk = JSON.stringify({ errors: [{ message: 'Something went wrong' }] });
+    const seen = world(on, { pr, trunk });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const ui = await band($);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
+    await clock.advance(1_800_000);
+    expect(seen.runs.filter(isTrunkRead).length).toBeGreaterThan(8);
+    expect(await lineIn(ui)).toBe('#128 merged into main · ✗ Release: Publish failed');
+  });
+
+  test('a failed merge whose trunk read is rate limited still says its failure at once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const pr = JSON.stringify(onMerge(mergedJson('COMPLETED', 'FAILURE')));
+    const seen = world(on, { pr, trunkLimited: true });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.runs.filter(isTrunkRead)).toHaveLength(1);
+    expect(seen.notified).toEqual(['#128 merged: Release: Publish failed']);
+    expect(await lineIn(await band($))).toMatch(
+      /^#128 merged into main · ✗ Release: Publish failed · rate limited until /,
+    );
   });
 
   test('a merge whose commit starts no runs leaves once the 90 s are up', async ($, on) => {

@@ -7,7 +7,9 @@ import {
   createdPull,
   delayOf,
   errorLine,
+  followTrunk,
   GIVE_UP_AFTER,
+  needsTrunk,
   isCleared,
   isQuotaLow,
   isNetworkError,
@@ -1337,7 +1339,7 @@ describe('after a merge', () => {
     expect(delayOf(v, p, later)).toBe(10_000);
   });
 
-  test('a failed merge never settles: it stays, read each minute until a re-run passes', () => {
+  test('a failed merge stays, read each minute until a run of it passes', () => {
     const p = merged([release('FAILURE'), codeql('SUCCESS')]);
     const later = at + 3_600_000;
     const v = verdictAt(p, {}, 'github.com', later);
@@ -1357,6 +1359,184 @@ describe('after a merge', () => {
     expect(verdictAt(pull([green()], { state: 'CLOSED' }), {}, 'github.com', at)).toEqual({
       kind: 'closed',
     });
+  });
+});
+
+// Merged as `merged` is, its merge commit `m`.
+const onMerge = (runs: Workflow[] | null) => ({ ...merged(runs), mergeOid: 'm', trunk: 'main' });
+const commit = (oid: string, workflows: Workflow[], parents?: string[]) => ({
+  oid,
+  ...(parents ? { parents } : {}),
+  runs: { workflows, isTruncated: false },
+});
+const runOf = (n: number, w: Workflow) => ({ ...w, url: `https://x/run/${n}` });
+
+// A linear trunk, newest first: each commit's parent is the next one, unless given.
+const follow = (p: Pull, trunk: ReturnType<typeof commit>[]) =>
+  followTrunk(
+    p,
+    trunk.map((c, i) => ({ parents: trunk[i + 1] ? [trunk[i + 1]!.oid] : [], ...c })),
+  );
+
+describe('needsTrunk and followTrunk', () => {
+  const late = at + 30_000;
+
+  test('the trunk is read for a merge commit with no runs past the grace, or a failed one', () => {
+    expect(needsTrunk(onMerge([]), at)).toBe(false);
+    expect(needsTrunk(onMerge([]), late)).toBe(true);
+    expect(needsTrunk(onMerge([release('FAILURE'), codeql('SUCCESS')]), at)).toBe(true);
+    expect(needsTrunk(onMerge([release('CANCELLED')]), at)).toBe(true);
+    expect(needsTrunk(onMerge([release('SUCCESS'), codeql(null)]), late)).toBe(false);
+    // Without the merge commit's oid, or its runs, nothing on the trunk is later.
+    expect(needsTrunk(merged([]), late)).toBe(false);
+    expect(needsTrunk(onMerge(null), late)).toBe(false);
+    expect(needsTrunk(pull([], { mergeOid: 'm' }), late)).toBe(false);
+    // Outside a stack, only a failure looks past the merge commit.
+    for (const trunk of [null, undefined]) {
+      expect(needsTrunk({ ...onMerge([]), trunk }, late)).toBe(false);
+      expect(needsTrunk({ ...onMerge([release('FAILURE')]), trunk }, late)).toBe(true);
+    }
+  });
+
+  test("a merge commit with no runs follows the oldest later commit's that has some", () => {
+    const trunk = [
+      commit('newest', [runOf(3, release(null))]),
+      commit('next', [runOf(2, release('SUCCESS'))]),
+      commit('bare', []),
+      commit('m', []),
+      commit('older', [runOf(1, release('FAILURE'))]),
+    ];
+    const p = follow(onMerge([]), trunk);
+    expect(p.mergeRuns?.workflows.map((w) => w.url)).toEqual(['https://x/run/2']);
+    expect(p.followed).toEqual({ isLater: true, since: [] });
+    expect(textOf(watched(p), {}, 80)).toBe(
+      '#128 merged into main · ✓ checks passed on a later commit',
+    );
+  });
+
+  test('a merge commit with no runs and none later is left as it was', () => {
+    const p = onMerge([]);
+    expect(follow(p, [commit('later', []), commit('m', [])])).toBe(p);
+    expect(follow(p, [])).toBe(p);
+  });
+
+  test('only commits that descend from the merge commit are later', () => {
+    // git log order: a merge of `side` on top, then `side`, then the merge commit.
+    const trunk = [
+      commit('tip', [], ['m', 'side']),
+      commit('side', [runOf(2, release('SUCCESS'))], ['base']),
+      commit('m', []),
+    ];
+    expect(follow(onMerge([]), trunk).followed).toBeUndefined();
+    const failing = onMerge([release('FAILURE')]);
+    expect(follow(failing, trunk)).toBe(failing);
+    const above = [commit('next', [runOf(3, release('SUCCESS'))], ['tip']), ...trunk];
+    expect(follow(failing, above).followed).toEqual({ isLater: false, since: ['Release'] });
+    // A merge whose first parent is a side branch still holds the merge commit.
+    const second = [
+      commit('tip', [runOf(4, release('SUCCESS'))], ['side', 'm']),
+      commit('side', [], ['base']),
+      commit('m', []),
+    ];
+    expect(follow(failing, second).followed).toEqual({ isLater: false, since: ['Release'] });
+  });
+
+  test('a trunk without the merge commit is followed for nothing', () => {
+    const trunk = [commit('b', [release('SUCCESS')]), commit('a', [codeql('SUCCESS')])];
+    for (const p of [onMerge([]), onMerge([release('FAILURE')])]) {
+      expect(follow(p, trunk)).toBe(p);
+    }
+  });
+
+  test('a failed workflow gives way to its newest finished run on a later commit, once that passed', () => {
+    const failing = onMerge([release('FAILURE'), codeql('SUCCESS')]);
+    const passedSince = follow(failing, [
+      commit('c', [runOf(4, release(null))]),
+      commit('b', [runOf(3, release('SUCCESS'))]),
+      commit('a', [runOf(2, release('FAILURE'))]),
+      commit('m', []),
+    ]);
+    expect(passedSince.mergeRuns?.workflows.map((w) => w.url)).toEqual([
+      'https://x/run/3',
+      'https://x/run/2',
+    ]);
+    expect(passedSince.followed).toEqual({ isLater: false, since: ['Release'] });
+    // Only the failed workflow gives way; one that passed, or still runs, on the
+    // merge commit keeps its own run.
+    const both = follow(onMerge([release('FAILURE'), runOf(7, codeql(null))]), [
+      commit('a', [runOf(2, release('SUCCESS')), runOf(5, codeql('SUCCESS'))]),
+      commit('m', []),
+    ]);
+    expect(both.followed).toEqual({ isLater: false, since: ['Release'] });
+    expect(both.mergeRuns?.workflows.map((w) => w.url)).toEqual([
+      'https://x/run/2',
+      'https://x/run/7',
+    ]);
+    // A run still going on a newer commit does not hide one that finished.
+    const stillGoing = follow(failing, [
+      commit('b', [runOf(3, release(null))]),
+      commit('a', [runOf(2, release('SUCCESS'))]),
+      commit('m', []),
+    ]);
+    expect(stillGoing.mergeRuns?.workflows[0]?.url).toBe('https://x/run/2');
+    const v = verdictAt(passedSince, {}, 'github.com', late);
+    expect(v.kind).toBe('merged-passed');
+    expect(isSettled(v, passedSince, late)).toBe(true);
+    expect(textOf(watched(passedSince))).toBe(
+      '#128 merged into main · ✓ Release failed, since passed',
+    );
+  });
+
+  test('a failed workflow stays while its newest later run failed, runs, or never ran', () => {
+    const failing = onMerge([release('FAILURE')]);
+    const m = commit('m', []);
+    const stays = [
+      [commit('b', [runOf(3, release('FAILURE'))]), commit('a', [runOf(2, release('SUCCESS'))]), m],
+      [commit('a', [runOf(2, release(null))]), m],
+      [commit('a', [codeql('SUCCESS')]), m],
+      [m, commit('older', [runOf(1, release('SUCCESS'))])],
+    ];
+    for (const trunk of stays) expect(follow(failing, trunk)).toBe(failing);
+    // A skipped run never ran the workflow, so an older pass still counts.
+    const skipped = { ...runOf(3, release('SUCCESS')), conclusion: 'SKIPPED' };
+    expect(follow(failing, [commit('a', [skipped]), m])).toBe(failing);
+    const olderPass = follow(failing, [
+      commit('b', [skipped]),
+      commit('a', [runOf(2, release('SUCCESS'))]),
+      m,
+    ]);
+    expect(olderPass.mergeRuns?.workflows[0]?.url).toBe('https://x/run/2');
+  });
+
+  test('says the later commit, or the workflow that since passed, in its news', () => {
+    const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+    const tell = (p: Pull) => wakeOf(pr, p, verdictAt(p, {}, 'github.com', late), {});
+    const later = follow(onMerge([]), [commit('a', [release('SUCCESS')]), commit('m', [])]);
+    expect(tell(later).passed).toEqual([
+      "o/r#128 merged into main, and a later commit's checks on main passed.",
+    ]);
+    const failedLater = follow(onMerge([]), [commit('a', [release('FAILURE')]), commit('m', [])]);
+    expect(tell(failedLater).text).toContain(
+      'Release: Publish failed on a later commit for o/r#128',
+    );
+    const since = follow(onMerge([release('FAILURE')]), [
+      commit('a', [runOf(2, release('SUCCESS'))]),
+      commit('m', []),
+    ]);
+    expect(tell(since).passed).toEqual([
+      'o/r#128 merged into main, and Release failed on the merge commit and since passed on main.',
+    ]);
+    // With no runs on the merge commit, the failure was the followed commit's.
+    const both = follow(onMerge([]), [
+      commit('b', [runOf(3, release('SUCCESS'))]),
+      commit('a', [runOf(2, release('FAILURE'))]),
+      commit('m', []),
+    ]);
+    expect(both.followed).toEqual({ isLater: true, since: ['Release'] });
+    expect(tell(both).passed).toEqual([
+      'o/r#128 merged into main, and Release failed on a later commit and since passed on main.',
+    ]);
+    expect(textOf(watched(both))).toBe('#128 merged into main · ✓ Release failed, since passed');
   });
 });
 

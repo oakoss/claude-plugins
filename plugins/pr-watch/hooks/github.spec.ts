@@ -7,8 +7,12 @@ import {
   parseEstimate,
   parsePull,
   parseQuota,
+  parseStackBase,
+  parseTrunk,
   pullArgs,
   pushArgs,
+  stackArgs,
+  trunkArgs,
 } from './github';
 
 const queryOf = (args: string[]) => args.find((a) => a.startsWith('query=')) ?? '';
@@ -379,6 +383,94 @@ const took = (s: number, attempt = 1) => ({
 });
 const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
 
+describe('parseStackBase', () => {
+  test("a stack layer's trunk", () => {
+    const stacks = [{ number: 236, base: { ref: 'main' }, pull_requests: [{ number: 235 }] }];
+    expect(parseStackBase(JSON.stringify(stacks))).toBe('main');
+  });
+  test('the first stack it is in', () => {
+    const stacks = [{ base: { ref: 'main' } }, { base: { ref: 'develop' } }];
+    expect(parseStackBase(JSON.stringify(stacks))).toBe('main');
+  });
+  test.each(['[]', '[{"base":{}}]', '[{"base":{"ref":""}}]'])('%s names no trunk', (stdout) => {
+    expect(parseStackBase(stdout)).toBeNull();
+  });
+  test.each(['{"message":"Not Found","status":"404"}', '{"0":{"base":{"ref":"x"}}}'])(
+    '%s is no answer, not no stack',
+    (stdout) => {
+      expect(() => parseStackBase(stdout)).toThrow('gh printed no list of stacks');
+    },
+  );
+  test('throws on what is not JSON', () => {
+    expect(() => parseStackBase('nope')).toThrow('gh printed something other than JSON');
+  });
+  test('asks the stacks API by pull request, on the host', () => {
+    expect(stackArgs('ghe.example.com', 'o/r', 235)).toEqual([
+      'gh',
+      'api',
+      '--hostname',
+      'ghe.example.com',
+      '-X',
+      'GET',
+      'repos/o/r/stacks',
+      '-f',
+      'pull_request=235',
+    ]);
+  });
+});
+
+const trunk = (nodes: unknown[]) =>
+  JSON.stringify({ data: { repository: { ref: { target: { history: { nodes } } } } } });
+const suites = (nodes: unknown[]) => ({ pageInfo: { hasNextPage: false }, nodes });
+
+describe('parseTrunk', () => {
+  test("reads each commit's oid and runs, newest first", () => {
+    const commits = parseTrunk(
+      trunk([
+        {
+          oid: 'b',
+          parents: { nodes: [{ oid: 'a' }, { oid: 'x' }, { id: 'no oid' }] },
+          checkSuites: suites([suite({}, [TYPECHECK])]),
+        },
+        { oid: 'a', checkSuites: suites([]) },
+      ]),
+    );
+    expect(commits.map((c) => c.parents)).toEqual([['a', 'x'], []]);
+    expect(commits.map((c) => c.oid)).toEqual(['b', 'a']);
+    expect(commits[0]?.runs.workflows.map((w) => w.name)).toEqual(['CI']);
+    expect(commits[1]?.runs).toEqual({ workflows: [], isTruncated: false });
+    const more = { oid: 'c', checkSuites: { pageInfo: { hasNextPage: true }, nodes: [] } };
+    expect(parseTrunk(trunk([more]))[0]?.runs.isTruncated).toBe(true);
+  });
+  test('skips a commit with no oid', () => {
+    expect(parseTrunk(trunk([{ checkSuites: suites([]) }]))).toEqual([]);
+  });
+  test('a branch that is gone has no commits', () => {
+    expect(parseTrunk(JSON.stringify({ data: { repository: { ref: null } } }))).toEqual([]);
+  });
+  test('throws on an error, or no repository', () => {
+    const errors = JSON.stringify({ errors: [{ message: 'Something went wrong' }] });
+    expect(() => parseTrunk(errors)).toThrow('Something went wrong');
+    expect(() => parseTrunk('{"data":{}}')).toThrow('repository not found');
+  });
+  test("asks for the branch's newest 10 commits by oid, on the host", () => {
+    const args = trunkArgs('ghe.example.com', 'o/r', 'main');
+    expect(args).toContain('b=refs/heads/main');
+    expect(args).toContain('o=o');
+    expect(args).toContain('r=r');
+    expect(args).toContain('--hostname');
+    const query = queryOf(args);
+    expect(query).toContain('history(first: 10) { nodes {');
+    expect(query).toContain('oid parents(first: 2) { nodes { oid } } checkSuites(first: 20)');
+    expect(query).not.toContain('since');
+  });
+  test('reads the merge commit’s oid', () => {
+    const merged = { state: 'MERGED', mergeCommit: { oid: 'abc', checkSuites: suites([]) } };
+    expect(parsePull(prOutput([], merged)).mergeOid).toBe('abc');
+    expect(parsePull(prOutput([]))).not.toHaveProperty('mergeOid');
+  });
+});
+
 describe('parseQuota', () => {
   test('reads the quota a query reported', () => {
     const rateLimit = { cost: 1, remaining: 4912, limit: 5000, resetAt: '2026-10-08T21:00:00Z' };
@@ -479,7 +571,7 @@ describe('the gh calls', () => {
 
   test('ask for the base branch, when it merged, and the merge commit’s runs', () => {
     const query = queryOf(pullArgs('github.com', 'a/b', 1, true));
-    for (const field of ['baseRefName', 'mergedAt', 'mergeCommit { checkSuites']) {
+    for (const field of ['baseRefName', 'mergedAt', 'mergeCommit { oid checkSuites']) {
       expect(query).toContain(field);
     }
     expect(query).not.toContain('commits(last: 1)');
@@ -496,6 +588,7 @@ describe('the gh calls', () => {
       pullArgs('github.com', 'a/b', 1),
       pullArgs('github.com', 'a/b', 1, true),
       pushArgs('github.com', 'a/b', 'main'),
+      trunkArgs('github.com', 'a/b', 'main'),
     ]) {
       expect(queryOf(args)).toContain('rateLimit { cost remaining limit resetAt }');
     }

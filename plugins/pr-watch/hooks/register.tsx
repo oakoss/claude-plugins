@@ -18,8 +18,12 @@ import {
   parsePull,
   parsePush,
   parseQuota,
+  parseStackBase,
+  parseTrunk,
   pullArgs,
   pushArgs,
+  stackArgs,
+  trunkArgs,
   viewArgs,
   type Quota,
 } from './github';
@@ -33,6 +37,8 @@ import {
   pushedPull,
   delayOf,
   errorLine,
+  followTrunk,
+  needsTrunk,
   estimateKey,
   rerunKey,
   lineOf,
@@ -494,14 +500,35 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     // first finds it merged, read again for the merge commit's runs.
     const wasMerged = w.pull?.state === 'MERGED';
     const pull = await read(wasMerged);
-    if (wasMerged || pull.state !== 'MERGED') return { kind: 'pull', pull };
+    if (pull.state !== 'MERGED') return { kind: 'pull', pull };
+    let merged = pull;
+    if (!wasMerged) {
+      try {
+        merged = await read(true);
+      } catch (error) {
+        // Just merged, it shows as waiting on checks while the next read asks for
+        // them. Older, it would read as closed and leave, so the failure is said.
+        if (error instanceof RateLimited || !isMergeFresh(pull, await $.clock.now())) throw error;
+        merged = { ...pull, workflows: [], mergeRuns: null };
+      }
+    }
+    // Asked until the stacks API answers, then kept.
+    const trunk = w.pull?.trunk !== undefined ? w.pull.trunk : await trunkOf($, w);
+    const onTrunk = { ...merged, trunk, base: trunk ?? merged.base };
+    // Until the stacks API answers, the base may be the layer below, whose
+    // history never holds the merge commit.
+    if (trunk === undefined || !needsTrunk(onTrunk, await $.clock.now())) {
+      return { kind: 'pull', pull: onTrunk };
+    }
     try {
-      return { kind: 'pull', pull: await read(true) };
+      const commits = await readGh($, w.host, trunkArgs(w.host, w.repo, onTrunk.base), parseTrunk);
+      return { kind: 'pull', pull: followTrunk(onTrunk, commits) };
     } catch (error) {
-      // Just merged, it shows as waiting on checks while the next read asks for
-      // them. Older, it would read as closed and leave, so the failure is said.
-      if (error instanceof RateLimited || !isMergeFresh(pull, await $.clock.now())) throw error;
-      return { kind: 'pull', pull: { ...pull, workflows: [], mergeRuns: null } };
+      // The merge commit's own runs, a failure among them, stand; with none,
+      // the line would read as closed and leave. A rate limit has already
+      // paused the host for the next read.
+      if ((onTrunk.mergeRuns?.workflows.length ?? 0) === 0) throw error;
+      return { kind: 'pull', pull: onTrunk };
     }
   }
   const { branch, pushedAt } = w.push;
@@ -513,6 +540,34 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     return { kind: 'handoff', to: { host: w.host, repo, number, url, checkedAt: 0 } };
   }
   return { kind: 'pull', pull: pushedPull(branch, pushedAt, pushed.runs) };
+}
+
+// The trunk of the stack a merged pull request was a layer of, null when it
+// was in none or the host has no stacks API, or undefined when GitHub did not
+// say, so a read after the retry delay asks again. It is REST, so its rate
+// limit is not the host's GraphQL one and pauses nothing.
+async function trunkOf($: $, w: Watch): Promise<string | null | undefined> {
+  const now = await $.clock.now();
+  const key = `${w.host}/stack/${w.repo}#${w.number}`;
+  const pause = paused.get(w.host);
+  if ((pause && now < pause.until) || now - (asked.get(key) ?? -Infinity) < ESTIMATE_RETRY_MS) {
+    return undefined;
+  }
+  asked.set(key, now);
+  try {
+    const r = await $.process.run(stackArgs(w.host, w.repo, w.number), {
+      timeoutMs: VIEW_TIMEOUT_MS,
+    });
+    if (r.exitCode !== 0) {
+      const isMissing = /HTTP 404\b/.test(r.stderr) && !isRateLimited(r.stdout, r.stderr);
+      return isMissing ? null : undefined;
+    }
+    const trunk = parseStackBase(r.stdout);
+    asked.delete(key);
+    return trunk;
+  } catch {
+    return undefined;
+  }
 }
 
 // What a read leaves for a caller that tells it itself: its news, whether it
