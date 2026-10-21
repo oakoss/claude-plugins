@@ -140,7 +140,7 @@ import {
   type Needed,
 } from './push-verdict';
 import { readRounds, recordRounds, roundsOf } from './rounds';
-import { applyEdit, bashTouchesGate, isJsonPath, touchesGate } from './settings';
+import { applyEdit, bashTouchesGate, isJsonPath, namesSwitch, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import {
@@ -1327,12 +1327,10 @@ async function onEdit($: $, e: Input<EditHook>, next: NextOf<EditHook>): Promise
   // An edit to a missing file creates it with the new text.
   if (before === null) return touchesGate(null, e.new_string) ? deny(SWITCHED_BY_USER) : next(e);
   const after = applyEdit(before, e.old_string, e.new_string, e.replace_all === true);
-  // An edit the gate cannot replay passes only when neither the file nor the
-  // edit names a switch.
+  // An edit the gate cannot replay passes only when neither the file, which
+  // holds the text it replaces, nor its new text names a switch.
   const touches =
-    after === null
-      ? touchesGate(before, '') || touchesGate(e.old_string, e.new_string)
-      : touchesGate(before, after);
+    after === null ? namesSwitch(before) || namesSwitch(e.new_string) : touchesGate(before, after);
   return touches ? deny(SWITCHED_BY_USER) : next(e);
 }
 

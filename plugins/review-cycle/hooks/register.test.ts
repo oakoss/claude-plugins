@@ -1295,6 +1295,13 @@ describe('the switch in settings files', () => {
     fakeWorld(on, { files: { [SETTINGS]: on_ } });
     expect(denied(await $.tool.call(edit('“dark”', '"light"')), 'only by the user')).toBe(true);
   });
+  test('an edit the gate cannot replay is refused when a skipped file names the switch', async ($, on) => {
+    // Removing the comment makes the file load, switching review-cycle off.
+    const jsonc = '// set by “me”\n{"enabledPlugins":{"review-cycle@oakoss":false}}';
+    fakeWorld(on, { files: { [SETTINGS]: jsonc } });
+    const r = await $.tool.call(edit('// set by "me"\n', ''));
+    expect(denied(r, 'only by the user')).toBe(true);
+  });
   test('writing pluginConfigs with enabled false is refused', async ($, on) => {
     fakeWorld(on, { files: { [SETTINGS]: on_ } });
     const content = JSON.stringify({
