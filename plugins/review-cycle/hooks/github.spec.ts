@@ -382,7 +382,11 @@ describe('GitHub MCP tools', () => {
       { owner: 'o', repo: 'r', pullNumber: '5' },
       merge(['5', '--repo', 'o/r']),
     ],
-    ['mcp__github__merge_pull_request', { pullNumber: 5 }, merge({ cannot: 'unnamed' })],
+    [
+      'mcp__github__merge_pull_request',
+      { pullNumber: 5 },
+      merge({ cannot: 'unnamed', selector: '5' }),
+    ],
     [
       'mcp__github__merge_pull_request',
       { owner: 'o', repo: 'r', pullNumber: '--web' },
@@ -391,7 +395,7 @@ describe('GitHub MCP tools', () => {
     [
       'mcp__github__merge_pull_request',
       { owner: '--json', repo: 'r', pullNumber: 5 },
-      merge({ cannot: 'unnamed' }),
+      merge({ cannot: 'unnamed', selector: '5' }),
     ],
     ['mcp__github__pull_request_review_write', { event: 'APPROVE' }, { kind: 'approve' }],
     ['mcp__github__pull_request_review_write', { event: 'approve' }, { kind: 'approve' }],

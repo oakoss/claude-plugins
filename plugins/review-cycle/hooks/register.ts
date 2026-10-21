@@ -33,8 +33,10 @@ import {
   EPIC_ID,
   grantOf,
   holdOf,
+  prNumbers,
   liftsHold,
   mandateAfter,
+  NAMED_ELSEWHERE,
   NO_GRANT,
   isReply,
   stepsNamed,
@@ -228,7 +230,14 @@ type Message = {
   unread: UnreadOffer | null;
   // The one message its grant came from; null once a queued one joined it.
   said: string | null;
+  // The pull requests a merge naming none may reach, kept apart from the
+  // grant since combining an unnamed merge with a named one names none.
+  pointed: Pointed;
 };
+
+// A number the grammar could not place ("do not merge 130") voids the answers'.
+type Pointed = { named: readonly string[]; answer: readonly string[]; unplaced: boolean };
+const NOTHING_POINTED: Pointed = { named: [], answer: [], unplaced: false };
 
 type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
 
@@ -309,6 +318,7 @@ const state: GateState = {
     prWindow: false,
     unread: null,
     said: null,
+    pointed: NOTHING_POINTED,
   },
   owed: null,
   messages: 0,
@@ -527,7 +537,13 @@ async function recall($: $): Promise<void> {
       );
       state.reviews = kept.reviews;
       state.legs = legs;
-      state.message = { ...kept.message, grant: NO_GRANT, unread: null, said: null };
+      state.message = {
+        ...kept.message,
+        grant: NO_GRANT,
+        unread: null,
+        said: null,
+        pointed: NOTHING_POINTED,
+      };
       state.messages = kept.messages;
       state.lastAnswer = kept.lastAnswer;
       state.misses = kept.misses;
@@ -709,7 +725,10 @@ const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
 const _keptHold: Equal<Hold, Kept['held']> = true;
 const _keptMandate: Equal<Mandate | null, Kept['mandate']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
-const _keptMessage: Equal<Omit<Message, 'grant' | 'unread' | 'said'>, Kept['message']> = true;
+const _keptMessage: Equal<
+  Omit<Message, 'grant' | 'unread' | 'said' | 'pointed'>,
+  Kept['message']
+> = true;
 const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -972,6 +991,8 @@ async function onPromptSubmit(
       // A retraction takes the reason with the yes it explained.
       state.message.unread = drops ? null : (state.message.unread ?? unread);
       state.message.said = drops ? e.text : null;
+      const more = pointedBy(e.text, state.lastAnswer, grant);
+      state.message.pointed = drops ? more : joinPointed(state.message.pointed, more);
       // An owed reminder already covers this turn's changes.
       state.message.nudged = state.owed !== null;
     } else {
@@ -995,6 +1016,7 @@ async function onPromptSubmit(
         prWindow: false,
         unread,
         said: e.text,
+        pointed: pointedBy(e.text, state.lastAnswer, grant),
       };
       if (owed === null || waits) return next(e);
       const reminder = reviews ? null : await reminderFor($, owed.since, tree);
@@ -1421,6 +1443,28 @@ function onMonitorError(
   );
 }
 
+function pointedNow(): readonly string[] {
+  const { named, answer, unplaced } = state.message.pointed;
+  return unplaced ? named : [...new Set([...named, ...answer])];
+}
+
+function pointedBy(text: string, before: string, grant: Grant): Pointed {
+  const all = [...grant.mergeNamed, ...grant.readyNamed];
+  return {
+    named: all.filter((n) => n !== NAMED_ELSEWHERE),
+    answer: prNumbers(before),
+    unplaced: all.includes(NAMED_ELSEWHERE) && /\d/.test(text),
+  };
+}
+
+function joinPointed(a: Pointed, b: Pointed): Pointed {
+  return {
+    named: [...new Set([...a.named, ...b.named])],
+    answer: [...new Set([...a.answer, ...b.answer])],
+    unplaced: a.unplaced || b.unplaced,
+  };
+}
+
 // A GitHub MCP tool is judged as the gh command it stands for would be.
 async function onGithubTool(
   $: $,
@@ -1441,6 +1485,7 @@ async function onGithubTool(
     ghLookups($),
     {},
     state.message.unread,
+    pointedNow(),
   );
   const { gh, yes } =
     'deny' in first && !first.final
@@ -1763,6 +1808,7 @@ async function ghUnnamed(
     ghLookups($),
     {},
     state.message.unread,
+    pointedNow(),
   );
   return 'deny' in gh ? kept : { gh, granted: read.grant, told: targetRan($, read.n) };
 }
@@ -1813,6 +1859,7 @@ async function ghWithModel(
     ghLookups($),
     second.steps,
     state.message.unread,
+    pointedNow(),
   );
   return { gh, yes: 'deny' in gh ? null : second };
 }
@@ -1849,6 +1896,7 @@ async function judgeBash(
       ghLookups($),
       {},
       state.message.unread,
+      pointedNow(),
     );
     const read =
       'deny' in typed && !typed.final
@@ -2294,12 +2342,6 @@ async function ghRead($: $, args: string[], what: string, schedule = LOOKUP_MS):
 function ghLookups($: $): GhLookups {
   return {
     ladder: () => ladderOf($),
-    mergeHead: (lookup) =>
-      ghRead(
-        $,
-        ['pr', 'view', ...lookup, '--json', 'headRefName', '--jq', '.headRefName'],
-        'the pull request it merges',
-      ),
     mergeTarget: (lookup) =>
       ghRead(
         $,
@@ -2322,10 +2364,25 @@ function ghLookups($: $): GhLookups {
         'the current repository',
         MERGE_LOOKUP_MS,
       ),
-    pullRequest: async (head) => {
-      const args = ['pr', 'view', ...head, '--json', PR_FIELDS, '--jq', PR_JQ];
-      const r = await ghRead($, args, 'the pull request it updates');
-      return r.asks === undefined ? parsePullRequest(r.out) : { asks: r.asks };
+    branch: async () => {
+      try {
+        const r = await $.process.run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], {
+          timeoutMs: 5000,
+        });
+        if (r.exitCode === 0) return { out: r.stdout };
+        // --quiet leaves a detached HEAD exit 1 with nothing on stderr.
+        const why = r.stderr.trim().split('\n')[0] ?? '';
+        if (r.exitCode === 1 && why === '') return { out: '' };
+        return { asks: `reading the current branch printed \`${why}\` (exit ${r.exitCode})` };
+      } catch (error) {
+        return { asks: `reading the current branch failed (${messageOf(error)})` };
+      }
+    },
+    pullRequest: async (lookup, what) => {
+      const args = ['pr', 'view', ...lookup, '--json', PR_FIELDS, '--jq', PR_JQ];
+      const r = await ghRead($, args, what);
+      if (r.asks === undefined) return parsePullRequest(r.out, what);
+      return r.slow ? { asks: r.asks, slow: true } : { asks: r.asks };
     },
     defaultBranch: (repo) =>
       ghRead(

@@ -15,12 +15,15 @@ import type { StackRead } from './stack';
 
 type StackLookup = (n: number) => StackRead | { asks: string; slow?: true };
 
+// What gh prints for oakum's version pull request in this repository.
+const VERSION_PR = 'false https://github.com/o/r/pull/62 oakum/version-packages';
+
 // GitHub as the lookups see it, recording each lookup made. The pull request
 // lookup answers what gh prints, read as register.ts reads it.
 function world(
   stopBefore: StopBefore,
   answers: Partial<
-    Record<'mergeHead' | 'mergeTarget' | 'repoUrl' | 'pullRequest' | 'defaultBranch', Lookup>
+    Record<'mergeTarget' | 'branch' | 'repoUrl' | 'pullRequest' | 'defaultBranch', Lookup>
   > = {},
   unreadable?: string,
   stack?: StackLookup,
@@ -35,8 +38,6 @@ function world(
   const pr = answers.pullRequest ?? { out: 'false https://github.com/o/r/pull/7 fix/x' };
   const lookups: GhLookups = {
     ladder: () => answer('ladder', ladder),
-    mergeHead: (lookup) =>
-      answer(`mergeHead ${lookup.join(' ')}`, answers.mergeHead ?? { out: 'fix/x' }),
     // Not ready unless a test says so.
     mergeTarget: (lookup) =>
       answer(
@@ -50,10 +51,14 @@ function world(
             },
       ),
     repoUrl: () => answer('repoUrl', answers.repoUrl ?? { out: 'https://github.com/o/r' }),
-    pullRequest: (head) =>
+    // The checkout is on the branch every pull request here is headed by.
+    branch: () => answer('branch', answers.branch ?? { out: 'fix/x' }),
+    pullRequest: (head, what) =>
       answer(
         `pullRequest ${head.join(' ')}`,
-        pr.asks === undefined ? parsePullRequest(pr.out) : { asks: pr.asks },
+        pr.asks === undefined
+          ? parsePullRequest(pr.out, what)
+          : { asks: pr.asks, ...(pr.slow && { slow: pr.slow }) },
       ),
     defaultBranch: (repo) =>
       answer(`defaultBranch ${repo ?? '-'}`, answers.defaultBranch ?? { out: 'main' }),
@@ -81,8 +86,9 @@ async function judge(
   w: ReturnType<typeof world>,
   granted = grant(),
   held: Hold = null,
+  pointed: readonly string[] = [],
 ) {
-  return judgeGh('the call', actions, granted, held, w.lookups);
+  return judgeGh('the call', actions, granted, held, w.lookups, {}, null, pointed);
 }
 
 describe('GitHub writes on the ladder', () => {
@@ -187,7 +193,7 @@ describe('a push through GitHub', () => {
     expect(await judge([push({ branch: 'main', repo: 'o/r' })], padded)).toMatchObject({
       deny: expect.stringContaining('it pushes to `main`, the default branch'),
     });
-    const release = world('release', { mergeHead: { out: 'oakum/version-packages\n' } });
+    const release = world('release', { pullRequest: { out: VERSION_PR } });
     expect(
       await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], release),
     ).toMatchObject({
@@ -381,24 +387,210 @@ describe('a merge', () => {
   });
 
   test("of oakum's version pull request is a release", async () => {
-    const w = world('release', { mergeHead: { out: 'oakum/version-packages' } });
+    const w = world('release', { pullRequest: { out: VERSION_PR } });
     const r = await judge(
       [{ kind: 'merge', admin: false, auto: false, lookup: ['62', '--repo', 'o/r'] }],
       w,
     );
     expect(r).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
-    expect(w.calls).toEqual(['ladder', 'mergeHead 62 --repo o/r']);
+    expect(w.calls).toEqual(['ladder', 'pullRequest 62 --repo o/r']);
   });
 
-  test("asked for, covers oakum's version pull request without a lookup", async () => {
-    const w = world('release', { mergeHead: { out: 'oakum/version-packages' } });
+  test("asked for, covers oakum's version pull request, found by its branch", async () => {
+    const w = world('merge', { pullRequest: { out: `false ${PR1} oakum/version-packages` } });
     const r = await judge([merge(false)], w, grant({ merge: true }));
     expect(r).toEqual({ ran: [] });
-    expect(w.calls).toEqual(['ladder']);
+    expect(w.calls).toEqual(['ladder', 'mergeTarget 1', 'repoUrl', 'pullRequest 1']);
+  });
+
+  const PR1 = 'https://github.com/o/r/pull/1';
+  describe('asked for with no pull request named', () => {
+    const away = { branch: { out: 'main' } } as const;
+    const unnamedDeny = 'neither they nor the answer they replied to named #1';
+    test('covers one the answer named, the current branch’s, or a bare gh pr merge', async () => {
+      const unnamed = grant({ merge: true });
+      expect(await judge([merge(false)], world('merge', away), unnamed, null, ['1'])).toEqual({
+        ran: [],
+      });
+      expect(await judge([merge(false)], world('merge'), unnamed)).toEqual({ ran: [] });
+      const bare: GhAction = { kind: 'merge', admin: false, auto: false, lookup: [] };
+      expect(await judge([bare], world('merge', away), unnamed)).toEqual({ ran: [] });
+    });
+
+    test('asks before merging one nothing pointed at', async () => {
+      for (const named of [[], [NAMED_ELSEWHERE]]) {
+        const r = await judge(
+          [merge(false)],
+          world('merge', away),
+          grant({ merge: true, mergeNamed: named }),
+          null,
+          ['40'],
+        );
+        expect(r).toMatchObject({
+          deny: expect.stringContaining(
+            `it merges #1, and the user named no pull request, and ${unnamedDeny}`,
+          ),
+        });
+        expect(r).toMatchObject({ deny: expect.stringContaining('"Merge #1?"') });
+      }
+    });
+
+    test('asks before merging another branch’s pull request, even once ready', async () => {
+      const r = await judge([merge(true)], world('merge', away), grant({ autoMerge: true }));
+      expect(r).toMatchObject({ deny: expect.stringContaining(unnamedDeny) });
+    });
+
+    test('asks before merging a fork’s pull request whose branch shares a name', async () => {
+      for (const branch of ['fix/x', 'oakum/version-packages']) {
+        const fork = world('merge', { pullRequest: { out: `true ${PR1} ${branch}` } });
+        expect(await judge([merge(false)], fork, grant({ merge: true }))).toMatchObject({
+          deny: expect.stringContaining(unnamedDeny),
+        });
+      }
+    });
+
+    test('names why when a lookup fails, retrying when GitHub was slow', async () => {
+      const lost = world('merge', { branch: { asks: 'reading it failed (y)' } });
+      expect(await judge([merge(false)], lost, grant({ merge: true }))).toMatchObject({
+        deny: expect.stringContaining(
+          'the gate cannot tell whether the conversation pointed at #1: reading it failed (y)',
+        ),
+      });
+      // A checkout on no branch heads no pull request.
+      const detached = world('merge', { branch: { out: '' } });
+      expect(await judge([merge(false)], detached, grant({ merge: true }))).toMatchObject({
+        deny: expect.stringContaining("nor is it this branch's"),
+      });
+      const headless = world('merge', { pullRequest: { asks: 'looking it up failed (x)' } });
+      const failed = await judge([merge(false)], headless, grant({ merge: true }));
+      expect(failed).toMatchObject({ deny: expect.stringContaining('looking it up failed (x)') });
+      expect(failed).toMatchObject({ deny: expect.stringContaining('"Merge #1?"') });
+      const slow = world('merge', { pullRequest: { asks: 'it timed out', slow: true } });
+      expect(await judge([merge(false)], slow, grant({ merge: true }))).toMatchObject({
+        deny: expect.stringContaining(
+          'ask the user only if it fails the same way again. The command:',
+        ),
+      });
+    });
+
+    test('reads an Enterprise host served over http', async () => {
+      const w = world('merge', {
+        pullRequest: { out: 'false http://ghe.example.com/o/r/pull/1 fix/x' },
+      });
+      expect(await judge([merge(false)], w, grant({ merge: true }))).toEqual({ ran: [] });
+    });
+
+    test('is never stricter than the setting, but for a merge now asked for once ready', async () => {
+      for (const stop of ['release', 'never stop'] as const) {
+        for (const asked of [
+          { merge: true },
+          { autoMerge: true },
+          { merge: true, autoMerge: true },
+        ]) {
+          expect(await judge([merge(false)], world(stop, away), grant(asked))).toEqual(
+            merged(stop),
+          );
+        }
+      }
+      // A number asked for once ready binds only that pull request.
+      const mixed = grant({
+        merge: true,
+        mergeNamed: [NAMED_ELSEWHERE],
+        autoMerge: true,
+        readyNamed: ['62'],
+      });
+      expect(await judge([merge(false)], world('release', away), mixed, null, ['62'])).toEqual(
+        merged('release'),
+      );
+      // Merging now and once ready, a failed lookup runs as merging now does.
+      const both = grant({ merge: true, autoMerge: true });
+      const blind = world('never stop', { mergeTarget: { asks: 'looking it up failed (x)' } });
+      expect(await judge([merge(false)], blind, both)).toEqual(merged('never stop'));
+      // Merging now on a once-ready ask, a failed lookup is refused whatever the setting.
+      expect(await judge([merge(false)], blind, grant({ autoMerge: true }))).toMatchObject({
+        deny: expect.stringContaining('looking it up failed (x)'),
+      });
+      // `--auto` leaves the wait to GitHub, so a failed lookup runs as merging now does.
+      expect(await judge([merge(true)], blind, grant({ autoMerge: true }))).toEqual(
+        merged('never stop'),
+      );
+      // A number named once ready needs no pointing, so a failed branch read is moot.
+      const unread = world('release', {
+        branch: { asks: 'git failed' },
+        mergeTarget: pull(1, 'CLEAN'),
+      });
+      const ready1 = grant({ merge: true, autoMerge: true, readyNamed: ['1'] });
+      expect(await judge([merge(false)], unread, ready1)).not.toHaveProperty('deny');
+      // `--auto` of a pointed pull request asks no release question the setting answers.
+      const auto = world('never stop', { pullRequest: { asks: 'looking it up failed (x)' } });
+      expect(await judge([merge(true)], auto, grant({ autoMerge: true }), null, ['1'])).toEqual({
+        ran: [],
+      });
+      // A failed lookup runs where the setting lets any merge through, and is
+      // named where the setting would ask whether it is a release.
+      const failed = (stop: StopBefore) =>
+        world(stop, { pullRequest: { asks: 'looking it up failed (x)', slow: true } });
+      expect(await judge([merge(false)], failed('never stop'), grant({ merge: true }))).toEqual(
+        merged('never stop'),
+      );
+      const named = await judge([merge(false)], failed('release'), grant({ merge: true }));
+      expect(named).toMatchObject({ deny: expect.stringContaining('looking it up failed (x)') });
+      expect(named).toMatchObject({ deny: expect.stringContaining('Run the same command again') });
+      const loose = world('never stop', away);
+      expect(await judge([beside('200')], loose, grant({ merge: true }))).toEqual({
+        ran: [{ step: 'merge', ladder: { stopBefore: 'never stop', source: 'local' } }],
+      });
+    });
+
+    test('never reads a fork’s version branch as a release', async () => {
+      const fork = world('commit', {
+        pullRequest: { out: VERSION_PR.replace('false', 'true') },
+        mergeTarget: { out: 'https://github.com/o/r/pull/1 OPEN BLOCKED' },
+      });
+      const asked = grant({ autoMerge: true, release: true });
+      expect(await judge([merge(false)], fork, asked)).toMatchObject({
+        deny: expect.stringContaining('it merges #1'),
+      });
+    });
+
+    test('a bare merge naming only its repository needs no lookup', async () => {
+      const w = world('merge', { mergeTarget: { asks: 'looking it up failed (x)' } });
+      const bare: GhAction = {
+        kind: 'merge',
+        admin: false,
+        auto: false,
+        lookup: ['--repo', 'o/r'],
+      };
+      expect(await judge([bare], w, grant({ merge: true }))).toEqual({ ran: [] });
+      expect(w.calls).toEqual(['ladder']);
+    });
+
+    test('beside other steps, covers only a number the conversation pointed at', async () => {
+      const w = world('merge', away);
+      expect(await judge([beside('40')], w, grant({ merge: true }), null, ['40'])).toEqual({
+        ran: [],
+      });
+      expect(w.calls).toEqual(['ladder']);
+      // `gh pr checkout 62 && gh pr merge` merges #62, not this branch's.
+      for (const other of [beside(), beside('200'), beside('feat/y')]) {
+        expect(await judge([other], w, grant({ merge: true }), null, ['40'])).toMatchObject({
+          deny: expect.stringContaining('Run the merge as its own command.'),
+        });
+      }
+      const elsewhere: GhAction = {
+        kind: 'merge',
+        admin: false,
+        auto: false,
+        lookup: { cannot: 'elsewhere', selector: '40' },
+      };
+      expect(await judge([elsewhere], w, grant({ merge: true }), null, ['40'])).toMatchObject({
+        deny: expect.stringContaining('the gate cannot tell whether this is it'),
+      });
+    });
   });
 
   test('asked for by number, covers only the version pull request it names', async () => {
-    const version = { mergeHead: { out: 'oakum/version-packages' } } as const;
+    const version = { pullRequest: { out: VERSION_PR } } as const;
     const other = await judge(
       [merge(false)],
       world('release', version),
@@ -420,34 +612,34 @@ describe('a merge', () => {
         deny: expect.stringContaining('it merges #1, and the user asked to merge #131'),
       });
     }
-    // One whose pull request it cannot tell stays unbound, with no lookup.
-    const vague = world('merge');
-    expect(
-      await judge([merge(false)], vague, grant({ merge: true, mergeNamed: [NAMED_ELSEWHERE] })),
-    ).toEqual({ ran: [] });
-    expect(vague.calls.some((c) => c.startsWith('mergeTarget'))).toBe(false);
+    // One whose pull request it cannot tell covers one the conversation pointed at.
+    const vague = world('merge', { branch: { out: 'main' } });
+    const told = grant({ merge: true, mergeNamed: [NAMED_ELSEWHERE] });
+    expect(await judge([merge(false)], vague, told, null, ['1', '2'])).toEqual({ ran: [] });
   });
 
   test('that may be a release asks when the lookup fails', async () => {
     const w = world('release', {
-      mergeHead: { asks: 'looking up the pull request it merges failed (x)' },
+      pullRequest: { asks: 'looking up the pull request it merges failed (x)' },
     });
     const r = await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], w);
     expect(r).toMatchObject({ deny: expect.stringContaining('"Merge and release #62?"') });
   });
 
   test('not allowed, names why the lookup could not tell', async () => {
-    const failed = world('merge', { mergeHead: { asks: 'looking up it failed (x)' } });
+    const failed = world('merge', { pullRequest: { asks: 'looking up it failed (x)' } });
     expect(
       await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], failed),
     ).toMatchObject({
       deny: expect.stringContaining('This asks whatever the setting: looking up it failed (x).'),
     });
-    const blank = world('release', { mergeHead: { out: ' ' } });
+    const garbled = world('release', { pullRequest: { out: 'oakum/version-packages' } });
     expect(
-      await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], blank),
+      await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], garbled),
     ).toMatchObject({
-      deny: expect.stringContaining('looking up the pull request it merges printed nothing'),
+      deny: expect.stringContaining(
+        'looking up the pull request it merges printed `oakum/version-packages`',
+      ),
     });
     const unnamed = await judge(
       [{ kind: 'merge', admin: false, auto: false, lookup: { cannot: 'unnamed' } }],
@@ -582,15 +774,15 @@ describe('a merge', () => {
       const action: GhAction = { kind: 'merge', admin: false, auto: false, lookup: ['62'] };
       const answers = {
         mergeTarget: pull(62, 'CLEAN'),
-        mergeHead: { out: 'oakum/version-packages' },
+        pullRequest: { out: VERSION_PR },
       } as const;
       const released = grant({ merge: true, mergeNamed: ['46'], release: true });
       const w = world('push', answers);
       expect(await judge([action], w, released)).toEqual({ ran: [] });
-      expect(w.calls.filter((c) => c.startsWith('mergeHead'))).toHaveLength(1);
+      expect(w.calls.filter((c) => c.startsWith('pullRequest'))).toHaveLength(1);
       const unread = world('push', {
         mergeTarget: pull(62, 'CLEAN'),
-        mergeHead: { asks: 'looking up the pull request it merges failed (x)' },
+        pullRequest: { asks: 'looking up the pull request it merges failed (x)' },
       });
       expect(await judge([action], unread, released)).toMatchObject({
         deny: expect.stringContaining('the user asked to merge #46 (looking up'),
@@ -679,8 +871,7 @@ describe('a merge', () => {
         deny: expect.stringContaining('cannot tell which pull request the user asked to merge'),
       });
       const auto = world('merge', { mergeTarget: pull(46, 'CLEAN') });
-      expect(await judge([merge(true)], auto, granted)).toEqual({ ran: [] });
-      expect(auto.calls.some((c) => c.startsWith('mergeTarget'))).toBe(false);
+      expect(await judge([merge(true)], auto, granted, null, ['46', '47'])).toEqual({ ran: [] });
     });
 
     test.each(['MERGED', 'CLOSED'])(
@@ -701,7 +892,7 @@ describe('a merge', () => {
       const action: GhAction = { kind: 'merge', admin: false, auto: false, lookup: ['62'] };
       const w = world('push', {
         mergeTarget: pull(62, 'CLEAN'),
-        mergeHead: { out: 'oakum/version-packages' },
+        pullRequest: { out: VERSION_PR },
       });
       const r = await judge([action], w, granted);
       expect(r).toMatchObject({ deny: expect.stringContaining("doesn't ask for a release") });
@@ -759,7 +950,7 @@ describe('a merge', () => {
     test('a version pull request not ready yet asks for a release, not --auto', async () => {
       const w = world('push', {
         mergeTarget: pull(155, 'BLOCKED'),
-        mergeHead: { out: 'oakum/version-packages' },
+        pullRequest: { out: VERSION_PR },
       });
       const r = await judge([merge(false)], w, asked('merge 155 once CI passes'));
       expect(r).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
@@ -769,7 +960,7 @@ describe('a merge', () => {
     test('a ready version pull request merged now at a permissive rung is noted as a release', async () => {
       const w = world('never stop', {
         mergeTarget: pull(46, 'CLEAN'),
-        mergeHead: { out: 'oakum/version-packages' },
+        pullRequest: { out: VERSION_PR },
       });
       const r = await judge([merge(false)], w, asked('Ok, lets merge 46 when its ready'));
       expect(r).toMatchObject({ ran: [{ step: 'merge' }, { step: 'release' }] });
@@ -778,7 +969,7 @@ describe('a merge', () => {
     test('a ready version pull request merged now is still a release that asks', async () => {
       const w = world('merge', {
         mergeTarget: pull(1, 'CLEAN'),
-        mergeHead: { out: 'oakum/version-packages' },
+        pullRequest: { out: VERSION_PR },
       });
       const r = await judge([merge(false)], w, ready);
       expect(r).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
@@ -796,7 +987,7 @@ describe('a merge', () => {
     });
 
     test("is no release: oakum's version pull request still asks", async () => {
-      const w = world('merge', { mergeHead: { out: 'oakum/version-packages' } });
+      const w = world('merge', { pullRequest: { out: VERSION_PR } });
       const r = await judge([merge(true)], w, ready);
       expect(r).toMatchObject({ deny: expect.stringContaining('"Release `v0.25.0`?"') });
     });
@@ -1010,7 +1201,12 @@ const m = (target: number | null): GhAction => ({
 describe('gh stack merge', () => {
   test('a merge of one layer is judged as that pull request', async () => {
     const w = world('push', {}, undefined, STACKS);
-    expect(await judge([m(2)], w, grant({ merge: true }))).toEqual({ ran: [] });
+    expect(await judge([m(2)], w, grant({ merge: true }), null, ['2'])).toEqual({ ran: [] });
+    // An unnamed merge of a layer nothing pointed at asks, as `gh pr merge 2` does.
+    const away = world('push', { branch: { out: 'main' } }, undefined, STACKS);
+    expect(await judge([m(2)], away, grant({ merge: true }))).toMatchObject({
+      deny: expect.stringContaining('the answer they replied to named #2'),
+    });
     // Named, it is looked up and bound by number, as `gh pr merge 2` is.
     expect(await judge([m(2)], w, grant({ merge: true, mergeNamed: ['2'] }))).toEqual({
       ran: [],
@@ -1091,7 +1287,7 @@ describe('gh stack merge', () => {
   test('a layer that is the version pull request is judged as a release', async () => {
     const r = await judge(
       [m(4)],
-      world('release', { mergeHead: { out: 'oakum/version-packages' } }, undefined, STACKS),
+      world('release', { pullRequest: { out: VERSION_PR } }, undefined, STACKS),
     );
     expect(r).toMatchObject({ deny: expect.stringContaining('release') });
   });
@@ -1121,3 +1317,16 @@ describe('gh stack merge', () => {
     });
   });
 });
+
+function merged(stop: StopBefore) {
+  return { ran: [{ step: 'merge', ladder: { stopBefore: stop, source: 'local' } }] };
+}
+
+function beside(selector?: string): GhAction {
+  return {
+    kind: 'merge',
+    admin: false,
+    auto: false,
+    lookup: { cannot: 'beside', ...(selector !== undefined && { selector }) },
+  };
+}

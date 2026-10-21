@@ -3808,7 +3808,7 @@ function remoteSide(
 }
 
 // GitHub as the gate sees it: `gh pr view` names the merged pull request's
-// branch, or fails when `head` is 'fail'.
+// branch, or fails when `head` is 'fail'; the checkout is on that branch.
 function github(
   head: string,
   defaultBranch = 'main',
@@ -3817,6 +3817,9 @@ function github(
   mergeState = 'BLOCKED',
 ): (a: string) => Partial<Run> | null {
   return (a) => {
+    if (a === 'git symbolic-ref --quiet --short HEAD' && head !== 'fail') {
+      return { stdout: `${head}\n` };
+    }
     if (a.startsWith('gh pr view')) {
       if (head === 'fail') return { exitCode: 1, stderr: 'no pull requests found for branch "x"' };
       if (a.includes('mergeStateStatus')) {
@@ -3831,6 +3834,11 @@ function github(
     if (a.startsWith('gh repo view')) return { stdout: `${defaultBranch}\n` };
     return null;
   };
+}
+
+// On main, merging pull requests headed by fix/x.
+function onMain(a: string): Partial<Run> | null {
+  return a === 'git symbolic-ref --quiet --short HEAD' ? { stdout: 'main\n' } : github('fix/x')(a);
 }
 
 async function mcp($: any, tool: string, args: Record<string, unknown>, extra = {}) {
@@ -4281,9 +4289,9 @@ describe('the stop-before setting', () => {
       'view',
       '116',
       '--json',
-      'headRefName',
+      'url,isCrossRepository,headRefName',
       '--jq',
-      '.headRefName',
+      String.raw`"\(.isCrossRepository) \(.url) \(.headRefName)"`,
     ]);
     expect(view?.init?.timeoutMs).toBe(5000);
   });
@@ -4838,7 +4846,8 @@ describe('the stop-before setting', () => {
     });
     await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
-    expect(w.calls.some((c) => c.argv.join(' ').startsWith('gh pr view'))).toBe(false);
+    // Named by number, it is looked up to find it was the version pull request.
+    expect(w.calls.some((c) => c.argv.join(' ').startsWith('gh pr view 62'))).toBe(true);
   });
   test('a merge asked for by number releases only the version PR it names', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
@@ -5003,6 +5012,60 @@ describe('the stop-before setting', () => {
     const other = 'it merges #74, and the user asked to merge #52';
     expect(denied(await bash($, 'gh pr merge 74 --squash'), other)).toBe(true);
   });
+  // #40 is offered three paragraphs up; the closing lines name no pull request.
+  const farUp = [
+    '#40 passes its checks and is ready to merge.',
+    'I also looked at the flaky test; it is unrelated.',
+    'The docs build is green.',
+    'Want me to merge it?',
+  ].join('\n\n');
+  test('a merge naming no pull request runs one the answer named anywhere', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await endTurn($, 'answer', farUp);
+    await say($, 'merge that PR');
+    expect(ran(await bash($, 'gh pr merge 40 --squash'))).toBe(true);
+  });
+  test('a merge naming no pull request asks before one nothing pointed at', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await endTurn($, 'answer', farUp);
+    await say($, 'merge that PR');
+    const r = await bash($, 'gh pr merge 200 --squash');
+    expect(denied(r, 'neither they nor the answer they replied to named #200')).toBe(true);
+    expect(denied(r, '"Merge #200?"')).toBe(true);
+  });
+  test('a queued merge keeps the number it named beside an unnamed one', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge it');
+    await queue($, 'and merge 41');
+    expect(ran(await bash($, 'gh pr merge 41 --squash'))).toBe(true);
+  });
+  test('a merge naming no pull request skips the answer’s numbers once the user names one', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await endTurn($, 'answer', farUp.replace('#40 passes', '#130 fails, and #40 passes'));
+    await say($, 'merge it; do not merge 130');
+    expect(denied(await bash($, 'gh pr merge 130 --squash'), '"Merge #130?"')).toBe(true);
+    await queue($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 130 --squash'), '"Merge #130?"')).toBe(true);
+  });
+  test('a queued message keeps what the earlier one pointed at, until it retracts', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await endTurn($, 'answer', farUp);
+    await say($, 'merge that PR');
+    await queue($, 'thanks');
+    expect(ran(await bash($, 'gh pr merge 40 --squash'))).toBe(true);
+    await say($, 'merge 41');
+    await queue($, "actually, don't merge it");
+    await queue($, 'merge it');
+    expect(denied(await bash($, 'gh pr merge 41 --squash'), 'named #41')).toBe(true);
+  });
+  test('a merge naming no pull request asks when the branch read fails', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    w.reject = (a) => a === 'git symbolic-ref --quiet --short HEAD';
+    await say($, 'merge it');
+    const r = await bash($, 'gh pr merge 200 --squash');
+    expect(denied(r, 'pointed at #200: reading the current branch failed (')).toBe(true);
+    expect(denied(r, '"Merge #200?"')).toBe(true);
+  });
   test('an unanswered reading refuses, says why, and is asked again', async ($, on) => {
     const w = fakeWorld(on, {
       settings: { local: stops('release') },
@@ -5136,8 +5199,11 @@ describe('the stop-before setting', () => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
     await say($, 'merge it when its ready');
     const r = await bash($, 'gh pr merge 62 --auto');
-    expect(denied(r, 'the merge may be a release, which the user has not allowed')).toBe(true);
-    expect(denied(r, '"Merge and release #62?"')).toBe(true);
+    expect(denied(r, 'the gate cannot tell whether this is it')).toBe(true);
+    expect(denied(r, 'looking up the pull request it merges failed')).toBe(true);
+    // A bare --auto merge needs no lookup to point at the branch's pull request.
+    const bare = await bash($, 'gh pr merge --auto');
+    expect(denied(bare, 'the merge may be a release, which the user has not allowed')).toBe(true);
   });
   test('a held merge asks; one beside a commit is refused', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
@@ -5373,6 +5439,14 @@ describe('the stop-before setting', () => {
     await say($, 'fix the parser');
     const r = await mcp($, 'mcp__github__merge_pull_request', { pullNumber: 5 });
     expect(denied(r, 'does not name the pull request by number and repository')).toBe(true);
+    await say($, 'merge it');
+    expect(
+      denied(
+        await mcp($, 'mcp__github__merge_pull_request', { pullNumber: 5 }),
+        'the gate cannot tell whether this is it',
+      ),
+    ).toBe(true);
+    await endTurn($, 'answer', farUp.replace('#40', '#5'));
     await say($, 'merge it');
     expect(ran(await mcp($, 'mcp__github__merge_pull_request', { pullNumber: 5 }))).toBe(true);
     expect(w.calls.some((c) => c.argv.join(' ').startsWith('gh pr view'))).toBe(false);

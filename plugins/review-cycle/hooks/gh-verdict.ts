@@ -39,9 +39,9 @@ export type PullRequest = { cross: boolean; repo: string; branch: string };
 export const PR_FIELDS = 'url,isCrossRepository,headRefName';
 export const PR_JQ = String.raw`"\(.isCrossRepository) \(.url) \(.headRefName)"`;
 
-export function parsePullRequest(out: string): PullRequest | { asks: string } {
-  const read = /^(true|false) https:\/\/([^/\s]+\/[^/\s]+\/[^/\s]+)\/pull\/\d+ (\S+)$/.exec(out);
-  if (read === null) return { asks: `looking up the pull request it updates printed \`${out}\`` };
+export function parsePullRequest(out: string, what: string): PullRequest | { asks: string } {
+  const read = /^(true|false) https?:\/\/([^/\s]+\/[^/\s]+\/[^/\s]+)\/pull\/\d+ (\S+)$/.exec(out);
+  if (read === null) return { asks: `looking up ${what} printed \`${out}\`` };
   const [, cross = '', repo = '', branch = ''] = read;
   // The repository from the pull request's URL, so an Enterprise host survives.
   return { cross: cross === 'true', repo, branch };
@@ -49,13 +49,17 @@ export function parsePullRequest(out: string): PullRequest | { asks: string } {
 
 export type GhLookups = {
   ladder: () => Promise<InForce>;
-  // The head branch of the pull request `gh pr view <lookup>` names.
-  mergeHead: (lookup: readonly string[]) => Promise<Lookup>;
   // The pull request `gh pr view <lookup>` names: "<url> <state> <mergeStateStatus>".
   mergeTarget: (lookup: readonly string[]) => Promise<Lookup>;
   // The current repository's URL.
   repoUrl: () => Promise<Lookup>;
-  pullRequest: (head: readonly string[]) => Promise<PullRequest | { asks: string }>;
+  // The branch the checkout is on, empty when HEAD is on none.
+  branch: () => Promise<Lookup>;
+  // The pull request `gh pr view <lookup>` names, `what` saying which in a failure.
+  pullRequest: (
+    lookup: readonly string[],
+    what: string,
+  ) => Promise<PullRequest | { asks: string; slow?: true }>;
   // The default branch of `repo` (HOST/OWNER/NAME or OWNER/NAME), or of the
   // repository gh picks when it is null.
   defaultBranch: (repo: string | null) => Promise<Lookup>;
@@ -267,15 +271,38 @@ function readyNow(t: Target): { asks: string; closed?: true } | { ready: string 
   };
 }
 
-// Which step a merge is: a release when it merges the version pull request.
-// A lookup that fails says why, and the merge asks.
+// Whether a merge that named no pull request reaches one the conversation
+// pointed at: a number the messages or the answer named, or one from this
+// repository headed by the current branch or oakum's version branch; a fork's
+// branch can share either name. A lookup that fails says why.
+async function pointedAt(
+  lookups: GhLookups,
+  lookup: readonly string[],
+  target: Target,
+  pointed: readonly string[],
+): Promise<boolean | { asks: string; remedy: string | null }> {
+  if (pointed.includes(target.number)) return true;
+  const pr = await lookups.pullRequest(lookup, MERGED);
+  if ('asks' in pr) return { asks: pr.asks, remedy: pr.slow ? SLOW : null };
+  if (pr.cross) return false;
+  if (pr.branch === VERSION_BRANCH) return true;
+  const here = await lookups.branch();
+  return here.asks === undefined
+    ? here.out.trim() === pr.branch
+    : { asks: here.asks, remedy: null };
+}
+
+const MERGED = 'the pull request it merges';
+
+// Which step a merge is: a release when it merges this repository's version
+// pull request. A lookup that fails says why, and the merge asks.
 async function mergeStep(
   lookups: GhLookups,
   lookup: readonly string[],
 ): Promise<{ step: 'merge' | 'release' } | { asks: string }> {
-  const r = read(await lookups.mergeHead(lookup), 'the pull request it merges');
-  if (r.asks !== undefined) return { asks: r.asks };
-  return { step: r.out === VERSION_BRANCH ? 'release' : 'merge' };
+  const pr = await lookups.pullRequest(lookup, MERGED);
+  if ('asks' in pr) return { asks: pr.asks };
+  return { step: !pr.cross && pr.branch === VERSION_BRANCH ? 'release' : 'merge' };
 }
 
 // Why a push the ladder lets through asks anyway, or null: one to the
@@ -297,7 +324,7 @@ async function branchOf(
   if ('asks' in ref) return { asks: ref.asks };
   let target: { branch: string; repo: string | null } = { branch: '', repo: null };
   if ('head' in ref) {
-    const head = await lookups.pullRequest(ref.head);
+    const head = await lookups.pullRequest(ref.head, 'the pull request it updates');
     if ('asks' in head) return { asks: head.asks };
     if (head.cross) return { asks: "it updates a branch in the pull request's fork" };
     if (head.branch === '') return { asks: 'the pull request it updates names no branch' };
@@ -390,6 +417,8 @@ export async function judgeGh(
   lookups: GhLookups,
   model: ModelSteps = {},
   unread: UnreadOffer | null = null,
+  // The pull request numbers the answer the user replied to named.
+  pointed: readonly string[] = [],
 ): Promise<GhVerdict> {
   const ran: Unasked[] = [];
   const notes: string[] = [];
@@ -485,7 +514,30 @@ export async function judgeGh(
           (action.auto ? readyNamed.length === 0 : granted.readyNamed.length === 0);
         let covers = { now: nowAny, ready: readyAny };
         let target: Target | null = null;
-        const free = (nowAny && readyNamed.length === 0) || (readyAny && action.auto);
+        // A bare merge reaches this branch's pull request, but not beside
+        // `gh pr checkout 62`, so an unlookable one must name a pointed number.
+        const unlookable = 'cannot' in action.lookup ? action.lookup : null;
+        const bare =
+          !('cannot' in action.lookup) &&
+          (action.lookup[0] === undefined || action.lookup[0] === '--repo');
+        const besidePointed =
+          unlookable !== null &&
+          unlookable.cannot !== 'elsewhere' &&
+          unlookable.selector !== undefined &&
+          pointed.includes(unlookable.selector);
+        const unnamedMay = nowAny || readyAny;
+        const free =
+          (bare || besidePointed) &&
+          ((nowAny && readyNamed.length === 0) || (readyAny && action.auto));
+        // An unnamed merge of one nothing pointed at, or whose lookup failed,
+        // is judged as if unasked, so it is never stricter than the setting;
+        // a refusal there still names the failure (`lost`).
+        const settingMay =
+          unnamedMay &&
+          permitted({ ...granted, merge: false, autoMerge: false }, ladder, held !== null, model)
+            .merge;
+        let unasked = false;
+        let lost: string | null = null;
         if ((granted.merge || granted.autoMerge) && !free) {
           const t = await targetOf(lookups, action.lookup);
           if ('asks' in t) {
@@ -494,17 +546,39 @@ export async function judgeGh(
               t.remedy === null
                 ? `To go ahead, ${askThem('the pull request', '"Merge #116?"', shown)}`
                 : `${t.remedy} The command: ${shown}`;
-            return {
-              deny: `the user asked to merge ${named || 'a pull request'}, and the gate cannot tell whether this is it: ${t.asks}, so nothing ran. ${remedy}`,
+            lost = `the user asked to merge ${named || 'a pull request'}, and the gate cannot tell whether this is it: ${t.asks}, so nothing ran. ${remedy}`;
+            // It may be one they named, and one merged now on readiness alone
+            // waits on GitHub whatever the setting.
+            unasked = settingMay && named === '' && (nowAny || (readyAny && action.auto));
+            if (!unasked) return { deny: lost };
+            covers = { now: false, ready: false };
+          } else {
+            const unnamedHere = !nowNamed.includes(t.number) && !readyNamed.includes(t.number);
+            unasked = settingMay && unnamedHere;
+            // A merge naming no pull request covers one the conversation pointed at.
+            const pointing =
+              unnamedMay && unnamedHere && !('cannot' in action.lookup)
+                ? await pointedAt(lookups, action.lookup, t, pointed)
+                : false;
+            if (typeof pointing === 'object') {
+              const remedy =
+                pointing.remedy === null
+                  ? `To go ahead, ${askThem('the pull request', `"Merge #${t.number}?"`, shown)}`
+                  : `${pointing.remedy} The command: ${shown}`;
+              lost = `the user named no pull request, and the gate cannot tell whether the conversation pointed at #${t.number}: ${pointing.asks}, so nothing ran. ${remedy}`;
+              if (!unasked) return { deny: lost };
+            }
+            const isPointed = pointing === true;
+            target = t;
+            covers = {
+              now:
+                granted.merge &&
+                (nowAny
+                  ? isPointed && !readyNamed.includes(t.number)
+                  : nowNamed.includes(t.number)),
+              ready: granted.autoMerge && (readyAny ? isPointed : readyNamed.includes(t.number)),
             };
           }
-          target = t;
-          covers = {
-            now:
-              granted.merge &&
-              (nowAny ? !readyNamed.includes(t.number) : nowNamed.includes(t.number)),
-            ready: granted.autoMerge && (readyAny || readyNamed.includes(t.number)),
-          };
         }
         // A merge now of one asked for once ready runs only when it already is.
         if (target !== null && covers.ready && !covers.now && !action.auto) {
@@ -534,11 +608,13 @@ export async function judgeGh(
         }
         // "merge 46 and release it" still covers oakum's version pull request.
         let known: Awaited<ReturnType<typeof mergeStep>> | null = null;
-        if (target !== null && !covers.now && !covers.ready) {
+        if (target !== null && !covers.now && !covers.ready && !unasked) {
           const named = [...nowNamed, ...readyNamed].map((n) => `#${n}`).join(', ');
           const wanted = named
             ? `the user asked to merge ${named}`
-            : 'the gate cannot tell which pull request the user asked to merge';
+            : unnamedMay
+              ? `the user named no pull request, and neither they nor the answer they replied to named #${target.number}, nor is it this branch's or the version pull request`
+              : 'the gate cannot tell which pull request the user asked to merge';
           if (granted.release && !('cannot' in action.lookup)) {
             known = await mergeStep(lookups, action.lookup);
           }
@@ -561,7 +637,7 @@ export async function judgeGh(
         if (covers.now && held?.step !== 'release' && covered) break;
         // Allowed either way, a merge needs no lookup to tell which it is,
         // except one run now on readiness alone: a release there is noted.
-        const readyOnly = target !== null && covers.ready && !covers.now;
+        const readyOnly = target !== null && covers.ready && !covers.now && !action.auto;
         if (mayHere.merge && mayHere.release && !readyOnly) {
           if (!asked.merge && !asked.release && setHere.merge && setHere.release) {
             ran.push({ step: 'merge', ladder });
@@ -577,6 +653,8 @@ export async function judgeGh(
             deny: `other steps in the same command can change which pull request the merge reaches, so the gate cannot tell a release from a merge, and nothing ran. Run the merge as its own command. The command: ${shown}`,
           };
         } else which = { asks: CANNOT[lookup.cannot] };
+        const refused = 'asks' in which || !mayHere[which.step];
+        if (refused && lost !== null) return { deny: lost };
         if ('asks' in which && mayHere.merge) {
           return {
             deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('the pull request', '"Merge and release #62?"', shown)}`,

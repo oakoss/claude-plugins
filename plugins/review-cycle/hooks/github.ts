@@ -31,7 +31,8 @@ export type PushRef =
   | { head: readonly string[]; force?: never }
   | Asking;
 
-export type Unlookable = { cannot: Exclude<GhContext, 'fixed'> | 'unnamed' };
+// `selector` is the number, branch or URL the merge names, when it names one.
+export type Unlookable = { cannot: Exclude<GhContext, 'fixed'> | 'unnamed'; selector?: string };
 
 export type GhAction =
   | { kind: 'pr' }
@@ -556,10 +557,11 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   }
   if (name === 'merge_pull_request') {
     const number = text(input.pullNumber);
+    const numbered = number !== null && /^\d+$/.test(number);
     const lookup =
-      number !== null && /^\d+$/.test(number) && repo !== null
+      numbered && repo !== null
         ? [number, '--repo', repo]
-        : { cannot: 'unnamed' as const };
+        : { cannot: 'unnamed' as const, ...(numbered ? { selector: number } : {}) };
     return { kind: 'merge', admin: false, auto: false, lookup };
   }
   if (name === 'pull_request_review_write') {
