@@ -5057,6 +5057,123 @@ describe('the stop-before setting', () => {
     await queue($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 130 --squash'), '"Merge #130?"')).toBe(true);
   });
+  test('a merge asked for once ready outlasts unrelated messages, until used', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'While we wait on that lets plan out our next bit of work');
+    // A wake from another plugin neither grants nor ends it.
+    await say($, 'pr-watch: #46 is ready to merge. merge 47', 'plugin');
+    expect(await bash($, 'gh pr merge 47 --auto')).toMatchObject({
+      deny: expect.stringContaining('#47'),
+    });
+    expect(await bash($, 'gh pr merge 46 --auto')).not.toHaveProperty('deny');
+    await say($, 'thanks');
+    expect(await bash($, 'gh pr merge 46 --auto')).toMatchObject({
+      deny: expect.stringContaining("doesn't ask for a merge"),
+    });
+  });
+  test('a merge asked for once ready runs on a wake only once it is ready', async ($, on) => {
+    let state = 'BLOCKED';
+    fakeWorld(on, {
+      settings: { local: stops('merge') },
+      git: (a) =>
+        a === 'git symbolic-ref --quiet --short HEAD'
+          ? { stdout: 'main\n' }
+          : github('fix/x', 'main', false, 'github.com/o/r', state)(a),
+    });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'While we wait on that lets plan out our next bit of work');
+    await say($, 'pr-watch: #46 changed', 'plugin');
+    expect(denied(await bash($, 'gh pr merge 46 --squash'), 'BLOCKED')).toBe(true);
+    state = 'CLEAN';
+    await say($, 'pr-watch: #46 is ready to merge', 'plugin');
+    expect(ran(await bash($, 'gh pr merge 46 --squash'))).toBe(true);
+  });
+  test('a merge now in a later message never reaches a pull request asked for once ready', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 46 once CI passes');
+    await say($, "merge it. merge it when it's ready");
+    expect(denied(await bash($, 'gh pr merge 46 --squash'), 'BLOCKED')).toBe(true);
+  });
+  test('a merge that fails leaves its standing ask', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'thanks');
+    w.bashFails = true;
+    await bash($, 'gh pr merge 46 --auto');
+    w.bashFails = false;
+    expect(ran(await bash($, 'gh pr merge 46 --auto'))).toBe(true);
+  });
+  test('using one standing ask leaves the others', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'merge 47 once CI passes');
+    await say($, 'thanks');
+    expect(ran(await bash($, 'gh pr merge 46 --auto'))).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 47 --auto'))).toBe(true);
+  });
+  test('an unnamed merge once ready ends with its message', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await endTurn($, 'answer', farUp);
+    await say($, 'merge it once CI passes');
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 40 --auto'), 'merge')).toBe(true);
+  });
+  test('a merge asked for once ready ends on a merge hold, telling the agent', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'hold off on the docs push');
+    await say($, 'thanks');
+    expect(ran(await bash($, 'gh pr merge 46 --auto'))).toBe(true);
+    await say($, 'merge 47 once CI passes');
+    await say($, "don't merge 47 yet");
+    expect(w.contexts?.join('\n')).toContain("ended the user's standing ask to merge #47");
+    await say($, 'merge 48 once CI passes');
+    await say($, 'do not push. do not merge 48');
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 48 --auto'), 'merge')).toBe(true);
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 47 --auto'), 'merge')).toBe(true);
+  });
+  test('a main condition joins a standing release whose lookup fails', async ($, on) => {
+    let listing = true;
+    fakeWorld(on, {
+      git: (a) => {
+        if (a.startsWith('gh api graphql')) return { stdout: 'main PENDING\n' };
+        if (a.startsWith('gh pr list --head oakum/version-packages')) {
+          return listing
+            ? { stdout: '62:OPEN 55:MERGED\n' }
+            : { exitCode: 1, stderr: 'gh: timeout' };
+        }
+        return github('oakum/version-packages')(a);
+      },
+    });
+    await say($, 'release when the release PR is ready');
+    listing = false;
+    await say($, 'Ok, when main is done and the release PR is ready lets merge it');
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 62 --auto'), 'Run the same command again')).toBe(true);
+  });
+  test('a release asked for once main and the release PR are ready waits on main', async ($, on) => {
+    let rollup = 'PENDING';
+    fakeWorld(on, {
+      git: (a) => {
+        if (a.startsWith('gh api graphql')) return { stdout: `main ${rollup}\n` };
+        if (a.startsWith('gh pr list --head oakum/version-packages')) {
+          return { stdout: '62:OPEN 55:MERGED\n' };
+        }
+        return github('oakum/version-packages')(a);
+      },
+    });
+    await say($, 'Ok, when main is done and the release PR is ready lets merge it');
+    await say($, 'While we wait on that lets plan out our next bit of work');
+    await say($, 'pr-watch: #62 is ready to merge', 'plugin');
+    expect(denied(await bash($, 'gh pr merge 62 --auto'), 'Run the same command again')).toBe(true);
+    rollup = 'SUCCESS';
+    expect(ran(await bash($, 'gh pr merge 62 --auto'))).toBe(true);
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 62 --auto'), 'release')).toBe(true);
+  });
   test('a queued message keeps what the earlier one pointed at, until it retracts', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await endTurn($, 'answer', farUp);

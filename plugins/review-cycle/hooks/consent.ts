@@ -44,6 +44,10 @@ export type Grant = Readonly<{
   mergeNamed: readonly string[];
   autoMerge: boolean;
   readyNamed: readonly string[];
+  // The version pull request once ready, which is the release.
+  readyRelease: boolean;
+  // A ready merge also waits on the base branch's checks ("when main is done").
+  readyMain: boolean;
   mergeStack: readonly string[];
   approve: boolean;
   release: boolean;
@@ -60,6 +64,8 @@ export const NO_GRANT: Grant = Object.freeze({
   mergeNamed: [],
   autoMerge: false,
   readyNamed: [],
+  readyRelease: false,
+  readyMain: false,
   mergeStack: [],
   approve: false,
   release: false,
@@ -786,38 +792,81 @@ const HOW_WE =
 
 // A condition GitHub's auto-merge waits on itself: "when it's ready", "once
 // CI passes", "after the checks are green".
-const READY =
-  /^(?:(?:it|it's|its|this|that|(?:the )?pr(?: \d+)?|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)(?: please| thanks| now)?$/;
+const READY_PART =
+  /^(?:(?:it|it's|its|this|that|(?:the )?pr(?: \d+)?|(?:the )?ci|everything|(?:(?:the|its|all) )?(?:checks|tests))(?: is| are)? )?(?:ready(?: to merge)?|green|passing|passes|pass|succeeds|succeed|goes green|go green|turns green|turn green)$/;
+// The base branch's checks, which the gate reads on GitHub before the merge.
+const MAIN_PART = /^main(?: is| has)? (?:done|green|passing|passed|finished)$/;
+const RELEASE_PART = /^(?:the )?(?:release|version) pr(?: is)? (?:ready(?: to merge)?|green)$/;
+const RELEASE_PR = /^(?:the )?(?:release|version) pr$/;
+
+type Readiness = { main: boolean; release: boolean };
+
+// What a condition joined by "and" waits on, or null when a part is one the
+// gate cannot check ("when main is done and I say so").
+function readinessOf(condition: string): Readiness | null {
+  const parts = condition.replace(/ (?:please|thanks|now)$/, '').split(' and ');
+  const r = { main: false, release: false };
+  for (const part of parts) {
+    if (MAIN_PART.test(part)) r.main = true;
+    else if (RELEASE_PART.test(part)) r.release = true;
+    else if (!READY_PART.test(part)) return null;
+  }
+  return r;
+}
+
+const READY = { test: (condition: string): boolean => readinessOf(condition) !== null };
 
 const asSoonAs = (w: readonly string[]): number =>
   w.findIndex((x, i) => x === 'as' && w[i + 1] === 'soon' && w[i + 2] === 'as');
 
-// "merge it when it's ready": one merge request, then a condition only
-// auto-merge waits on. Anything else conditional asks for nothing.
-function isReadyMerge(
+// "merge it when it's ready": one merge or release request, then a condition
+// the gate or auto-merge checks. Anything else conditional asks for nothing.
+// `release` when it releases; `unnamed` when "release" leaves which pull
+// request to the conversation; `andRelease` when "and release it" follows.
+function readyMergeOf(
   w: string[],
   verbs: Readonly<Record<string, Family>>,
   lead: Set<string>,
   agreed: boolean,
   opens: boolean,
-): boolean {
+): (Readiness & { andRelease: boolean; unnamed: boolean }) | null {
   const soon = asSoonAs(w);
   const k = soon === -1 ? w.findIndex((x) => SUBORDINATE.has(x)) : soon;
   const after = soon === -1 ? k + 1 : k + 3;
-  if (k === -1 || (soon === -1 && !/^(when|once|after|if)$/.test(w[k] ?? ''))) return false;
-  if (!READY.test(w.slice(after).join(' '))) return false;
+  if (k === -1 || (soon === -1 && !/^(when|once|after|if)$/.test(w[k] ?? ''))) return null;
+  const said = w.slice(after).join(' ');
+  const then = / and (?:then )?release(?: it)?$/.exec(said);
+  const condition = then === null ? said : said.slice(0, then.index);
+  const ready = readinessOf(condition);
+  if (ready === null) return null;
   // "go ahead and merge it": only request words before the last "and".
   const joined = w.slice(0, k).findLastIndex((x) => x === 'and' || x === 'then');
   const before = w.slice(0, joined + 1).filter((x) => x !== 'and' && x !== 'then');
   const request = w.slice(joined + 1, k);
   const at = request.findIndex((x) => Object.hasOwn(verbs, x));
   const family = verbs[request[at] ?? ''];
-  return (
-    family?.forms[0] === 'merge' &&
-    isLead([...before, ...request.slice(0, at)], lead, agreed, opens) &&
-    namesPullRequest(request.slice(at + 1)) &&
-    samePullRequest(w.slice(after).join(' '), request.join(' '))
-  );
+  const tail = request.slice(at + 1);
+  const releasing = family?.grants.includes('release') === true;
+  const names = releasing
+    ? tail.every((x) => x === 'it') || RELEASE_PR.test(tail.join(' '))
+    : namesPullRequest(tail) || RELEASE_PR.test(tail.join(' '));
+  // "merge 46 when the release PR is ready" waits on another pull request.
+  if (ready.release && tail.some((x) => /^\d+$/.test(x))) return null;
+  if (
+    (family?.forms[0] !== 'merge' && !releasing) ||
+    !isLead([...before, ...request.slice(0, at)], lead, agreed, opens) ||
+    !names ||
+    !samePullRequest(condition, request.join(' '))
+  ) {
+    return null;
+  }
+  const named = ready.release || RELEASE_PR.test(tail.join(' '));
+  return {
+    main: ready.main,
+    release: releasing || named,
+    unnamed: releasing && !named,
+    andRelease: then !== null,
+  };
 }
 
 // "once it's ready, merge it" read as "merge it once it's ready", the form
@@ -838,6 +887,8 @@ function leadingReady(sentence: string): string | null {
       .slice(i)
       .join(' ')
       .replace(/^then\s+/i, '');
+    // "when main is done and you say so, merge it": the condition goes on.
+    if (/^(?:and|or|but)\b/i.test(request)) return null;
     if (!MERGE_WORD.test(request) || !samePullRequest(condition, request)) return null;
     return `${agreed}${request} ${when} ${condition}${end}`;
   }
@@ -856,11 +907,11 @@ function samePullRequest(condition: string, request: string): boolean {
 // on the same condition.
 function onlyAutoMerge(g: MutableGrant): boolean {
   return (
-    g.autoMerge &&
+    (g.autoMerge || g.readyRelease) &&
     g.push === 'none' &&
     g.finish.length === 0 &&
     g.mergeStack.length === 0 &&
-    STEPS.every((s) => s === 'autoMerge' || !g[s])
+    STEPS.every((s) => s === 'autoMerge' || s === 'readyRelease' || !g[s])
   );
 }
 
@@ -971,9 +1022,17 @@ function grammarGrant(
   opens: Opens = 'none',
 ): Carry {
   const w = now ? withoutNow(words(clause), verbs, clause) : words(clause);
-  if (isReadyMerge(w, verbs, lead, agreed, opens === 'alone')) {
-    into.autoMerge = true;
-    into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
+  const ready = readyMergeOf(w, verbs, lead, agreed, opens === 'alone');
+  if (ready !== null) {
+    if (ready.release) into.readyRelease = true;
+    // "release when the PR is ready" may mean the pull request the answer
+    // offered, whose merge releases, so it binds as an unnamed ready merge too.
+    if (!ready.release || ready.unnamed) {
+      into.autoMerge = true;
+      into.readyNamed = [...new Set([...into.readyNamed, ...w.filter((x) => /^\d+$/.test(x))])];
+    }
+    if (ready.andRelease) into.readyRelease = true;
+    if (ready.main) into.readyMain = true;
     return 'ready';
   }
   if (
@@ -1117,10 +1176,20 @@ function settled(g: MutableGrant): Grant {
 }
 
 // Each step a grant can name besides the push level.
-const STEPS = ['commit', 'pr', 'merge', 'autoMerge', 'approve', 'release', 'comment'] as const;
+const STEPS = [
+  'commit',
+  'pr',
+  'merge',
+  'autoMerge',
+  'readyRelease',
+  'approve',
+  'release',
+  'comment',
+] as const;
 
 function merged(into: MutableGrant, from: MutableGrant): void {
   for (const step of STEPS) into[step] ||= from[step];
+  into.readyMain ||= from.readyMain;
   into.finish = [...into.finish, ...from.finish];
   into.pushNamed = [...new Set([...into.pushNamed, ...from.pushNamed])];
   into.mergeNamed = [...into.mergeNamed, ...from.mergeNamed];
@@ -1138,10 +1207,21 @@ function asksAny(g: Grant): boolean {
   );
 }
 
+function asksBeyond(g: Grant, step: (typeof STEPS)[number]): boolean {
+  return asksAny({ ...g, [step]: false });
+}
+
 // Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
   return (
-    g.pr || g.merge || g.autoMerge || g.mergeStack.length > 0 || g.approve || g.release || g.comment
+    g.pr ||
+    g.merge ||
+    g.autoMerge ||
+    g.readyRelease ||
+    g.mergeStack.length > 0 ||
+    g.approve ||
+    g.release ||
+    g.comment
   );
 }
 
@@ -1404,11 +1484,19 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
   if (PUSH_WORD.test(text) && !covers(grant, 'push')) return mentioned('push');
   if (PR_WORD.test(text) && !grant.pr) return mentioned('pr');
-  if (MERGE_WORD.test(text) && !grant.merge && !grant.autoMerge && grant.mergeStack.length === 0) {
+  if (
+    MERGE_WORD.test(text) &&
+    !grant.merge &&
+    !grant.autoMerge &&
+    !grant.readyRelease &&
+    grant.mergeStack.length === 0
+  ) {
     return mentioned('merge');
   }
   if (APPROVE_WORD.test(text) && !grant.approve) return mentioned('approve');
-  if (RELEASE_WORD.test(text) && !grant.release) return mentioned('release');
+  if (RELEASE_WORD.test(text) && !grant.release && !grant.readyRelease) {
+    return mentioned('release');
+  }
   if (!HOLD.test(text) || covers(grant, 'push') || asksBeyondPush(grant)) return null;
   // The furthest step offered: "merge #116 and delete the branch?" offers a
   // merge, though deleting the branch is a push too.
@@ -1444,6 +1532,22 @@ export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
   });
 }
 
+// Whether a message ends the asks for once ready that outlast their message: it
+// holds, declines or mentions a merge or release, or retracts or stops. A hold
+// of anything else ("hold off on the docs push") leaves them; `holdOf` names
+// only the first hold, so a later "do not merge 46" is read from the words.
+export function endsReady(prompt: string, previousAnswer = ''): boolean {
+  if (!dropsGrant(prompt, previousAnswer)) return false;
+  const hold = holdOf(prompt, previousAnswer);
+  if (hold === null || hold.step === 'merge' || hold.step === 'release') return true;
+  const text = prPhrase(unquote(forcePhrase(prompt)));
+  if (MERGE_WORD.test(text) || RELEASE_WORD.test(text)) return true;
+  return sentences(spoken(unquote(prompt))).some((raw) => {
+    const s = raw.replace(FILLER, '');
+    return RETRACT.test(raw) || RETRACT.test(s) || STOP.test(s);
+  });
+}
+
 // A merge with no pull request named covers any, so adding a named one must not
 // narrow it. readyNamed stays whole: it also keeps those pull requests out of an
 // open merge-now.
@@ -1467,6 +1571,7 @@ export function liftsHold(grant: Grant): boolean {
     grant.pr ||
     grant.merge ||
     grant.autoMerge ||
+    grant.readyRelease ||
     grant.release ||
     grant.mergeStack.length > 0
   );
@@ -1639,6 +1744,9 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
         opens,
       );
       merging = into === mine && ends.merging;
+      // "merge it when it's ready, then release it" releases once the version
+      // pull request is ready in turn.
+      if (into !== mine && into.release && !asksBeyond(into, 'release')) mine.readyRelease = true;
       agreed = AGREE.test(c);
       if (left === 'mood') withheld = true;
       else if (left !== 'none' && carry !== 'ready') carry = left;
@@ -1672,6 +1780,8 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       mergeNamed: [],
       autoMerge: false,
       readyNamed: [],
+      readyRelease: false,
+      readyMain: false,
       mergeStack: [],
       release: false,
     });

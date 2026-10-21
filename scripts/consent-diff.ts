@@ -81,6 +81,9 @@ const LEADS = [
   'fix it and we can ',
   'lets leave it and we can ',
   'lets wait and we can ',
+  'when main is done and the release PR is ready lets ',
+  'once main is green, ',
+  'when main is done and you say so, ',
 ];
 const VERBS = [
   'merge it',
@@ -93,6 +96,8 @@ const VERBS = [
   'push it',
   'commit it',
   'release it',
+  'release',
+  'merge the release PR',
   'delete the branch',
   'open a PR',
   'approve it',
@@ -223,10 +228,20 @@ const CONDITIONS = [
   ', as long as the tests pass',
   ', but only if CI passes',
   ', but not until CI passes',
+  // Conditions a standing ask may wait on, and their near misses.
+  ' when main is done',
+  ' once main is green',
+  ' when main is done and its ready',
+  ' once CI passes and main is done',
+  ' when the release PR is ready',
+  ' when main is broken',
+  ' when the docs are done',
+  ' when main is done and I say so',
 ];
 const TAILS = [
   '',
   ', then release it',
+  ' and release it',
   ', but hold off',
   '. push it',
   ' please',

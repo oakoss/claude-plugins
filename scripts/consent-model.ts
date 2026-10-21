@@ -85,9 +85,9 @@ const grammarSteps = (g: Grant): string[] =>
   [
     g.push === 'none' ? '' : 'push',
     g.pr ? 'pr' : '',
-    g.merge || g.autoMerge ? 'merge' : '',
+    g.merge || g.autoMerge || g.readyRelease ? 'merge' : '',
     g.approve ? 'approve' : '',
-    g.release ? 'release' : '',
+    g.release || g.readyRelease ? 'release' : '',
     g.comment ? 'comment' : '',
     g.finish.length > 0 ? 'finish' : '',
   ].filter(Boolean);
