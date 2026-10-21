@@ -286,6 +286,17 @@ function clauseOf(rest: string): string {
   return rest.split(/[!?;,:\n]|\.(?![a-z0-9])|\b(?:and|then|but)\b/i)[0] ?? '';
 }
 
+// Landing a pull request merges it. Each export rewrites the user's message
+// first; offers are left alone, since the agent's own say "merge". A
+// backticked name is kept whole: it may be a ref the message pushes.
+function landPhrase(text: string): string {
+  return text.replaceAll(
+    /(`[^`\n]*`)|(?<=^|[\s"'(])(land|landing)(?=$|[\s"'),;:!?]|\.(?!\w))(?!\s+(?:page|pages|zone|strip|gear)\b)/gi,
+    (_m: string, quoted?: string, verb?: string) =>
+      quoted ?? (/ing$/i.test(verb ?? '') ? 'merging' : 'merge'),
+  );
+}
+
 // A bare --force named apart from a lease ("`--force`", "bare force push",
 // "without a lease") becomes the word `nolease`, which counts only in the
 // tail of a push the grammar grants. Run before quotes are read, since
@@ -1431,12 +1442,12 @@ const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
 // A message that is a yes or a go-ahead and nothing more, as the grammar
 // reads one: it answers the offer before it.
 export function isReply(text: string): boolean {
-  return AFFIRMATIVE.test(spoken(text.trim()));
+  return AFFIRMATIVE.test(spoken(landPhrase(text).trim()));
 }
 
 // The steps a message names by their verbs, asked for or not.
 export function stepsNamed(text: string): HoldStep[] {
-  const read = prPhrase(unquote(forcePhrase(text)));
+  const read = prPhrase(unquote(forcePhrase(landPhrase(text))));
   return [...new Set(STEP_WORDS.filter(([, word]) => word.test(read)).map(([step]) => step))];
 }
 export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
@@ -1479,6 +1490,7 @@ export function mandateAfter(
 // A step mentioned without being asked for holds every step but a commit, read
 // by mention rather than grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
+  prompt = landPhrase(prompt);
   const grant = grantOf(prompt, previousAnswer);
   const text = prPhrase(unquote(forcePhrase(prompt)));
   const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
@@ -1522,6 +1534,7 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
 // step it does not ask for, or it picks fewer merges than were offered.
 // Anything else the agent reads before its next step.
 export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
+  prompt = landPhrase(prompt);
   if (holdOf(prompt, previousAnswer) !== null) return true;
   const picked = pickedMerges(spoken(prompt.trim()), previousAnswer);
   if (picked !== null && picked.length < offeredMerges(previousAnswer).length) return true;
@@ -1537,6 +1550,7 @@ export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
 // of anything else ("hold off on the docs push") leaves them; `holdOf` names
 // only the first hold, so a later "do not merge 46" is read from the words.
 export function endsReady(prompt: string, previousAnswer = ''): boolean {
+  prompt = landPhrase(prompt);
   if (!dropsGrant(prompt, previousAnswer)) return false;
   const hold = holdOf(prompt, previousAnswer);
   if (hold === null || hold.step === 'merge' || hold.step === 'release') return true;
@@ -1624,6 +1638,7 @@ function pickedMerges(reply: string, previousAnswer: string): string[] | null {
 }
 
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
+  prompt = landPhrase(prompt);
   const text = spoken(prompt.trim());
   const picked = pickedMerges(text, previousAnswer);
   if (picked !== null) return settled({ ...fresh(), merge: true, mergeNamed: picked });
