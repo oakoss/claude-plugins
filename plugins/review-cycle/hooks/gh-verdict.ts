@@ -294,6 +294,21 @@ async function pointedAt(
 
 const MERGED = 'the pull request it merges';
 
+// One verdict reads a pull request at most once: pointing and the release
+// check both ask for it.
+function pullRequestOnce(lookups: GhLookups): GhLookups {
+  const seen = new Map<string, ReturnType<GhLookups['pullRequest']>>();
+  return {
+    ...lookups,
+    pullRequest: (lookup, what) => {
+      const key = `${what}\n${lookup.join('\n')}`;
+      const read = seen.get(key) ?? lookups.pullRequest(lookup, what);
+      seen.set(key, read);
+      return read;
+    },
+  };
+}
+
 // Which step a merge is: a release when it merges this repository's version
 // pull request. A lookup that fails says why, and the merge asks.
 async function mergeStep(
@@ -414,12 +429,13 @@ export async function judgeGh(
   actions: readonly GhAction[],
   asked: Grant,
   held: Hold,
-  lookups: GhLookups,
+  given: GhLookups,
   model: ModelSteps = {},
   unread: UnreadOffer | null = null,
-  // The pull request numbers the answer the user replied to named.
+  // The pull request numbers the conversation pointed a merge at.
   pointed: readonly string[] = [],
 ): Promise<GhVerdict> {
+  const lookups = pullRequestOnce(given);
   const ran: Unasked[] = [];
   const notes: string[] = [];
   if (actions.length === 0) return { ran };
@@ -635,12 +651,15 @@ export async function judgeGh(
         const covered =
           granted.mergeNamed.length === 0 || (target !== null && nowNamed.includes(target.number));
         if (covers.now && held?.step !== 'release' && covered) break;
-        // Allowed either way, a merge needs no lookup to tell which it is,
-        // except one run now on readiness alone: a release there is noted.
+        // Allowed either way, a merge needs no lookup to run, except one run
+        // now on readiness alone: a release there is noted. One that runs
+        // unasked is looked up only so its note names the step it is.
         const readyOnly = target !== null && covers.ready && !covers.now && !action.auto;
         if (mayHere.merge && mayHere.release && !readyOnly) {
-          if (!asked.merge && !asked.release && setHere.merge && setHere.release) {
-            ran.push({ step: 'merge', ladder });
+          if (!asked.merge && setHere.merge && setHere.release) {
+            const it = 'cannot' in action.lookup ? null : await mergeStep(lookups, action.lookup);
+            const step = it !== null && 'step' in it ? it.step : 'merge';
+            if (!asked[step]) ran.push({ step, ladder });
           }
           break;
         }
