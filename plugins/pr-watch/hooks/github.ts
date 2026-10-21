@@ -1,6 +1,6 @@
 // The gh calls pr-watch makes and what it reads from their output. Pure:
 // register.tsx runs the commands.
-import type { Activity, Commit, Job, Pull, Runs, RunStatus, Workflow } from '../types';
+import type { Activity, Commit, Job, Pull, Runs, RunStatus, Stack, Workflow } from '../types';
 
 // Whether a check is required is asked only of the head commit: the base
 // branch's runs after a merge gate nothing.
@@ -133,13 +133,21 @@ export function stackArgs(host: string, repo: string, number: number): string[] 
   ];
 }
 
-// A merged stack layer keeps the layer below as its base, though its commit
-// landed on the stack's trunk. Null for a pull request in no stack; an error
-// body is not a list, so it throws rather than read as no stack.
-export function parseStackBase(stdout: string): string | null {
+// The first stack a pull request is a layer of; `pull_requests` lists the
+// layers bottom first. Null for one in no stack. An error body, or a stack
+// missing its number or a layer's, throws rather than read as no stack or
+// shift every layer's place.
+export function parseStack(stdout: string): Stack | null {
   const stacks = parse(stdout);
   if (!Array.isArray(stacks)) throw new Error('gh printed no list of stacks');
-  return str(stacks[0]?.base?.ref);
+  if (stacks.length === 0) return null;
+  const number = id(stacks[0]?.number);
+  const trunk = str(stacks[0]?.base?.ref);
+  const layers = list(stacks[0]?.pull_requests).map((p) => id(p?.number));
+  if (number === null || trunk === null || layers.includes(null)) {
+    throw new Error('gh printed a stack without its number, trunk or layers');
+  }
+  return { number, trunk, layers: layers as number[] };
 }
 
 // Over three repositories' history, 10 runs predicted the next run as well as

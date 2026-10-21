@@ -3,7 +3,12 @@ import { describe, expect, test } from 'vitest';
 import type { Activity, Job, Pull, RunStatus, Watch, Workflow } from '../types';
 import {
   barOf,
+  changesStacks,
   clockText,
+  layeredOf,
+  layerOf,
+  needsStack,
+  orderedOf,
   createdPull,
   delayOf,
   errorLine,
@@ -29,6 +34,7 @@ import {
   pushedBranches,
   pushedPull,
   shownOf,
+  submittedPulls,
   toastOf,
   verdictOf,
   QUIET_CAP,
@@ -154,6 +160,48 @@ describe('createdPull', () => {
     ]) {
       expect(createdPull('gh pr create', url)).toBeNull();
     }
+  });
+});
+
+describe('submittedPulls', () => {
+  // As gh stack submit printed it for stack #236, verbatim.
+  const out = [
+    'Checking stack state...',
+    'Pushing to origin...',
+    '✓ Created PR #234 (https://github.com/oakoss/claude-plugins/pull/234) for docs/review-cycle-stack-merge-setting',
+    '✓ Created PR #235 (https://github.com/oakoss/claude-plugins/pull/235) for docs/review-cycle-stack-create-label',
+    '✓ Stack created on GitHub with 2 PRs (stack #236)',
+    '✓ Pushed and synced 2 branches',
+  ].join('\n');
+
+  test('reads every pull request gh stack submit created, in order', () => {
+    expect(submittedPulls('gh stack submit --auto --open', out)).toEqual([
+      {
+        host: 'github.com',
+        repo: 'oakoss/claude-plugins',
+        number: 234,
+        url: 'https://github.com/oakoss/claude-plugins/pull/234',
+      },
+      {
+        host: 'github.com',
+        repo: 'oakoss/claude-plugins',
+        number: 235,
+        url: 'https://github.com/oakoss/claude-plugins/pull/235',
+      },
+    ]);
+    expect(submittedPulls('cd repo && gh stack submit', out)).toHaveLength(2);
+  });
+
+  test('a layer it could not create, or another command, adds none', () => {
+    expect(submittedPulls('gh stack submit', '⚠ failed to create PR for feat/b\n')).toEqual([]);
+    expect(submittedPulls('gh stack push', out)).toEqual([]);
+    expect(submittedPulls('echo gh stack submit', out)).toEqual([]);
+    expect(
+      submittedPulls('gh stack submit', '  Created PR #1 (https://github.com/o/r/pull/1) for a\n'),
+    ).toEqual([]);
+    expect(
+      submittedPulls('gh stack submit', 'Created PR #1 (https://github.com/o/r/pull/0) for a\n'),
+    ).toEqual([]);
   });
 });
 
@@ -287,6 +335,10 @@ describe('movesPulls', () => {
       'gh pr merge 129 --squash',
       'gh run rerun 37238665430 --failed',
       'gh workflow run ci.yml --ref feat/x',
+      'gh stack submit --auto',
+      'gh stack push',
+      'gh stack sync',
+      'gh stack merge 236 --yes --squash',
     ]) {
       expect(movesPulls(command)).toBe(true);
     }
@@ -300,6 +352,7 @@ describe('movesPulls', () => {
       'git pushd',
       'gh run view 37238665430',
       'gh workflow list',
+      'gh stack view --json',
     ]) {
       expect(movesPulls(command)).toBe(false);
     }
@@ -1363,7 +1416,11 @@ describe('after a merge', () => {
 });
 
 // Merged as `merged` is, its merge commit `m`.
-const onMerge = (runs: Workflow[] | null) => ({ ...merged(runs), mergeOid: 'm', trunk: 'main' });
+const onMerge = (runs: Workflow[] | null): Pull => ({
+  ...merged(runs),
+  mergeOid: 'm',
+  stack: { number: 236, trunk: 'main', layers: [] },
+});
 const commit = (oid: string, workflows: Workflow[], parents?: string[]) => ({
   oid,
   ...(parents ? { parents } : {}),
@@ -1392,9 +1449,9 @@ describe('needsTrunk and followTrunk', () => {
     expect(needsTrunk(onMerge(null), late)).toBe(false);
     expect(needsTrunk(pull([], { mergeOid: 'm' }), late)).toBe(false);
     // Outside a stack, only a failure looks past the merge commit.
-    for (const trunk of [null, undefined]) {
-      expect(needsTrunk({ ...onMerge([]), trunk }, late)).toBe(false);
-      expect(needsTrunk({ ...onMerge([release('FAILURE')]), trunk }, late)).toBe(true);
+    for (const stack of [null, undefined]) {
+      expect(needsTrunk({ ...onMerge([]), stack }, late)).toBe(false);
+      expect(needsTrunk({ ...onMerge([release('FAILURE')]), stack }, late)).toBe(true);
     }
   });
 
@@ -1555,6 +1612,158 @@ describe('needsTrunk and followTrunk', () => {
       'o/r#128 merged into main, and Release failed on a later commit and since passed on main.',
     ]);
     expect(textOf(watched(both))).toBe('#128 merged into main · ✓ Release failed, since passed');
+  });
+});
+
+// Pull request `number` of `repo`, a layer of stack `stack`.
+const layered = (number: number, stack: number, layers: number[], repo = 'o/r') =>
+  watched(pull([green()], { number, stack: { number: stack, trunk: 'main', layers } }), {
+    number,
+    repo,
+    url: `https://github.com/${repo}/pull/${number}`,
+  });
+const lane = (number: number) => watched(pull([green()], { number, stack: null }), { number });
+const numbers = (list: Watch[]) => list.map((w) => w.number);
+const runningLayer = (stack: Pull['stack']) =>
+  watched(pull([runningCi()], { number: 235, stack }), { number: 235 });
+const widthAt50 = (w: Watch) => lineOf(w, at, KNOWN, 50).reduce((n, s) => n + s.text.length, 0);
+
+describe('needsStack and layeredOf', () => {
+  const s236 = { number: 236, trunk: 'main', layers: [127, 128] };
+  const now = 1_000_000;
+  const minute = 60_000;
+
+  test('asks when nothing is known, and an open answer until a gh stack command or 10 minutes', () => {
+    expect(needsStack(undefined, false, now, 0)).toBe(true);
+    expect(needsStack({ stack: undefined, stackAt: now }, false, now, 0)).toBe(true);
+    for (const stack of [s236, null]) {
+      const was = { stack, stackAt: now - minute };
+      expect(needsStack(was, false, now, 0)).toBe(false);
+      // A command since, or at the same instant, makes it stale.
+      expect(needsStack(was, false, now, now - 2 * minute)).toBe(false);
+      expect(needsStack(was, false, now, now - minute)).toBe(true);
+      expect(needsStack(was, false, now, now - 30_000)).toBe(true);
+      expect(needsStack({ stack, stackAt: now - 10 * minute + 1 }, false, now, 0)).toBe(false);
+      expect(needsStack({ stack, stackAt: now - 10 * minute }, false, now, 0)).toBe(true);
+      // One with no time of asking counts as asked before any command.
+      expect(needsStack({ stack }, false, now, 0)).toBe(true);
+    }
+  });
+
+  test('a stack kept from before a module reload is asked again once', () => {
+    // After a reload, the change time is the first read's, less a millisecond.
+    const was = { stack: s236, stackAt: now - minute };
+    expect(needsStack(was, false, now, now - 1)).toBe(true);
+    const fresh = layeredOf(was, s236, false, now);
+    expect(needsStack(fresh, false, now + 10_000, now - 1)).toBe(false);
+  });
+
+  test("keeps a merged layer's answer only from a read that saw it merged, whatever its age", () => {
+    for (const stack of [s236, null]) {
+      expect(needsStack({ stack, stackAt: 0, stackMerged: true }, true, now, now)).toBe(false);
+      expect(needsStack({ stack, stackAt: now, stackMerged: false }, true, now, 0)).toBe(true);
+      expect(needsStack({ stack, stackAt: now }, true, now, 0)).toBe(true);
+    }
+  });
+
+  test('a read leaves its answer, or the last one when it got none', () => {
+    const was = { stack: s236, stackAt: 5, stackMerged: false };
+    expect(layeredOf(was, undefined, true, now)).toEqual(was);
+    expect(layeredOf(undefined, undefined, false, now)).toEqual({
+      stack: undefined,
+      stackAt: undefined,
+      stackMerged: undefined,
+    });
+    expect(layeredOf(was, null, true, now)).toEqual({
+      stack: null,
+      stackAt: now,
+      stackMerged: true,
+    });
+    const other = { ...s236, number: 240 };
+    expect(layeredOf(was, other, false, now)).toEqual({
+      stack: other,
+      stackAt: now,
+      stackMerged: false,
+    });
+  });
+
+  test('a refused lookup answers as no stack, but leaves one known', () => {
+    expect(layeredOf({ stack: s236, stackAt: 5 }, 'unreadable', true, now)).toEqual({
+      stack: s236,
+      stackAt: now,
+      stackMerged: true,
+    });
+    for (const was of [undefined, { stack: null, stackAt: 5 }]) {
+      expect(layeredOf(was, 'unreadable', false, now)).toEqual({
+        stack: null,
+        stackAt: now,
+        stackMerged: false,
+      });
+    }
+  });
+});
+
+describe('stack layers', () => {
+  test("a layer's place is counted from the bottom; a lane has none", () => {
+    expect(layerOf(layered(235, 236, [234, 235, 237]))).toEqual({ stack: 236, at: 2, of: 3 });
+    expect(layerOf(lane(7))).toBeNull();
+    expect(layerOf(watched(pull([green()])))).toBeNull();
+    // A stack that does not list the pull request places it nowhere.
+    expect(layerOf(layered(235, 236, [234]))).toBeNull();
+  });
+
+  test("a layer's line carries its place after the label", () => {
+    expect(textOf(layered(235, 236, [234, 235, 237]))).toBe('#235 ⧉ #236 2/3 ✓ ready to merge');
+    expect(textOf(lane(7))).toBe('#7 ✓ ready to merge');
+  });
+
+  test("a running layer's bar gives up the badge's width, so the line fits as a lane's does", () => {
+    // At 50 columns neither line's bar is at its shortest or longest.
+    const lone = widthAt50(runningLayer(null));
+    expect(widthAt50(runningLayer({ number: 236, trunk: 'main', layers: [234, 235] }))).toBe(lone);
+  });
+
+  test("each stack's lines sit together, top layer first, where its first line was", () => {
+    const list = [
+      lane(1),
+      layered(234, 236, [234, 235, 237]),
+      layered(301, 300, [301, 302]),
+      lane(2),
+      layered(237, 236, [234, 235, 237]),
+      layered(302, 300, [301, 302]),
+      layered(235, 236, [234, 235, 237]),
+    ];
+    expect(numbers(orderedOf(list))).toEqual([1, 237, 235, 234, 302, 301, 2]);
+    // The same stack number in another repository is another stack.
+    const other = layered(237, 236, [236, 237], 'o/other');
+    expect(numbers(orderedOf([layered(234, 236, [234, 235, 237]), lane(2), other]))).toEqual([
+      234, 2, 237,
+    ]);
+  });
+
+  test('a gh stack command that can change a stack asks every stack again', () => {
+    for (const command of [
+      'gh stack submit --auto',
+      'cd r && gh stack push',
+      'gh stack sync',
+      'gh stack merge 236 --yes',
+      'gh stack add feat/c',
+      'gh stack init a b',
+      'gh stack modify',
+      'gh stack unstack',
+      'gh stack link 10 11',
+      'gh stack delete 236',
+    ]) {
+      expect(changesStacks(command)).toBe(true);
+    }
+    for (const command of [
+      'gh stack view --json',
+      'gh stack top',
+      'echo gh stack push',
+      'gh pr create',
+    ]) {
+      expect(changesStacks(command)).toBe(false);
+    }
   });
 });
 
