@@ -894,9 +894,12 @@ describe('a pull request Claude opens', () => {
     await clock.advance(1000);
     gh.holdStack = true;
     await create($, 'gh stack push');
-    await clock.advance(11_000);
+    // Time passes on both sides of the command while the lookup is held, so the
+    // answer counts as asked before the command only if stamped when asked.
+    await clock.advance(16_000);
     gh.stacks = { 234: stackJson(236, [234, 235]) };
     await create($, 'gh stack sync');
+    await clock.advance(5000);
     gh.release?.();
     await clock.advance(120_000);
     expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');

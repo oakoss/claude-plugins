@@ -41,6 +41,8 @@ import {
   delayOf,
   errorLine,
   followTrunk,
+  layeredOf,
+  needsStack,
   needsTrunk,
   estimateKey,
   rerunKey,
@@ -142,7 +144,6 @@ let pushedAt = 0;
 let burstUntil = 0;
 // When Claude last ran a `gh stack` command that can change a stack.
 let stacksChangedAt = 0;
-const STACK_STALE_MS = 10 * 60_000;
 let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
@@ -506,31 +507,13 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     // first finds it merged, read again for the merge commit's runs.
     const wasMerged = w.pull?.state === 'MERGED';
     const pull = await read(wasMerged);
-    const known = w.pull?.stack;
     const askedAt = await $.clock.now();
-    const stackAt = w.pull?.stackAt ?? 0;
     // A stack kept from before a module reload is asked again once.
     stacksChangedAt ||= askedAt - 1;
     const isMerged = pull.state === 'MERGED';
-    // A merged layer's trunk is fixed by an answer from a read that saw it
-    // merged, which no clock skew can fake; an open one's stack can change with
-    // any `gh stack` command, or from elsewhere.
-    const isKnown =
-      known !== undefined &&
-      (isMerged
-        ? w.pull?.stackMerged === true
-        : stackAt > stacksChangedAt && askedAt - stackAt < STACK_STALE_MS);
-    const answer = isKnown ? undefined : await stackOf($, w);
-    // No stacks API, or no access to it, answers as no stack, but leaves one
-    // known; a lookup with no answer keeps the last one, to be asked again.
-    const layered =
-      answer === undefined
-        ? { stack: known, stackAt: w.pull?.stackAt, stackMerged: w.pull?.stackMerged }
-        : {
-            stack: answer === 'unreadable' ? (known ?? null) : answer,
-            stackAt: askedAt,
-            stackMerged: isMerged,
-          };
+    const isAsked = needsStack(w.pull, isMerged, askedAt, stacksChangedAt);
+    const answer = isAsked ? await stackOf($, w) : undefined;
+    const layered = layeredOf(w.pull, answer, isMerged, askedAt);
     if (pull.state !== 'MERGED') return { kind: 'pull', pull: { ...pull, ...layered } };
     let merged = pull;
     if (!wasMerged) {

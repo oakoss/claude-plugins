@@ -1,5 +1,5 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Commit, Held, Job, Pull, Runs, Watch, Workflow } from '../types';
+import type { Activity, Commit, Held, Job, Pull, Runs, Stack, Watch, Workflow } from '../types';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -130,6 +130,41 @@ export function submittedPulls(command: string, stdout: string): Target[] {
 // After one, every watched pull request's stack is asked again.
 export function changesStacks(command: string): boolean {
   return STACK_CHANGE.test(command);
+}
+
+export type Layered = Pick<Pull, 'stack' | 'stackAt' | 'stackMerged'>;
+
+const STACK_STALE_MS = 10 * 60_000;
+
+// Whether to ask GitHub's stacks API again, given the last answer and when a
+// `gh stack` command last ran. A merged layer's trunk is fixed by an answer
+// from a read that saw it merged, which no clock skew can fake; an open one's
+// stack can change with any such command, or from elsewhere.
+export function needsStack(
+  was: Layered | undefined,
+  isMerged: boolean,
+  now: number,
+  changedAt: number,
+): boolean {
+  if (was?.stack === undefined) return true;
+  if (isMerged) return was.stackMerged !== true;
+  const at = was.stackAt ?? 0;
+  return at <= changedAt || now - at >= STACK_STALE_MS;
+}
+
+// The stack a read leaves. No answer keeps the last, to be asked again; no
+// stacks API, or no access to it, answers as no stack, but leaves one known.
+export function layeredOf(
+  was: Layered | undefined,
+  answer: Stack | null | 'unreadable' | undefined,
+  isMerged: boolean,
+  now: number,
+): Layered {
+  if (answer === undefined) {
+    return { stack: was?.stack, stackAt: was?.stackAt, stackMerged: was?.stackMerged };
+  }
+  const stack = answer === 'unreadable' ? (was?.stack ?? null) : answer;
+  return { stack, stackAt: now, stackMerged: isMerged };
 }
 
 // A layer's place in its stack, numbered from the bottom as GitHub's badge is;

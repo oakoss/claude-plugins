@@ -5,7 +5,9 @@ import {
   barOf,
   changesStacks,
   clockText,
+  layeredOf,
   layerOf,
+  needsStack,
   orderedOf,
   createdPull,
   delayOf,
@@ -1625,6 +1627,81 @@ const numbers = (list: Watch[]) => list.map((w) => w.number);
 const runningLayer = (stack: Pull['stack']) =>
   watched(pull([runningCi()], { number: 235, stack }), { number: 235 });
 const widthAt50 = (w: Watch) => lineOf(w, at, KNOWN, 50).reduce((n, s) => n + s.text.length, 0);
+
+describe('needsStack and layeredOf', () => {
+  const s236 = { number: 236, trunk: 'main', layers: [127, 128] };
+  const now = 1_000_000;
+  const minute = 60_000;
+
+  test('asks when nothing is known, and an open answer until a gh stack command or 10 minutes', () => {
+    expect(needsStack(undefined, false, now, 0)).toBe(true);
+    expect(needsStack({ stack: undefined, stackAt: now }, false, now, 0)).toBe(true);
+    for (const stack of [s236, null]) {
+      const was = { stack, stackAt: now - minute };
+      expect(needsStack(was, false, now, 0)).toBe(false);
+      // A command since, or at the same instant, makes it stale.
+      expect(needsStack(was, false, now, now - 2 * minute)).toBe(false);
+      expect(needsStack(was, false, now, now - minute)).toBe(true);
+      expect(needsStack(was, false, now, now - 30_000)).toBe(true);
+      expect(needsStack({ stack, stackAt: now - 10 * minute + 1 }, false, now, 0)).toBe(false);
+      expect(needsStack({ stack, stackAt: now - 10 * minute }, false, now, 0)).toBe(true);
+      // One with no time of asking counts as asked before any command.
+      expect(needsStack({ stack }, false, now, 0)).toBe(true);
+    }
+  });
+
+  test('a stack kept from before a module reload is asked again once', () => {
+    // After a reload, the change time is the first read's, less a millisecond.
+    const was = { stack: s236, stackAt: now - minute };
+    expect(needsStack(was, false, now, now - 1)).toBe(true);
+    const fresh = layeredOf(was, s236, false, now);
+    expect(needsStack(fresh, false, now + 10_000, now - 1)).toBe(false);
+  });
+
+  test("keeps a merged layer's answer only from a read that saw it merged, whatever its age", () => {
+    for (const stack of [s236, null]) {
+      expect(needsStack({ stack, stackAt: 0, stackMerged: true }, true, now, now)).toBe(false);
+      expect(needsStack({ stack, stackAt: now, stackMerged: false }, true, now, 0)).toBe(true);
+      expect(needsStack({ stack, stackAt: now }, true, now, 0)).toBe(true);
+    }
+  });
+
+  test('a read leaves its answer, or the last one when it got none', () => {
+    const was = { stack: s236, stackAt: 5, stackMerged: false };
+    expect(layeredOf(was, undefined, true, now)).toEqual(was);
+    expect(layeredOf(undefined, undefined, false, now)).toEqual({
+      stack: undefined,
+      stackAt: undefined,
+      stackMerged: undefined,
+    });
+    expect(layeredOf(was, null, true, now)).toEqual({
+      stack: null,
+      stackAt: now,
+      stackMerged: true,
+    });
+    const other = { ...s236, number: 240 };
+    expect(layeredOf(was, other, false, now)).toEqual({
+      stack: other,
+      stackAt: now,
+      stackMerged: false,
+    });
+  });
+
+  test('a refused lookup answers as no stack, but leaves one known', () => {
+    expect(layeredOf({ stack: s236, stackAt: 5 }, 'unreadable', true, now)).toEqual({
+      stack: s236,
+      stackAt: now,
+      stackMerged: true,
+    });
+    for (const was of [undefined, { stack: null, stackAt: 5 }]) {
+      expect(layeredOf(was, 'unreadable', false, now)).toEqual({
+        stack: null,
+        stackAt: now,
+        stackMerged: false,
+      });
+    }
+  });
+});
 
 describe('stack layers', () => {
   test("a layer's place is counted from the bottom; a lane has none", () => {
