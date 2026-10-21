@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { applyEdit, bashTouchesGate, touchesGate } from './settings';
+import { applyEdit, bashTouchesGate, namesSwitch, touchesGate } from './settings';
 
 const on = JSON.stringify({ enabledPlugins: { 'review-cycle@oakoss': true, 'x@y': true } });
 
@@ -30,28 +30,40 @@ describe('touchesGate', () => {
     expect(touchesGate(null, '{}')).toBe(false);
     expect(touchesGate(null, '[1]')).toBe(false);
   });
-  test('repairing or breaking a file that names a switch touches it', () => {
-    const loose = jsonc('never stop');
-    expect(touchesGate(`${loose}}`, loose)).toBe(true);
-    expect(touchesGate(loose, `${loose}}`)).toBe(true);
+  // Claude Code skips a settings file that is not a strict JSON object, so a
+  // file with comments or a trailing comma switches nothing until it is one.
+  test('making a file strict JSON, or no longer strict, touches it when it holds a switch', () => {
+    const strict = JSON.stringify({
+      pluginConfigs: { 'review-cycle': { options: { stopBefore: 'never stop' } } },
+    });
+    expect(touchesGate(jsonc('never stop'), strict)).toBe(true);
+    expect(touchesGate(strict, jsonc('never stop'))).toBe(true);
+    expect(touchesGate(on, `// mine\n${on}`)).toBe(true);
+    expect(touchesGate(on, on.replace('}}', '},}'))).toBe(true);
     expect(touchesGate('{"theme":1', '{"theme":1}')).toBe(false);
   });
-  test('a file with comments and trailing commas is read as JSON', () => {
-    expect(touchesGate(jsonc('push'), jsonc('never stop'))).toBe(true);
-    expect(touchesGate(jsonc('push'), jsonc('push').replace('// mine', '// theirs'))).toBe(false);
-    expect(touchesGate(jsonc('push'), jsonc('push').replace('x//y,}', 'x//z,}'))).toBe(false);
+  test('a file Claude Code skips switches nothing, however it changes', () => {
+    expect(touchesGate(jsonc('push'), jsonc('never stop'))).toBe(false);
+    expect(touchesGate(null, `// x\n{"enabledPlugins":{"review-cycle@oakoss":false}}`)).toBe(false);
+    expect(touchesGate(`// mine\n${on}`, `// mine\n${on.replace('true', 'false')}`)).toBe(false);
   });
-  test('a byte-order mark, comments or a trailing comma do not hide the switch', () => {
-    const off = '{"enabledPlugins":{"review-cycle@oakoss":false}}';
-    expect(touchesGate(null, `\uFEFF${off}`)).toBe(true);
-    expect(touchesGate(null, `// x\n${off}`)).toBe(true);
-    expect(touchesGate(null, off.replace('}}', '},}'))).toBe(true);
-    expect(touchesGate(`// mine\n${on}`, `// mine\n${on.replace('true', 'false')}`)).toBe(true);
-    expect(touchesGate('// notes\n{"theme":1}', '// notes\n{"theme":2}')).toBe(false);
+  test('a byte-order mark does not hide the switch', () => {
+    expect(touchesGate(null, '\uFEFF{"enabledPlugins":{"review-cycle@oakoss":false}}')).toBe(true);
+    expect(touchesGate(on, `\uFEFF${on}`)).toBe(false);
+  });
+  test('JSON that is not an object is no settings file', () => {
+    const corpus = JSON.stringify([
+      { offer: 'Set "enabledPlugins":{"review-cycle@oakoss":false}?', may: [] },
+    ]);
+    expect(touchesGate(null, corpus)).toBe(false);
+    expect(touchesGate(corpus, corpus.replace('may', 'missed'))).toBe(false);
+    expect(touchesGate(on, '[]')).toBe(true);
+    expect(touchesGate(on, 'null')).toBe(true);
+    expect(touchesGate(null, 'null')).toBe(false);
   });
   test('switching hooks off touches it', () => {
     expect(touchesGate('{}', '{"disableAllHooks":true}')).toBe(true);
-    expect(touchesGate(null, '// c\n{"disableAllHooks":true}')).toBe(true);
+    expect(touchesGate(null, '\uFEFF{"disableAllHooks":true}')).toBe(true);
     // Claude Code ignores this from v2.1.287, when mods went on by default.
     expect(touchesGate('{}', '{"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"0"}}')).toBe(false);
     expect(touchesGate('// c\n{}', '// c\n{"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"0"}}')).toBe(
@@ -66,6 +78,22 @@ describe('touchesGate', () => {
     expect(touchesGate('{"a":1}', '{')).toBe(false);
     expect(touchesGate('not json', on)).toBe(true);
     expect(touchesGate('not json', 'still not json')).toBe(false);
+    expect(touchesGate('{"enabledPlugins":', '{"enabledPlugins":{"review-cycle":')).toBe(false);
+  });
+});
+
+describe('namesSwitch', () => {
+  test.each([
+    ['"enabledPlugins":{', true],
+    ['"review-cycle@oakoss": false', true],
+    ['"pluginConfigs"', true],
+    ['"disableAllHooks": true', true],
+    ['"theme": "dark"', false],
+    ['review-cycle without quotes', false],
+    ['"x":"see review-cycle docs"', false],
+    ['"review-cycle', false],
+  ])('%j → %s', (text, named) => {
+    expect(namesSwitch(text)).toBe(named);
   });
 });
 
