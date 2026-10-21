@@ -480,7 +480,7 @@ describe('a merge', () => {
       expect(await judge([merge(false)], w, grant({ merge: true }))).toEqual({ ran: [] });
     });
 
-    test('is never stricter than the setting', async () => {
+    test('is never stricter than the setting, but for a merge now asked for once ready', async () => {
       for (const stop of ['release', 'never stop'] as const) {
         for (const asked of [
           { merge: true },
@@ -506,6 +506,10 @@ describe('a merge', () => {
       const both = grant({ merge: true, autoMerge: true });
       const blind = world('never stop', { mergeTarget: { asks: 'looking it up failed (x)' } });
       expect(await judge([merge(false)], blind, both)).toEqual(merged('never stop'));
+      // Merging now on a once-ready ask, a failed lookup is refused whatever the setting.
+      expect(await judge([merge(false)], blind, grant({ autoMerge: true }))).toMatchObject({
+        deny: expect.stringContaining('looking it up failed (x)'),
+      });
       // `--auto` leaves the wait to GitHub, so a failed lookup runs as merging now does.
       expect(await judge([merge(true)], blind, grant({ autoMerge: true }))).toEqual(
         merged('never stop'),
