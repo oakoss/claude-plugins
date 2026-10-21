@@ -788,8 +788,7 @@
   {
     "prompt": "go ahead and land it",
     "offer": "Merge #116?",
-    "may": ["merge", "release"],
-    "missed": true
+    "may": ["merge", "release"]
   },
   {
     "prompt": "yep, cut it",

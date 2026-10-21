@@ -12,6 +12,7 @@ import {
   mandateOf,
   NAMED_ELSEWHERE,
   NO_GRANT,
+  stepsNamed,
   unreadOffer,
   VERB_FORMS,
 } from './consent';
@@ -537,6 +538,9 @@ describe('a merge or release once the pull request and main are ready', () => {
 describe('a message ends the asks for once ready that outlast it', () => {
   test.each([
     ["don't merge 46 yet", true],
+    ["don't land 46", true],
+    ['hold off on the docs push. do not land 46', true],
+    ["don't touch the landing page", false],
     ['do not push. do not merge 46', true],
     ['should we release next week?', true],
     ['never mind', true],
@@ -934,6 +938,55 @@ describe('an affirmative grants what the previous answer asked', () => {
   ])("GitHub's merge methods merge: %j after %j", (prompt, offer, grant) => {
     expect(grantOf(prompt, offer)).toEqual(grant);
   });
+  test.each([
+    ['go ahead and land it', 'Merge #116?', merging('116')],
+    ['land 131', '', merging('131')],
+    ['land the release PR', '', RELEASE],
+    ["don't land 131", 'Merge #131?', NONE],
+    ['landing 131', '', NONE],
+    ['go ahead, landing it now', 'Merge #131?', NONE],
+    ['land both', 'Merge #131 and #132?', merging('131', '132')],
+    ['land 131 but not 132', 'Merge #131 and #132?', merging('131')],
+    ['ok, land.', 'Merge #131?', merging('131')],
+    ['push the `release-land` tag', '', { ...NONE, push: 'push', pushNamed: ['tag:release-land'] }],
+    [
+      'push the `release+land+fix` tag',
+      '',
+      { ...NONE, push: 'push', pushNamed: ['tag:release+land+fix'] },
+    ],
+    [
+      'push the `release(land)` tag',
+      '',
+      { ...NONE, push: 'push', pushNamed: ['tag:release(land)'] },
+    ],
+    // Only the user's words are read for "land": an offer in it asks again.
+    ['yes', 'Land #131?', NONE],
+    ['yes', 'Should I land fix/x into main?', NONE],
+  ])('landing a pull request merges it: %j after %j', (prompt, offer, grant) => {
+    expect(grantOf(prompt, offer)).toEqual(grant);
+  });
+  test('a miss in "land" names the merge', () => {
+    expect(stepsNamed('land 46')).toEqual(['merge']);
+  });
+  test.each(["don't land 46", "don't land.", 'landing 131'])('%j holds the merge', (prompt) => {
+    expect(holdOf(prompt)?.step).toBe('merge');
+  });
+  test.each([
+    'landing page',
+    'landing-page',
+    'landing pages',
+    'landing zone',
+    'landing strip',
+    'landing gear',
+  ])('the %s is no merge', (noun) => {
+    expect(holdOf(`fix the ${noun}`)).toBeNull();
+  });
+  test.each(['fix the typo in notes/land please', 'push the tag v1.land now'])(
+    'a path or ref ending in land is no merge: %j',
+    (prompt) => {
+      expect(holdOf(prompt)).toBeNull();
+    },
+  );
   test.each([
     'Should I merge #131, then #132?',
     'Should I squash-merge #131, then #132?',
@@ -2107,6 +2160,8 @@ describe('a reply picking among the pull requests a merge offer named', () => {
   test('a narrowing typed into the turn replaces its grant', () => {
     expect(dropsGrant('merge only #3', OFFER)).toBe(true);
     expect(dropsGrant('merge #3 but not #4', OFFER)).toBe(true);
+    expect(dropsGrant('land only #3', OFFER)).toBe(true);
+    expect(dropsGrant('land #3 but not #4', OFFER)).toBe(true);
     expect(dropsGrant('merge both', OFFER)).toBe(false);
     expect(dropsGrant('and merge #4', OFFER)).toBe(false);
   });

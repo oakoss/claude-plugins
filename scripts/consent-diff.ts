@@ -146,6 +146,16 @@ const VERBS = [
   'squash-merge the release',
   'merge 131, then 130',
   'merge 131, and then 130',
+  // "Land" for a merge, and its other senses.
+  'land it',
+  'land 130',
+  'land the PR',
+  'land the release',
+  'land the release PR',
+  'landing it',
+  "don't land 130",
+  'fix the landing page',
+  'land the fix on main',
   // A gh-stack stack, whole or up to a layer, and its pushes.
   'push the stack',
   'push the whole stack',
@@ -322,6 +332,9 @@ const REPLIES = [
   'yes, but not yet',
   'merge both once CI passes',
   "merge 131, don't merge 130",
+  'go ahead and land it',
+  'land both',
+  "land 131, don't land 130",
   // Answers to a stack's offers.
   'merge the stack',
   'push the stack',
