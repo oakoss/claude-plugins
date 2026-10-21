@@ -10,20 +10,12 @@
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 
-type Grammar = {
-  grantOf: (prompt: string, previousAnswer?: string) => Record<string, unknown>;
-  holdsOf: (prompt: string, previousAnswer?: string) => boolean;
-  // Whether a message typed into a running turn replaces its grant; absent
-  // before #182.
-  dropsGrant?: (prompt: string, previousAnswer?: string) => boolean;
-  // The epic a typed message starts a job on; absent before review-cycle's
-  // epic mandate.
-  mandateOf?: (prompt: string, previousAnswer?: string) => string | null;
-};
+import type { Grammar, Group, Share } from './consent-diff.worker.ts';
 
 const CONSENT = 'plugins/review-cycle/hooks/consent.ts';
 const SOURCES = [CONSENT.replace('.ts', '.spec.ts'), 'plugins/review-cycle/hooks/register.test.ts'];
@@ -461,51 +453,68 @@ for (const lead of LEADS) {
   }
 }
 
-// A verdict as one comparable line: the grant's non-default fields in key
-// order, whether it holds (the reason a hold gives is wording, not a verdict)
-// and the epic it starts a job on.
-function verdict(
-  g: Grammar,
-  prompt: string,
-  offer: string,
-  queued: boolean,
-  jobs: boolean,
-): string {
-  const out: string[] = [];
-  const fields = Object.entries(g.grantOf(prompt, offer)).toSorted(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  for (const [key, value] of fields) {
-    if (value === false || value === 'none' || (Array.isArray(value) && value.length === 0)) {
-      continue;
-    }
-    if (value === true) out.push(key);
-    else out.push(`${key}=${Array.isArray(value) ? value.join('+') : String(value)}`);
+// A case reads the same message and offer several times (holdOf and
+// dropsGrant read the grant again, and each reads the offer's merges), so each
+// grammar's copy remembers its last grant and hold, and each offer's merges.
+// Measured on 100k cases: 58.5 to 25 µs per verdict, every verdict the same.
+// A function declared const is left as it is.
+const REMEMBER = `
+;{
+  const rebind = (assign) => {
+    try {
+      assign();
+    } catch {}
+  };
+  const lastOf = (f) => {
+    let key = null;
+    let value;
+    return (...a) => {
+      if (a.length > 2) return f(...a);
+      const k = a[0] + '\\u0000' + (a[1] ?? '');
+      if (k !== key) {
+        value = f(...a);
+        key = k;
+      }
+      return value;
+    };
+  };
+  if (typeof grantOf === 'function') rebind(() => (grantOf = lastOf(grantOf)));
+  if (typeof holdOf === 'function') rebind(() => (holdOf = lastOf(holdOf)));
+  if (typeof offeredMerges === 'function') {
+    const read = offeredMerges;
+    const seen = new Map();
+    rebind(
+      () =>
+        (offeredMerges = (answer) => {
+          if (!seen.has(answer)) seen.set(answer, read(answer));
+          return [...seen.get(answer)];
+        }),
+    );
   }
-  if (g.holdsOf(prompt, offer)) out.push('held');
-  if (queued && g.dropsGrant?.(prompt, offer)) out.push('drops a queued grant');
-  const epic = jobs ? (g.mandateOf?.(prompt, offer) ?? null) : null;
-  if (epic !== null) out.push(`starts a job on ${epic}`);
-  return out.join(', ') || 'nothing';
 }
+`;
+// A grammar with module-level let or var may keep state between calls, so it
+// is read uncached and by one worker, as a single thread would read it. A
+// mutated module-level const goes unseen.
+const stateful = (source: string): boolean => /^(?:export\s+)?(?:let|var)\s/m.test(source);
 
 async function compare(base: string, current: string): Promise<void> {
   // Copied to .mts so Node reads both versions as ES modules, without warnings.
   const dir = mkdtempSync(join(tmpdir(), 'consent-diff-'));
-  const groups = new Map<string, string[]>();
+  const groups = new Map<string, Group>();
   let cases = 0;
   try {
-    const load = async (name: string, source: string): Promise<Grammar> => {
+    const load = async (name: string, source: string): Promise<[string, Grammar]> => {
       const file = join(dir, `${name}.mts`);
-      writeFileSync(file, source);
+      writeFileSync(file, stateful(source) ? source : source + REMEMBER);
       const module = (await import(pathToFileURL(file).href)) as Partial<Grammar>;
       if (typeof module.grantOf !== 'function' || typeof module.holdsOf !== 'function') {
         throw new TypeError(`${CONSENT} (${name}) exports no grantOf and holdsOf to compare`);
       }
-      return module as Grammar;
+      return [file, module as Grammar];
     };
-    const before = await load('before', base);
-    const after = await load('after', current);
+    const [beforeFile, before] = await load('before', base);
+    const [afterFile, after] = await load('after', current);
     // Compared only where both versions read queued messages, so an older ref
     // does not report every message as newly dropping.
     const queued = before.dropsGrant !== undefined && after.dropsGrant !== undefined;
@@ -513,33 +522,75 @@ async function compare(base: string, current: string): Promise<void> {
       console.log(`dropsGrant is missing at ${ref} or here: queued messages not compared`);
     const jobs = before.mandateOf !== undefined && after.mandateOf !== undefined;
     if (!jobs) console.log(`mandateOf is missing at ${ref} or here: epic jobs not compared`);
-    for (const [prompt, offers] of offered) {
-      for (const offer of offers) {
-        cases++;
-        const was = verdict(before, prompt, offer, queued, jobs);
-        const now = verdict(after, prompt, offer, queued, jobs);
-        if (was === now) continue;
-        const key = `${was}  →  ${now}`;
-        const examples = groups.get(key) ?? [];
-        examples.push(
-          offer === ''
-            ? JSON.stringify(prompt)
-            : `${JSON.stringify(prompt)} after ${JSON.stringify(offer)}`,
-        );
-        groups.set(key, examples);
+    // Shares of about equal cases, in order, each starting at its first case's place.
+    const entries = [...offered].map(([prompt, offers]): [string, string[]] => [
+      prompt,
+      [...offers],
+    ]);
+    cases = entries.reduce((n, [, offers]) => n + offers.length, 0);
+    const workers =
+      stateful(base) || stateful(current) ? 1 : Math.max(1, availableParallelism() - 1);
+    const shares: Share[] = [];
+    let start = 0;
+    let share: Share['entries'] = [];
+    let size = 0;
+    for (const entry of entries) {
+      share.push(entry);
+      size += entry[1].length;
+      if (size >= cases / workers) {
+        shares.push({ before: beforeFile, after: afterFile, queued, jobs, entries: share, start });
+        start += size;
+        share = [];
+        size = 0;
+      }
+    }
+    if (share.length > 0) {
+      shares.push({ before: beforeFile, after: afterFile, queued, jobs, entries: share, start });
+    }
+    const results = await Promise.all(
+      shares.map(
+        (data) =>
+          new Promise<[string, Group][]>((resolve, reject) => {
+            const worker = new Worker(new URL('consent-diff.worker.ts', import.meta.url), {
+              workerData: data,
+            });
+            worker.once('message', resolve);
+            worker.once('error', reject);
+            // Ignored once the result has arrived.
+            worker.once('exit', (code) =>
+              reject(new Error(`a consent-diff worker exited ${code} without a result`)),
+            );
+          }),
+      ),
+    );
+    // Merged by each case's place, so the groups and examples are those one
+    // thread reading every case in order would print.
+    for (const result of results) {
+      for (const [key, group] of result) {
+        const into = groups.get(key);
+        if (into === undefined) {
+          groups.set(key, { ...group, examples: [...group.examples] });
+          continue;
+        }
+        into.count += group.count;
+        into.first = Math.min(into.first, group.first);
+        into.examples = [...into.examples, ...group.examples]
+          .toSorted((a, b) => a[0] - b[0])
+          .slice(0, 3);
       }
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 
-  const changed = [...groups.values()].reduce((n, e) => n + e.length, 0);
+  const changed = [...groups.values()].reduce((n, g) => n + g.count, 0);
   console.log(
     `${cases} cases (${offered.size} messages, ${asked.length + 1} offers) against ${ref}: ${changed} changed\n`,
   );
-  for (const [key, examples] of [...groups].toSorted((a, b) => b[1].length - a[1].length)) {
-    console.log(`${examples.length.toString().padStart(6)}  ${key}`);
-    for (const example of examples.slice(0, 3)) console.log(`          ${example}`);
+  const order = [...groups].toSorted((a, b) => b[1].count - a[1].count || a[1].first - b[1].first);
+  for (const [key, group] of order) {
+    console.log(`${group.count.toString().padStart(6)}  ${key}`);
+    for (const [, example] of group.examples) console.log(`          ${example}`);
   }
 }
 
