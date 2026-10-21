@@ -9,7 +9,7 @@ import {
   type Timer,
 } from 'claude-code';
 
-import type { Held, Pull, Watch, Workflow } from '../types';
+import type { Held, Pull, Stack, Watch, Workflow } from '../types';
 import {
   attemptArgs,
   estimateArgs,
@@ -18,7 +18,7 @@ import {
   parsePull,
   parsePush,
   parseQuota,
-  parseStackBase,
+  parseStack,
   parseTrunk,
   pullArgs,
   pushArgs,
@@ -29,7 +29,10 @@ import {
 } from './github';
 import { configured, loadedRung, mergesUnasked } from './ladder';
 import {
+  changesStacks,
   createdPull,
+  orderedOf,
+  submittedPulls,
   mergedPullOf,
   mergingPull,
   viewedPull,
@@ -137,6 +140,9 @@ const BURST_MS = 5000;
 const BURST_FOR_MS = 60_000;
 let pushedAt = 0;
 let burstUntil = 0;
+// When Claude last ran a `gh stack` command that can change a stack.
+let stacksChangedAt = 0;
+const STACK_STALE_MS = 10 * 60_000;
 let poller: Timer | undefined;
 let isTickFailing = false;
 let isSaveFailing = false;
@@ -500,7 +506,32 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     // first finds it merged, read again for the merge commit's runs.
     const wasMerged = w.pull?.state === 'MERGED';
     const pull = await read(wasMerged);
-    if (pull.state !== 'MERGED') return { kind: 'pull', pull };
+    const known = w.pull?.stack;
+    const askedAt = await $.clock.now();
+    const stackAt = w.pull?.stackAt ?? 0;
+    // A stack kept from before a module reload is asked again once.
+    stacksChangedAt ||= askedAt - 1;
+    const isMerged = pull.state === 'MERGED';
+    // A merged layer's trunk is fixed by an answer from a read that saw it
+    // merged, which no clock skew can fake; an open one's stack can change with
+    // any `gh stack` command, or from elsewhere.
+    const isKnown =
+      known !== undefined &&
+      (isMerged
+        ? w.pull?.stackMerged === true
+        : stackAt > stacksChangedAt && askedAt - stackAt < STACK_STALE_MS);
+    const answer = isKnown ? undefined : await stackOf($, w);
+    // No stacks API, or no access to it, answers as no stack, but leaves one
+    // known; a lookup with no answer keeps the last one, to be asked again.
+    const layered =
+      answer === undefined
+        ? { stack: known, stackAt: w.pull?.stackAt, stackMerged: w.pull?.stackMerged }
+        : {
+            stack: answer === 'unreadable' ? (known ?? null) : answer,
+            stackAt: askedAt,
+            stackMerged: isMerged,
+          };
+    if (pull.state !== 'MERGED') return { kind: 'pull', pull: { ...pull, ...layered } };
     let merged = pull;
     if (!wasMerged) {
       try {
@@ -512,9 +543,9 @@ async function readWatch($: $, w: Watch): Promise<Read> {
         merged = { ...pull, workflows: [], mergeRuns: null };
       }
     }
-    // Asked until the stacks API answers, then kept.
-    const trunk = w.pull?.trunk !== undefined ? w.pull.trunk : await trunkOf($, w);
-    const onTrunk = { ...merged, trunk, base: trunk ?? merged.base };
+    const { stack } = layered;
+    const trunk = stack === undefined ? undefined : (stack?.trunk ?? null);
+    const onTrunk = { ...merged, ...layered, base: trunk ?? merged.base };
     // Until the stacks API answers, the base may be the layer below, whose
     // history never holds the merge commit.
     if (trunk === undefined || !needsTrunk(onTrunk, await $.clock.now())) {
@@ -542,11 +573,9 @@ async function readWatch($: $, w: Watch): Promise<Read> {
   return { kind: 'pull', pull: pushedPull(branch, pushedAt, pushed.runs) };
 }
 
-// The trunk of the stack a merged pull request was a layer of, null when it
-// was in none or the host has no stacks API, or undefined when GitHub did not
-// say, so a read after the retry delay asks again. It is REST, so its rate
-// limit is not the host's GraphQL one and pauses nothing.
-async function trunkOf($: $, w: Watch): Promise<string | null | undefined> {
+// Null in no stack, 'unreadable' without the stacks API or access to it, and
+// undefined when GitHub did not say. REST, so its rate limit pauses no GraphQL read.
+async function stackOf($: $, w: Watch): Promise<Stack | null | 'unreadable' | undefined> {
   const now = await $.clock.now();
   const key = `${w.host}/stack/${w.repo}#${w.number}`;
   const pause = paused.get(w.host);
@@ -559,12 +588,13 @@ async function trunkOf($: $, w: Watch): Promise<string | null | undefined> {
       timeoutMs: VIEW_TIMEOUT_MS,
     });
     if (r.exitCode !== 0) {
-      const isMissing = /HTTP 404\b/.test(r.stderr) && !isRateLimited(r.stdout, r.stderr);
-      return isMissing ? null : undefined;
+      // No stacks API, or a token that may not read it; a rate limit is a 403 too.
+      const isMissing = /HTTP 40[34]\b/.test(r.stderr) && !isRateLimited(r.stdout, r.stderr);
+      return isMissing ? 'unreadable' : undefined;
     }
-    const trunk = parseStackBase(r.stdout);
+    const stack = parseStack(r.stdout);
     asked.delete(key);
-    return trunk;
+    return stack;
   } catch {
     return undefined;
   }
@@ -1280,17 +1310,27 @@ export const register: Register = (on, options) => {
       const ids = new Set(fresh.map((p) => idOf(p)));
       await update($, watches, (all) => [...all.filter((w) => !ids.has(idOf(w))), ...fresh]);
     }
+    // A failed submit may still have opened pull requests and changed a stack.
+    if (changesStacks(e.command)) stacksChangedAt = await $.clock.now();
+    const submitted = submittedPulls(e.command, stdout);
+    const created = r.isError ? null : createdPull(e.command, stdout);
+    const opened = [...(created ? [created] : []), ...submitted];
+    if (opened.length > 0) {
+      await update($, watches, (all) => {
+        const ids = new Set(all.map((w) => idOf(w)));
+        const added: Watch[] = [];
+        for (const t of opened) {
+          if (ids.has(idOf(t))) continue;
+          ids.add(idOf(t));
+          added.push({ ...t, checkedAt: 0 });
+        }
+        return [...all, ...added];
+      });
+    }
     if (r.isError) return r;
     // A merged pull request nothing watched yet is followed onto its base
     // branch. Not awaited, so the merge's result waits on no gh call.
     if (merging) void followMerge($, merging, startedAt).catch(() => null);
-    const target = createdPull(e.command, stdout);
-    if (target) {
-      const id = idOf(target);
-      await update($, watches, (all) =>
-        all.some((w) => idOf(w) === id) ? all : [...all, { ...target, checkedAt: 0 }],
-      );
-    }
     return r;
   });
 
@@ -1309,7 +1349,7 @@ export const register: Register = (on, options) => {
     // between them truncates.
     return (
       <Box flexDirection="column" marginTop={1}>
-        {list.map((w) => (
+        {orderedOf(list).map((w) => (
           <Box key={`row-${idOf(w)}`} flexDirection="row">
             {lineOf(w, now, known, e.props.bodyColumns).map((s: Segment, i) =>
               s.url ? (

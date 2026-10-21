@@ -10,9 +10,16 @@ const PR_URL = new RegExp(
 // leading VAR=value assignments.
 const START = String.raw`(?:^|[;&|(\n])\s*(?:\w+=\S*\s+)*`;
 const PR_CREATE = new RegExp(String.raw`${START}gh\s+pr\s+create\b`);
+const STACK_SUBMIT = new RegExp(String.raw`${START}gh\s+stack\s+submit\b`);
+// What can add, drop or merge a stack's layers.
+const STACK_CHANGE = new RegExp(
+  String.raw`${START}gh\s+stack\s+(?:init|add|submit|push|sync|merge|modify|unstack|delete|link)\b`,
+);
+// gh stack submit's line for each pull request it opened, after its success mark.
+const SUBMIT_CREATED = /^(?:✓ )?Created PR #\d+ \((\S+)\) for \S+\s*$/gm;
 // git's own options may come before the subcommand: -C dir, -c key=value, --flag.
 const MOVES_PR = new RegExp(
-  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b)`,
+  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b|gh\s+stack\s+(?:submit|push|sync|merge)\b)`,
 );
 
 const GIT_PUSH = new RegExp(String.raw`${START}git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b`);
@@ -112,6 +119,46 @@ export type Target = Pick<Watch, 'host' | 'repo' | 'number' | 'url'>;
 export function createdPull(command: string, stdout: string): Target | null {
   if (!PR_CREATE.test(command)) return null;
   return pullAt(stdout);
+}
+
+// The pull requests a `gh stack submit` opened, bottom layer first.
+export function submittedPulls(command: string, stdout: string): Target[] {
+  if (!STACK_SUBMIT.test(command)) return [];
+  return [...stdout.matchAll(SUBMIT_CREATED)].flatMap((m) => pullAt(m[1]!) ?? []);
+}
+
+// After one, every watched pull request's stack is asked again.
+export function changesStacks(command: string): boolean {
+  return STACK_CHANGE.test(command);
+}
+
+// A layer's place in its stack, numbered from the bottom as GitHub's badge is;
+// null for a lane.
+export function layerOf(watch: Watch): { stack: number; at: number; of: number } | null {
+  const stack = watch.pull?.stack;
+  const at = stack ? stack.layers.indexOf(watch.number) + 1 : 0;
+  if (!stack || at === 0) return null;
+  return { stack: stack.number, at, of: stack.layers.length };
+}
+
+function stackKeyOf(w: Watch): string | null {
+  const layer = layerOf(w);
+  return layer === null ? null : `${w.host}/${w.repo}#${layer.stack}`;
+}
+
+// Each stack's lines together, top layer first, where its first line was;
+// lanes keep their place.
+export function orderedOf(list: readonly Watch[]): Watch[] {
+  const placed = new Set<string>();
+  return list.flatMap((w) => {
+    const key = stackKeyOf(w);
+    if (key === null) return [w];
+    if (placed.has(key)) return [];
+    placed.add(key);
+    return list
+      .filter((other) => stackKeyOf(other) === key)
+      .toSorted((a, b) => layerOf(b)!.at - layerOf(a)!.at);
+  });
 }
 
 // The pull request `gh pr view --json url,…` names, with the rest of its answer.
@@ -436,7 +483,7 @@ export function needsTrunk(pull: Pull, now: number): boolean {
   // Outside a stack, a merge commit with no runs was skipped on purpose, as by
   // a path filter, and a later commit's runs are someone else's.
   if (runs.workflows.length === 0)
-    return typeof pull.trunk === 'string' && !isMergeFresh(pull, now);
+    return typeof pull.stack?.trunk === 'string' && !isMergeFresh(pull, now);
   return runs.workflows.some(isFailedRun);
 }
 
@@ -971,7 +1018,21 @@ function markSegments(w: Workflow): Segment[] {
 
 // One line of the band. A running gate whose length is known draws a bar that
 // stops short of full until the run ends.
+// A stack layer's line carries its place after the label, as `⧉ #236 1/2`.
 export function lineOf(
+  watch: Watch,
+  now: number,
+  estimates: Record<string, number>,
+  columns: number,
+): Segment[] {
+  const layer = layerOf(watch);
+  if (layer === null) return bodyOf(watch, now, estimates, columns);
+  const badge = { text: ` ⧉ #${layer.stack} ${layer.at}/${layer.of}`, isDim: true };
+  const [label, ...rest] = bodyOf(watch, now, estimates, columns - badge.text.length);
+  return [label!, badge, ...rest];
+}
+
+function bodyOf(
   watch: Watch,
   now: number,
   estimates: Record<string, number>,

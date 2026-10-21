@@ -7,7 +7,7 @@ import {
   parseEstimate,
   parsePull,
   parseQuota,
-  parseStackBase,
+  parseStack,
   parseTrunk,
   pullArgs,
   pushArgs,
@@ -383,26 +383,50 @@ const took = (s: number, attempt = 1) => ({
 });
 const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
 
-describe('parseStackBase', () => {
-  test("a stack layer's trunk", () => {
-    const stacks = [{ number: 236, base: { ref: 'main' }, pull_requests: [{ number: 235 }] }];
-    expect(parseStackBase(JSON.stringify(stacks))).toBe('main');
+describe('parseStack', () => {
+  test("a stack's number, trunk and layers, bottom first", () => {
+    const stacks = [
+      {
+        number: 236,
+        base: { ref: 'main' },
+        pull_requests: [{ number: 234 }, { number: 235 }],
+      },
+    ];
+    expect(parseStack(JSON.stringify(stacks))).toEqual({
+      number: 236,
+      trunk: 'main',
+      layers: [234, 235],
+    });
   });
   test('the first stack it is in', () => {
-    const stacks = [{ base: { ref: 'main' } }, { base: { ref: 'develop' } }];
-    expect(parseStackBase(JSON.stringify(stacks))).toBe('main');
+    const stacks = [
+      { number: 236, base: { ref: 'main' } },
+      { number: 240, base: { ref: 'develop' } },
+    ];
+    expect(parseStack(JSON.stringify(stacks))).toEqual({ number: 236, trunk: 'main', layers: [] });
   });
-  test.each(['[]', '[{"base":{}}]', '[{"base":{"ref":""}}]'])('%s names no trunk', (stdout) => {
-    expect(parseStackBase(stdout)).toBeNull();
+  test('[] names no stack', () => {
+    expect(parseStack('[]')).toBeNull();
+  });
+  test.each([
+    '[{"number":236,"base":{}}]',
+    '[{"number":236,"base":{"ref":""}}]',
+    '[{"base":{"ref":"main"}}]',
+    '[{"number":236,"base":{"ref":"main"},"pull_requests":[{"number":234},{"number":"x"}]}]',
+    '[{"number":236,"base":{"ref":"main"},"pull_requests":[{}]}]',
+  ])('%s is no answer: a place it gives would be wrong', (stdout) => {
+    expect(() => parseStack(stdout)).toThrow(
+      'gh printed a stack without its number, trunk or layers',
+    );
   });
   test.each(['{"message":"Not Found","status":"404"}', '{"0":{"base":{"ref":"x"}}}'])(
     '%s is no answer, not no stack',
     (stdout) => {
-      expect(() => parseStackBase(stdout)).toThrow('gh printed no list of stacks');
+      expect(() => parseStack(stdout)).toThrow('gh printed no list of stacks');
     },
   );
   test('throws on what is not JSON', () => {
-    expect(() => parseStackBase('nope')).toThrow('gh printed something other than JSON');
+    expect(() => parseStack('nope')).toThrow('gh printed something other than JSON');
   });
   test('asks the stacks API by pull request, on the host', () => {
     expect(stackArgs('ghe.example.com', 'o/r', 235)).toEqual([

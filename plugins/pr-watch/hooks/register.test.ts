@@ -25,6 +25,8 @@ type Gh = {
   // GitHub's stacks API answer for the pull request; `[]` (no stack) when unset.
   // That many stacks calls fail first, with this stderr when set.
   stack?: string;
+  // The stacks API's answer for these pull request numbers, over `stack`.
+  stacks?: Record<number, string>;
   stackFails?: number;
   stackError?: string;
   // The trunk history query's answer; a branch that is gone when unset. Only
@@ -54,6 +56,8 @@ type Gh = {
   // Holds the first PR read, every pushed-branch read, or the next gh pr view,
   // until the test calls `release`.
   holdFirst?: boolean;
+  // Holds the next stacks call, answering what it would have when asked.
+  holdStack?: boolean;
   holdPush?: boolean;
   holdView?: boolean;
   // pr-watch's prompts are refused: the hook throws, so the kit finds nothing beneath.
@@ -102,6 +106,43 @@ function prJson(over: Record<string, unknown> = {}, suites: unknown[] = []): str
       },
     },
   });
+}
+
+const pullUrl = (n: number) => `https://github.com/o/r/pull/${n}`;
+
+// The stacks API's answer for a layer of stack `number` in o/r.
+function stackJson(number: number, layers: number[]): string {
+  const pullRequests = layers.map((n) => ({ number: n, state: 'open', merged_at: null }));
+  return JSON.stringify([
+    { number, base: { ref: 'main' }, open: true, pull_requests: pullRequests },
+  ]);
+}
+
+// What gh stack submit prints, as it did for stack #236, opening these o/r pull requests.
+function submitOut(numbers: number[], more: string[] = []): string {
+  const created = numbers.map((n) => `✓ Created PR #${n} (${pullUrl(n)}) for feat/l${n}`);
+  return ['Checking stack state...', 'Pushing to origin...', ...created, ...more].join('\n');
+}
+
+// A merged pull request into develop whose stacks lookup fails with `stackError`
+// is asked once in half an hour and keeps its base.
+async function askedOnceFor($: any, on: any, stackError: string): Promise<void> {
+  const clock = mock.clock(on, { now: T0 });
+  const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+  merged.data.repository.pullRequest.baseRefName = 'develop';
+  const seen = world(on, { pr: JSON.stringify(merged), stackFails: 99, stackError });
+  await start($);
+  await create($);
+  await clock.advance(1000);
+  await clock.advance(30 * 60_000);
+  expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
+  expect(await lineIn(await band($))).toMatch(/^#128 merged into develop · /);
+}
+
+// The first line the band draws.
+async function firstRow($: any): Promise<string | undefined> {
+  const rows = await rowsIn(await band($));
+  return rows[0];
 }
 
 function ciSuite(summary: Record<string, unknown>, jobs: unknown[] = []) {
@@ -320,12 +361,21 @@ function world(
       return { value: { exitCode: 1, stdout: gh.pr, stderr: 'gh: Resource not accessible' } };
     }
     if (argv.includes('/stacks')) {
+      if (gh.holdStack) {
+        gh.holdStack = false;
+        const asked = Number(/pull_request=(\d+)/.exec(argv)?.[1]);
+        const stdout = gh.stacks?.[asked] ?? gh.stack ?? '[]';
+        return new Promise((resolve) => {
+          gh.release = () => resolve({ value: { exitCode: 0, stdout, stderr: '' } });
+        });
+      }
       if ((gh.stackFails ?? 0) > 0) {
         gh.stackFails = (gh.stackFails ?? 0) - 1;
         if (gh.stackError === undefined) return failed;
         return { value: { exitCode: 1, stdout: '', stderr: gh.stackError } };
       }
-      return { value: { exitCode: 0, stdout: gh.stack ?? '[]', stderr: '' } };
+      const asked = Number(/pull_request=(\d+)/.exec(argv)?.[1]);
+      return { value: { exitCode: 0, stdout: gh.stacks?.[asked] ?? gh.stack ?? '[]', stderr: '' } };
     }
     if (argv.includes('history(first')) {
       if (gh.trunkLimited) {
@@ -386,6 +436,14 @@ async function lineIn(ui: any): Promise<string | undefined> {
   expect(await ui.find({ type: 'Text', text: 'beneath' })).toBeDefined();
   const row = await ui.find({ key: `row-${ID}` });
   return row?.text.replace(/ ×$/, '');
+}
+
+// Every line the band draws, top to bottom, their × left off.
+async function rowsIn(ui: any): Promise<string[]> {
+  const boxes: any[] = await ui.findAll({ type: 'Box' });
+  return boxes
+    .filter((b) => String(b.key ?? b.props?.key ?? '').startsWith('row-'))
+    .map((b) => b.text.replace(/ ×$/, ''));
 }
 
 // The color the band draws a Text of this text in; undefined when it has none.
@@ -722,6 +780,305 @@ describe('a pull request Claude opens', () => {
     await clock.advance(1000);
     const ui = await band($);
     expect(await ui.findAll({ key: `row-${ID}` })).toHaveLength(1);
+  });
+
+  test('watches every pull request gh stack submit opened, with no watch call', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const printed = submitOut([234, 235], ['⚠ failed to create PR for feat/two']);
+    const seen = world(on, { pr: prJson() }, printed);
+    await start($);
+    await create($, 'gh stack submit --auto --open');
+    await clock.advance(1000);
+    expect(await rowsIn(await band($))).toEqual(['#234 ✓ ready to merge', '#235 ✓ ready to merge']);
+    expect(seen.runs.filter((r) => r.includes('graphql'))).toHaveLength(2);
+  });
+
+  test('a submit adds none twice, and none already watched', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const printed = `${pullUrl(234)}\n${submitOut([234, 235, 235])}`;
+    world(on, { pr: prJson() }, printed);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await create($, 'gh stack submit --auto');
+    await clock.advance(1000);
+    expect(await rowsIn(await band($))).toEqual(['#234 ✓ ready to merge', '#235 ✓ ready to merge']);
+  });
+
+  test('a submit that failed after opening some pull requests still watches them', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: prJson() }, submitOut([234]), (command) => command.includes('submit'));
+    await start($);
+    await create($, 'gh stack submit --auto');
+    await clock.advance(1000);
+    expect(await rowsIn(await band($))).toEqual(['#234 ✓ ready to merge']);
+  });
+
+  test("a three-layer stack's lines carry their places, top layer first", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const printed = submitOut([234, 235, 237]);
+    const stack = stackJson(236, [234, 235, 237]);
+    world(on, { pr: prJson(), stacks: { 234: stack, 235: stack, 237: stack } }, printed);
+    await start($);
+    await create($, 'gh stack submit --auto');
+    await clock.advance(1000);
+    expect(await rowsIn(await band($))).toEqual([
+      '#237 ⧉ #236 3/3 ✓ ready to merge',
+      '#235 ⧉ #236 2/3 ✓ ready to merge',
+      '#234 ⧉ #236 1/3 ✓ ready to merge',
+    ]);
+  });
+
+  test('two stacks open beside a lane keep apart, each where its first line was', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const a = stackJson(236, [234, 235]);
+    const b = stackJson(240, [238, 239]);
+    const stacks = { 234: a, 235: a, 238: b, 239: b };
+    // Watched in this order; #300 is in no stack.
+    world(on, { pr: prJson(), stacks }, submitOut([234, 300, 238, 235, 239]));
+    await start($);
+    await create($, 'gh stack submit --auto');
+    await clock.advance(1000);
+    expect(await rowsIn(await band($))).toEqual([
+      '#235 ⧉ #236 2/2 ✓ ready to merge',
+      '#234 ⧉ #236 1/2 ✓ ready to merge',
+      '#300 ✓ ready to merge',
+      '#239 ⧉ #240 2/2 ✓ ready to merge',
+      '#238 ⧉ #240 1/2 ✓ ready to merge',
+    ]);
+  });
+
+  test('a gh stack command asks every watched stack again; another command does not', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stacks: { 234: stackJson(236, [234]) } };
+    const seen = world(on, gh, `${pullUrl(234)}\n`);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 1/1 ✓ ready to merge');
+    const asks = () => seen.runs.filter((r) => r.includes('/stacks')).length;
+    const before = asks();
+    await create($, 'git status');
+    await clock.advance(120_000);
+    expect(asks()).toBe(before);
+    gh.stacks = { 234: stackJson(236, [234, 235]) };
+    await create($, 'gh stack push');
+    await clock.advance(11_000);
+    expect(asks()).toBe(before + 1);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+  });
+
+  test('a read in flight when a gh stack command runs does not keep the old stack', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stacks: { 234: stackJson(236, [234]) } };
+    world(on, gh, `${pullUrl(234)}\n`);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 1/1 ✓ ready to merge');
+    gh.holdFirst = true;
+    await clock.advance(60_000);
+    gh.stacks = { 234: stackJson(236, [234, 235]) };
+    await create($, 'gh stack submit --auto');
+    gh.release?.();
+    // The held read itself asks again, before any later poll.
+    await clock.advance(1);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+  });
+
+  test('a stacks lookup in flight when a gh stack command runs is asked again', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stacks: { 234: stackJson(236, [234]) } };
+    world(on, gh, `${pullUrl(234)}\n`);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.holdStack = true;
+    await create($, 'gh stack push');
+    await clock.advance(11_000);
+    gh.stacks = { 234: stackJson(236, [234, 235]) };
+    await create($, 'gh stack sync');
+    gh.release?.();
+    await clock.advance(120_000);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+  });
+
+  test('a gh stack command that failed still has every stack asked again', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stacks: { 234: stackJson(236, [234]) } };
+    world(on, gh, `${pullUrl(234)}\n`, (command) => command.startsWith('gh stack'));
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    gh.stacks = { 234: stackJson(236, [234, 235]) };
+    await create($, 'gh stack submit --auto');
+    await clock.advance(11_000);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+  });
+
+  test('a stack known before a gh stack command is asked again once it merged', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: '[]' };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
+    gh.stack = stackJson(236, [127, 128]);
+    await create($, 'gh stack link 127 128');
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    gh.pr = JSON.stringify(merged);
+    // A ready line is read once a minute; gh stack link starts no burst.
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+  });
+
+  test("a lane stacked elsewhere and then merged names the stack's trunk", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: '[]' };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
+    gh.stack = stackJson(236, [127, 128]);
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    gh.pr = JSON.stringify(merged);
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+  });
+
+  test('a merged layer whose stacks lookup failed at the merge asks again', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: '[]' };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.stack = stackJson(236, [127, 128]);
+    gh.stackFails = 1;
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    // Merged after the lane's last answer, as a real merge is.
+    merged.data.repository.pullRequest.mergedAt = new Date(T0 + 30_000).toISOString();
+    gh.pr = JSON.stringify(merged);
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toMatch(/^#128 merged into docs\/lower-layer · /);
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+  });
+
+  test('a merged layer asks again after a failed lookup whatever the clocks say', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: stackJson(236, [127, 128]) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.stack = '[]';
+    gh.stackFails = 1;
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    // GitHub's clock behind this one: its mergedAt precedes the open read.
+    merged.data.repository.pullRequest.mergedAt = new Date(T0 - 60_000).toISOString();
+    gh.pr = JSON.stringify(merged);
+    await clock.advance(61_000);
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toMatch(/^#128 merged into develop · /);
+  });
+
+  test('a merged layer refused the stacks API keeps its stack and asks no more', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: stackJson(236, [127, 128]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.stackFails = 99;
+    gh.stackError = 'gh: Not Found (HTTP 404)\n';
+    gh.pr = mergedJson('IN_PROGRESS', null);
+    await clock.advance(61_000);
+    const asks = seen.runs.filter((r) => r.includes('/stacks')).length;
+    await clock.advance(30 * 60_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(asks);
+    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+  });
+
+  test('an open pull request on a host with no stacks API is asked every 10 minutes, no more', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const stackError = 'gh: Not Found (HTTP 404)\n';
+    const seen = world(on, { pr: prJson(), stackFails: 99, stackError });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    await clock.advance(25 * 60_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(3);
+    expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
+  });
+
+  test('a layer unstacked and then merged keeps its own base', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: stackJson(236, [127, 128]) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toBe('#128 ⧉ #236 2/2 ✓ ready to merge');
+    gh.stack = '[]';
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'develop';
+    gh.pr = JSON.stringify(merged);
+    await create($, 'gh stack unstack');
+    await clock.advance(61_000);
+    expect(await lineIn(await band($))).toMatch(/^#128 merged into develop · /);
+  });
+
+  test('a known stack outlasts a stacks lookup refused after a gh stack command', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stack: stackJson(236, [127, 128]) };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    gh.stackFails = 1;
+    gh.stackError = 'gh: Resource not accessible by integration (HTTP 403)\n';
+    await create($, 'gh stack sync');
+    await clock.advance(11_000);
+    expect(await lineIn(await band($))).toBe('#128 ⧉ #236 2/2 ✓ ready to merge');
+  });
+
+  test("an open layer's stack is asked again every 10 minutes, for changes made elsewhere", async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), stacks: { 234: '[]' } };
+    world(on, gh, `${pullUrl(234)}\n`);
+    await start($);
+    await create($, 'gh pr create --fill');
+    await clock.advance(1000);
+    expect(await firstRow($)).toBe('#234 ✓ ready to merge');
+    gh.stacks = { 234: stackJson(236, [233, 234]) };
+    await clock.advance(5 * 60_000);
+    expect(await firstRow($)).toBe('#234 ✓ ready to merge');
+    await clock.advance(10 * 60_000);
+    expect(await firstRow($)).toBe('#234 ⧉ #236 2/2 ✓ ready to merge');
+  });
+
+  test('a merged layer keeps its trunk through a gh stack command', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
+    merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
+    const gh: Gh = { pr: JSON.stringify(merged), stack: stackJson(236, [128]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 1\/1 merged into main · /);
+    gh.stack = '[]';
+    const asks = seen.runs.filter((r) => r.includes('/stacks')).length;
+    await create($, 'gh stack merge 236 --yes --squash');
+    await clock.advance(30_000);
+    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(asks);
+    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 1\/1 merged into main · /);
   });
 
   test('gives the band to a survey', async ($, on) => {
@@ -1849,7 +2206,7 @@ describe('the query', () => {
     const clock = mock.clock(on, { now: T0 });
     const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
     merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
-    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const stack = stackJson(236, []);
     const seen = world(on, { pr: JSON.stringify(merged), stack, stackFails: 1 });
     await start($);
     await create($);
@@ -1863,17 +2220,11 @@ describe('the query', () => {
   });
 
   test('a host with no stacks API is asked once, and the base stands', async ($, on) => {
-    const clock = mock.clock(on, { now: T0 });
-    const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
-    merged.data.repository.pullRequest.baseRefName = 'develop';
-    const stackError = 'gh: Not Found (HTTP 404)\n';
-    const seen = world(on, { pr: JSON.stringify(merged), stackFails: 9, stackError });
-    await start($);
-    await create($);
-    await clock.advance(1000);
-    await clock.advance(120_000);
-    expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(1);
-    expect(await lineIn(await band($))).toMatch(/^#128 merged into develop · /);
+    await askedOnceFor($, on, 'gh: Not Found (HTTP 404)\n');
+  });
+
+  test('a token that may not read the stacks API is asked once, and the base stands', async ($, on) => {
+    await askedOnceFor($, on, 'gh: Resource not accessible by integration (HTTP 403)\n');
   });
 
   test("a rate-limited stacks lookup pauses none of the host's reads", async ($, on) => {
@@ -1906,7 +2257,7 @@ describe('the query', () => {
     const clock = mock.clock(on, { now: T0 });
     const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
     merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
-    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const stack = stackJson(236, []);
     world(on, { pr: JSON.stringify(merged), stack, mergedFails: 1 });
     await start($);
     await create($);
@@ -2152,7 +2503,7 @@ describe('a merged pull request', () => {
   test("a stack's lower layer, whose merge commit gets no runs, follows the layer above's", async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const lower = onMerge(mergedJson('IN_PROGRESS', null), []);
-    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const stack = stackJson(236, []);
     const gh: Gh = { pr: JSON.stringify(lower), stack, trunk: above('IN_PROGRESS', null) };
     const seen = world(on, gh);
     await start($);
@@ -2215,7 +2566,7 @@ describe('a merged pull request', () => {
     const clock = mock.clock(on, { now: T0 });
     const pr = onMerge(mergedJson('COMPLETED', 'FAILURE'));
     pr.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
-    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const stack = stackJson(236, []);
     const trunk = trunkJson([
       ['next', [releaseSuite('COMPLETED', 'SUCCESS', 12)]],
       ['m', []],
@@ -2250,7 +2601,7 @@ describe('a merged pull request', () => {
   test('a stack layer with no runs whose trunk cannot be read says so, rather than leave', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const pr = JSON.stringify(onMerge(mergedJson('IN_PROGRESS', null), []));
-    const stack = JSON.stringify([{ base: { ref: 'main' } }]);
+    const stack = stackJson(236, []);
     const trunk = JSON.stringify({ errors: [{ message: 'Something went wrong' }] });
     world(on, { pr, stack, trunk });
     await start($);
