@@ -379,11 +379,32 @@ describe('a push through GitHub', () => {
 });
 
 describe('a merge', () => {
-  test('allowed either way, looks nothing up', async () => {
-    const w = world('never stop');
-    const r = await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['1'] }], w);
-    expect(r).toMatchObject({ ran: [{ step: 'merge' }] });
-    expect(w.calls).toEqual(['ladder']);
+  test('allowed either way and unasked, is noted as the step it is', async () => {
+    const one: GhAction = { kind: 'merge', admin: false, auto: false, lookup: ['1'] };
+    const plain = world('never stop');
+    expect(await judge([one], plain)).toEqual(merged('never stop'));
+    expect(plain.calls).toEqual(['ladder', 'pullRequest 1']);
+    const version = world('never stop', { pullRequest: { out: VERSION_PR } });
+    expect(await judge([{ ...one, auto: true }], version)).toEqual({
+      ran: [{ step: 'release', ladder: { stopBefore: 'never stop', source: 'local' } }],
+    });
+    // Pointing and the note read the pull request once between them.
+    const away = world('never stop', { branch: { out: 'main' } });
+    expect(await judge([merge(false)], away, grant({ merge: true }))).toEqual(merged('never stop'));
+    expect(away.calls.filter((c) => c.startsWith('pullRequest'))).toHaveLength(1);
+    // A lookup that fails still runs what the setting allows, noted as a merge.
+    const lost = world('never stop', { pullRequest: { asks: 'looking it up failed (x)' } });
+    expect(await judge([one], lost)).toEqual(merged('never stop'));
+  });
+
+  test('a release asked for does not hide an unasked merge of another', async () => {
+    const one: GhAction = { kind: 'merge', admin: false, auto: false, lookup: ['1'] };
+    expect(await judge([one], world('release'), grant({ release: true }))).toEqual(
+      merged('release'),
+    );
+    // Of the version pull request, the release was asked for, so nothing is noted.
+    const version = world('release', { pullRequest: { out: VERSION_PR } });
+    expect(await judge([one], version, grant({ release: true }))).toEqual({ ran: [] });
   });
 
   test("of oakum's version pull request is a release", async () => {

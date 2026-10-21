@@ -4305,6 +4305,16 @@ describe('the stop-before setting', () => {
     await say($, 'release it');
     expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
   });
+  test('an unasked merge of the version pull request is noted as a release', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('never stop') },
+      git: github('oakum/version-packages'),
+    });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr merge 62 --auto');
+    expect(ran(r)).toBe(true);
+    expect(has(contextOf(r), 'ran a release without asking')).toBe(true);
+  });
   test('"merge the release" merges the version pull request, and no other', async ($, on) => {
     const w = fakeWorld(on, {
       settings: { local: stops('merge') },
