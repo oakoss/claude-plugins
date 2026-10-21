@@ -1143,8 +1143,9 @@ function lookupOf(
     } else if (MERGE_VALUE.has(t)) i++;
     else if (!t.startsWith('-') && selector === null) selector = rest[i] ?? null;
   }
-  if (context === 'beside') return { cannot: 'beside' };
-  if (context === 'elsewhere' || target?.dynamic) return { cannot: 'elsewhere' };
+  const named = selector === null ? {} : { selector: selector.text };
+  if (context === 'beside') return { cannot: 'beside', ...named };
+  if (context === 'elsewhere' || target?.dynamic) return { cannot: 'elsewhere', ...named };
   return [...(selector ? [selector.text] : []), ...(target ? ['--repo', target.text] : [])];
 }
 

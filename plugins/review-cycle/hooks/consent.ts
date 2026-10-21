@@ -1702,6 +1702,10 @@ function namedFrom(
 export const NAMED_ELSEWHERE = '?';
 
 // The pull request numbers a text names: #131, PR 131, /pull/131.
+export function prNumbers(text: string): readonly string[] {
+  return [...numbers(text)];
+}
+
 function numbers(text: string): Set<string> {
   return new Set(
     [...text.matchAll(/(?:#|\b(?:pr|pull request)\s+#?|\/pull\/)(\d+)\b/gi)].map((m) => m[1] ?? ''),
@@ -1709,9 +1713,10 @@ function numbers(text: string): Set<string> {
 }
 
 // What "merge it" names: the pull requests the end of the previous answer
-// names (#131, PR 131, /pull/131), none meaning any. Several, or a message
-// naming numbers or the version PR itself ("merge it; do not merge 130"),
-// name none by name, so the version PR is looked up and asks.
+// names (#131, PR 131, /pull/131), none meaning any the conversation pointed
+// at, which the gate checks. Several, or a message naming numbers or the
+// version PR itself ("merge it; do not merge 130"), name none by name, so the
+// version PR is looked up and asks.
 function unnamedMerge(typed: string, previousAnswer: string): readonly string[] {
   const text = unquote(typed);
   if (/#?\b\d+\b/.test(text) || /\b(version|release)\s+(pr|pull\s+request)\b/i.test(text)) {

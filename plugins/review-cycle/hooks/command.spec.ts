@@ -1894,10 +1894,7 @@ describe('gh steps', () => {
     expect(ghActions('gh pr merge 1 -b x --auto')).toMatchObject([{ auto: true }]);
   });
   test('a pull request something else may pick cannot be looked up', () => {
-    const elsewhere = [
-      { kind: 'merge', admin: false, auto: false, lookup: { cannot: 'elsewhere' } },
-    ];
-    const beside = [{ kind: 'merge', admin: false, auto: false, lookup: { cannot: 'beside' } }];
+    const elsewhere = cannot('elsewhere', '62');
     expect(ghActions('GH_REPO=o/r gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('env -C ../other gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('env --chdir=/tmp gh pr merge 62')).toEqual(elsewhere);
@@ -1905,10 +1902,11 @@ describe('gh steps', () => {
     expect(ghActions('env GIT_DIR=../other/.git gh pr merge 62')).toEqual(elsewhere);
     expect(ghActions('gh pr merge 62 -R "$REPO"')).toEqual(elsewhere);
     expect(kinds('echo 62 | xargs gh pr merge')).toEqual(['unread']);
-    expect(ghActions('cd ../other && gh pr merge 62')).toEqual(beside);
-    expect(ghActions('gh pr checkout 62 && gh pr merge')).toEqual(beside);
-    expect(ghActions('export GH_REPO=o/r; gh pr merge 62')).toEqual(beside);
-    expect(ghActions('gh pr merge 116 && echo merged')).toEqual(beside);
+    expect(ghActions('cd ../other && gh pr merge 62')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr checkout 62 && gh pr merge')).toEqual(cannot('beside'));
+    expect(ghActions('export GH_REPO=o/r; gh pr merge 62')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 116 && echo merged')).toEqual(cannot('beside', '116'));
+    expect(ghActions('cd x && gh pr merge feat/y')).toEqual(cannot('beside', 'feat/y'));
     // gh's settings that pick no pull request leave the lookup in place.
     expect(ghActions('GH_PROMPT_DISABLED=1 gh pr merge 62')).toEqual([
       { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
@@ -1918,3 +1916,16 @@ describe('gh steps', () => {
     expect(classify('git push && ls toString x').kind).not.toBe('error');
   });
 });
+
+// A merge the gate cannot look up keeps the pull request it names, which an
+// unnamed merge is bound by.
+function cannot(where: 'elsewhere' | 'beside', selector?: string) {
+  return [
+    {
+      kind: 'merge',
+      admin: false,
+      auto: false,
+      lookup: { cannot: where, ...(selector !== undefined && { selector }) },
+    },
+  ];
+}
