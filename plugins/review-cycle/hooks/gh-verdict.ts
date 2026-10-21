@@ -55,6 +55,11 @@ export type GhLookups = {
   repoUrl: () => Promise<Lookup>;
   // The branch the checkout is on, empty when HEAD is on none.
   branch: () => Promise<Lookup>;
+  // The default branch and the rolled-up state of its head commit's checks and
+  // statuses: "<branch> <SUCCESS|PENDING|EXPECTED|FAILURE|ERROR|NONE>".
+  mainChecks: () => Promise<Lookup>;
+  // This repository's version pull requests, newest first: "<n>:<STATE> …".
+  versionPulls: () => Promise<Lookup>;
   // The pull request `gh pr view <lookup>` names, `what` saying which in a failure.
   pullRequest: (
     lookup: readonly string[],
@@ -164,7 +169,7 @@ function prRefusal(shown: string, ladder: InForce, held: Hold, unread: UnreadOff
 }
 
 // The branch oakum's version pull request comes from: merging it is the release.
-const VERSION_BRANCH = 'oakum/version-packages';
+export const VERSION_BRANCH = 'oakum/version-packages';
 
 const CANNOT: Record<'elsewhere' | 'unnamed', string> = {
   elsewhere:
@@ -294,6 +299,48 @@ async function pointedAt(
 
 const MERGED = 'the pull request it merges';
 
+// Why the default branch is not done yet ("when main is done"), or null when
+// every check on its head commit finished without failing.
+// Whether `t` is the version pull request a standing release covers: the one
+// open when the user asked, or the first opened after the newest then. A read
+// that fails covers nothing.
+async function releaseMatches(
+  lookups: GhLookups,
+  lookup: readonly string[],
+  t: Target,
+  release: NonNullable<Standing['release']>,
+): Promise<boolean> {
+  const which = await mergeStep(lookups, lookup);
+  if (!('step' in which) || which.step !== 'release') return false;
+  if ('pr' in release) return t.number === release.pr;
+  const listed = await lookups.versionPulls();
+  if (listed.asks !== undefined) return false;
+  const after = listed.out
+    .split(/\s+/)
+    .map((x) => Number.parseInt(x, 10))
+    .filter((n) => Number.isInteger(n) && n > release.after);
+  return after.length > 0 && t.number === String(Math.min(...after));
+}
+
+async function mainNotDone(lookups: GhLookups): Promise<{ asks: string; retry: boolean } | null> {
+  const r = read(await lookups.mainChecks(), "the default branch's checks");
+  if (r.asks !== undefined) return { asks: r.asks, retry: false };
+  const [branch = '', state = ''] = r.out.split(' ');
+  const on = `the checks on \`${branch}\``;
+  if (state === 'SUCCESS') return null;
+  if (state === 'PENDING' || state === 'EXPECTED') {
+    return { asks: `${on} have not finished`, retry: true };
+  }
+  if (state === 'FAILURE' || state === 'ERROR') return { asks: `${on} failed`, retry: false };
+  if (state === 'NONE') {
+    return {
+      asks: `\`${branch}\` reports no checks, so the gate cannot tell it is done`,
+      retry: false,
+    };
+  }
+  return { asks: `looking up ${on} printed \`${r.out}\``, retry: false };
+}
+
 // One verdict reads a pull request at most once: pointing and the release
 // check both ask for it.
 function pullRequestOnce(lookups: GhLookups): GhLookups {
@@ -418,7 +465,23 @@ function ghRefusal(
 // ran unchecked.
 export type GhVerdict =
   | { deny: string; final?: true }
-  | { ran: Unasked[]; notes?: readonly string[] };
+  | { ran: Unasked[]; notes?: readonly string[]; used?: Used };
+
+// The asks for once ready that a merge allowed here fulfils, so they end.
+export type Used = { ready: readonly string[]; release: boolean };
+
+// Asks for once ready that outlast their message, covering no merge now.
+// `release` is the version pull request open when asked, or the first after.
+// `main` lists the asks that also wait on the default branch: numbers, and
+// RELEASE_ASK for the version pull request.
+export type Standing = Readonly<{
+  ready: readonly string[];
+  release: { pr: string } | { after: number } | null;
+  main: readonly string[];
+}>;
+
+export const RELEASE_ASK = 'release';
+export const NO_STANDING: Standing = Object.freeze({ ready: [], release: null, main: [] });
 
 // What the GitHub writes in a call may run, or the refusal of the first one
 // that may not. A comment is off the ladder: it needs the user's request. A
@@ -434,10 +497,12 @@ export async function judgeGh(
   unread: UnreadOffer | null = null,
   // The pull request numbers the conversation pointed a merge at.
   pointed: readonly string[] = [],
+  standing: Standing = NO_STANDING,
 ): Promise<GhVerdict> {
   const lookups = pullRequestOnce(given);
   const ran: Unasked[] = [];
   const notes: string[] = [];
+  const used = { ready: [] as string[], release: false };
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
@@ -554,7 +619,13 @@ export async function judgeGh(
             .merge;
         let unasked = false;
         let lost: string | null = null;
-        if ((granted.merge || granted.autoMerge) && !free) {
+        // "release when the PR is ready" covers oakum's version pull request
+        // once ready, and the release that merging it is.
+        let readyRelease = false;
+        // The standing ask that covers the merge, when one does.
+        let byStanding: string | null = null;
+        const standingAsks = standing.ready.length > 0 || standing.release !== null;
+        if ((granted.merge || granted.autoMerge || granted.readyRelease || standingAsks) && !free) {
           const t = await targetOf(lookups, action.lookup);
           if ('asks' in t) {
             const named = [...nowNamed, ...readyNamed].map((n) => `#${n}`).join(', ');
@@ -594,6 +665,45 @@ export async function judgeGh(
                   : nowNamed.includes(t.number)),
               ready: granted.autoMerge && (readyAny ? isPointed : readyNamed.includes(t.number)),
             };
+            const lookable = !('cannot' in action.lookup) ? action.lookup : null;
+            if (granted.readyRelease && !covers.now && lookable !== null) {
+              const which = await mergeStep(lookups, lookable);
+              readyRelease = 'step' in which && which.step === 'release';
+              if (readyRelease) covers = { ...covers, ready: true };
+            }
+            // Any merge allowed of a pull request a standing ask names ends that
+            // ask, now or once ready; it covers only once ready.
+            const standingRelease =
+              standing.release !== null &&
+              lookable !== null &&
+              (await releaseMatches(lookups, lookable, t, standing.release));
+            const standingHere = standing.ready.includes(t.number) || standingRelease;
+            if (standingHere && !covers.now && !covers.ready) {
+              covers = { ...covers, ready: true };
+              byStanding = standingRelease ? RELEASE_ASK : t.number;
+              readyRelease ||= standingRelease;
+            }
+            if (standing.ready.includes(t.number)) used.ready.push(t.number);
+            else if (covers.ready && !covers.now && readyNamed.includes(t.number)) {
+              used.ready.push(t.number);
+            }
+            if (standingRelease || (readyRelease && !covers.now)) used.release = true;
+          }
+        }
+        // A pull request both named and bound as the release keeps either's condition.
+        const mainAsked =
+          byStanding === null
+            ? granted.readyMain
+            : standing.main.includes(byStanding) || standing.main.includes(target?.number ?? '');
+        if (mainAsked && covers.ready && !covers.now) {
+          const main = await mainNotDone(lookups);
+          if (main !== null) {
+            const next = main.retry
+              ? 'Run the same command again once they pass; there is nothing to ask the user.'
+              : 'Tell the user, and merge nothing until they say.';
+            return {
+              deny: `the user asked to merge once the default branch is done, and ${main.asks}, so nothing ran. ${next} The command: ${shown}`,
+            };
           }
         }
         // A merge now of one asked for once ready runs only when it already is.
@@ -606,7 +716,7 @@ export async function judgeGh(
           }
           // `--auto` on oakum's version pull request is a release too.
           const releases = permitted(
-            { ...granted, merge: true },
+            { ...granted, merge: true, release: granted.release || readyRelease },
             ladder,
             held !== null,
             model,
@@ -630,7 +740,9 @@ export async function judgeGh(
             ? `the user asked to merge ${named}`
             : unnamedMay
               ? `the user named no pull request, and neither they nor the answer they replied to named #${target.number}, nor is it this branch's or the version pull request`
-              : 'the gate cannot tell which pull request the user asked to merge';
+              : granted.readyRelease
+                ? "the user asked to merge only oakum's version pull request, once it is ready"
+                : 'the gate cannot tell which pull request the user asked to merge';
           if (granted.release && !('cannot' in action.lookup)) {
             known = await mergeStep(lookups, action.lookup);
           }
@@ -641,7 +753,11 @@ export async function judgeGh(
             };
           }
         }
-        const asked = { ...granted, merge: covers.now || covers.ready };
+        const asked = {
+          ...granted,
+          merge: covers.now || covers.ready,
+          release: granted.release || readyRelease,
+        };
         const mayHere = permitted(asked, ladder, held !== null, model);
         const setHere = permitted(asked, ladder, held !== null);
         // A merge the user asked for covers oakum's version pull request too:
@@ -815,5 +931,6 @@ export async function judgeGh(
       }
     }
   }
-  return notes.length === 0 ? { ran } : { ran, notes };
+  const done = used.release || used.ready.length > 0 ? { used } : {};
+  return notes.length === 0 ? { ran, ...done } : { ran, notes, ...done };
 }

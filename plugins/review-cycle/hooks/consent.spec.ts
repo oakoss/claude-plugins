@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import {
   combine,
   dropsGrant,
+  endsReady,
   grantOf,
   holdOf,
   holdsOf,
@@ -84,8 +85,12 @@ describe('merges, approvals, releases and review replies', () => {
     ['go ahead and merge it when its ready', AUTO],
     ['merge it when the PR is ready to merge please', AUTO],
     ['merge it once the tests go green', AUTO],
+    // A release after a ready merge waits on the version pull request being ready.
+    ['merge it when its ready, then release it', { ...AUTO, readyRelease: true }],
+    ['merge 46 once CI passes and release it', { ...autoNamed('46'), readyRelease: true }],
+    // Only a release on its own: a push beside it may wait on the same condition.
+    ['merge it when its ready, then push and release it', AUTO],
     // The rest of the sentence may wait on the same condition.
-    ['merge it when its ready, then release it', AUTO],
     ['merge it when its ready, and delete the branch', AUTO],
     ['merge it once CI passes, push the docs', AUTO],
     ['merge it once CI passes; then push', AUTO],
@@ -485,6 +490,65 @@ describe('merges, approvals, releases and review replies', () => {
       readyNamed: ['62'],
     });
     expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));
+  });
+});
+
+describe('a merge or release once the pull request and main are ready', () => {
+  const READY_RELEASE = { ...NONE, readyRelease: true };
+  const cases: [string, object][] = [
+    [
+      'Ok, when main is done and the release PR is ready lets merge it',
+      { ...READY_RELEASE, readyMain: true },
+    ],
+    // "the PR" may be the one the answer offered, whose merge releases.
+    ['Ok, lets release when the PR is ready', { ...AUTO, readyRelease: true }],
+    ['release when the release PR is ready', READY_RELEASE],
+    ["merge the release PR when it's ready", READY_RELEASE],
+    ['merge it when main is done', { ...AUTO, readyMain: true }],
+    ['merge it once main is green', { ...AUTO, readyMain: true }],
+    ['merge 46 once CI passes and main is done', { ...autoNamed('46'), readyMain: true }],
+    ['once main is green, merge 46', { ...autoNamed('46'), readyMain: true }],
+    // A condition on another pull request asks for nothing.
+    ['merge 46 when the release PR is ready', NONE],
+    // Conditions the gate cannot check ask for nothing.
+    ['merge it when main is broken', NONE],
+    ['merge it when the docs are done', NONE],
+    ['merge it when main is done and I say so', NONE],
+    // A condition that goes on leads nothing, so the re-ask after it counts.
+    ['when main is done and you say so, merge it', NONE],
+    ['when main is done and you say so, merge it. never mind. merge it', MERGE],
+    ['release it when main is broken', NONE],
+    // A release now stays a release now.
+    ['release it', RELEASE],
+  ];
+  test.each(cases)('%s', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
+  });
+  // Asked for, the merge and the release hold nothing.
+  test.each([
+    "merge the release PR when it's ready",
+    'Ok, when main is done and the release PR is ready lets merge it',
+    'release when the release PR is ready',
+  ])('%s holds nothing', (prompt) => {
+    expect(holdOf(prompt)).toBeNull();
+  });
+});
+
+describe('a message ends the asks for once ready that outlast it', () => {
+  test.each([
+    ["don't merge 46 yet", true],
+    ['do not push. do not merge 46', true],
+    ['should we release next week?', true],
+    ['never mind', true],
+    ['stop', true],
+    // A retraction beside a hold of anything else still ends them.
+    ["don't push yet. never mind", true],
+    ['hold off on the docs push', false],
+    ['dont push the other branch yet', false],
+    ['While we wait on that lets plan out our next bit of work', false],
+    ['thanks', false],
+  ] as const)('%s → %s', (prompt, ends) => {
+    expect(endsReady(prompt)).toBe(ends);
   });
 });
 

@@ -30,6 +30,7 @@ import {
   combine,
   covers,
   dropsGrant,
+  endsReady,
   EPIC_ID,
   grantOf,
   holdOf,
@@ -76,6 +77,11 @@ import {
   type Lookup,
   type ModelSteps,
   type Unasked as GhUnasked,
+  type Standing,
+  type Used,
+  NO_STANDING,
+  RELEASE_ASK,
+  VERSION_BRANCH,
 } from './gh-verdict';
 import {
   coverageOf,
@@ -299,6 +305,8 @@ type GateState = {
   held: Hold;
   // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
   mandate: Kept['mandate'];
+  // "merge 46 once CI passes" outlasts its message until used, held or retracted.
+  standing: Standing;
   // Where in `reviews` the next commit's rounds start counting.
   roundsFrom: number;
   // `<git common dir>\t<remote>/<branch>` and the commit this agent last
@@ -344,6 +352,7 @@ const state: GateState = {
   unaskedNotice: false,
   held: null,
   mandate: null,
+  standing: NO_STANDING,
   roundsFrom: 0,
   pushed: [],
 };
@@ -718,7 +727,8 @@ type Unkept =
   | 'stopBefore'
   | 'nudge'
   | 'owed'
-  | 'unaskedNotice';
+  | 'unaskedNotice'
+  | 'standing';
 const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
 const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
 const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
@@ -983,6 +993,10 @@ async function onPromptSubmit(
     if (hold !== null) state.held = hold;
     else if (liftsHold(grant)) state.held = null;
     state.mandate = mandateAfter(state.mandate, e.text, state.lastAnswer);
+    const ends = endsReady(e.text, state.lastAnswer);
+    const ended = ends ? endedNote(state.standing) : null;
+    state.standing = await standingAfter($, ends ? NO_STANDING : state.standing, grant);
+    if (ended !== null) e = { ...e, context: [...(e.context ?? []), ended] };
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree.
     if (e.turnId !== undefined) {
@@ -1443,6 +1457,62 @@ function onMonitorError(
   );
 }
 
+// The standing asks after a message: a merge once ready of the pull requests it
+// named, and of the version pull request. An unnamed one binds to what its own
+// message pointed at, so it ends with that message.
+async function standingAfter($: $, prior: Standing, grant: Grant): Promise<Standing> {
+  const named = grant.readyNamed.filter((n) => n !== NAMED_ELSEWHERE);
+  const bound = grant.readyRelease ? await releaseOf($) : null;
+  const release = bound ?? prior.release;
+  // A main condition binds to this message's own asks, not to earlier ones.
+  const releasing = grant.readyRelease && release !== null;
+  const waits = grant.readyMain ? [...named, ...(releasing ? [RELEASE_ASK] : [])] : [];
+  return {
+    ready: [...new Set([...prior.ready, ...named])],
+    release,
+    main: [...new Set([...prior.main, ...waits])],
+  };
+}
+
+const standsFor = (s: Pick<Standing, 'ready' | 'release'>): boolean =>
+  s.ready.length > 0 || s.release !== null;
+
+// The version pull request a standing release covers: the open one, or the
+// first opened after the newest. Null when GitHub cannot say.
+async function releaseOf($: $): Promise<Standing['release']> {
+  const r = await ghLookups($).versionPulls();
+  if (r.asks !== undefined) return null;
+  const pulls = r.out
+    .trim()
+    .split(/\s+/)
+    .map((x) => /^(\d+):(\w+)$/.exec(x))
+    .filter((m) => m !== null);
+  const open = pulls.find((m) => m[2] === 'OPEN');
+  if (open?.[1] !== undefined) return { pr: open[1] };
+  return { after: Math.max(0, ...pulls.map((m) => Number(m[1]))) };
+}
+
+// What a merge that ran under a standing ask fulfils ends that ask.
+function spend(used: Used | undefined): void {
+  if (used === undefined) return;
+  const done = new Set([...used.ready, ...(used.release ? [RELEASE_ASK] : [])]);
+  state.standing = {
+    ready: state.standing.ready.filter((n) => !done.has(n)),
+    release: used.release ? null : state.standing.release,
+    main: state.standing.main.filter((n) => !done.has(n)),
+  };
+}
+
+// The line telling the agent a message ended its standing asks, or null.
+function endedNote(s: Standing): string | null {
+  if (!standsFor(s)) return null;
+  const which = [
+    ...s.ready.map((n) => `#${n}`),
+    ...(s.release === null ? [] : ["oakum's version pull request"]),
+  ].join(' and ');
+  return `review-cycle: this message ended the user's standing ask to merge ${which} once ready. Ask them before merging it.`;
+}
+
 function pointedNow(): readonly string[] {
   const { named, answer, unplaced } = state.message.pointed;
   return unplaced ? named : [...new Set([...named, ...answer])];
@@ -1486,6 +1556,7 @@ async function onGithubTool(
     {},
     state.message.unread,
     pointedNow(),
+    state.standing,
   );
   const { gh, yes } =
     'deny' in first && !first.final
@@ -1496,6 +1567,8 @@ async function onGithubTool(
   if (stale !== null) return stale;
   const r = await next(e);
   if (r.deny !== undefined) return r;
+  // A merge that failed fulfilled nothing, so its ask stands.
+  if (r.isError !== true) spend(gh.used);
   const notes = [
     ...(yes === null ? [] : [modelRan($, yes)]),
     ...unaskedNotes($, gh.ran),
@@ -1809,6 +1882,7 @@ async function ghUnnamed(
     {},
     state.message.unread,
     pointedNow(),
+    state.standing,
   );
   return 'deny' in gh ? kept : { gh, granted: read.grant, told: targetRan($, read.n) };
 }
@@ -1860,6 +1934,7 @@ async function ghWithModel(
     second.steps,
     state.message.unread,
     pointedNow(),
+    state.standing,
   );
   return { gh, yes: 'deny' in gh ? null : second };
 }
@@ -1897,6 +1972,7 @@ async function judgeBash(
       {},
       state.message.unread,
       pointedNow(),
+      state.standing,
     );
     const read =
       'deny' in typed && !typed.final
@@ -1935,6 +2011,7 @@ async function judgeBash(
     const checked = rewrite === 'alone' ? 'history' : 'unchecked';
     const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
     const ran = yes === null ? await watched : await ranByModel($, watched, yes);
+    if (ran.deny === undefined && ran.isError !== true) spend(gh.used);
     const notes = [...(read.told === null ? [] : [read.told]), ...(gh.notes ?? [])];
     const r =
       notes.length === 0 || ran.deny !== undefined
@@ -2378,6 +2455,45 @@ function ghLookups($: $): GhLookups {
         return { asks: `reading the current branch failed (${messageOf(error)})` };
       }
     },
+    // GitHub's rollup counts check runs and commit statuses alike, unpaged.
+    mainChecks: () =>
+      ghRead(
+        $,
+        [
+          'api',
+          'graphql',
+          '-F',
+          'owner={owner}',
+          '-F',
+          'name={repo}',
+          '-f',
+          'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){defaultBranchRef{name target{... on Commit{statusCheckRollup{state}}}}}}',
+          '--jq',
+          String.raw`"\(.data.repository.defaultBranchRef.name) \(.data.repository.defaultBranchRef.target.statusCheckRollup.state // "NONE")"`,
+        ],
+        "the default branch's checks",
+        MERGE_LOOKUP_MS,
+      ),
+    versionPulls: () =>
+      ghRead(
+        $,
+        [
+          'pr',
+          'list',
+          '--head',
+          VERSION_BRANCH,
+          '--state',
+          'all',
+          '--limit',
+          '50',
+          '--json',
+          'number,state,isCrossRepository',
+          '--jq',
+          String.raw`[.[] | select(.isCrossRepository | not) | "\(.number):\(.state)"] | if length == 0 then "none" else join(" ") end`,
+        ],
+        "oakum's version pull requests",
+        MERGE_LOOKUP_MS,
+      ),
     pullRequest: async (lookup, what) => {
       const args = ['pr', 'view', ...lookup, '--json', PR_FIELDS, '--jq', PR_JQ];
       const r = await ghRead($, args, what);
@@ -2814,7 +2930,8 @@ async function onStatus(
   status.mayMerge = may.merge;
   status.mayRelease = may.release;
   status.commentRequested = state.message.grant.comment;
-  status.autoMergeRequested = state.message.grant.autoMerge;
+  const g = state.message.grant;
+  status.autoMergeRequested = g.autoMerge || g.readyRelease || standsFor(state.standing);
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
@@ -3217,6 +3334,11 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Edit' }, onEditSlop);
   on('tool.call', { tool: 'Write' }, onWriteSlop);
   on('session.start', onSessionStart);
+  // `/clear` and a resume end the session without a fresh session.start.
+  on('session.end', async (_$, e, next) => {
+    state.standing = NO_STANDING;
+    return next(e);
+  });
   on('tool.call', { tool: 'mcp__review-cycle__ledger' }, onLedger);
   on('tool.call', { tool: 'mcp__review-cycle__ledger_record' }, onLedgerRecord);
   on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
