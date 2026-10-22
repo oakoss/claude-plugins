@@ -122,6 +122,7 @@ describe('with the gate on', () => {
     const $$ = {
       ...$,
       env: { get: () => Promise.resolve(null) },
+      plugin: { name: 'review-cycle', root: '/plugins/review-cycle' },
       fs: { ...$.fs, list: () => Promise.reject(new Error('none')) },
       session: { cwd: () => Promise.resolve('/tmp') },
       settings: { read: () => Promise.resolve({}) },
@@ -143,6 +144,24 @@ describe('with the gate on', () => {
     const [unset] = load(true).get('tool.call:Bash') ?? [];
     expect(await unset?.($$, e, runs)).toEqual({
       deny: expect.stringContaining("doesn't ask for a pull request"),
+    });
+  });
+  test('a marketplace removal is judged by the marketplace review-cycle came from', async () => {
+    const $$ = {
+      ...$,
+      env: { get: () => Promise.resolve(null) },
+      plugin: { name: 'review-cycle', root: '/u/.claude/plugins/cache/oakoss/review-cycle/0.32.0' },
+      fs: { ...$.fs, list: () => Promise.reject(new Error('none')) },
+      session: { cwd: () => Promise.resolve('/tmp') },
+      settings: { read: () => Promise.resolve({}) },
+      ui: { log: () => null },
+    };
+    const runs = Object.assign(() => edited(), { signal: { aborted: false } });
+    const [bash] = load(true).get('tool.call:Bash') ?? [];
+    const run = (command: string) => bash?.($$, { tool: 'Bash', command }, runs);
+    expect(await run('claude plugin marketplace remove other')).toMatchObject({ result: 'edited' });
+    expect(await run('claude plugin marketplace remove oakoss')).toEqual({
+      deny: expect.stringContaining('only by the user'),
     });
   });
   test('an edit or write to its own switch is refused, whichever hook runs first', async () => {

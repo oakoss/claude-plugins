@@ -141,7 +141,14 @@ import {
 } from './push-verdict';
 import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
-import { applyEdit, bashTouchesGate, isJsonPath, namesSwitch, touchesGate } from './settings';
+import {
+  applyEdit,
+  bashTouchesGate,
+  isJsonPath,
+  marketplaceOf,
+  namesSwitch,
+  touchesGate,
+} from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import {
@@ -1491,7 +1498,7 @@ async function onMonitor(
   if (e.command === undefined) return next(e);
   await loadShellAliases($);
   const judged =
-    bashTouchesGate(e.command) ||
+    bashTouchesGate(e.command, marketplaceOf($.plugin.root), state.shellAliases) ||
     classify(e.command, state.shellAliases).kind !== 'none' ||
     ghActions(e.command, state.shellAliases).length > 0 ||
     possibleAliases(e.command, state.shellAliases).length > 0;
@@ -2002,8 +2009,10 @@ async function judgeBash(
   // A newer message overtakes anything decided from this one.
   const message = state.messages;
   const granted = state.message.grant;
-  if (bashTouchesGate(e.command)) return deny(SWITCHED_BY_USER);
   await loadShellAliases($);
+  if (bashTouchesGate(e.command, marketplaceOf($.plugin.root), state.shellAliases)) {
+    return deny(SWITCHED_BY_USER);
+  }
   const cls = classify(e.command, state.shellAliases);
   if (cls.kind === 'refuse') return deny(cls.reason);
   // A gh command beside a commit or push is refused by classify.

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { applyEdit, bashTouchesGate, namesSwitch, touchesGate } from './settings';
+import { applyEdit, bashTouchesGate, marketplaceOf, namesSwitch, touchesGate } from './settings';
 
 const on = JSON.stringify({ enabledPlugins: { 'review-cycle@oakoss': true, 'x@y': true } });
 
@@ -241,6 +241,66 @@ describe('bashTouchesGate', () => {
     'cd /x && CLAUDE_CONFIG_DIR=/x/claude claude plugin install pr-kit@oakoss --scope local && cat /x/.claude/settings.local.json',
     'CLAUDE_CONFIG_DIR=/x/claude claude plugin install pr-kit@oakoss; ls /x/claude/settings.json',
   ])('allows %s', (cmd) => expect(bashTouchesGate(cmd)).toBe(false));
+  describe('removing a plugin', () => {
+    test.each([
+      ['claude plugin uninstall review-cycle@oakoss', 'oakoss'],
+      ['claude plugin disable review-cycle', 'oakoss'],
+      ['claude plugin uninstall review-cycle@elsewhere', 'oakoss'],
+      ['claude plugin uninstall pr-watch@oakoss review-cycle@oakoss', 'oakoss'],
+      ['claude plugin marketplace remove oakoss', 'oakoss'],
+      ['claude plugin marketplace remove oakoss', null],
+      ['claude plugin marketplace remove other', null],
+      ['claude plugin uninstall $P', 'oakoss'],
+      ['claude plugin uninstall review-*', 'oakoss'],
+      ['claude plugin uninstall', 'oakoss'],
+      ['claude plugin uninstall --scope user', 'oakoss'],
+      ['claude plugin uninstall -s user', 'oakoss'],
+      ['claude plugin disable Review-Cycle@oakoss', 'oakoss'],
+      ['claude plugin marketplace remove OAKOSS', 'oakoss'],
+      ['claude plugin disable --all pr-kit', 'oakoss'],
+      ['claude plugin uninstall review-cycle -- --help', 'oakoss'],
+      ['claude plugin uninstall -- review-cycle', 'oakoss'],
+    ] as const)('refuses %s (installed from %s)', (cmd, market) =>
+      expect(bashTouchesGate(cmd, market)).toBe(true),
+    );
+    test.each([
+      ['claude plugin uninstall pr-watch@oakoss', 'oakoss'],
+      ['claude plugin disable --scope user pr-kit', 'oakoss'],
+      ['claude plugin uninstall review-cycle-extra@x', 'oakoss'],
+      ['claude plugin marketplace remove other', 'oakoss'],
+      ['claude plugin uninstall --help', 'oakoss'],
+      ['claude plugin uninstall --help 2>&1 | head -20', null],
+      ['claude plugin marketplace remove -h', null],
+      ['claude plugin disable review-cycle --help', 'oakoss'],
+      ['claude plugin uninstall prose@oakoss', 'oakoss'],
+      ['claude plugin disable -s user pr-kit', 'oakoss'],
+      ['claude plugin uninstall my-review-cycle@x', 'oakoss'],
+    ] as const)('allows %s (installed from %s)', (cmd, market) =>
+      expect(bashTouchesGate(cmd, market)).toBe(false),
+    );
+    test('reads the command through the shell aliases', () => {
+      const aliases = new Map([['cpu', 'claude plugin uninstall']]);
+      expect(bashTouchesGate('cpu review-cycle', 'oakoss', aliases)).toBe(true);
+      expect(bashTouchesGate('cpu pr-kit', 'oakoss', aliases)).toBe(false);
+    });
+    test('an alias renaming a command the check knows still refuses', () => {
+      const sed = new Map([['sed', 'gsed']]);
+      expect(bashTouchesGate(`sed -i 's/a/b/' ~/.claude/settings.json`, 'oakoss', sed)).toBe(true);
+      const claude = new Map([['claude', 'happy']]);
+      expect(bashTouchesGate('claude plugin uninstall review-cycle', 'oakoss', claude)).toBe(true);
+    });
+    test('--help wins wherever it falls', () => {
+      expect(bashTouchesGate('claude plugin disable --all --help', 'oakoss')).toBe(false);
+      expect(bashTouchesGate('claude plugin disable --help --all', 'oakoss')).toBe(false);
+    });
+  });
+  test.each([
+    ['/Users/x/.claude/plugins/cache/oakoss/review-cycle/0.32.0', 'oakoss'],
+    ['/Users/x/.claude/plugins/cache/my-fork/review-cycle/1.0.0/', 'my-fork'],
+    ['/Users/x/code/claude-plugins/plugins/review-cycle', null],
+    ['/Users/x/.claude/plugins/cache/oakoss/pr-kit/0.2.1', null],
+    ['/Users/x/.claude/plugins/cache/oakoss/review-cycle/0.32.0/hooks', null],
+  ])('marketplaceOf(%j) is %j', (root, market) => expect(marketplaceOf(root)).toBe(market));
   test('falls back to the text check when the command does not parse', () => {
     expect(bashTouchesGate(`echo {} > ~/.claude/settings.json; echo '`)).toBe(true);
     expect(bashTouchesGate(`echo hi; echo '`)).toBe(false);
