@@ -455,6 +455,25 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
 const NOTHING_ASKED = '{"steps": {}, "quote": ""}';
 // Its answers on a merge's pull request: offered by the answer, or only mentioned.
 const OFFERED = '{"offers": true, "sure": true}';
+
+// consent.ts's NO_GRANT, as a kept record holds it.
+const NO_GRANT_KEPT = {
+  commit: false,
+  finish: [],
+  push: 'none',
+  pushNamed: [],
+  pr: false,
+  merge: false,
+  mergeNamed: [],
+  autoMerge: false,
+  readyNamed: [],
+  readyRelease: false,
+  readyMain: false,
+  mergeStack: [],
+  approve: false,
+  release: false,
+  comment: false,
+};
 const MENTIONED = 'The offer names no PR.\n\n{"offers": false, "sure": true}';
 const verdictFor = (step: string, quote: string, flags = {}) =>
   JSON.stringify({
@@ -1947,32 +1966,38 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-5');
+    expect(kept?.shape).toBe('gate-6');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
-    // What a message granted is not kept, so a reload makes the next step ask.
-    expect(kept?.value.message).toEqual({
+    expect(kept?.value.message).toMatchObject({
       tree: expect.any(String),
       nudged: false,
       prWindow: false,
+      grant: { push: 'push' },
     });
     expect(kept?.value.mandate).toBeNull();
-    // A job outlives a reload, unlike a message's grant.
     await say($, 'do epic cpl-czgp');
     await settle();
     expect(kept?.value.mandate).toEqual({ epic: 'cpl-czgp' });
   });
 
-  test('keeps nothing before the session start has taken back what a reload left', async ($, on) => {
-    fakeWorld(on);
-    let writes = 0;
-    on('state.set', ($$: unknown, e: { key: string }, next: any) => {
-      if (e.key === 'gate') writes += 1;
+  test('a save before the session start keeps what the reload left', async ($, on) => {
+    const w = fakeWorld(on);
+    const tree = treeId(w, w.work);
+    const review = {
+      type: 'review-cycle:code-reviewer',
+      trees: [tree, tree],
+      reviewedPaths: ['a.ts'],
+    };
+    reloadInto(on, keptRecord({ reviews: [review] }));
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
       return next(e);
     });
     await say($, 'fix the parser');
     await settle();
-    expect(writes).toBe(0);
+    expect(kept?.value.reviews).toEqual([review]);
   });
 
   test('takes back a leg it was running, so its review still counts', async ($, on) => {
@@ -2019,6 +2044,123 @@ describe('a reload of the module', () => {
     reloadInto(on, keptRecord({ held: { step: 'push', how: 'declined' } }));
     await startSession($);
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
+  });
+
+  test("takes back the latest message's grant, so a step it covered still runs", async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    const message = {
+      tree: null,
+      nudged: true,
+      prWindow: false,
+      grant: { ...NO_GRANT_KEPT, push: 'push', pr: true },
+      pointed: { named: [], answer: [], unplaced: false },
+    };
+    reloadInto(on, keptRecord({ message }));
+    await startSession($);
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+  });
+
+  test("takes back a kept grant's pull request, the step the reload used to refuse", async ($, on) => {
+    fakeWorld(on);
+    const message = {
+      tree: null,
+      nudged: true,
+      prWindow: false,
+      grant: { ...NO_GRANT_KEPT, push: 'push', pr: true },
+      pointed: { named: [], answer: [], unplaced: false },
+    };
+    reloadInto(on, keptRecord({ message }));
+    await startSession($);
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+  });
+
+  test('takes back what the message pointed at, so an unnamed merge still runs', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    const message = {
+      tree: null,
+      nudged: true,
+      prWindow: false,
+      grant: { ...NO_GRANT_KEPT, merge: true },
+      pointed: { named: [], answer: ['40'], unplaced: false },
+    };
+    reloadInto(on, keptRecord({ message }));
+    await startSession($);
+    expect(ran(await bash($, 'gh pr merge 40 --squash'))).toBe(true);
+  });
+
+  test('a hold kept with its message still refuses after a reload', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await say($, 'push it');
+    await say($, "don't push yet");
+    await settle();
+    expect(kept?.value.message.grant.push).toBe('none');
+    expect(kept?.value.held).toMatchObject({ step: 'push' });
+  });
+
+  test('a message heard before the take-back applies on top of the record', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    const message = {
+      tree: null,
+      nudged: true,
+      prWindow: false,
+      grant: { ...NO_GRANT_KEPT, push: 'push', pr: true },
+      pointed: { named: [], answer: [], unplaced: false },
+    };
+    await sayBeforeRecall($, on, { message }, "don't push yet");
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
+  });
+
+  test('a kept hold outlives an unrelated message heard before the take-back', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
+    await sayBeforeRecall($, on, { held: { step: 'push', how: 'declined' } }, 'fix the parser');
+    expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
+  });
+
+  test('a kept mandate outlives an unrelated message heard before the take-back', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    await sayBeforeRecall($, on, { mandate: { epic: 'cpl-czgp' } }, 'fix the parser');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+  });
+
+  test('a newer message replaces the kept grant', async ($, on) => {
+    fakeWorld(on);
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await say($, 'push it');
+    await settle();
+    expect(kept?.value.message.grant.push).toBe('push');
+    await say($, 'not yet');
+    await settle();
+    expect(kept?.value.message.grant.push).toBe('none');
+  });
+
+  test("a session's end clears the kept grant", async ($, on) => {
+    fakeWorld(on);
+    on('session.end', () => ({ sessionId: 's' }));
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await say($, 'ship it and merge 12');
+    await settle();
+    expect(kept?.value.message.grant.pr).toBe(true);
+    expect(kept?.value.message.pointed.named).toEqual(['12']);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await settle();
+    expect(kept?.value.message.grant).toEqual(NO_GRANT_KEPT);
+    expect(kept?.value.message.pointed).toEqual({ named: [], answer: [], unplaced: false });
   });
 
   test('takes back an epic mandate, so the job keeps pushing', async ($, on) => {
@@ -2085,6 +2227,33 @@ describe('a reload of the module', () => {
     ['a mandate on no epic', { mandate: { epic: '' } }],
     ['a mandate that is not one', { mandate: 'cpl-czgp' }],
     ['a message without its flags', { message: {} }],
+    [
+      'a grant that is not one',
+      {
+        message: {
+          tree: null,
+          nudged: true,
+          prWindow: false,
+          grant: { ...NO_GRANT_KEPT, push: 'everything' },
+          pointed: { named: [], answer: [], unplaced: false },
+        },
+      },
+    ],
+    ...(
+      [
+        ['no pointed', null],
+        ['a pointed name that is a number', { named: [1], answer: [], unplaced: false }],
+        ['a pointed without unplaced', { named: [], answer: [] }],
+      ] as const
+    ).map(
+      ([name, pointed]) =>
+        [
+          name,
+          {
+            message: { tree: null, nudged: true, prWindow: false, grant: NO_GRANT_KEPT, pointed },
+          },
+        ] as const,
+    ),
     ['a miss that is not one', { misses: [null] }],
     ['a rounds index past its reviews', { roundsFrom: 1 }],
     ['a rounds index below zero', { roundsFrom: -1 }],
@@ -2156,7 +2325,7 @@ describe('a reload of the module', () => {
     await settle();
     for (const t of (w.timers ?? []).filter((t) => t.ms === 5000)) t.fire();
     await settle();
-    expect(toasts.filter((t) => t.includes('could not keep its reviews'))).toHaveLength(1);
+    expect(toasts.filter((t) => t.includes('could not keep its record'))).toHaveLength(1);
     await say($, 'and the lexer');
     await settle();
     expect(writes).toBe(2);
@@ -2234,7 +2403,13 @@ describe('a reload of the module', () => {
             ['leg-done', done],
             ['leg-capped', capped],
           ],
-          message: { tree, nudged: true, prWindow: true },
+          message: {
+            tree,
+            nudged: true,
+            prWindow: true,
+            grant: { ...NO_GRANT_KEPT, push: 'push', pr: true },
+            pointed: { named: ['12'], answer: [], unplaced: false },
+          },
           messages: 4,
           lastAnswer: 'Push it?',
           misses: [miss],
@@ -2256,7 +2431,13 @@ describe('a reload of the module', () => {
             ['leg-done', done],
             ['leg-capped', capped],
           ],
-          message: { tree: null, nudged: false, prWindow: false },
+          message: {
+            tree: null,
+            nudged: false,
+            prWindow: false,
+            grant: NO_GRANT_KEPT,
+            pointed: { named: [], answer: [], unplaced: false },
+          },
           messages: 4,
           lastAnswer: '',
           misses: [miss],
@@ -2294,7 +2475,16 @@ describe('a reload of the module', () => {
     // What an off-load leaves, as the test above pins it.
     reloadInto(
       on,
-      keptRecord({ reviews: [review], message: { tree: null, nudged: false, prWindow: false } }),
+      keptRecord({
+        reviews: [review],
+        message: {
+          tree: null,
+          nudged: false,
+          prWindow: false,
+          grant: NO_GRANT_KEPT,
+          pointed: { named: [], answer: [], unplaced: false },
+        },
+      }),
     );
     await startSession($);
     await say($, 'commit it');
@@ -2315,7 +2505,7 @@ describe('a reload of the module', () => {
     await say($, 'fix the parser');
     await say($, 'and the lexer');
     await settle();
-    expect(toasts.filter((t) => t.includes('could not keep its reviews'))).toHaveLength(1);
+    expect(toasts.filter((t) => t.includes('could not keep its record'))).toHaveLength(1);
   });
 });
 
@@ -2335,11 +2525,25 @@ function runningLeg(w: World, at: number) {
   };
 }
 
+// A reloaded module hears a message before its session start, so the message takes the record back.
+async function sayBeforeRecall($: any, on: any, kept: Record<string, unknown>, text: string) {
+  reloadInto(on, keptRecord(kept));
+  await say($, text);
+  await startSession($);
+  await settle();
+}
+
 function keptRecord(over: Record<string, unknown>) {
   return {
     reviews: [],
     legs: [],
-    message: { tree: null, nudged: true, prWindow: false },
+    message: {
+      tree: null,
+      nudged: true,
+      prWindow: false,
+      grant: NO_GRANT_KEPT,
+      pointed: { named: [], answer: [], unplaced: false },
+    },
     messages: 0,
     lastAnswer: '',
     misses: [],
@@ -2362,7 +2566,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-5', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-6', value: kept }, version: 1 } };
   });
 }
 

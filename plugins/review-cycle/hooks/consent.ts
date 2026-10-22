@@ -72,6 +72,47 @@ export const NO_GRANT: Grant = Object.freeze({
   comment: false,
 });
 
+const GRANT_FLAGS = [
+  'commit',
+  'pr',
+  'merge',
+  'autoMerge',
+  'readyRelease',
+  'readyMain',
+  'approve',
+  'release',
+  'comment',
+] as const;
+const GRANT_NAMES = ['pushNamed', 'mergeNamed', 'readyNamed', 'mergeStack'] as const;
+// Typed, so a value added to Finishes fails to compile until it is listed; a
+// runtime import would break the consent scripts, which load this file alone.
+const GRANT_FINISHES: Record<Finishes, true> = {
+  merge: true,
+  'cherry-pick': true,
+  revert: true,
+  rebase: true,
+};
+// Fails to compile unless every key of Grant is checked by a list or field below.
+type KeysOf<V> = { [K in keyof Grant]: Grant[K] extends V ? K : never }[keyof Grant];
+type Checked = (typeof GRANT_FLAGS)[number] | (typeof GRANT_NAMES)[number] | 'push' | 'finish';
+const _grantFlags: readonly KeysOf<boolean>[] = GRANT_FLAGS;
+const _grantNames: readonly KeysOf<readonly string[]>[] = GRANT_NAMES;
+const _grantChecked: [keyof Grant] extends [Checked] ? true : false = true;
+const isStrings = (v: unknown) => Array.isArray(v) && v.every((s) => typeof s === 'string');
+
+// A grant taken back from a reload's record, field by field.
+export function isGrant(x: unknown): x is Grant {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
+  const g = x as Record<string, unknown>;
+  return (
+    GRANT_FLAGS.every((k) => typeof g[k] === 'boolean') &&
+    GRANT_NAMES.every((k) => isStrings(g[k])) &&
+    (PUSH_LEVELS as readonly unknown[]).includes(g.push) &&
+    Array.isArray(g.finish) &&
+    g.finish.every((f) => typeof f === 'string' && Object.hasOwn(GRANT_FINISHES, f))
+  );
+}
+
 // Compared by rank, so a level added between two others keeps its meaning.
 export function covers(grant: Grant, level: PushLevel): boolean {
   return pushRank(grant.push) >= pushRank(level);

@@ -17,11 +17,36 @@ export type KeptLeg = {
   spawnedAt: number;
 };
 
+// What the user's latest message granted, as consent.ts's Grant.
+export type KeptGrant = Readonly<{
+  commit: boolean;
+  finish: readonly ('merge' | 'cherry-pick' | 'revert' | 'rebase')[];
+  push: 'none' | 'push' | 'lease' | 'bare';
+  pushNamed: readonly string[];
+  pr: boolean;
+  merge: boolean;
+  mergeNamed: readonly string[];
+  autoMerge: boolean;
+  readyNamed: readonly string[];
+  readyRelease: boolean;
+  readyMain: boolean;
+  mergeStack: readonly string[];
+  approve: boolean;
+  release: boolean;
+  comment: boolean;
+}>;
+
 export type Kept = {
   reviews: { type: string; trees: readonly [string, string]; reviewedPaths: readonly string[] }[];
   legs: [string, KeptLeg][];
-  // The latest message, less what it granted: a reload makes the next step ask.
-  message: { tree: string | null; nudged: boolean; prWindow: boolean };
+  // The latest message and what it granted, until the next message or the session ends.
+  message: {
+    tree: string | null;
+    nudged: boolean;
+    prWindow: boolean;
+    grant: KeptGrant;
+    pointed: { named: readonly string[]; answer: readonly string[]; unplaced: boolean };
+  };
   messages: number;
   lastAnswer: string;
   misses: { message: string; offer: string; steps: KeptStep[]; refusal: string }[];

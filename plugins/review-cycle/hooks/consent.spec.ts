@@ -7,6 +7,7 @@ import {
   grantOf,
   holdOf,
   holdsOf,
+  isGrant,
   liftsHold,
   mandateAfter,
   mandateOf,
@@ -2295,5 +2296,31 @@ describe('the job a message leaves running', () => {
     ['Not yet. Do epic cpl-czgp.', null],
   ])('%j with no job leaves %j', (message, job) => {
     expect(mandateAfter(null, message)).toEqual(job);
+  });
+});
+
+describe('isGrant', () => {
+  test('takes a grant the grammar gives', () => {
+    expect(isGrant(NO_GRANT)).toBe(true);
+    expect(isGrant(grantOf('ship it'))).toBe(true);
+    expect(isGrant(grantOf('push to main and merge 12'))).toBe(true);
+    expect(isGrant(structuredClone(grantOf('finish the rebase and push')))).toBe(true);
+  });
+  test.each(Object.keys(NO_GRANT))('refuses one without %s', (key) => {
+    const { [key as keyof typeof NO_GRANT]: _gone, ...rest } = NO_GRANT;
+    expect(isGrant(rest)).toBe(false);
+  });
+  test.each([
+    ['a flag that is a string', { ...NO_GRANT, pr: 'yes' }],
+    ['a name that is a number', { ...NO_GRANT, mergeNamed: [12] }],
+    ['a list that is a string', { ...NO_GRANT, pushNamed: 'main' }],
+    ['a push level it does not know', { ...NO_GRANT, push: 'everything' }],
+    ['a finish it does not know', { ...NO_GRANT, finish: ['squash'] }],
+    ['a finish named by an object key', { ...NO_GRANT, finish: ['constructor'] }],
+    ['a finish that is not a list', { ...NO_GRANT, finish: 'merge' }],
+    ['null', null],
+    ['a list', []],
+  ])('refuses %s', (_name, value) => {
+    expect(isGrant(value)).toBe(false);
   });
 });
