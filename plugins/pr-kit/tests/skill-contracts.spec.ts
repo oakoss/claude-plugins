@@ -177,7 +177,7 @@ describe('do-epic: a job runs to its report', () => {
   });
   test('fix-ci pushes a stack layer through gh stack', () => {
     expect(skillText('pr-kit', 'fix-ci')).toContain(
-      'On a layer of a github/gh-stack stack (`gh stack view --json` lists the branch), push with `gh stack push` instead, after `gh stack rebase --upstack` as its own command when layers sit above it',
+      'On a layer of a github/gh-stack stack (`gh stack view --json` lists the branch), push with `gh stack push` instead, after `gh stack rebase --upstack` when layers sit above it, each as its own command with nothing before it, not even a `cd`',
     );
   });
   test('the report carries every outcome', () => {
@@ -331,6 +331,12 @@ describe('ship: what it may do unasked', () => {
     );
     expect(stack).toContain('exits 0 even after printing `⚠ failed to create PR for <branch>`');
     expect(stack).toContain("pass the gate's question to the user as written");
+    expect(stack).toContain(
+      'run `gh stack submit` as its own Bash call with nothing before it, not even a `cd`',
+    );
+    expect(stack).toContain(
+      'offer `gh stack sync`, which rebases the stack onto the trunk and pushes it; run it as its own Bash call with nothing before it',
+    );
     expect(stack).toContain('name those layers and ask before pushing');
     expect(stack).toContain('On a no, stop before pushing');
     expect(stack).toContain('return with `git checkout <branch>` whether they pass or fail');
@@ -555,6 +561,18 @@ describe('merge: only what was asked, and a stack as one', () => {
       '`UNSTABLE` means a check that is not required failed: name it and ask before merging.',
     );
     expect(text).toContain('would merge it into the layer below, not into the trunk');
+    expect(lines).toContain(
+      'gh pr list --base <headRefName> --state open --json number,headRefName',
+    );
+    expect(text).toContain(
+      'running the same `gh pr list` for each listed branch until it lists none',
+    );
+    expect(text).toContain(
+      "Merge nothing: name them, and give the user the command to link them, to run in their own terminal: this pull request's number, then each one above it (`! gh stack link <number> <number above>…`)",
+    );
+    expect(text).toContain(
+      'when this stop already named them earlier in the conversation and the user asks again to merge this one, merge it by step 2.',
+    );
     expect(stack).toContain('apply its stops to each');
   });
 
@@ -567,6 +585,7 @@ describe('merge: only what was asked, and a stack as one', () => {
     expect(stack).toContain('run `gh stack merge` with no number in their own terminal');
     expect(stack).toContain('where it cannot prompt it merges the whole stack');
     expect(stack).toContain('it takes no `--auto` and no `--admin`');
+    expect(stack).toContain('Run it as its own Bash call with nothing before it, not even a `cd`');
   });
 
   test('a refusal is reported in its own words, and the report says what landed', () => {
@@ -579,6 +598,9 @@ describe('merge: only what was asked, and a stack as one', () => {
   test('sync is offered, not run, and read by its output, not its exit code', () => {
     for (const line of lines) expect(line).not.toMatch(/gh stack sync\b/);
     expect(stack).toContain('offer it rather than run it');
+    expect(stack).toContain(
+      'When the user agrees, run it as its own Bash call with nothing before it, not even a `cd`',
+    );
     expect(stack).toContain(
       'read its output, not its exit code: a diverged stack prints `Sync aborted` and exits 0',
     );
