@@ -150,14 +150,29 @@ claude --plugin-dir ./plugins/<name>
 
 Use `/reload-plugins` to pick up edits without restarting the session; saving a hooks module reloads it on its own.
 
-To have every session in this repository run the working tree's plugins instead of the released installs, set `CLAUDE_CODE_PLUGIN_DIRS` while the shell is here, for example in a gitignored `mise.local.toml` at the root:
+To have every session in this repository run the working tree's plugins, set `CLAUDE_CODE_PLUGIN_DIRS` while the shell is here, for example in a gitignored `mise.local.toml` at the root:
 
 ```toml
 [env]
 CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/prose:{{config_root}}/plugins/review-cycle"
 ```
 
-With it set, an edit to a hooks module takes effect in the session that made it, so a change to the commit gate or the consent grammar judges that session's own next commit and push. `CLAUDE_CODE_PLUGIN_DIRS= claude` starts a session on the released plugins.
+The working tree's copies load beside the released installs, not instead of them: `claude plugin list` shows each plugin twice, once installed as `<name>@oakoss` and once as a session-only `<name>@inline`, so two commit gates judge every command and the released one can refuse what the working tree's allows. Switch the released copies off for this checkout in the gitignored `.claude/settings.local.json`:
+
+```json
+{
+  "enabledPlugins": {
+    "pr-kit@oakoss": false,
+    "pr-watch@oakoss": false,
+    "prose@oakoss": false,
+    "review-cycle@oakoss": false
+  }
+}
+```
+
+Measured on 2.1.309: with both set, `claude plugin list` shows each `@oakoss` install `✘ disabled` and each `@inline` copy `✔ loaded`, and a session already running stopped applying the released gate without a restart: `claude plugin uninstall --help`, which released 0.32.0 refused, ran.
+
+With both set, an edit to a hooks module takes effect in the session that made it, so a change to the commit gate or the consent grammar judges that session's own next commit and push. `CLAUDE_CODE_PLUGIN_DIRS= claude` then starts a session with none of these plugins; to run the released ones, remove the overrides too.
 
 ```bash
 pnpm test          # vitest: modules' pure logic and prose anchors
