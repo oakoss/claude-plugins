@@ -25,6 +25,8 @@ type World = {
   // Answers an Edit or Write itself, after it wrote `files`; null keeps the
   // ordinary result.
   tool?: (path: string, files: Record<string, string>) => object | null;
+  // Runs as the Skill tool itself, as the engine expands the skill.
+  skillRun?: () => Promise<unknown>;
   readFails?: boolean;
   // fs.stat reports the path as something other than a file.
   statKind?: string;
@@ -356,6 +358,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
             : (w.files[path] ?? '').replace(e.old_string ?? '', () => e.new_string ?? '');
         return w.tool?.(path, w.files) ?? { result: { filePath: path } };
       }
+      if (e.tool === 'Skill' && w.skillRun) return w.skillRun().then(() => ({ result: 'loaded' }));
       const head = w.head;
       const logged = w.headLog?.length ?? 0;
       w.shell?.(e.command ?? '');
@@ -1937,7 +1940,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-4');
+    expect(kept?.shape).toBe('gate-5');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     // What a message granted is not kept, so a reload makes the next step ask.
@@ -2086,6 +2089,7 @@ describe('a reload of the module', () => {
       { pushed: [['/repo/.git\torigin/x', ['a'.repeat(40)]]] },
     ],
     ['a push keyed without its repository', { pushed: [['origin/x', 'a'.repeat(40)]] }],
+    ['a review skill that is not a path', { reviewing: 1 }],
   ] as const) {
     test(`sets aside a record holding ${name}`, async ($, on) => {
       fakeWorld(on);
@@ -2340,6 +2344,7 @@ function keptRecord(over: Record<string, unknown>) {
     mandate: null,
     roundsFrom: 0,
     pushed: [],
+    reviewing: null,
     ...over,
   };
 }
@@ -2350,7 +2355,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-4', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-5', value: kept }, version: 1 } };
   });
 }
 
@@ -6594,5 +6599,163 @@ describe('the model check', () => {
     expect(byPlugin).toEqual({ deny: expect.stringContaining('only by the user') });
     const byUser = await $.config.set({ ...change, origin: { kind: 'composer' } });
     expect(byUser).toEqual({ value: false });
+  });
+});
+
+// A world whose engine expands a skill as the hooks above it leave it.
+function world(on: any, setup: Partial<World> = {}) {
+  on('skill.prompt', ($$: unknown, e: { text: string }) => ({ text: e.text }));
+  return fakeWorld(on, setup);
+}
+
+const handedBack = (r: any) =>
+  (r.messages as { text: string }[]).filter((m) => m.text.startsWith('review-cycle:'));
+
+describe('a compaction during a review', () => {
+  // The skill as expanded; the re-attached copy is cut inside Phase 2.
+  const SKILL = `Base directory for this skill: /plugins/review-cycle/skills/review\n\n# Review\n\n### Phase 1\n\n${'one '.repeat(4000)}\n\n### Phase 2\n\n${'two '.repeat(2000)}the later phase\n`;
+  const SUMMARY = { role: 'user' as const, text: 'This session is being continued.', toolUses: [] };
+
+  // The transcript the engine hands a compaction; the stand-in summarizer ignores it.
+  const compact = ($: any, agentId?: string) =>
+    $.session.compact({ messages: [SUMMARY], ...(agentId ? { agentId } : {}) });
+
+  async function loadSkill($: any, over: Record<string, unknown> = {}) {
+    await $.skill.prompt({
+      skill: 'review-cycle:review',
+      text: SKILL,
+      source: 'plugin',
+      pluginName: 'review-cycle',
+      ...over,
+    });
+  }
+
+  function compactsTo(on: any, messages: object[] = [SUMMARY]) {
+    on('session.compact', () => ({ messages }));
+  }
+
+  test('hands back the phases the re-attached copy drops', async ($, on) => {
+    world(on);
+    compactsTo(on);
+    await loadSkill($);
+    const r = await compact($);
+    expect(r.messages[0]).toMatchObject({ text: SUMMARY.text });
+    const [back] = handedBack(r);
+    expect(back?.text).toContain('### Phase 2\n\ntwo ');
+    expect(back?.text).toContain('the later phase');
+    expect(back?.text).not.toContain('### Phase 1');
+  });
+  test('hands back nothing before the review skill loads', async ($, on) => {
+    world(on);
+    compactsTo(on);
+    const r = await compact($);
+    expect(r.messages).toHaveLength(1);
+    expect(handedBack(r)).toEqual([]);
+  });
+  test("hands back nothing for a subagent's compaction", async ($, on) => {
+    world(on);
+    compactsTo(on);
+    await loadSkill($);
+    const r = await compact($, 'sub-1');
+    expect(r.messages).toHaveLength(1);
+  });
+  test('hands back nothing once the reviewed work is committed', async ($, on) => {
+    fakeStore(on);
+    world(on, {
+      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
+      shell(this: World) {
+        this.head = 'd'.repeat(40);
+      },
+    });
+    compactsTo(on);
+    await loadSkill($);
+    await review($);
+    expect(handedBack(await compact($))).toHaveLength(1);
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    const r = await compact($);
+    expect(r.messages).toHaveLength(1);
+  });
+  test('hands back nothing a second time', async ($, on) => {
+    world(on);
+    let messages: (typeof SUMMARY)[] = [SUMMARY];
+    on('session.compact', () => ({ messages }));
+    await loadSkill($);
+    const first = await compact($);
+    expect(handedBack(first)).toHaveLength(1);
+    messages = first.messages;
+    expect(handedBack(await compact($))).toHaveLength(1);
+  });
+  test('a summary computed during the review drops the phases once it is committed', async ($, on) => {
+    fakeStore(on);
+    world(on, {
+      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
+      shell(this: World) {
+        this.head = 'd'.repeat(40);
+      },
+    });
+    let messages: (typeof SUMMARY)[] = [SUMMARY];
+    on('session.compact', () => ({ messages }));
+    await loadSkill($);
+    await review($);
+    const during = await compact($);
+    messages = during.messages;
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    const r = await compact($);
+    expect(r.messages).toEqual([SUMMARY]);
+  });
+  test('only review-cycle loading its review skill starts it', async ($, on) => {
+    world(on);
+    compactsTo(on);
+    await loadSkill($, { pluginName: 'other', source: 'projectSettings' });
+    await loadSkill($, { skill: 'review-cycle:review-pr' });
+    expect(handedBack(await compact($))).toEqual([]);
+  });
+  test("a subagent's review hands the main conversation nothing", async ($, on) => {
+    world(on, { skillRun: () => loadSkill($) });
+    compactsTo(on);
+    await skill($, 'review-cycle:review', 'sub');
+    expect(handedBack(await compact($))).toEqual([]);
+    await skill($, 'review-cycle:review');
+    expect(handedBack(await compact($))).toHaveLength(1);
+  });
+  test('the loaded skill is kept for a reload', async ($, on) => {
+    world(on);
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await loadSkill($);
+    await settle();
+    expect(kept?.value.reviewing).toBe(SKILL);
+  });
+  test('a session ended by /clear ends it', async ($, on) => {
+    world(on);
+    compactsTo(on);
+    on('session.end', () => ({ sessionId: 's' }));
+    await loadSkill($);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    const r = await compact($);
+    expect(r.messages).toHaveLength(1);
+  });
+  test(
+    'the gate switched off still hands it back',
+    { options: { enabled: false } },
+    async ($, on) => {
+      world(on);
+      compactsTo(on);
+      await loadSkill($);
+      expect(handedBack(await compact($))).toHaveLength(1);
+    },
+  );
+  test('a review in flight outlives a reload', async ($, on) => {
+    world(on);
+    compactsTo(on);
+    reloadInto(on, keptRecord({ reviewing: SKILL }));
+    await startSession($);
+    expect(handedBack(await compact($))).toHaveLength(1);
   });
 });
