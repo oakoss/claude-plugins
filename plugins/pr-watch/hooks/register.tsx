@@ -99,6 +99,8 @@ const clock = atom({ plugin: 'pr-watch', key: 'now' } as const, 0);
 const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, { isTurning: false, held: [] });
 // Merges Claude ran, whose passed checks are no news to it.
 const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
+// Watches whose ready line and passed checks wake Claude, as it asked.
+const wakeAsked = atom({ plugin: 'pr-watch', key: 'wakeAsked' } as const, []);
 // A ready pull request Claude would need asking to merge, and a merge's passed
 // checks, wait for the person's next prompt rather than waking Claude.
 const quiet = atom({ plugin: 'pr-watch', key: 'quiet' } as const, []);
@@ -155,6 +157,8 @@ const STORE_RETRY_MS = 30_000;
 let storeRetryAt = 0;
 // What `remember` last saved, so an unchanged list writes nothing.
 let lastRemembered: string | null = null;
+// The watch ids the last tick saw, so its sweep of wakes drops only those gone since.
+let lastLive = new Set<string>();
 // From /config; a change there reloads the module with the new values.
 let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
 
@@ -186,13 +190,15 @@ async function tell($: $, h: Held): Promise<void> {
   if (!(await hold($, h))) await deliver($, h);
 }
 
-// Ready wakes Claude only where review-cycle lets it merge unasked; otherwise
-// it waits with the passed checks for the person's next prompt. Decided as it
-// is sent, so a held line follows /config as it is then.
+// Ready wakes Claude only where it asked the watch tool to be woken, or
+// review-cycle lets it merge unasked; otherwise it waits with the passed checks
+// for the person's next prompt. Decided as it is sent, so a held line follows
+// /config as it is then.
 async function deliver($: $, h: Held): Promise<void> {
   let { ready } = h;
   if (ready !== null) {
-    if (await isMergeUnasked($)) {
+    const asked = await read($, wakeAsked);
+    if (asked.includes(h.id) || (await isMergeUnasked($))) {
       await forgetReady($, h.id).catch((error) =>
         $.ui.toast(`pr-watch could not clear ${h.label}'s kept ready line: ${errorText(error)}`),
       );
@@ -683,6 +689,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     let woke = null as Wake | null;
     let wakeFor: ((last: Memory) => Wake) | null = null;
     let isClosed = false;
+    let isWakeAsked = false;
     if (next.pull && isFresh) {
       const pull = next.pull;
       const verdict = verdictOf(pull, await read($, estimates), next.host, now);
@@ -694,7 +701,10 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
         const shown = target.shown;
         const merged = await read($, ownMerges);
-        const isOwnMerge = merged.includes(idOf(next));
+        const asked = await read($, wakeAsked);
+        isWakeAsked = asked.includes(idOf(next));
+        // A merge Claude made is news once it asked to hear its checks pass.
+        const isOwnMerge = merged.includes(idOf(next)) && !isWakeAsked;
         wakeFor = (last) =>
           wakeOf(next, pull, verdict, last, { isEarly, isOwnMerge, tells: config.tells });
         // A ready pull request read as checking is not ready again afterwards.
@@ -765,8 +775,11 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       else {
         const { news: lines, ready, passed } = woke;
         const h = { id: idOf(next), label: labelOf(next), url: next.url };
-        await tell($, { ...h, news: lines, ready });
-        await keep($, { ...h, news: passed, ready: null });
+        if (isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
+        else {
+          await tell($, { ...h, news: lines, ready });
+          await keep($, { ...h, news: passed, ready: null });
+        }
       }
     }
     if (!isClosed && isFresh) await learnEstimates($, next, now);
@@ -804,6 +817,13 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
 async function tick($: $): Promise<void> {
   const saved = await read($, watches);
   await remember($, saved);
+  // A watch gone by any route takes its wake with it, so a later watch of the
+  // same pull request starts quiet. Only one seen at the last tick counts as
+  // gone, so a wake asked while this read was out is kept.
+  const live = new Set(saved.map((w) => idOf(w)));
+  const gone = [...lastLive].filter((id) => !live.has(id));
+  lastLive = live;
+  if (gone.length > 0) await update($, wakeAsked, (ids) => ids.filter((id) => !gone.includes(id)));
   // A host no line is on any more is forgotten, so a later outage starts afresh.
   for (const host of unreachable.keys()) {
     if (!saved.some((w) => w.host === host)) unreachable.delete(host);
@@ -1015,6 +1035,12 @@ async function followMerge($: $, m: Merging, startedAt: number): Promise<void> {
 
 async function stop($: $, id: string): Promise<void> {
   await update($, watches, (all) => all.filter((w) => idOf(w) !== id));
+  await forgetWake($, id);
+}
+
+// So a later watch of the same pull request starts quiet.
+async function forgetWake($: $, id: string): Promise<void> {
+  await update($, wakeAsked, (ids) => ids.filter((x) => x !== id));
 }
 
 const TOOL_COLUMNS = 80;
@@ -1029,17 +1055,24 @@ function textOf(w: Watch, now: number, known: Record<string, number>): string {
 const nameOf = (w: Pick<Watch, 'repo' | 'number' | 'push'>) =>
   w.push ? `the push to ${w.push.branch} on ${w.repo}` : `${w.repo}#${w.number}`;
 
-type ToolInput = { pull: string; repo: string | null };
+type ToolInput = { pull: string; repo: string | null; wake: boolean };
 
 function toolInputOf(e: unknown): ToolInput | string {
-  const { pull, repo } = e as { pull?: unknown; repo?: unknown };
+  const { pull, repo, wake } = e as { pull?: unknown; repo?: unknown; wake?: unknown };
   if (typeof pull !== 'string' || pull.trim() === '') {
     return 'pr-watch: `pull` names a pull request: its number, URL or head branch.';
   }
   if (repo !== undefined && repo !== null && typeof repo !== 'string') {
     return 'pr-watch: `repo` is the repository as owner/name.';
   }
-  return { pull: pull.trim(), repo: typeof repo === 'string' && repo !== '' ? repo : null };
+  if (wake !== undefined && wake !== null && typeof wake !== 'boolean') {
+    return 'pr-watch: `wake` is true or false.';
+  }
+  return {
+    pull: pull.trim(),
+    repo: typeof repo === 'string' && repo !== '' ? repo : null,
+    wake: wake === true,
+  };
 }
 
 // The pull request gh resolves a tool's input to, or why it cannot.
@@ -1078,6 +1111,7 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
       return [...all, { ...target, checkedAt: 0 }];
     });
     isAdded = true;
+    if (input.wake) await update($, wakeAsked, (ids) => [...new Set([...ids, id])]);
     const now = await $.clock.now();
     const kept: Kept = { news: null };
     const before = await read($, watches);
@@ -1093,14 +1127,24 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
           kept.news ?? `${name} is no longer watched: its line was removed while pr-watch read it.`,
       };
     }
-    const line = textOf(after, now, await read($, estimates));
+    const known = await read($, estimates);
+    const line = textOf(after, now, known);
     const head = `pr-watch ${isNew ? 'is now watching' : 'was already watching'} ${name}: ${line}`;
     if (kept.error !== undefined) {
       return { result: `${head}\npr-watch could not finish its first read: ${kept.error}` };
     }
-    const closing = config.isAwake
-      ? 'pr-watch tells you when that changes, at once or with the next message, so there is no need to poll gh.'
-      : 'Waking Claude is off in /config: changes show on the line, and the watches tool reads them.';
+    // Already there, it was told before and will not wake: the line says it now.
+    // A passed merge counts only once settled, as a read tells it.
+    const verdict = after.pull ? verdictOf(after.pull, known, after.host, now) : null;
+    const isPassed =
+      verdict?.kind === 'merged-passed' && after.pull && isSettled(verdict, after.pull, now);
+    const closing = !config.isAwake
+      ? 'Waking Claude is off in /config: changes show on the line, and the watches tool reads them.'
+      : !input.wake
+        ? 'pr-watch tells you when that changes, at once or with the next message, so there is no need to poll gh.'
+        : verdict?.kind === 'ready' || isPassed
+          ? `${isPassed ? "Its merge's checks have passed" : 'It is ready to merge'} now, as its line says. pr-watch wakes you if that happens again after new checks, and tells you the rest when it changes.`
+          : 'pr-watch wakes you when it turns ready to merge or its checks pass, and tells you the rest when it changes, so there is no need to poll gh.';
     return { result: [head, kept.news, closing].filter(Boolean).join('\n') };
   } catch (error) {
     const why = errorText(error);
@@ -1173,8 +1217,18 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless review-cycle lets you merge unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; use this for any other you are waiting on, instead of polling gh pr checks or sleeping.",
-    inputSchema: PULL_INPUT,
+      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; call this for them too to pass wake, and for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+    inputSchema: {
+      ...PULL_INPUT,
+      properties: {
+        ...PULL_INPUT.properties,
+        wake: {
+          type: 'boolean',
+          description:
+            "Wake you as soon as it turns ready to merge or its merge's checks pass, for an ask like 'merge it once it's green' or 'tell me when main passes'. Once set, it lasts while it is watched in this session.",
+        },
+      },
+    },
   },
   {
     name: 'unwatch',
