@@ -167,6 +167,44 @@ export function layeredOf(
   return { stack, stackAt: now, stackMerged: isMerged };
 }
 
+// The nearest open layer below this one that is not ready, or null; `of` is 0
+// when its place is not yet known. A stack merge of a layer merges the open
+// layers below it, while GitHub reports each layer ready by itself. A layer
+// whose base is the trunk has none open below; one not watched, and not
+// reported merged, counts as not ready.
+export function belowOf(
+  w: Pick<Watch, 'host' | 'repo' | 'number'>,
+  pull: Pull,
+  all: readonly Watch[],
+  estimates: Record<string, number>,
+): { at: number; of: number } | null {
+  const near = (x: Watch) => !x.push && x.host === w.host && x.repo === w.repo;
+  const isReady = (x: Watch | undefined) =>
+    x?.pull?.state === 'OPEN' && verdictOf(x.pull, estimates, x.host, x.checkedAt).kind === 'ready';
+  const { stack } = pull;
+  // Until the stacks API answers, a watched pull request this one is based on
+  // stands for the layer below.
+  if (stack === undefined) {
+    const under = all.find(
+      (x) => near(x) && x.pull?.head?.branch === pull.base && x.pull.head.repo === w.repo,
+    );
+    return under?.pull?.state === 'OPEN' && !isReady(under) ? { at: 0, of: 0 } : null;
+  }
+  if (stack === null || pull.base === stack.trunk) return null;
+  const at = stack.layers.indexOf(w.number);
+  for (let i = at - 1; i >= 0; i--) {
+    const n = stack.layers[i];
+    if (n === undefined || stack.merged?.includes(n)) continue;
+    const lower = all.find((x) => near(x) && x.number === n);
+    if (lower?.pull?.state === 'MERGED') continue;
+    if (!isReady(lower)) return { at: i + 1, of: stack.layers.length };
+    // A ready layer based on the trunk has every layer under it merged, even
+    // where this one's stack list is older than that merge.
+    if (lower?.pull?.base === stack.trunk) return null;
+  }
+  return null;
+}
+
 // A layer's place in its stack, numbered from the bottom as GitHub's badge is;
 // null for a lane.
 export function layerOf(watch: Watch): { stack: number; at: number; of: number } | null {
@@ -577,7 +615,14 @@ export function verdictOf(
   if (pull.isDraft) return { kind: 'waiting', reason: 'draft' };
   const blocker = blockerOf(pull);
   if (blocker !== null) return { kind: 'blocked', reason: blocker };
-  if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(pull.merge)) return { kind: 'ready' };
+  if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(pull.merge)) {
+    const { below } = pull;
+    if (below) {
+      const reason = below.of === 0 ? 'layer below' : `layer ${below.at}/${below.of}`;
+      return { kind: 'waiting', reason };
+    }
+    return { kind: 'ready' };
+  }
   if (pull.merge === 'BLOCKED') {
     if (pull.review === 'REVIEW_REQUIRED') return { kind: 'waiting', reason: 'review' };
     // A required check outside any workflow, a GitHub App's, still running.
@@ -621,7 +666,9 @@ export function delayOf(verdict: Verdict, pull: Pull, now: number, shownAt = now
   }
   if (verdict.kind === 'running' || verdict.kind.startsWith('merged-')) return 10_000;
   if (pull.workflows.some((w) => w.status !== 'done')) return 10_000;
-  if (verdict.kind === 'waiting' && verdict.reason !== 'review' && verdict.reason !== 'draft') {
+  // A layer waiting on one below changes when that one's read does.
+  const isPerson = ['review', 'draft'].includes(verdict.kind === 'waiting' ? verdict.reason : '');
+  if (verdict.kind === 'waiting' && !isPerson && !verdict.reason.startsWith('layer')) {
     return 10_000;
   }
   return slow;
@@ -1053,7 +1100,7 @@ function markSegments(w: Workflow): Segment[] {
 
 // One line of the band. A running gate whose length is known draws a bar that
 // stops short of full until the run ends.
-// A stack layer's line carries its place after the label, as `⧉ #236 1/2`.
+// A stack layer's line carries its place after the label, as `≡ #236 1/2`.
 export function lineOf(
   watch: Watch,
   now: number,
@@ -1062,7 +1109,7 @@ export function lineOf(
 ): Segment[] {
   const layer = layerOf(watch);
   if (layer === null) return bodyOf(watch, now, estimates, columns);
-  const badge = { text: ` ⧉ #${layer.stack} ${layer.at}/${layer.of}`, isDim: true };
+  const badge = { text: ` ≡ #${layer.stack} ${layer.at}/${layer.of}`, isDim: true };
   const [label, ...rest] = bodyOf(watch, now, estimates, columns - badge.text.length);
   return [label!, badge, ...rest];
 }

@@ -831,11 +831,129 @@ describe('a pull request Claude opens', () => {
     await start($);
     await create($, 'gh stack submit --auto');
     await clock.advance(1000);
+    // Read before the layers below them, each waits on the one below.
     expect(await rowsIn(await band($))).toEqual([
-      '#237 ⧉ #236 3/3 ✓ ready to merge',
-      '#235 ⧉ #236 2/3 ✓ ready to merge',
-      '#234 ⧉ #236 1/3 ✓ ready to merge',
+      '#237 ≡ #236 3/3 ○ waiting on layer 2/3',
+      '#235 ≡ #236 2/3 ○ waiting on layer 1/3',
+      '#234 ≡ #236 1/3 ✓ ready to merge',
     ]);
+    // A layer turning ready has those above read again at once.
+    await clock.advance(3000);
+    expect(await rowsIn(await band($))).toEqual([
+      '#237 ≡ #236 3/3 ✓ ready to merge',
+      '#235 ≡ #236 2/3 ✓ ready to merge',
+      '#234 ≡ #236 1/3 ✓ ready to merge',
+    ]);
+  });
+
+  test('after the bottom layer merges, the next follows its rebase and the top waits on it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const stack = stackJson(236, [234, 235, 237]);
+    const layer = (n: number, over: Record<string, unknown> = {}, suites: unknown[] = []) =>
+      prJson({ number: n, url: pullUrl(n), ...over }, suites);
+    const merged = JSON.parse(mergedJson('COMPLETED', 'SUCCESS'));
+    Object.assign(merged.data.repository.pullRequest, { number: 234, url: pullUrl(234) });
+    const gh: Gh = {
+      pr: prJson(),
+      prs: { 234: layer(234), 235: layer(235), 237: layer(237) },
+      stacks: { 234: stack, 235: stack, 237: stack },
+    };
+    world(on, gh, submitOut([234, 235, 237]));
+    await start($);
+    await create($, 'gh stack submit --auto');
+    await clock.advance(3000);
+    // As measured: GitHub retargets the next layer to the trunk, rebases it and
+    // runs its checks again, while the top layer's own checks are already green.
+    gh.prs = {
+      234: JSON.stringify(merged),
+      235: layer(235, { baseRefName: 'main', mergeStateStatus: 'UNKNOWN' }, [RUNNING_CI]),
+      237: layer(237),
+    };
+    await clock.advance(61_000);
+    const [top, next] = await rowsIn(await band($));
+    expect(next).toMatch(/^#235 ≡ #236 2\/3 ● CI/);
+    expect(top).toBe('#237 ≡ #236 3/3 ○ waiting on layer 2/3');
+    gh.prs = { ...gh.prs, 235: layer(235, { baseRefName: 'main' }) };
+    await clock.advance(61_000);
+    const rows = await rowsIn(await band($));
+    expect(rows.slice(0, 2)).toEqual([
+      '#237 ≡ #236 3/3 ✓ ready to merge',
+      '#235 ≡ #236 2/3 ✓ ready to merge',
+    ]);
+    // Once the merged line leaves, the top layer's older stack list still
+    // has #234 open, and #235 on the trunk stands for it.
+    await clock.advance(5 * 60_000);
+    expect(await rowsIn(await band($))).toEqual([
+      '#237 ≡ #236 3/3 ✓ ready to merge',
+      '#235 ≡ #236 2/3 ✓ ready to merge',
+    ]);
+  });
+
+  test('a layer read before the stacks API answers waits on the pull request it is based on', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const layer = (n: number, over: Record<string, unknown> = {}, suites: unknown[] = []) =>
+      prJson(
+        {
+          number: n,
+          url: pullUrl(n),
+          headRefName: `feat/l${n}`,
+          headRepository: { nameWithOwner: 'o/r' },
+          ...over,
+        },
+        suites,
+      );
+    const gh: Gh = {
+      pr: prJson(),
+      prs: {
+        234: layer(234, { mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+        235: layer(235, { baseRefName: 'feat/l234' }),
+      },
+      // A gateway error leaves the stack unknown, not "no stack".
+      stackFails: 99,
+      stackError: 'gh: HTTP 502: Bad Gateway\n',
+      stopBefore: { user: 'release' },
+    };
+    const seen = world(on, gh, submitOut([234, 235]));
+    await start($);
+    await create($, 'gh stack submit --auto');
+    // Read in the same tick as #234, its first read cannot see it; the next can.
+    await clock.advance(7000);
+    expect(await rowsIn(await band($))).toContain('#235 ○ waiting on layer below');
+    const woken = seen.wakes.length;
+    await clock.advance(60_000);
+    expect(seen.wakes.slice(woken).filter((w) => w.includes('#235 ready'))).toEqual([]);
+    // #234 turns ready, then not: each change has #235 read again at once.
+    gh.prs = { ...gh.prs, 234: layer(234) };
+    await clock.advance(62_000);
+    expect(await rowsIn(await band($))).toContain('#235 ✓ ready to merge');
+    gh.prs = { ...gh.prs, 234: layer(234, { mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) };
+    await clock.advance(62_000);
+    expect(await rowsIn(await band($))).toContain('#235 ○ waiting on layer below');
+  });
+
+  test('a layer read again with an unchanged line has the layers above left to their own pace', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const stack = stackJson(236, [234, 235]);
+    // The lower layer runs CI, read every 10 s; the upper one waits on it.
+    const gh: Gh = {
+      pr: prJson(),
+      prs: {
+        234: prJson({ number: 234, url: pullUrl(234) }, [RUNNING_CI]),
+        235: prJson({ number: 235, url: pullUrl(235) }),
+      },
+      stacks: { 234: stack, 235: stack },
+    };
+    const seen = world(on, gh, submitOut([234, 235]));
+    await start($);
+    await create($, 'gh stack submit --auto');
+    // Past the minute of fast reads a gh stack command starts.
+    await clock.advance(70_000);
+    const readsOf = (n: number) =>
+      seen.runs.filter((r) => r.includes('graphql') && r.includes(` n=${n}`)).length;
+    const before = readsOf(235);
+    // The lower layer's reads change nothing, so the upper keeps its minute.
+    await clock.advance(60_000);
+    expect(readsOf(235) - before).toBeLessThanOrEqual(2);
   });
 
   test('two stacks open beside a lane keep apart, each where its first line was', async ($, on) => {
@@ -847,13 +965,14 @@ describe('a pull request Claude opens', () => {
     world(on, { pr: prJson(), stacks }, submitOut([234, 300, 238, 235, 239]));
     await start($);
     await create($, 'gh stack submit --auto');
-    await clock.advance(1000);
+    // Long enough for the upper layers to be read after the ones below.
+    await clock.advance(3000);
     expect(await rowsIn(await band($))).toEqual([
-      '#235 ⧉ #236 2/2 ✓ ready to merge',
-      '#234 ⧉ #236 1/2 ✓ ready to merge',
+      '#235 ≡ #236 2/2 ✓ ready to merge',
+      '#234 ≡ #236 1/2 ✓ ready to merge',
       '#300 ✓ ready to merge',
-      '#239 ⧉ #240 2/2 ✓ ready to merge',
-      '#238 ⧉ #240 1/2 ✓ ready to merge',
+      '#239 ≡ #240 2/2 ✓ ready to merge',
+      '#238 ≡ #240 1/2 ✓ ready to merge',
     ]);
   });
 
@@ -864,7 +983,7 @@ describe('a pull request Claude opens', () => {
     await start($);
     await create($, 'gh pr create --fill');
     await clock.advance(1000);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 1/1 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 1/1 ✓ ready to merge');
     const asks = () => seen.runs.filter((r) => r.includes('/stacks')).length;
     const before = asks();
     await create($, 'git status');
@@ -874,7 +993,7 @@ describe('a pull request Claude opens', () => {
     await create($, 'gh stack push');
     await clock.advance(11_000);
     expect(asks()).toBe(before + 1);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 1/2 ✓ ready to merge');
   });
 
   test('a read in flight when a gh stack command runs does not keep the old stack', async ($, on) => {
@@ -884,7 +1003,7 @@ describe('a pull request Claude opens', () => {
     await start($);
     await create($, 'gh pr create --fill');
     await clock.advance(1000);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 1/1 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 1/1 ✓ ready to merge');
     gh.holdFirst = true;
     await clock.advance(60_000);
     gh.stacks = { 234: stackJson(236, [234, 235]) };
@@ -892,7 +1011,7 @@ describe('a pull request Claude opens', () => {
     gh.release?.();
     // The held read itself asks again, before any later poll.
     await clock.advance(1);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 1/2 ✓ ready to merge');
   });
 
   test('a stacks lookup in flight when a gh stack command runs is asked again', async ($, on) => {
@@ -912,7 +1031,7 @@ describe('a pull request Claude opens', () => {
     await clock.advance(5000);
     gh.release?.();
     await clock.advance(120_000);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 1/2 ✓ ready to merge');
   });
 
   test('a gh stack command that failed still has every stack asked again', async ($, on) => {
@@ -925,7 +1044,7 @@ describe('a pull request Claude opens', () => {
     gh.stacks = { 234: stackJson(236, [234, 235]) };
     await create($, 'gh stack submit --auto');
     await clock.advance(11_000);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 1/2 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 1/2 ✓ ready to merge');
   });
 
   test('a stack known before a gh stack command is asked again once it merged', async ($, on) => {
@@ -943,7 +1062,7 @@ describe('a pull request Claude opens', () => {
     gh.pr = JSON.stringify(merged);
     // A ready line is read once a minute; gh stack link starts no burst.
     await clock.advance(61_000);
-    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+    expect(await lineIn(await band($))).toMatch(/^#128 ≡ #236 2\/2 merged into main · /);
   });
 
   test("a lane stacked elsewhere and then merged names the stack's trunk", async ($, on) => {
@@ -959,7 +1078,7 @@ describe('a pull request Claude opens', () => {
     merged.data.repository.pullRequest.baseRefName = 'docs/lower-layer';
     gh.pr = JSON.stringify(merged);
     await clock.advance(61_000);
-    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+    expect(await lineIn(await band($))).toMatch(/^#128 ≡ #236 2\/2 merged into main · /);
   });
 
   test('a merged layer whose stacks lookup failed at the merge asks again', async ($, on) => {
@@ -979,7 +1098,7 @@ describe('a pull request Claude opens', () => {
     await clock.advance(61_000);
     expect(await lineIn(await band($))).toMatch(/^#128 merged into docs\/lower-layer · /);
     await clock.advance(61_000);
-    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+    expect(await lineIn(await band($))).toMatch(/^#128 ≡ #236 2\/2 merged into main · /);
   });
 
   test('a merged layer asks again after a failed lookup whatever the clocks say', async ($, on) => {
@@ -1015,7 +1134,7 @@ describe('a pull request Claude opens', () => {
     const asks = seen.runs.filter((r) => r.includes('/stacks')).length;
     await clock.advance(30 * 60_000);
     expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(asks);
-    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 2\/2 merged into main · /);
+    expect(await lineIn(await band($))).toMatch(/^#128 ≡ #236 2\/2 merged into main · /);
   });
 
   test('an open pull request on a host with no stacks API is asked every 10 minutes, no more', async ($, on) => {
@@ -1037,7 +1156,8 @@ describe('a pull request Claude opens', () => {
     await start($);
     await create($);
     await clock.advance(1000);
-    expect(await lineIn(await band($))).toBe('#128 ⧉ #236 2/2 ✓ ready to merge');
+    // Layer 1/2 is not watched, so this one waits on it.
+    expect(await lineIn(await band($))).toBe('#128 ≡ #236 2/2 ○ waiting on layer 1/2');
     gh.stack = '[]';
     const merged = JSON.parse(mergedJson('IN_PROGRESS', null));
     merged.data.repository.pullRequest.baseRefName = 'develop';
@@ -1058,7 +1178,7 @@ describe('a pull request Claude opens', () => {
     gh.stackError = 'gh: Resource not accessible by integration (HTTP 403)\n';
     await create($, 'gh stack sync');
     await clock.advance(11_000);
-    expect(await lineIn(await band($))).toBe('#128 ⧉ #236 2/2 ✓ ready to merge');
+    expect(await lineIn(await band($))).toBe('#128 ≡ #236 2/2 ○ waiting on layer 1/2');
   });
 
   test("an open layer's stack is asked again every 10 minutes, for changes made elsewhere", async ($, on) => {
@@ -1073,7 +1193,7 @@ describe('a pull request Claude opens', () => {
     await clock.advance(5 * 60_000);
     expect(await firstRow($)).toBe('#234 ✓ ready to merge');
     await clock.advance(10 * 60_000);
-    expect(await firstRow($)).toBe('#234 ⧉ #236 2/2 ✓ ready to merge');
+    expect(await firstRow($)).toBe('#234 ≡ #236 2/2 ○ waiting on layer 1/2');
   });
 
   test('a merged layer keeps its trunk through a gh stack command', async ($, on) => {
@@ -1085,13 +1205,13 @@ describe('a pull request Claude opens', () => {
     await start($);
     await create($);
     await clock.advance(1000);
-    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 1\/1 merged into main · /);
+    expect(await lineIn(await band($))).toMatch(/^#128 ≡ #236 1\/1 merged into main · /);
     gh.stack = '[]';
     const asks = seen.runs.filter((r) => r.includes('/stacks')).length;
     await create($, 'gh stack merge 236 --yes --squash');
     await clock.advance(30_000);
     expect(seen.runs.filter((r) => r.includes('/stacks'))).toHaveLength(asks);
-    expect(await lineIn(await band($))).toMatch(/^#128 ⧉ #236 1\/1 merged into main · /);
+    expect(await lineIn(await band($))).toMatch(/^#128 ≡ #236 1\/1 merged into main · /);
   });
 
   test('gives the band to a survey', async ($, on) => {
@@ -4211,6 +4331,30 @@ describe('the tools', () => {
     expect(seen.wakes).toHaveLength(1);
     expect(seen.wakes[0]).toContain('o/r#128 ready to merge');
     expect(seen.wakes[0]).not.toContain('#129');
+  });
+
+  test('watch with wake on a stack top layer wakes Claude once the whole stack is ready', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const stack = stackJson(236, [234, 235]);
+    const layer = (n: number, over: Record<string, unknown> = {}, suites: unknown[] = []) =>
+      prJson({ number: n, url: pullUrl(n), ...over }, suites);
+    const gh: Gh = {
+      pr: prJson(),
+      prs: { 234: layer(234, { mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]), 235: layer(235) },
+      views: { 235: JSON.stringify({ url: pullUrl(235), state: 'OPEN', mergedAt: null }) },
+      stacks: { 234: stack, 235: stack },
+      stopBefore: {},
+    };
+    const seen = world(on, gh, submitOut([234, 235]));
+    await start($);
+    await create($, 'gh stack submit --auto');
+    await tool($, 'watch', { pull: '235', wake: true });
+    await clock.advance(3000);
+    expect(seen.wakes).toEqual([]);
+    gh.prs = { ...gh.prs, 234: layer(234) };
+    await clock.advance(15_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('o/r#235 ready to merge');
   });
 
   test('watch with wake makes the passed checks of a merge Claude made wake it, once', async ($, on) => {

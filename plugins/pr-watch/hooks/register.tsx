@@ -38,6 +38,8 @@ import {
   viewedPull,
   pushedBranches,
   pushedPull,
+  belowOf,
+  layerOf,
   delayOf,
   errorLine,
   followTrunk,
@@ -115,6 +117,9 @@ const PROMPT_VIEW_TIMEOUT_MS = 3000;
 // The prompts the person sent, whose turn may carry kept news.
 const PERSON = new Set<PromptOrigin['kind']>(['composer', 'bridge', 'sdk']);
 const busy = new Set<string>();
+// Layers to read at the next tick, above one whose line changed; apart from
+// the watch, so a read in flight cannot clear the mark.
+const restack = new Set<string>();
 // When each watch was last read, kept here too so a read whose result could
 // not be saved still waits out its delay.
 const tried = new Map<string, number>();
@@ -507,12 +512,12 @@ type Read = { kind: 'pull'; pull: Pull } | { kind: 'handoff'; to: Watch } | { ki
 // A push whose branch heads an open pull request hands its line to that PR.
 async function readWatch($: $, w: Watch): Promise<Read> {
   if (!w.push) {
-    const read = (isMerged: boolean) =>
+    const readPull = (isMerged: boolean) =>
       readGh($, w.host, pullArgs(w.host, w.repo, w.number, isMerged), parsePull);
     // Until a read says it merged, read the open variant; on the read that
     // first finds it merged, read again for the merge commit's runs.
     const wasMerged = w.pull?.state === 'MERGED';
-    const pull = await read(wasMerged);
+    const pull = await readPull(wasMerged);
     const askedAt = await $.clock.now();
     // A stack kept from before a module reload is asked again once.
     stacksChangedAt ||= askedAt - 1;
@@ -520,11 +525,15 @@ async function readWatch($: $, w: Watch): Promise<Read> {
     const isAsked = needsStack(w.pull, isMerged, askedAt, stacksChangedAt);
     const answer = isAsked ? await stackOf($, w) : undefined;
     const layered = layeredOf(w.pull, answer, isMerged, askedAt);
-    if (pull.state !== 'MERGED') return { kind: 'pull', pull: { ...pull, ...layered } };
+    if (pull.state !== 'MERGED') {
+      const open = { ...pull, ...layered };
+      const below = belowOf(w, open, await read($, watches), await read($, estimates));
+      return { kind: 'pull', pull: below ? { ...open, below } : open };
+    }
     let merged = pull;
     if (!wasMerged) {
       try {
-        merged = await read(true);
+        merged = await readPull(true);
       } catch (error) {
         // Just merged, it shows as waiting on checks while the next read asks for
         // them. Older, it would read as closed and leave, so the failure is said.
@@ -596,6 +605,7 @@ type Kept = { news: string | null; isClosed?: boolean; error?: string };
 async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<void> {
   const id = idOf(target);
   busy.add(id);
+  restack.delete(id);
   tried.set(id, now);
   try {
     let next: Watch;
@@ -689,6 +699,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     let woke = null as Wake | null;
     let wakeFor: ((last: Memory) => Wake) | null = null;
     let isClosed = false;
+    let isMoved = false;
     let isWakeAsked = false;
     if (next.pull && isFresh) {
       const pull = next.pull;
@@ -714,6 +725,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
           isUrgent = ['ready', 'failing', 'merged-failing'].includes(verdict.kind);
           next.shown = shownOf(verdict);
           if (next.shown !== shown || next.shownAt === undefined) next.shownAt = now;
+          isMoved = next.shown !== shown;
         }
       }
     }
@@ -748,6 +760,12 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         if (config.isAwake) news = woke.text;
         next.told = toldAfter(woke.told, target.told, config.isAwake);
         next.heard = woke.heard;
+      }
+      // A layer above one whose line changed is read at once, since it may
+      // wait on this one.
+      const layer = isMoved ? layerOf(next) : null;
+      for (const number of layer ? (next.pull?.stack?.layers.slice(layer.at) ?? []) : []) {
+        restack.add(idOf({ host: next.host, repo: next.repo, number }));
       }
       return takeOverPush(
         reached.map((w) => (isSame(w, target) ? next : w)),
@@ -908,7 +926,10 @@ async function tick($: $): Promise<void> {
     const last = Math.max(w.checkedAt, tried.get(idOf(w)) ?? 0);
     // A line says the pause until a read of its own, so the end of one reads it at once.
     const isDue =
-      w.limitedUntil !== undefined || (last <= pushedAt && !isSlowed) || now - last >= delay;
+      w.limitedUntil !== undefined ||
+      (last <= pushedAt && !isSlowed) ||
+      now - last >= delay ||
+      (restack.has(idOf(w)) && !isSlowed);
     if (isDue) void refresh($, w, now);
   }
   if (isMoving) await update($, clock, () => now);

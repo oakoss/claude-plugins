@@ -143,11 +143,14 @@ export function parseStack(stdout: string): Stack | null {
   if (stacks.length === 0) return null;
   const number = id(stacks[0]?.number);
   const trunk = str(stacks[0]?.base?.ref);
-  const layers = list(stacks[0]?.pull_requests).map((p) => id(p?.number));
+  const pulls = list(stacks[0]?.pull_requests);
+  const layers = pulls.map((p) => id(p?.number));
   if (number === null || trunk === null || layers.includes(null)) {
     throw new Error('gh printed a stack without its number, trunk or layers');
   }
-  return { number, trunk, layers: layers as number[] };
+  const numbers = layers as number[];
+  const merged = numbers.filter((_, i) => str(pulls[i]?.merged_at) !== null);
+  return { number, trunk, layers: numbers, merged };
 }
 
 // Over three repositories' history, 10 runs predicted the next run as well as
