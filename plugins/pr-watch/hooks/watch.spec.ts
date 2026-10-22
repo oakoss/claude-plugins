@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import type { Activity, Job, Pull, RunStatus, Watch, Workflow } from '../types';
 import {
   barOf,
+  belowOf,
   changesStacks,
   clockText,
   layeredOf,
@@ -571,6 +572,9 @@ describe('delayOf', () => {
     expect(delayOf({ kind: 'waiting', reason: 'checking' }, p, AT)).toBe(10_000);
     expect(delayOf({ kind: 'waiting', reason: 'review' }, p, AT)).toBe(60_000);
     expect(delayOf({ kind: 'waiting', reason: 'draft' }, p, AT)).toBe(60_000);
+    // A layer below is read on its own, and its change reads this one again.
+    expect(delayOf({ kind: 'waiting', reason: 'layer 1/3' }, p, AT)).toBe(60_000);
+    expect(delayOf({ kind: 'waiting', reason: 'layer below' }, p, AT)).toBe(60_000);
     expect(delayOf({ kind: 'ready' }, p, AT)).toBe(60_000);
     expect(delayOf({ kind: 'closed' }, p, AT)).toBeNull();
   });
@@ -1703,6 +1707,75 @@ describe('needsStack and layeredOf', () => {
   });
 });
 
+const at237 = { host: 'github.com', repo: 'o/r', number: 237 };
+const lower = (p: Pull) => watched(p, { number: p.number });
+// #237 before the stacks API answers, based on #235's branch.
+const unknown = (over: Partial<Pull> = {}) =>
+  pull([green()], { number: 237, base: 'feat/l235', stack: undefined, ...over });
+
+describe('belowOf', () => {
+  const stack = { number: 236, trunk: 'main', layers: [234, 235, 237] };
+  const open = (number: number, over: Partial<Pull> = {}) =>
+    pull([green()], { number, base: 'feat', stack, ...over });
+
+  test('an open layer below that is not watched holds it, the nearest named', () => {
+    expect(belowOf(at237, open(237), [], KNOWN)).toEqual({ at: 2, of: 3 });
+    expect(belowOf(at237, open(237), [lower(open(235))], KNOWN)).toEqual({ at: 1, of: 3 });
+  });
+  test('a layer whose base is the trunk has none open below', () => {
+    expect(belowOf(at237, open(237, { base: 'main' }), [], KNOWN)).toBeNull();
+  });
+  test('a lower layer the stacks API reports merged, or one read merged, holds nothing', () => {
+    const merged = { ...stack, merged: [234] };
+    const ready = lower(open(235, { stack: merged }));
+    expect(belowOf(at237, open(237, { stack: merged }), [ready], KNOWN)).toBeNull();
+    const gone = lower(open(234, { state: 'MERGED' }));
+    expect(belowOf(at237, open(237), [gone, lower(open(235))], KNOWN)).toBeNull();
+  });
+  test('a lower layer not ready holds it, even when it is watched', () => {
+    const waiting = lower(open(235, { merge: 'BLOCKED', review: 'REVIEW_REQUIRED' }));
+    expect(belowOf(at237, open(237), [lower(open(234)), waiting], KNOWN)).toEqual({
+      at: 2,
+      of: 3,
+    });
+  });
+  test('a ready layer below based on the trunk has everything under it merged', () => {
+    // #234 merged and its line left; #237's stack list still has it open.
+    const onTrunk = lower(open(235, { base: 'main' }));
+    expect(belowOf(at237, open(237), [onTrunk], KNOWN)).toBeNull();
+  });
+  test('only a watch in the same repository and on the same host stands for a layer', () => {
+    const elsewhere = [
+      watched(open(235), { number: 235, repo: 'o/other' }),
+      watched(open(235), { number: 235, host: 'ghe.example.com' }),
+    ];
+    expect(belowOf(at237, open(237), elsewhere, KNOWN)).toEqual({ at: 2, of: 3 });
+  });
+  test('before the stacks API answers, the pull request it is based on stands for the layer below', () => {
+    const under = (p: Pull) => lower({ ...p, head: { branch: 'feat/l235', repo: 'o/r' } });
+    const blocked = under(open(235, { merge: 'BLOCKED', review: 'REVIEW_REQUIRED' }));
+    expect(belowOf(at237, unknown(), [blocked], KNOWN)).toEqual({ at: 0, of: 0 });
+    expect(belowOf(at237, unknown(), [under(open(235))], KNOWN)).toBeNull();
+    expect(belowOf(at237, unknown(), [], KNOWN)).toBeNull();
+    expect(belowOf(at237, unknown({ stack: null }), [blocked], KNOWN)).toBeNull();
+    // One merged or closed holds nothing.
+    for (const state of ['MERGED', 'CLOSED'] as const) {
+      expect(belowOf(at237, unknown(), [under(open(235, { state }))], KNOWN)).toBeNull();
+    }
+    // A fork's branch of the same name is not this repository's.
+    const fork = lower({ ...blocked.pull!, head: { branch: 'feat/l235', repo: 'f/r' } });
+    expect(belowOf(at237, unknown(), [fork], KNOWN)).toBeNull();
+    expect(textOf(watched(unknown({ below: { at: 0, of: 0 } }), { number: 237 }))).toBe(
+      '#237 ○ waiting on layer below',
+    );
+  });
+  test('a ready line waits on the layer it names', () => {
+    expect(textOf(watched(open(237, { below: { at: 2, of: 3 } }), { number: 237 }))).toBe(
+      '#237 ≡ #236 3/3 ○ waiting on layer 2/3',
+    );
+  });
+});
+
 describe('stack layers', () => {
   test("a layer's place is counted from the bottom; a lane has none", () => {
     expect(layerOf(layered(235, 236, [234, 235, 237]))).toEqual({ stack: 236, at: 2, of: 3 });
@@ -1713,7 +1786,7 @@ describe('stack layers', () => {
   });
 
   test("a layer's line carries its place after the label", () => {
-    expect(textOf(layered(235, 236, [234, 235, 237]))).toBe('#235 ⧉ #236 2/3 ✓ ready to merge');
+    expect(textOf(layered(235, 236, [234, 235, 237]))).toBe('#235 ≡ #236 2/3 ✓ ready to merge');
     expect(textOf(lane(7))).toBe('#7 ✓ ready to merge');
   });
 

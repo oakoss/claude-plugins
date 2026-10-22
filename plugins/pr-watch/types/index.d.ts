@@ -30,7 +30,8 @@ export type Commit = { oid: string; parents: string[]; runs: Runs };
 
 // A github/gh-stack stack: its number, the branch its bottom layer merges
 // into, and its layers' pull request numbers, bottom first.
-export type Stack = { number: number; trunk: string; layers: number[] };
+// `merged` lists the layers the stacks API reports merged; it keeps them in `layers`.
+export type Stack = { number: number; trunk: string; layers: number[]; merged?: number[] };
 
 // A comment or review on a pull request by someone other than the viewer.
 export type Activity = {
@@ -74,6 +75,9 @@ export type Pull = {
   stackAt?: number;
   // `stack` was answered on a read that found it merged.
   stackMerged?: boolean;
+  // The nearest open layer below that is not ready, by place in the stack;
+  // a stack merge of this layer would merge it too.
+  below?: { at: number; of: number };
   // The latest comments and reviews by others, oldest first; null when the
   // reply lacks the viewer or either list.
   activity: Activity[] | null;

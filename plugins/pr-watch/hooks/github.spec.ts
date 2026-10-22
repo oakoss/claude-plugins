@@ -384,18 +384,23 @@ const took = (s: number, attempt = 1) => ({
 const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
 
 describe('parseStack', () => {
-  test("a stack's number, trunk and layers, bottom first", () => {
+  test("a stack's number, trunk and layers, bottom first, merged ones kept and named", () => {
     const stacks = [
       {
         number: 236,
         base: { ref: 'main' },
-        pull_requests: [{ number: 234 }, { number: 235 }],
+        pull_requests: [
+          { number: 233, merged_at: '2026-10-22T02:23:06Z' },
+          { number: 234, merged_at: null },
+          { number: 235 },
+        ],
       },
     ];
     expect(parseStack(JSON.stringify(stacks))).toEqual({
       number: 236,
       trunk: 'main',
-      layers: [234, 235],
+      layers: [233, 234, 235],
+      merged: [233],
     });
   });
   test('the first stack it is in', () => {
@@ -403,7 +408,12 @@ describe('parseStack', () => {
       { number: 236, base: { ref: 'main' } },
       { number: 240, base: { ref: 'develop' } },
     ];
-    expect(parseStack(JSON.stringify(stacks))).toEqual({ number: 236, trunk: 'main', layers: [] });
+    expect(parseStack(JSON.stringify(stacks))).toEqual({
+      number: 236,
+      trunk: 'main',
+      layers: [],
+      merged: [],
+    });
   });
   test('[] names no stack', () => {
     expect(parseStack('[]')).toBeNull();
