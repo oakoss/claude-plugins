@@ -1331,6 +1331,12 @@ describe('the switch in settings files', () => {
       true,
     );
   });
+  test('removing another plugin, or asking for help, is not the switch', async ($, on) => {
+    fakeWorld(on);
+    expect(ran(await bash($, 'claude plugin uninstall pr-watch@oakoss'))).toBe(true);
+    expect(ran(await bash($, 'claude plugin uninstall --help'))).toBe(true);
+    expect(denied(await bash($, 'claude plugin uninstall $P'), 'only by the user')).toBe(true);
+  });
   test('an edit that creates a settings file is judged by its new text', async ($, on) => {
     fakeWorld(on);
     const r = await $.tool.call({
@@ -1363,6 +1369,7 @@ describe('the switch in settings files', () => {
     expect(denied(await monitor('git commit -am x'), 'Monitor runs commands')).toBe(true);
     expect(denied(await monitor('claude plugin disable review-cycle'), 'Monitor runs')).toBe(true);
     expect(ran(await monitor('tail -f log'))).toBe(true);
+    expect(ran(await monitor('claude plugin uninstall --help'))).toBe(true);
   });
   test('a failed read refuses a JSON edit', async ($, on) => {
     fakeWorld(on, { fsFails: true });
