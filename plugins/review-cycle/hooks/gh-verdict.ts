@@ -5,6 +5,7 @@
 import {
   covers,
   NAMED_ELSEWHERE,
+  NO_GRANT,
   type Grant,
   type HoldReason,
   type HoldStep,
@@ -166,6 +167,15 @@ export function notAsked(
 
 function prRefusal(shown: string, ladder: InForce, held: Hold, unread: UnreadOffer | null): string {
   return `${notAsked('a pull request', ladder, true, held, unreadFor(unread, 'pr'))}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
+}
+
+function submitRefusal(
+  shown: string,
+  ladder: InForce,
+  held: Hold,
+  unread: UnreadOffer | null,
+): string {
+  return `${notAsked('a pull request', ladder, true, held, unreadFor(unread, 'pr'))}, and \`gh stack submit\` also pushes every active branch of the stack with --force-with-lease, so nothing ran. To run it, ${askThem('the stack, that it force-pushes its branches with a lease and that it opens their pull requests,', '"Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?"', shown)}`;
 }
 
 // The branch oakum's version pull request comes from: merging it is the release.
@@ -803,6 +813,20 @@ export async function judgeGh(
       }
       case 'stack': {
         if (action.step === 'submit' || action.step === 'link') {
+          // Asked for both at once unless the push runs on the setting alone,
+          // so one answer covers the command: a push asked for in this message
+          // does not last to the answer.
+          if (!may.pr && action.step === 'submit') {
+            const isPushSet = permitted(NO_GRANT, ladder, held !== null).push;
+            const bound = !isPushSet
+              ? null
+              : 'unread' in action.where
+                ? { asks: action.where.unread }
+                : await lookups.stackLease(action.step, action.where.remote);
+            if (bound === null || 'asks' in bound) {
+              return { deny: submitRefusal(shown, ladder, held, unread) };
+            }
+          }
           if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
           if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         }

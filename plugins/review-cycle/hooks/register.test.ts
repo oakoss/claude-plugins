@@ -4528,6 +4528,50 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'gh pr view 116'))).toBe(true);
     expect(w.calls.some((c) => c.argv.join(' ') === 'gh alias list')).toBe(false);
   });
+  test('gh stack submit asks for its pull requests and its lease at once, and one yes runs it', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh stack submit --auto');
+    expect(denied(r, 'also pushes every active branch of the stack with --force-with-lease')).toBe(
+      true,
+    );
+    expect(denied(r, 'with a lease and open its PRs?"')).toBe(true);
+    await endTurn(
+      $,
+      'answer',
+      'Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?',
+    );
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh stack submit --auto'))).toBe(true);
+  });
+  test('a lease asked in the message still has gh stack submit ask for both, since the answer is a new message', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await endTurn($, 'answer', 'Force-push the stack with a lease?');
+    await say($, 'yes');
+    const r = await bash($, 'gh stack submit --auto');
+    expect(denied(r, 'also pushes every active branch')).toBe(true);
+    // gh stack link pushes plainly, so it is never asked a lease.
+    const link = await bash($, 'gh stack link feat/a feat/b');
+    expect(denied(link, "doesn't ask for a pull request")).toBe(true);
+    expect(denied(link, 'also pushes every active branch')).toBe(false);
+    await endTurn(
+      $,
+      'answer',
+      'Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?',
+    );
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh stack submit --auto'))).toBe(true);
+  });
+  test('where the setting allows a push its lease cannot bound, gh stack submit still asks for both; gh stack link never for a lease', async ($, on) => {
+    // This clone tracks no stack, so the lease bound cannot be read.
+    fakeWorld(on, { settings: { local: stops('open PR') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh stack submit --auto');
+    expect(denied(r, 'also pushes every active branch')).toBe(true);
+    const link = await bash($, 'gh stack link feat/a feat/b');
+    expect(denied(link, "doesn't ask for a pull request")).toBe(true);
+    expect(denied(link, 'also pushes every active branch')).toBe(false);
+  });
   test('gh stack is read: moving around runs, a stack push asks for its lease', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
     await say($, 'push the stack');

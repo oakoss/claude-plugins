@@ -1277,6 +1277,29 @@ describe('gh stack', () => {
     expect(w.calls).toContain('stackLease sync fork');
   });
 
+  test('submit asks for its pull requests alone only where its push runs on the setting', async () => {
+    const both = expect.stringContaining('also pushes every active branch');
+    const prOnly = expect.not.stringContaining('also pushes every active branch');
+    // No setting lets the push run: one question for both, whatever its lease.
+    expect(await judge([stack('submit')], world('push'), grant())).toMatchObject({ deny: both });
+    const leased = world('push', {}, undefined, undefined, { ok: true });
+    expect(await judge([stack('submit')], leased, grant())).toMatchObject({ deny: both });
+    // Even with the lease asked in this message, which the answer will not carry.
+    expect(await judge([stack('submit')], world('push'), grant({ push: 'lease' }))).toMatchObject({
+      deny: both,
+    });
+    // The setting lets it run and its lease is bound: the pull requests alone.
+    const bound = world('open PR', {}, undefined, undefined, { ok: true });
+    expect(await judge([stack('submit')], bound, grant())).toMatchObject({ deny: prOnly });
+    // The setting lets it run, but the lease could overwrite another push.
+    const unbound = world('open PR', {}, undefined, undefined, { asks: 'a branch moved' });
+    expect(await judge([stack('submit')], unbound, grant())).toMatchObject({ deny: both });
+    // A link pushes plainly and is never asked a lease.
+    expect(await judge([link({ remote: null })], world('push'), grant())).toMatchObject({
+      deny: prOnly,
+    });
+  });
+
   test('a pull request submit opens unasked is noted as run by the setting', async () => {
     expect(await judge([stack('submit')], world('never stop'), grant({ push: 'lease' }))).toEqual({
       ran: [{ step: 'pr', ladder: { stopBefore: 'never stop', source: 'local' } }],
