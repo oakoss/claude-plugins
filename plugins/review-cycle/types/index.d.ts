@@ -36,6 +36,8 @@ export type Kept = {
   roundsFrom: number;
   // `<git common dir>\t<remote>/<branch>` and the commit this agent last pushed there.
   pushed: [string, string][];
+  // The review skill's text while a review runs.
+  reviewing: string | null;
 };
 
 declare module 'claude-code' {

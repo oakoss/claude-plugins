@@ -139,6 +139,7 @@ import {
   type Unnamed,
   type Needed,
 } from './push-verdict';
+import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, bashTouchesGate, isJsonPath, namesSwitch, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
@@ -312,6 +313,9 @@ type GateState = {
   // `<git common dir>\t<remote>/<branch>` and the commit this agent last
   // pushed there, newest last: what gh-stack's leased push may overwrite.
   pushed: [string, string][];
+  // The review skill's text from when it loads until a commit lands or the
+  // session ends, so a compaction can hand back what its re-attached copy drops.
+  reviewing: string | null;
 };
 
 const state: GateState = {
@@ -355,6 +359,7 @@ const state: GateState = {
   standing: NO_STANDING,
   roundsFrom: 0,
   pushed: [],
+  reviewing: null,
 };
 
 // The gate's memory as the host keeps it: module variables start over when the
@@ -363,7 +368,7 @@ const state: GateState = {
 // the user's message granted is not kept: a reload makes the next step ask, so
 // a stale copy can never grant what a later message took back. Bump the shape
 // whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-4' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-5' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -390,6 +395,7 @@ function keptOf(): Kept {
     mandate: state.mandate,
     roundsFrom: state.roundsFrom,
     pushed: state.pushed,
+    reviewing: state.reviewing,
   };
 }
 
@@ -564,6 +570,7 @@ async function recall($: $): Promise<void> {
       state.mandate = kept.mandate;
       state.roundsFrom = kept.roundsFrom;
       state.pushed = kept.pushed;
+      state.reviewing = kept.reviewing;
       for (const [id, leg] of legs) {
         if (leg.done || leg.capped) continue;
         const left = Math.max(0, LEG_BUDGET_MS - (now - leg.spawnedAt));
@@ -643,6 +650,7 @@ function offKept(k: Kept): Kept {
     lastAnswer: '',
     held: null,
     mandate: null,
+    reviewing: null,
   };
 }
 
@@ -699,7 +707,8 @@ function isKept(k: unknown): k is Kept {
         x[0].includes('\t') &&
         typeof x[1] === 'string' &&
         OBJECT_ID.test(x[1]),
-    )
+    ) &&
+    (k.reviewing === null || typeof k.reviewing === 'string')
   );
 }
 
@@ -1140,6 +1149,54 @@ function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType
     state.owed = null;
   }
   return next(e);
+}
+
+// Review skill calls a subagent has running. `skill.prompt` names no loop but
+// fires inside its Skill call (measured on 2.1.308), and a subagent's review
+// is not the main conversation's.
+let subagentSkills = 0;
+
+async function onSubagentSkill(
+  _$: $,
+  e: Input<SkillHook>,
+  next: NextOf<SkillHook>,
+): Promise<Output<SkillHook>> {
+  if (!e.agentId || !isReviewSkill(e.skill)) return next(e);
+  subagentSkills += 1;
+  try {
+    return await next(e);
+  } finally {
+    subagentSkills -= 1;
+  }
+}
+
+async function onReviewSkill(
+  $: $,
+  e: Input<HookFor<'skill.prompt'>>,
+  next: NextOf<HookFor<'skill.prompt'>>,
+): Promise<Output<HookFor<'skill.prompt'>>> {
+  const r = await next(e);
+  if (e.pluginName === 'review-cycle' && subagentSkills === 0) {
+    // The text the model reads, which is what the engine re-attaches and cuts.
+    state.reviewing = r.text;
+    void keep($);
+  }
+  return r;
+}
+
+async function onCompact(
+  _$: $,
+  e: Input<HookFor<'session.compact'>>,
+  next: NextOf<HookFor<'session.compact'>>,
+): Promise<Output<HookFor<'session.compact'>>> {
+  const r = await next(e);
+  if (e.agentId !== undefined || r.messages === undefined) return r;
+  const messages = resumed(r.messages, state.reviewing, (text) => ({
+    role: 'user' as const,
+    text,
+    toolUses: [],
+  }));
+  return { ...r, messages };
 }
 
 async function onAgentSpawn(
@@ -2796,6 +2853,7 @@ async function recordCommitRounds(
   const from = state.roundsFrom;
   const rounds = roundsOf(state.reviews.slice(from));
   state.roundsFrom = state.reviews.length;
+  state.reviewing = null;
   void keep($);
   const now = await $.clock.now();
   roundsAt = Math.max(now, roundsAt + 1);
@@ -3333,8 +3391,10 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Write' }, onWriteSlop);
   on('session.start', onSessionStart);
   // `/clear` and a resume end the session without a fresh session.start.
-  on('session.end', async (_$, e, next) => {
+  on('session.end', async ($, e, next) => {
     state.standing = NO_STANDING;
+    state.reviewing = null;
+    void keep($);
     return next(e);
   });
   on('tool.call', { tool: 'mcp__review-cycle__ledger' }, onLedger);
@@ -3342,6 +3402,9 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
   on('tool.call', { tool: 'mcp__review-cycle__sweep' }, keptSweep);
   on('tool.call', { tool: 'mcp__review-cycle__codex_log' }, onCodexLog);
+  on('tool.call', { tool: 'Skill' }, onSubagentSkill);
+  on('skill.prompt', { skill: 'review-cycle:review' }, onReviewSkill);
+  on('session.compact', onCompact);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.
     on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatusOff);
