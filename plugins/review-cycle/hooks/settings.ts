@@ -6,7 +6,7 @@
 // loosens it without passing through `config.set`. Any JSON file counts,
 // because a settings file can be passed with `--settings` under any name.
 
-import { assignmentName, parse, type Statement, type Word } from './shell';
+import { assignmentName, parse, type ShellAliases, type Statement, type Word } from './shell';
 
 const PLUGIN = /^review-cycle(@|$)/;
 const SWITCHES = ['enabledPlugins', 'pluginConfigs'] as const;
@@ -133,11 +133,27 @@ const basename = (text: string): string =>
 // a plugin subcommand, such as an issue description, is neither. Whether a
 // settings file is named is still read from the whole text, so a path reached
 // through `cd`, a variable or a loop counts.
-export function bashTouchesGate(command: string): boolean {
-  const parsed = parse(command);
+// Read as typed and through the user's aliases, refusing on either: an alias
+// can hide a removal (`cpu='claude plugin uninstall'`) or rename a writer the
+// check knows (`sed=gsed`).
+export function bashTouchesGate(
+  command: string,
+  marketplace: string | null = null,
+  aliases: ShellAliases = new Map(),
+): boolean {
+  if (touchesGateAs(command, marketplace, new Map())) return true;
+  return aliases.size > 0 && touchesGateAs(command, marketplace, aliases);
+}
+
+function touchesGateAs(
+  command: string,
+  marketplace: string | null,
+  aliases: ShellAliases,
+): boolean {
+  const parsed = parse(command, aliases);
   if ('error' in parsed) return textTouchesGate(command);
   const all = flatten(parsed.statements);
-  if (all.some((st) => removesPlugin(st))) return true;
+  if (all.some((st) => removesPlugin(st, marketplace))) return true;
   if (all.some((st) => runsShell(st))) return textTouchesGate(command);
   const written = parsed.bareWrites.some(writesFile) || all.some((st) => writes(st));
   return written && namesSettings(command);
@@ -172,16 +188,45 @@ function names(st: Statement): string[] {
   return st.words.map((w) => basename(w.text));
 }
 
-// `claude [options] plugin[s] [marketplace] disable|uninstall|remove|rm`.
-function removesPlugin(st: Statement): boolean {
+// `claude [options] plugin[s] [marketplace] disable|uninstall|remove|rm` that
+// reaches review-cycle: naming it, the marketplace it came from (or any, when
+// that is unknown), nothing at all, every plugin, or a name only the shell
+// resolves. The CLI matches names case-insensitively; `--help` removes nothing.
+function removesPlugin(st: Statement, marketplace: string | null): boolean {
   const at = names(st).findIndex((n) => CLAUDE.test(n));
   if (at === -1) return false;
-  const rest = st.words.slice(at + 1).map((w) => w.text);
-  const plugin = rest.findIndex((w) => /^plugins?$/.test(w));
+  const rest = st.words.slice(at + 1);
+  const plugin = rest.findIndex((w) => /^plugins?$/.test(w.text));
   if (plugin === -1) return false;
-  const args = rest.slice(plugin + 1);
-  const verb = /^market(place)?$/.test(args[0] ?? '') ? args[1] : args[0];
-  return /^(disable|uninstall|remove|rm)$/.test(verb ?? '');
+  let args = rest.slice(plugin + 1);
+  const market = /^market(place)?$/.test(args[0]?.text ?? '');
+  if (market) args = args.slice(1);
+  if (!/^(disable|uninstall|remove|rm)$/.test(args[0]?.text ?? '')) return false;
+  const operands: Word[] = [];
+  let flags = true;
+  let all = false;
+  for (let i = 1; i < args.length; i++) {
+    const w = args[i]!;
+    if (!flags || !w.text.startsWith('-')) operands.push(w);
+    else if (w.text === '--') flags = false;
+    else if (/^(-h|--help)$/.test(w.text)) return false;
+    else if (/^(-a|--all)$/.test(w.text)) all = true;
+    else if (/^(-s|--scope)$/.test(w.text)) i += 1;
+  }
+  if (all || operands.length === 0) return true;
+  const own = market ? marketplace?.toLowerCase() : null;
+  return operands.some((w) => {
+    const name = w.text.toLowerCase();
+    if (w.dynamic || w.pattern) return true;
+    return market ? marketplace === null || name === own : /^review-cycle(@|$)/.test(name);
+  });
+}
+
+// The marketplace an installed copy came from, read from its cache path
+// (`…/plugins/cache/<marketplace>/review-cycle/<version>`); null for a copy
+// loaded from a directory, such as `--plugin-dir`.
+export function marketplaceOf(root: string): string | null {
+  return /\/plugins\/cache\/([^/]+)\/review-cycle\/[^/]+\/?$/.exec(root)?.[1] ?? null;
 }
 
 function writes(st: Statement): boolean {
