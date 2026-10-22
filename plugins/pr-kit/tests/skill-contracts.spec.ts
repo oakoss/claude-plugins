@@ -558,7 +558,20 @@ describe('merge: only what was asked, and a stack as one', () => {
       'stop and say why when `state` is not `OPEN`, `isDraft` is true, or `mergeStateStatus` is `BLOCKED`, `BEHIND` or `DIRTY`',
     );
     expect(text).toContain(
-      '`UNSTABLE` means a check that is not required failed: name it and ask before merging.',
+      '`UNSTABLE` means a check has not passed: one that failed, or one still running.',
+    );
+    expect(text).toContain('`gh pr checks <number> --json name,bucket`');
+    expect(text).toContain('`gh pr checks <number> --required --json name,bucket`');
+    expect(text).toContain('Ignore `pass` and `skipping`.');
+    expect(text).toContain('When any is `fail` or `cancel`, name it and ask before merging.');
+    expect(text).toContain(
+      'When the others are `pending`, at least one check is required and every required check is `pass` or `skipping`, merge, and name the pending ones in the report as still running',
+    );
+    expect(text).toContain(
+      'when none is required the second exits 1 with `no required checks reported`, which means no check is required',
+    );
+    expect(text).toContain(
+      'When no check is required, or a required one is pending, name the pending ones and ask.',
     );
     expect(text).toContain('would merge it into the layer below, not into the trunk');
     expect(lines).toContain(
