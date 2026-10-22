@@ -6636,11 +6636,15 @@ describe('a compaction during a review', () => {
 
   test('hands back the phases the re-attached copy drops', async ($, on) => {
     world(on);
-    compactsTo(on);
+    on('session.compact', () => ({ messages: [SUMMARY], tokensAfter: 123 }));
     await loadSkill($);
-    const r = await compact($);
+    const raw = { role: 'user' as const, text: 'the transcript before compaction', toolUses: [] };
+    const r = await ($ as any).session.compact({ messages: [raw] });
     expect(r.messages[0]).toMatchObject({ text: SUMMARY.text });
+    expect(r.messages.some((m: { text: string }) => m.text === raw.text)).toBe(false);
+    expect(r.tokensAfter).toBe(123);
     const [back] = handedBack(r);
+    expect(back).toMatchObject({ role: 'user', toolUses: [] });
     expect(back?.text).toContain('### Phase 2\n\ntwo ');
     expect(back?.text).toContain('the later phase');
     expect(back?.text).not.toContain('### Phase 1');
@@ -6717,9 +6721,58 @@ describe('a compaction during a review', () => {
     compactsTo(on);
     await skill($, 'review-cycle:review', 'sub');
     expect(handedBack(await compact($))).toEqual([]);
+    await skill($, '/review-cycle:review', 'sub');
+    expect(handedBack(await compact($))).toEqual([]);
     await skill($, 'review-cycle:review');
     expect(handedBack(await compact($))).toHaveLength(1);
   });
+  test("a subagent's other skill does not hide the main conversation's review", async ($, on) => {
+    world(on, { skillRun: () => loadSkill($) });
+    compactsTo(on);
+    await skill($, 'other:thing', 'sub');
+    expect(handedBack(await compact($))).toHaveLength(1);
+  });
+  test('keeps the text the model reads, not the one the skill computed', async ($, on) => {
+    on('skill.prompt', ($$: unknown, e: { text: string }) => ({
+      text: `${'x'.repeat(30_000)}\n\n${e.text}`,
+    }));
+    fakeWorld(on);
+    compactsTo(on);
+    await loadSkill($);
+    const [back] = handedBack(await compact($));
+    expect(back?.text).toContain('xxxx');
+  });
+  test('/clear clears the kept record too', async ($, on) => {
+    world(on);
+    on('session.end', () => ({ sessionId: 's' }));
+    let kept: any = null;
+    on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+      if (e.key === 'gate') kept = e.value;
+      return next(e);
+    });
+    await startSession($);
+    await loadSkill($);
+    await settle();
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await settle();
+    expect(kept?.value.reviewing).toBeNull();
+  });
+  test(
+    'switching the gate off forgets a review in flight',
+    { options: { enabled: false } },
+    async ($, on) => {
+      world(on);
+      let kept: any = 'unset';
+      on('state.set', ($$: unknown, e: { key: string; value: unknown }, next: any) => {
+        if (e.key === 'gate') kept = e.value;
+        return next(e);
+      });
+      reloadInto(on, keptRecord({ reviewing: SKILL }));
+      await startSession($);
+      await settle();
+      expect(kept?.value.reviewing).toBeNull();
+    },
+  );
   test('the loaded skill is kept for a reload', async ($, on) => {
     world(on);
     let kept: any = null;

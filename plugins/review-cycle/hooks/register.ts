@@ -139,7 +139,7 @@ import {
   type Unnamed,
   type Needed,
 } from './push-verdict';
-import { RESUMED, resumeText } from './resume';
+import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, bashTouchesGate, isJsonPath, namesSwitch, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
@@ -650,6 +650,7 @@ function offKept(k: Kept): Kept {
     lastAnswer: '',
     held: null,
     mandate: null,
+    reviewing: null,
   };
 }
 
@@ -1150,8 +1151,9 @@ function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType
   return next(e);
 }
 
-// Skill calls a subagent has running; `skill.prompt` names no loop, and a
-// subagent's review is not the main conversation's.
+// Review skill calls a subagent has running. `skill.prompt` names no loop but
+// fires inside its Skill call (measured on 2.1.308), and a subagent's review
+// is not the main conversation's.
 let subagentSkills = 0;
 
 async function onSubagentSkill(
@@ -1159,7 +1161,7 @@ async function onSubagentSkill(
   e: Input<SkillHook>,
   next: NextOf<SkillHook>,
 ): Promise<Output<SkillHook>> {
-  if (!e.agentId) return next(e);
+  if (!e.agentId || !isReviewSkill(e.skill)) return next(e);
   subagentSkills += 1;
   try {
     return await next(e);
@@ -1182,23 +1184,19 @@ async function onReviewSkill(
   return r;
 }
 
-// A summary computed ahead (`precompute`) and installed later may carry the
-// phases, wanted or not by the time it is installed.
 async function onCompact(
   _$: $,
   e: Input<HookFor<'session.compact'>>,
   next: NextOf<HookFor<'session.compact'>>,
 ): Promise<Output<HookFor<'session.compact'>>> {
-  const skill = state.reviewing;
   const r = await next(e);
   if (e.agentId !== undefined || r.messages === undefined) return r;
-  const carried = r.messages.some((m) => m.text.startsWith(RESUMED));
-  if (skill === null) {
-    return carried ? { ...r, messages: r.messages.filter((m) => !m.text.startsWith(RESUMED)) } : r;
-  }
-  const text = carried ? null : resumeText(skill);
-  if (text === null) return r;
-  return { ...r, messages: [...r.messages, { role: 'user', text, toolUses: [] }] };
+  const messages = resumed(r.messages, state.reviewing, (text) => ({
+    role: 'user' as const,
+    text,
+    toolUses: [],
+  }));
+  return { ...r, messages };
 }
 
 async function onAgentSpawn(

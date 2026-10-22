@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { REATTACHED, restOf, RESUMED, resumeText } from './resume';
+import { isReviewSkill, REATTACHED, restOf, RESUMED, resumed, resumeText } from './resume';
 
 describe('restOf', () => {
   const body = '# T\n\nintro\n\n### A\n\naaaa\n\n### B\n\nbbbb\n';
@@ -39,4 +39,43 @@ describe('resumeText', () => {
   test('a skill the copy holds whole hands back nothing', () => {
     expect(resumeText('# X\n\nshort\n')).toBeNull();
   });
+});
+
+const made = (text: string) => ({ text });
+
+describe('resumed', () => {
+  const skill = withHeadingAt(REATTACHED);
+  const summary = { text: 'summary' };
+
+  test('appends the rest of the review in flight', () => {
+    expect(resumed([summary], skill, made)).toEqual([summary, { text: resumeText(skill) }]);
+  });
+  test('replaces a carried copy instead of adding a second', () => {
+    const carried = { text: `${RESUMED}. an older copy` };
+    expect(resumed([summary, carried], skill, made)).toEqual([
+      summary,
+      { text: resumeText(skill) },
+    ]);
+  });
+  test('drops a carried copy when no review is in flight', () => {
+    expect(resumed([summary, { text: `${RESUMED}. stale` }], null, made)).toEqual([summary]);
+  });
+  test('adds nothing for a skill the copy holds whole', () => {
+    expect(resumed([summary], '# X\n\nshort\n', made)).toEqual([summary]);
+    expect(resumed([summary, { text: `${RESUMED}. stale` }], '# X\n\nshort\n', made)).toEqual([
+      summary,
+    ]);
+  });
+});
+
+test.each([
+  ['review-cycle:review', true],
+  ['/review-cycle:review', true],
+  [' review-cycle:review ', true],
+  ['review', true],
+  ['review-cycle:review-pr', false],
+  ['other:thing', false],
+  [undefined, false],
+])('isReviewSkill(%j) is %j', (name, is) => {
+  expect(isReviewSkill(name)).toBe(is);
 });

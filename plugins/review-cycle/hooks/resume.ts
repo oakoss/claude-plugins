@@ -33,3 +33,23 @@ export function resumeText(text: string): string | null {
     rest,
   ].join('\n');
 }
+
+// A bare `review` may be another plugin's; counting it only withholds that call.
+export function isReviewSkill(name: unknown): boolean {
+  if (typeof name !== 'string') return false;
+  const bare = name.trim().replace(/^\//, '');
+  return bare === 'review-cycle:review' || bare === 'review';
+}
+
+// A compacted conversation with any carried copy replaced by one of `skill`,
+// the review in flight, or by none: a summary computed ahead (`precompute`)
+// can carry a copy made for a review that is over by its install.
+export function resumed<M extends { readonly text: string }>(
+  messages: readonly M[],
+  skill: string | null,
+  made: (text: string) => M,
+): M[] {
+  const rest = messages.filter((m) => !m.text.startsWith(RESUMED));
+  const text = skill === null ? null : resumeText(skill);
+  return text === null ? rest : [...rest, made(text)];
+}
