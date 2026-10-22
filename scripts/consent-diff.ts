@@ -138,6 +138,11 @@ const VERBS = [
   'merge the version 2 PR',
   'merge the release fixes',
   'open a PR for the docs',
+  // A stack's pull requests, and what stays a description.
+  'open its PRs',
+  'open the PRs',
+  'open a PR for each layer',
+  'open PRs for the stack',
   // GitHub's merge methods, and pull requests named in turn.
   'squash-merge 130',
   'squash merge it',
@@ -429,6 +434,8 @@ const OFFERS = [
   'Should I squash-merge the release?',
   // A gh-stack stack's offers.
   'Force-push the stack with a lease?',
+  'Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?',
+  'Push `feat/a` and `feat/b`?',
   'Merge #2, #3?',
   'Merge the stack?',
   'Merge stack #4 (#2 and #3)?',

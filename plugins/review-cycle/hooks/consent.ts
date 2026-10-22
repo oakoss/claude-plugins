@@ -239,7 +239,8 @@ function prPhrase(text: string): string {
       )
       .replaceAll(/\bready for review\b/gi, 'markready')
       .replaceAll(
-        /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new)\s+)*(?:draft\s+)?(?:pr|pull[\s-]request)\b/gi,
+        // A stack's pull requests too: "open its PRs", "a PR for each layer".
+        /\b(?:(open|create|make|raise|submit)|(opening|creating|making|raising|submitting))\s+(?:(?:a|an|the|new|its|their)\s+)*(?:draft\s+)?(?:prs?|pull[\s-]requests?)(?:\s+for\s+(?:each|every)\s+(?:layer|branch))?\b/gi,
         (_m: string, verb?: string) => (verb ? 'openpr' : 'openingpr'),
       )
       .replaceAll(
@@ -1370,6 +1371,17 @@ function asked(answer: string, heard?: Set<Family>): Grant {
     .replaceAll(
       /(\bmerg(?:e|ing)\s+)(?:`[\w./-]+`|[\w.-]+\/[\w./-]*[\w-])(?=\s+(?:into|to|against)\b)/gi,
       '$1branch',
+    )
+    // A list of names is one object: "the stack `feat/a`, `feat/b` and `feat/c`";
+    // one holding a hand-back word stays whole, for the rule below.
+    .replaceAll(
+      /(`[\w./-]+`)(?:\s*(?:,\s*(?:and\s+)?|and\s+)`[\w./-]+`)+/g,
+      (list: string, first: string) =>
+        [...list.matchAll(/`([\w./-]+)`/g)].some(([, name]) =>
+          words(name ?? '').some((x) => HANDBACK.has(x)),
+        )
+          ? list
+          : first,
     )
     // A backticked hand-back stays a word: "or would you `rather` do it?".
     .replaceAll(/`([\w./-]+)`/g, (_m: string, name: string) =>

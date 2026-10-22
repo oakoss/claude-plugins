@@ -604,6 +604,14 @@ describe('grants on a request', () => {
     // What a pull request is "for" can be a time ("for tonight"), so the grammar
     // leaves it to the agent to ask.
     ['open a PR for the docs', NONE],
+    // A stack's pull requests.
+    ['open the PRs', PR],
+    ['open their pull requests', PR],
+    ['open a PR for each layer', PR],
+    ['open a PR for every branch', PR],
+    ['open a PR for each layer tonight', NONE],
+    ['open PRs for the stack', NONE],
+    ['force-push the stack with a lease and open its PRs', { ...LEASE, pr: true }],
     ['create a test for the PR', NONE],
     ["it's not committed yet, commit it", COMMIT],
     ["commit it with the message 'fix: parser'", COMMIT],
@@ -967,6 +975,17 @@ describe('an affirmative grants what the previous answer asked', () => {
   });
   test('a miss in "land" names the merge', () => {
     expect(stepsNamed('land 46')).toEqual(['merge']);
+  });
+  test.each([
+    'Force-push the stack with a lease and open its PRs?',
+    'Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?',
+    'Force-push the stack `feat/a` and `feat/b` with a lease and open a PR for each layer?',
+  ])('a yes to %j grants the leased push and the pull requests', (offer) => {
+    expect(grantOf('yes', offer)).toEqual({ ...LEASE, pr: true });
+  });
+  test('a list naming a hand-back word keeps it', () => {
+    expect(grantOf('yes', 'Push `fix/x` and `skip` `fix/y`?').push).toBe('none');
+    expect(grantOf('yes', 'Push `fix/x` and `rather`?').push).toBe('none');
   });
   test.each(["don't land 46", "don't land.", 'landing 131'])('%j holds the merge', (prompt) => {
     expect(holdOf(prompt)?.step).toBe('merge');
