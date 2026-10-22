@@ -126,6 +126,9 @@ declare module 'claude-code' {
       turn: { isTurning: boolean; held: Held[] };
       // Watch ids, kept apart from the watch so a read in flight cannot drop one.
       ownMerges: string[];
+      // Watch ids whose ready line and passed checks wake Claude, as the watch
+      // tool was asked; kept apart for the same reason.
+      wakeAsked: string[];
       // News kept from Claude until the person's next prompt carries it.
       quiet: Held[];
       // The session id whose saved watches were restored.

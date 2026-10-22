@@ -29,6 +29,11 @@ type Gh = {
   stacks?: Record<number, string>;
   stackFails?: number;
   stackError?: string;
+  // Awaited before each store write, to hold one open.
+  storeHold?: () => Promise<void>;
+  // The GraphQL read and gh pr view answers for these numbers, over `pr` and `view`.
+  prs?: Record<number, string>;
+  views?: Record<number, string>;
   // The trunk history query's answer; a branch that is gone when unset. Only
   // that query is refused for GitHub's rate limit.
   trunk?: string;
@@ -222,6 +227,7 @@ function world(
     wakes: [] as string[],
     order: [] as string[],
     registered: [] as string[],
+    schemas: {} as Record<string, unknown>,
     contexts: [] as (readonly string[] | undefined)[],
     notified: [] as string[],
     suggested: [] as string[],
@@ -232,7 +238,8 @@ function world(
   on('store.get', ($: unknown, e: { key: string }) =>
     gh.storeFails ? { deny: 'store unreadable' } : { value: structuredClone(store.get(e.key)) },
   );
-  on('store.set', ($: unknown, e: { key: string; value: unknown }) => {
+  on('store.set', async ($: unknown, e: { key: string; value: unknown }) => {
+    await gh.storeHold?.();
     const refused = gh.onStoreSet?.();
     if (refused) return { deny: refused };
     store.set(e.key, structuredClone(e.value));
@@ -310,9 +317,10 @@ function world(
     seen.toasts.push(e.text);
     return { value: undefined };
   });
-  on('tool.register', ($: unknown, e: { name: string }) => {
+  on('tool.register', ($: unknown, e: { name: string; inputSchema?: unknown }) => {
     if (e.name === gh.registerFails) return { deny: 'registry closed' };
     seen.registered.push(e.name);
+    seen.schemas[e.name] = e.inputSchema;
     return { value: { tool: `mcp__pr-watch__${e.name}` } };
   });
   on('process.run', ($: unknown, e: { argv: string[]; init?: { timeoutMs?: number } }) => {
@@ -343,8 +351,9 @@ function world(
     }
     if (argv.startsWith('gh pr view')) {
       seen.order.push(argv);
-      if (gh.view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
-      const viewed = { value: { exitCode: 0, stdout: gh.view, stderr: '' } };
+      const view = gh.views?.[Number(/^gh pr view (\d+)/.exec(argv)?.[1])] ?? gh.view;
+      if (view === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'no PR' } };
+      const viewed = { value: { exitCode: 0, stdout: view, stderr: '' } };
       if (gh.holdView) {
         gh.holdView = false;
         return new Promise((resolve) => {
@@ -397,7 +406,8 @@ function world(
       gh.estimateFails = (gh.estimateFails ?? 0) - 1;
       return failed;
     }
-    const query = argv.includes('refs/heads/') ? (gh.push ?? gh.pr) : gh.pr;
+    const pr = gh.prs?.[Number(/ n=(\d+)/.exec(argv)?.[1])] ?? gh.pr;
+    const query = argv.includes('refs/heads/') ? (gh.push ?? pr) : pr;
     const out = argv.includes('graphql') ? query : (gh.estimate ?? '{"workflow_runs":[]}');
     const answer = { value: { exitCode: 0, stdout: out, stderr: '' } };
     const isHeld = gh.holdPush && argv.includes('refs/heads/');
@@ -3851,6 +3861,15 @@ const GIVE_UP = 8;
 
 const OPEN_VIEW = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
 
+// A promise and the function that settles it.
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let settle: (() => void) | undefined;
+  const promise = new Promise<void>((r) => {
+    settle = r;
+  });
+  return { promise, resolve: () => settle?.() };
+}
+
 async function tool($: any, name: string, input: object = {}): Promise<string> {
   const r = await $.tool.call({ tool: `mcp__pr-watch__${name}`, ...input });
   return (r as { result: string }).result;
@@ -4115,6 +4134,9 @@ describe('the tools', () => {
     await start($);
     expect(seen.registered).toEqual(['watch', 'unwatch', 'watches']);
     expect(seen.toasts).toEqual([]);
+    // Claude sends only what the schema offers.
+    expect(seen.schemas.watch).toMatchObject({ properties: { wake: { type: 'boolean' } } });
+    expect(seen.schemas.unwatch).not.toMatchObject({ properties: { wake: {} } });
   });
 
   test('one refused leaves the others, and says so once', async ($, on) => {
@@ -4144,6 +4166,187 @@ describe('the tools', () => {
     await clock.advance(70_000);
     expect(seen.toasts).toEqual(['#128 is ready to merge']);
     expect(await tool($, 'watches')).toBe(`${URL}: #128 ✓ ready to merge`);
+  });
+
+  for (const wake of [true, false]) {
+    test(`watch with wake ${wake} ${wake ? 'wakes Claude once' : 'leaves for the next prompt'} when it turns ready, while merges need asking`, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = {
+        pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+        view: OPEN_VIEW,
+        stopBefore: {},
+      };
+      const seen = world(on, gh);
+      await start($);
+      const answer = await tool($, 'watch', { pull: '128', wake });
+      expect(answer.includes('wakes you when it turns ready to merge')).toBe(wake);
+      gh.pr = prJson();
+      await clock.advance(70_000);
+      expect(seen.wakes).toHaveLength(wake ? 1 : 0);
+      if (wake) expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+      await clock.advance(70_000);
+      expect(seen.wakes).toHaveLength(wake ? 1 : 0);
+    });
+  }
+
+  test('watch with wake wakes Claude for that pull request only', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const url129 = 'https://github.com/o/r/pull/129';
+    const blocked = (number: number, url: string) =>
+      prJson({ number, url, mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    const gh: Gh = {
+      pr: blocked(128, URL),
+      prs: { 129: blocked(129, url129) },
+      view: OPEN_VIEW,
+      views: { 129: JSON.stringify({ url: url129, state: 'OPEN', mergedAt: null }) },
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128', wake: true });
+    await tool($, 'watch', { pull: '129' });
+    gh.pr = prJson();
+    gh.prs = { 129: prJson({ number: 129, url: url129 }) };
+    await clock.advance(70_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('o/r#128 ready to merge');
+    expect(seen.wakes[0]).not.toContain('#129');
+  });
+
+  test('watch with wake makes the passed checks of a merge Claude made wake it, once', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('IN_PROGRESS', null), view: VIEW };
+    const seen = world(on, gh, '');
+    await start($);
+    await create($, 'gh pr merge 128 --squash');
+    await tool($, 'watch', { pull: '128', wake: true });
+    gh.pr = mergedJson('COMPLETED', 'SUCCESS');
+    await clock.advance(92_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain("merge commit's checks passed");
+    await clock.advance(200_000);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('watch with wake on one already ready says it is ready now', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), view: OPEN_VIEW, stopBefore: {} });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    const answer = await tool($, 'watch', { pull: '128', wake: true });
+    expect(answer).toContain('It is ready to merge now, as its line says.');
+    expect(answer).not.toContain('wakes you when it turns ready');
+  });
+
+  test('a wake asked while a tick saves the session is kept by its sweep', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const url129 = 'https://github.com/o/r/pull/129';
+    const blocked = (number: number, url: string) =>
+      prJson({ number, url, mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    const gh: Gh = {
+      pr: blocked(128, URL),
+      prs: { 129: blocked(129, url129) },
+      view: OPEN_VIEW,
+      views: { 129: JSON.stringify({ url: url129, state: 'OPEN', mergedAt: null }) },
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '129' });
+    // The next tick saves the new list and waits on that write.
+    const write = deferred();
+    const held = deferred();
+    gh.storeHold = () => {
+      gh.storeHold = undefined;
+      held.resolve();
+      return write.promise;
+    };
+    const ticking = clock.advance(1000);
+    await held.promise;
+    await tool($, 'watch', { pull: '128', wake: true });
+    write.resolve();
+    await ticking;
+    gh.pr = prJson();
+    await clock.advance(70_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('o/r#128 ready to merge');
+  });
+
+  test('watch with wake on a merge whose checks passed says so once settled, and wakes only before', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: mergedJson('COMPLETED', 'SUCCESS'), view: VIEW };
+    const seen = world(on, gh, '');
+    await start($);
+    const early = await tool($, 'watch', { pull: '128', wake: true });
+    expect(early).toContain('wakes you when it turns ready to merge or its checks pass');
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+    const late = await tool($, 'watch', { pull: '128', wake: true });
+    expect(late).toContain("Its merge's checks have passed now, as its line says.");
+  });
+
+  test('a watch that closes takes its wake with it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      view: OPEN_VIEW,
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128', wake: true });
+    gh.pr = prJson({ state: 'CLOSED' });
+    await clock.advance(70_000);
+    expect(await tool($, 'watches')).toBe('pr-watch is watching nothing.');
+    gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+    await tool($, 'watch', { pull: '128' });
+    gh.pr = prJson();
+    await clock.advance(70_000);
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test(
+    'watch with wake while waking is off says changes only show on the line',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      mock.clock(on, { now: T0 });
+      world(on, { pr: prJson(), view: OPEN_VIEW });
+      await start($);
+      const answer = await tool($, 'watch', { pull: '128', wake: true });
+      expect(answer).toContain('Waking Claude is off');
+      expect(answer).not.toContain('wakes you');
+    },
+  );
+
+  test('a watch stopped and watched again without wake is quiet again', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      view: OPEN_VIEW,
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128', wake: true });
+    await tool($, 'unwatch', { pull: '128' });
+    await tool($, 'watch', { pull: '128' });
+    gh.pr = prJson();
+    await clock.advance(70_000);
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('watch refuses a wake that is not true or false', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), view: OPEN_VIEW });
+    await start($);
+    expect(await tool($, 'watch', { pull: '128', wake: 'yes' })).toBe(
+      'pr-watch: `wake` is true or false.',
+    );
+    const answer = await tool($, 'watch', { pull: '128', wake: null });
+    expect(answer).toContain('pr-watch is now watching o/r#128');
+    expect(answer).not.toContain('wakes you');
   });
 
   test('watch leaves a read already in flight to tell its own news', async ($, on) => {
