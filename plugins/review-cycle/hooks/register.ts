@@ -34,6 +34,8 @@ import {
   EPIC_ID,
   grantOf,
   holdOf,
+  isGrant,
+  isStrings,
   prNumbers,
   liftsHold,
   mandateAfter,
@@ -252,6 +254,14 @@ type Message = {
 // A number the grammar could not place ("do not merge 130") voids the answers'.
 type Pointed = { named: readonly string[]; answer: readonly string[]; unplaced: boolean };
 const NOTHING_POINTED: Pointed = { named: [], answer: [], unplaced: false };
+const isPointed = (x: unknown): x is Pointed =>
+  typeof x === 'object' &&
+  x !== null &&
+  isStrings((x as Pointed).named) &&
+  isStrings((x as Pointed).answer) &&
+  typeof (x as Pointed).unplaced === 'boolean';
+// What a message keeps of its consent, which /clear and switching the gate off drop.
+const UNGRANTED = { grant: NO_GRANT, pointed: NOTHING_POINTED } as const;
 
 type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
 
@@ -371,26 +381,32 @@ const state: GateState = {
 
 // The gate's memory as the host keeps it: module variables start over when the
 // module reloads (a saved hooks file, a /config change), so what the gate
-// remembers is copied here after each change and read back at the start. What
-// the user's message granted is not kept: a reload makes the next step ask, so
-// a stale copy can never grant what a later message took back. Bump the shape
-// whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-5' });
+// remembers is copied here after each change and read back at the start, the
+// latest message's grant included, so a reload mid-step does not ask twice.
+// Bump the shape whenever Kept changes, so a reload into new code starts fresh.
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-6' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
 // save cannot overwrite it.
 let isRecalled = false;
+// Once per load, at the session start or the first message, whichever comes
+// first: a message read before the take-back would be overwritten by it.
+let recalling: Promise<void> | null = null;
+const recallOnce = ($: $): Promise<void> =>
+  (recalling ??= recallOrSay($).then(() => {
+    isRecalled = true;
+  }));
 let saving: Promise<void> = Promise.resolve();
 let saves = 0;
 let ticker: Timer | undefined;
 
 function keptOf(): Kept {
-  const { tree, nudged, prWindow } = state.message;
+  const { tree, nudged, prWindow, grant, pointed } = state.message;
   return {
     reviews: state.reviews,
     legs: [...state.legs].map(([id, { timer: _timer, ...leg }]) => [id, leg]),
-    message: { tree, nudged, prWindow },
+    message: { tree, nudged, prWindow, grant, pointed },
     messages: state.messages,
     lastAnswer: state.lastAnswer,
     misses: state.misses,
@@ -451,7 +467,7 @@ async function write($: $): Promise<void> {
   } catch (error) {
     if (!isKeepFailing) {
       $.ui.toast(
-        `review-cycle could not keep its reviews for a reload, so one would forget them: ${error instanceof Error ? error.message : String(error)}`,
+        `review-cycle could not keep its record for a reload, so one would forget its reviews or bring back an earlier message's grant: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     isKeepFailing = true;
@@ -559,22 +575,16 @@ async function recall($: $): Promise<void> {
       );
       state.reviews = kept.reviews;
       state.legs = legs;
-      state.message = {
-        ...kept.message,
-        grant: NO_GRANT,
-        unread: null,
-        said: null,
-        pointed: NOTHING_POINTED,
-      };
+      state.message = { ...kept.message, unread: null, said: null };
       state.messages = kept.messages;
       state.lastAnswer = kept.lastAnswer;
+      state.held = kept.held;
+      state.mandate = kept.mandate;
       state.misses = kept.misses;
       state.dropped = kept.dropped;
       state.capped = kept.capped;
       state.scratch = kept.scratch;
       state.reviewerChanges = kept.reviewerChanges;
-      state.held = kept.held;
-      state.mandate = kept.mandate;
       state.roundsFrom = kept.roundsFrom;
       state.pushed = kept.pushed;
       state.reviewing = kept.reviewing;
@@ -586,7 +596,6 @@ async function recall($: $): Promise<void> {
       keptText = JSON.stringify(kept);
     }
   }
-  isRecalled = true;
 }
 
 // A take-back that fails is not tried again: by then the session may have moved
@@ -598,14 +607,11 @@ async function recallOrSay($: $): Promise<void> {
     $.ui.toast(
       `review-cycle could not take back its reviews after a reload, so it starts this load with none: ${error instanceof Error ? error.message : String(error)}`,
     );
-    isRecalled = true;
   }
 }
 
 const isRecord = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
-const strings = (xs: unknown): boolean =>
-  Array.isArray(xs) && xs.every((x) => typeof x === 'string');
 const flags = (o: Record<string, unknown>, keys: readonly string[]) =>
   keys.every((key) => typeof o[key] === 'boolean');
 const STEP_SET: Record<KeptStep, true> = {
@@ -625,8 +631,8 @@ function isReview(r: unknown): boolean {
     typeof r.type === 'string' &&
     Array.isArray(r.trees) &&
     r.trees.length === 2 &&
-    strings(r.trees) &&
-    strings(r.reviewedPaths)
+    isStrings(r.trees) &&
+    isStrings(r.reviewedPaths)
   );
 }
 
@@ -653,7 +659,7 @@ function offKept(k: Kept): Kept {
   return {
     ...k,
     legs: k.legs.filter(([, leg]) => leg.done || leg.capped),
-    message: { tree: null, nudged: false, prWindow: false },
+    message: { tree: null, nudged: false, prWindow: false, ...UNGRANTED },
     lastAnswer: '',
     held: null,
     mandate: null,
@@ -674,6 +680,8 @@ function isKept(k: unknown): k is Kept {
     k.legs.every(isLeg) &&
     (m.tree === null || typeof m.tree === 'string') &&
     flags(m, ['nudged', 'prWindow']) &&
+    isGrant(m.grant) &&
+    isPointed(m.pointed) &&
     Number.isFinite(k.messages) &&
     typeof k.lastAnswer === 'string' &&
     Array.isArray(k.misses) &&
@@ -694,9 +702,9 @@ function isKept(k: unknown): k is Kept {
         typeof x.text === 'string' &&
         typeof x.old === 'boolean',
     ) &&
-    strings(k.capped) &&
-    strings(k.scratch) &&
-    strings(k.reviewerChanges) &&
+    isStrings(k.capped) &&
+    isStrings(k.scratch) &&
+    isStrings(k.reviewerChanges) &&
     isHeld(k.held) &&
     (k.mandate === null ||
       (isRecord(k.mandate) &&
@@ -751,10 +759,7 @@ const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
 const _keptHold: Equal<Hold, Kept['held']> = true;
 const _keptMandate: Equal<Mandate | null, Kept['mandate']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
-const _keptMessage: Equal<
-  Omit<Message, 'grant' | 'unread' | 'said' | 'pointed'>,
-  Kept['message']
-> = true;
+const _keptMessage: Equal<Omit<Message, 'unread' | 'said'>, Kept['message']> = true;
 const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
@@ -960,7 +965,7 @@ async function onSessionStart(
     }
     return next(e);
   }
-  await recallOrSay($);
+  await recallOnce($);
   // What callbacks outside a hook change (a nudge, a capped leg) is kept here.
   ticker?.cancel();
   ticker = $.clock.every(1000, () => void keep($));
@@ -999,6 +1004,7 @@ async function onPromptSubmit(
   e: Input<HookFor<'prompt.submit'>>,
   next: NextOf<HookFor<'prompt.submit'>>,
 ): Promise<Output<HookFor<'prompt.submit'>>> {
+  await recallOnce($);
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
     // What a held message asks for still runs: "push it; don't open a PR yet".
@@ -3403,6 +3409,7 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     state.standing = NO_STANDING;
     state.reviewing = null;
+    state.message = { ...state.message, ...UNGRANTED };
     void keep($);
     return next(e);
   });
