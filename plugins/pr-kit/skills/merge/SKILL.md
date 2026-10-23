@@ -7,7 +7,7 @@ description: Merge a pull request the user asked to merge, or a github/gh-stack 
 
 Merge what the user asked for, in one command, then report what landed. The user's request is the consent, and it names what merges: this skill runs only on an explicit ask, never offers a merge itself, and arms auto-merge (`--auto`) only when the user asked for a merge once the pull request is ready.
 
-Run every command that writes as its own Bash call. A commit gate such as review-cycle's judges a merge alone; when it refuses one, report its words and stop, or ask the question it names, since a refusal is never retried in another shape. Pass `--admin` only when the user asked for it in so many words.
+Run every command that writes as its own Bash call. A commit gate such as review-cycle's judges a merge alone; when it refuses one, report its words and stop, or ask the question it names, since a refusal is never retried in another shape. Name each pull request in that question by its number alone ("Merge #41 and #42?"), so a yes covers each one: the gate reads a note in parentheses beside a number, other than a branch name, as one that may hold it. Pass `--admin` only when the user asked for it in so many words.
 
 ## 1. Orient
 

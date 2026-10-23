@@ -2235,6 +2235,69 @@ describe('a reply picking among the pull requests a merge offer named', () => {
   });
 });
 
+describe('an offer labelling its pull requests with branch names', () => {
+  test.each([
+    'Merge #3 (fix/a-1) and #4 (test/b-2c)?',
+    'Merge #3 (`fix/a-1`) and #4 (`test/b-2c`)?',
+  ])('%j reads as the plain offer', (offer) => {
+    expect(grantOf('yes', offer)).toEqual(merging('3', '4'));
+    expect(grantOf('Ok, lets merge both', offer)).toEqual(merging('3', '4'));
+    expect(grantOf('merge only #3', offer)).toEqual(merging('3'));
+    expect(dropsGrant('merge only #3', offer)).toBe(true);
+  });
+  test.each([
+    'Merge #3 (do not merge yet) and #4 (test/b)?',
+    'Merge #3 (blocked) and #4?',
+    'Merge #3 (wait for CI) and #4 (test/b)?',
+  ])('another note keeps %j from granting', (offer) => {
+    expect(grantOf('yes', offer).mergeNamed).not.toContain('3');
+    expect(grantOf('merge both', offer)).toEqual(NONE);
+  });
+});
+
+describe('a closing that tells the user what to type', () => {
+  test.each([
+    'Say "merge 3", "merge 4", or both.',
+    'Say merge 3, merge 4, or both.',
+    'Its CI is still running.\n\nSay "merge 3", "merge 4", or both.',
+    'Both are green.\nSay "merge 3", "merge 4", or both.',
+    'Reply "merge 3" or "merge 4".',
+    'Say “merge 3”, “merge 4”, or both!',
+    "Say 'merge 3', 'merge 4', or both.",
+    'Say `merge 3`, `merge 4`, or both.',
+    'Type: "merge 3" or "merge 4".',
+    'Just say "merge #3", "merge #4", or all of them.',
+  ])('%j offers its merges to a pick', (offer) => {
+    expect(grantOf('Ok, lets merge both', offer)).toEqual(merging('3', '4'));
+    expect(grantOf('merge them', offer)).toEqual(merging('3', '4'));
+    expect(grantOf('merge only 3', offer)).toEqual(merging('3'));
+    expect(grantOf('merge 3 but not 4', offer)).toEqual(merging('3'));
+    expect(grantOf('yes', offer)).toEqual(NONE);
+    expect(dropsGrant('merge only 3', offer)).toBe(true);
+    expect(dropsGrant('merge 3 but not 4', offer)).toBe(true);
+    expect(dropsGrant('merge both', offer)).toBe(false);
+  });
+  test.each([
+    'Say "merge 3", "don\'t merge 4", or both.',
+    'Say "merge 3" or "close 4".',
+    'Say "merge 3".',
+    'I could say "merge 3", "merge 4", or both.',
+    'Both are green. Say "merge 3", "merge 4", or both.',
+    'An example reply is: "Both are green. Say merge 3, merge 4, or both".',
+    'An example reply is: “Both are green. Say merge 3, merge 4, or both”.',
+    "An example reply is: 'Both are green. Say merge 3, merge 4, or both'.",
+    'An example reply is: ‘Both are green. Say merge 3, merge 4, or both’.',
+    'An example reply is: `Both are green. Say merge 3, merge 4, or both`.',
+    'An example reply is: "\nThe first PR is green.\nThe second PR is green.\nSay merge 3, merge 4, or both".',
+    'An example reply is:\n"Say merge 3, merge 4, or both"',
+    'An example reply is:\n\n    Say "merge 3", "merge 4", or both.',
+    'An example reply is:\n\n\tSay "merge 3", "merge 4", or both.',
+  ])('%j offers nothing to pick', (offer) => {
+    expect(grantOf('merge both', offer)).toEqual(NONE);
+    expect(grantOf('merge only 3', offer)).toEqual(NONE);
+  });
+});
+
 describe('a job started on an epic', () => {
   test.each([
     ['do epic cpl-czgp', 'cpl-czgp'],
