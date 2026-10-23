@@ -52,6 +52,8 @@ type Gh = {
   readsFail?: boolean;
   // GitHub cannot be reached: every GraphQL read fails as gh does on a dropped connection.
   offline?: boolean;
+  // Every pushed-branch read fails with this stderr.
+  pushError?: string;
   estimateFails?: number;
   // A re-run attempt's REST answer; the call fails when unset, and with this
   // stderr when it is set.
@@ -405,6 +407,9 @@ function world(
     if (!argv.includes('graphql') && (gh.estimateFails ?? 0) > 0) {
       gh.estimateFails = (gh.estimateFails ?? 0) - 1;
       return failed;
+    }
+    if (gh.pushError !== undefined && argv.includes('refs/heads/')) {
+      return { value: { exitCode: 1, stdout: '', stderr: gh.pushError } };
     }
     const pr = gh.prs?.[Number(/ n=(\d+)/.exec(argv)?.[1])] ?? gh.pr;
     const query = argv.includes('refs/heads/') ? (gh.push ?? pr) : pr;
@@ -3516,6 +3521,60 @@ describe('GitHub out of reach', () => {
     await create($, 'git push -u origin feat/x');
     await clock.advance(200_000);
     expect(await pushLineIn(await band($))).toBe('⟳ push feat/x offline, retrying');
+  });
+
+  test('a push GitHub refused stays past 90 s, then gives up after 8 reads and says so', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), pushError: 'gh: Bad credentials (HTTP 401)' };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(200_000);
+    expect(await pushLineIn(await band($))).toBe(
+      '⟳ push feat/x gh failed: Bad credentials (HTTP 401)',
+    );
+    await clock.advance(16 * MINUTE);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    expect(seen.toasts).toContain(
+      'pr-watch stopped watching push feat/x: gh failed: Bad credentials (HTTP 401)',
+    );
+    expect(seen.wakes).toEqual([
+      [
+        'pr-watch: 8 reads of the push to feat/x on o/r in a row failed, so pr-watch stopped watching it. The last: gh failed: Bad credentials (HTTP 401)',
+        'pr-watch follows the branch again on its next push once gh can read it. https://github.com/o/r/tree/feat/x',
+      ].join('\n'),
+    ]);
+  });
+
+  test('a refused push stays though a later read fails another way, and still gives up', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), pushError: 'gh: Bad credentials (HTTP 401)' };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    gh.pushError = 'gh: Something went wrong while executing your query.';
+    await clock.advance(200_000);
+    expect(await pushLineIn(await band($))).toBe(
+      '⟳ push feat/x gh failed: Something went wrong while executing your query.',
+    );
+    await clock.advance(16 * MINUTE);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    expect(seen.toasts).toHaveLength(1);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
+  test('a push to a host that is not GitHub leaves quietly once the grace is over', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const seen = world(on, { pr: prJson(), pushError: 'gh: HTTP 404' }, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    expect(await pushLineIn(await band($))).toBe('⟳ push feat/x gh failed: HTTP 404');
+    await clock.advance(90_000);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    expect(seen.toasts).toEqual([]);
+    expect(seen.wakes).toEqual([]);
   });
 
   test('a merged line waits out the outage past its 90 s', async ($, on) => {

@@ -103,6 +103,9 @@ export type Watch = {
   shownAt?: number;
   // Reads in a row that failed, a rate limit and an unreachable GitHub aside.
   failures?: number;
+  // A read since the last good one was refused by GitHub, so a later failure of
+  // another kind does not let an unread push leave quietly. Cleared with `failures`.
+  refused?: boolean;
   // Reads in a row on its host that could not reach GitHub.
   offline?: number;
   // When the rate limit pausing its host ends, until a read of its own.
