@@ -17,6 +17,7 @@ import {
   GIVE_UP_AFTER,
   needsTrunk,
   isCleared,
+  isUnreadable,
   isQuotaLow,
   isNetworkError,
   isRateLimited,
@@ -437,6 +438,46 @@ describe('pushedBranches', () => {
     const moved = pushOut('To github.com:o/r.git', '   1a1f1ba..93cfbf4  main -> main');
     expect(pushedBranches('git log', moved)).toEqual([]);
     expect(pushedBranches('git push', '   1a1f1ba..93cfbf4  main -> main\n')).toEqual([]);
+  });
+});
+
+const unreadPush = (error?: string): Watch => ({
+  host: 'github.com',
+  repo: 'o/r',
+  number: 0,
+  url: 'https://github.com/o/r/tree/feat/x',
+  checkedAt: 0,
+  push: { branch: 'feat/x', pushedAt: 0 },
+  error,
+});
+
+describe('isUnreadable', () => {
+  test.each([
+    [undefined, true],
+    ['gh failed: HTTP 404', true],
+    ['gh failed: HTTP 405', true],
+    ["gh failed: Field 'rateLimit' doesn't exist on type 'Query'", true],
+    ['gh failed: To get started with GitHub CLI, please run:  gh auth login', true],
+    ['gh failed: Could not resolve to a Ref', true],
+    ['gh failed: HTTP 404: Not Found (repos/o/r/git/ref/heads/fix-403)', true],
+    ['gh failed: Bad credentials (HTTP 401)', false],
+    ['gh failed: HTTP 403', false],
+    ["gh failed: Could not resolve to a Repository with the name 'o/r'.", false],
+    ['gh failed: Resource protected by organization SAML enforcement. You must grant…', false],
+    ['gh failed: Resource not accessible by personal access token', false],
+    [
+      'gh failed: Although you appear to have the correct authorization credentials, the `o` organization has an IP allow list enabled',
+      false,
+    ],
+    [
+      'gh failed: Your token has not been granted the required scopes to execute this query.',
+      false,
+    ],
+  ])('a push past the grace whose read said %j leaves: %s', (error, leaves) => {
+    expect(isUnreadable(unreadPush(error), 90_000)).toBe(leaves);
+  });
+  test('stays within the grace', () => {
+    expect(isUnreadable(unreadPush('gh failed: HTTP 404'), 89_999)).toBe(false);
   });
 });
 

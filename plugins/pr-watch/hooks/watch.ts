@@ -67,10 +67,29 @@ export function labelOf(w: Pick<Watch, 'number' | 'push'>): string {
   return w.push ? `push ${w.push.branch}` : `#${w.number}`;
 }
 
-// A push whose branch could not be read once in the grace, such as one on a
-// host gh does not know, leaves rather than staying an error.
+// GitHub refusing the token or hiding the repository; other hosts answer 404,
+// 405 or a GraphQL schema error. GraphQL states an organization's or a token's
+// refusal in its message, with no HTTP status.
+const REFUSED = new RegExp(
+  [
+    String.raw`\bHTTP 40[13]\b`,
+    'Could not resolve to a Repository',
+    'Resource protected by organization SAML enforcement',
+    'Resource not accessible by',
+    'Although you appear to have the correct authorization credentials',
+    'has not been granted the required scopes',
+  ].join('|'),
+);
+
+// A push unread in the grace, such as one on a host gh does not know, leaves
+// quietly; one GitHub refused gives up and says so, as a pull request does.
 export function isUnreadable(w: Watch, now: number): boolean {
-  return w.push !== undefined && w.pull === undefined && now - w.push.pushedAt >= MERGE_GRACE_MS;
+  return (
+    w.push !== undefined &&
+    w.pull === undefined &&
+    !REFUSED.test(w.error ?? '') &&
+    now - w.push.pushedAt >= MERGE_GRACE_MS
+  );
 }
 
 // Whether a line leaves with time alone: a merge or push that started no runs
