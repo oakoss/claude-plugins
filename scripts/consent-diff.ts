@@ -133,6 +133,11 @@ const VERBS = [
   'merge 130.5',
   'merge it.2',
   'push it.2 more to go',
+  // A period opening a word: a path.
+  'push .github',
+  'push the .github changes',
+  'merge the ./scripts fix',
+  'commit .gitignore',
   'push it to later',
   'merge into main',
   'merge into later',
