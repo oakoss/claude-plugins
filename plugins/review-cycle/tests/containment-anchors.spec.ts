@@ -204,6 +204,29 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
   ]);
 });
 
+// A PR's legs copy node_modules from the main checkout, so a PR that changes
+// dependencies is tested against the old ones unless the brief and report say so.
+test("review-pr names a PR's changed dependencies in the briefs and the report", () => {
+  const text = skillText('review-cycle', 'review-pr');
+  const brief = markedLine(
+    phase(text, 3, 'review-pr'),
+    'When the PR changes a JavaScript lockfile',
+    'review-pr: dependency paragraph expected exactly once in Phase 3',
+  );
+  if (brief !== undefined) {
+    expectAnchors(brief, 'review-pr', [
+      ['say so in every brief', 'the dependency change no longer reaches the legs'],
+      ['labeled inferred, not measured', 'results against old dependencies may read as measured'],
+    ]);
+  }
+  const report = markedLine(
+    phase(text, 5, 'review-pr'),
+    'Dependencies: unchanged | changed by this PR',
+    "review-pr: the report's Dependencies line expected exactly once in Phase 5",
+  );
+  expect(report, 'review-pr: the report no longer says when dependencies changed').toBeDefined();
+});
+
 test('both skills carry the effort-argument contract', () => {
   for (const skill of ['review', 'review-pr']) {
     expectAnchors(skillText('review-cycle', skill), skill, [

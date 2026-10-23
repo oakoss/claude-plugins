@@ -96,6 +96,8 @@ Record `<WT>` in the report draft immediately. **If the skill aborts at any poin
 
 **Compose the intent brief** — 2–4 sentences on what the PR is trying to accomplish and why, from its title, body, and commit subjects, plus the changed-file list. State intent, not hoped-for verdicts. Every reviewer gets it.
 
+**When the PR changes a JavaScript lockfile** (`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`) or the dependency sections of a `package.json`, say so in every brief: the `node_modules` a leg copies from `<ROOT>` does not match the PR, and `<WT>` has none, so a test or build result that depends on the changed dependencies is labeled inferred, not measured. Say it in the report's `Dependencies:` line too.
+
 Carry the evidence rule into the brief, in one sentence: a claim about what a command does cites a run of that command, a manifest is not evidence for behavior, and a claim the leg could not exercise is labeled inferred rather than stated flatly. Carry the never-evade rule into the brief the same way: never reshape a command to slip past a guard — an opt-out is visible and reviewable, an evasion is neither. It matters more here than in the working-tree cycle — the PR head sits in a disposable worktree whose dependencies may not be installed, so a reviewer that cannot build has every reason to reason from manifests and no fix loop downstream to catch it.
 
 Ask for the execution receipt in the same breath: every leg opens its report with two lines — `execution:` naming the heaviest verification that *succeeded* against this checkout with its first output line, or `none`; then `attempted-but-failed:` listing every verification that did not succeed, plus this project's build or test suite when the leg never attempted it, or `none`. Both lines are required, and an orientation command like `git status` on line one grades the same as `none`. The subagents carry this in their bodies. Leave the ask out of the Codex brief: `codex review` prints its own verdict, so Phase 4 reads its receipt from its command log. Instead tell Codex to join verification commands with &&, never ; or a newline, so a failure shows in the exit code.
@@ -177,6 +179,7 @@ Coverage:
   code-reviewer — reported | dropped (stalled, nudged once) | capped (over budget, stopped)
   <each other dispatched reviewer — reported | skipped (<reason>) | failed | dropped | capped (over budget, stopped)>
 Leg execution: all executed | no leg reported | <leg> = partial (<what>) / static-analysis-only (<observed cause>) / unknown — naming only legs that were not `executed`
+Dependencies: unchanged | changed by this PR (<files>) — legs ran against the main checkout's node_modules, so results that depend on them are inferred
 
 Findings: <count>
   - file:line — severity — issue — suggested fix (source)
