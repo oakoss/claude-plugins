@@ -52,6 +52,9 @@ const EVADE_ANCHOR = 'slip past a guard';
 // the target's; another ran git from an unset directory and created ~/.git.
 const NO_SYMLINK_ANCHOR = 'never symlink anything from the target';
 const NO_INSTALL_ANCHOR = 'no package-manager install';
+// pnpm 12 installs before `pnpm <script>` or `pnpm exec` in a copy without
+// node_modules, running lefthook's postinstall there.
+const BY_PATH_ANCHOR = "the project's tools by path";
 const SCRIPT_DIR_ANCHOR = /set -u.*cd <dir> &&`? before any git command/;
 // Claude Code stops to ask about an rm whose path a variable starts, even under
 // set -u; its own fix guards every variable in the path with :?.
@@ -111,6 +114,7 @@ test('every measuring agent requires a private mktemp -d it names in its report'
       [WRITE_NOWHERE_ANCHOR, 'write-nowhere clause lost'],
       [NO_SYMLINK_ANCHOR, 'symlink ban lost'],
       [NO_INSTALL_ANCHOR, 'install ban lost'],
+      [BY_PATH_ANCHOR, 'tools may run through the package manager, which installs'],
       [SCRIPT_DIR_ANCHOR, 'script directory rule lost'],
       [RM_PATH_ANCHOR, 'rm path rule lost'],
       [SCRIPT_GIT_ANCHOR, 'script git-location rule lost'],
@@ -167,6 +171,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
       [WRITE_NOWHERE_ANCHOR, 'the reviewer prompt lost the write-nowhere clause'],
       [NO_SYMLINK_ANCHOR, 'the reviewer prompt lost the symlink ban'],
       [NO_INSTALL_ANCHOR, 'the reviewer prompt lost the install ban'],
+      [BY_PATH_ANCHOR, 'the reviewer prompt lost the tools-by-path rule'],
       [SCRIPT_DIR_ANCHOR, 'the reviewer prompt lost the script directory rule'],
       [RM_PATH_ANCHOR, 'the reviewer prompt lost the rm path rule'],
     ]);
@@ -193,9 +198,33 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
     [WRITE_NOWHERE_ANCHOR, 'Phase 7 sentence lost the write-nowhere clause'],
     [NO_SYMLINK_ANCHOR, 'Phase 7 sentence lost the symlink ban'],
     [NO_INSTALL_ANCHOR, 'Phase 7 sentence lost the install ban'],
+    [BY_PATH_ANCHOR, 'Phase 7 sentence lost the tools-by-path rule'],
     [SCRIPT_DIR_ANCHOR, 'Phase 7 sentence lost the script directory rule'],
     [RM_PATH_ANCHOR, 'Phase 7 sentence lost the rm path rule'],
   ]);
+});
+
+// A PR's legs copy node_modules from the main checkout, so a PR that changes
+// dependencies is tested against the old ones unless the brief and report say so.
+test("review-pr names a PR's changed dependencies in the briefs and the report", () => {
+  const text = skillText('review-cycle', 'review-pr');
+  const brief = markedLine(
+    phase(text, 3, 'review-pr'),
+    'When the PR changes a JavaScript lockfile',
+    'review-pr: dependency paragraph expected exactly once in Phase 3',
+  );
+  if (brief !== undefined) {
+    expectAnchors(brief, 'review-pr', [
+      ['say so in every brief', 'the dependency change no longer reaches the legs'],
+      ['labeled inferred, not measured', 'results against old dependencies may read as measured'],
+    ]);
+  }
+  const report = markedLine(
+    phase(text, 5, 'review-pr'),
+    'Dependencies: unchanged | changed by this PR',
+    "review-pr: the report's Dependencies line expected exactly once in Phase 5",
+  );
+  expect(report, 'review-pr: the report no longer says when dependencies changed').toBeDefined();
 });
 
 test('both skills carry the effort-argument contract', () => {
