@@ -2396,7 +2396,8 @@ describe('joinPointed', () => {
 });
 
 describe('isPointed', () => {
-  test('takes nothing pointed', () => {
+  test('takes nothing pointed, which points at nothing', () => {
+    expect(NOTHING_POINTED).toEqual({ named: [], answer: [], unplaced: false });
     expect(isPointed(NOTHING_POINTED)).toBe(true);
   });
 

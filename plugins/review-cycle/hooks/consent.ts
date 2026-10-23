@@ -1479,7 +1479,8 @@ const RELEASE_WORD =
   /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
 // A step mentioned without being asked for, or an offer of one held off ("not yet").
-export type HoldStep = 'push' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+export const HOLD_STEPS = ['push', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
+export type HoldStep = (typeof HOLD_STEPS)[number];
 
 // Deleting a remote branch is a push.
 const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
@@ -1879,7 +1880,7 @@ function namedFrom(
 export const NAMED_ELSEWHERE = '?';
 
 // The pull request numbers a text names: #131, PR 131, /pull/131.
-export function prNumbers(text: string): readonly string[] {
+function prNumbers(text: string): readonly string[] {
   return [...numbers(text)];
 }
 

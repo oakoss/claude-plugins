@@ -113,6 +113,8 @@ describe('isKept', () => {
     ['a capped leg that is not a string', (k) => (k.capped = [1])],
     ['a hold of an unknown kind', (k) => (k.held = { step: 'push', how: 'asked' })],
     ['a hold of an unknown step', (k) => (k.held = { step: 'deploy', how: 'mentioned' })],
+    ['a hold of a prototype name', (k) => (k.held = { step: 'toString', how: 'mentioned' })],
+    ['a miss naming a prototype name', (k) => (k.misses[0].steps = ['constructor'])],
     ['a mandate that is not an epic id', (k) => (k.mandate = { epic: 'not an id' })],
     ['rounds counted past the reviews', (k) => (k.roundsFrom = 2)],
     ['negative rounds', (k) => (k.roundsFrom = -1)],

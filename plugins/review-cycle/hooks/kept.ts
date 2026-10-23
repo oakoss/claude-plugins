@@ -1,5 +1,5 @@
-import type { Kept, KeptLeg, KeptStep } from '../types';
-import { EPIC_ID, isGrant, isPointed, isStrings, UNGRANTED } from './consent';
+import type { Kept, KeptLeg } from '../types';
+import { EPIC_ID, HOLD_STEPS, isGrant, isPointed, isStrings, UNGRANTED } from './consent';
 
 // A SHA-1 or SHA-256 object name.
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -49,16 +49,7 @@ const isRecord = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
 const flags = (o: Record<string, unknown>, keys: readonly string[]) =>
   keys.every((key) => typeof o[key] === 'boolean');
-const STEP_SET: Record<KeptStep, true> = {
-  push: true,
-  pr: true,
-  merge: true,
-  approve: true,
-  release: true,
-  comment: true,
-};
-const STEPS = Object.keys(STEP_SET);
-const isStep = (x: unknown) => STEPS.some((step) => step === x);
+const isStep = (x: unknown) => HOLD_STEPS.some((step) => step === x);
 
 function isReview(r: unknown): boolean {
   return (
