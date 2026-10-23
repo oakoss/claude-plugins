@@ -1327,9 +1327,15 @@ function conditionIn(closing: string): { sentence: string; question: boolean } |
     : { sentence: sentence.trim(), question: sentence.trim().endsWith('?') };
 }
 
+// A branch name in parentheses beside a pull request labels it. Only a
+// conventional prefix tells one from a note that may hold it, such as
+// "(do not merge yet)" or "(WIP/draft)", which stays.
+const BRANCH_NOTE =
+  /(#\d+)\s*\(`?(?:feat|fix|chore|docs|test|refactor|perf|ci|build|style|release|hotfix|revert|deps|renovate|dependabot)\/[\w./-]*[\w-]`?\)/g;
+
 // The answer's last three lines, which an offer is read from.
 export const closingOf = (answer: string): string =>
-  answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+  answer.trim().split('\n').filter(Boolean).slice(-3).join('\n').replaceAll(BRANCH_NOTE, '$1');
 
 // What a yes grants: what the offer named, unless it set a condition a yes does not meet.
 function accepted(answer: string, heard?: Set<Family>): Grant {
@@ -1690,11 +1696,39 @@ const PICK_BUT_NOT = new RegExp(
   'i',
 );
 
+// The closing's last line telling the user what to type, whole, every option a
+// merge or "both", bare or in a pair of quotes: 'Say "merge 3", "merge 4", or
+// both.' Its merges are offered to a pick alone; a yes names no option. One
+// that starts mid-line or indented may sit inside an example the agent quotes.
+const MENU_LEAD = /^(?:just\s+)?(?:say|type|reply(?:\s+with)?)\b:?\s*/i;
+const PICKABLE = String.raw`merge\s+#?\d+|both|all\s+of\s+them`;
+const MENU_OPTION = new RegExp(
+  `^(?:${['', '"', '“”', "'", '‘’', '`']
+    .map((q) => `${q[0] ?? ''}(?:${PICKABLE})${q[1] ?? q[0] ?? ''}`)
+    .join('|')})$`,
+  'i',
+);
+
+function menuMerges(closing: string): string[] {
+  const line = closing.split('\n').at(-1)?.trimEnd() ?? '';
+  const lead = MENU_LEAD.exec(line);
+  if (lead === null) return [];
+  const options = line
+    .slice(lead[0].length)
+    .replace(/[.!]+$/, '')
+    .split(/\s*,\s*(?:or\s+)?|\s+or\s+/);
+  if (!options.every((o) => MENU_OPTION.test(o.trim()))) return [];
+  const named = [...new Set(options.flatMap((o) => /\d+/.exec(o) ?? []))];
+  return named.length >= 2 ? named : [];
+}
+
 // Only a plain offer: one question, no "or", and no number but the pull
 // requests it offers to merge. After any other ("Merge #3 and #4? Docs or
 // tests?") a pick could answer something else.
 function offeredMerges(previousAnswer: string): string[] {
   const closing = closingOf(previousAnswer);
+  const menu = menuMerges(closing);
+  if (menu.length > 0) return menu;
   if (closing.split('?').length !== 2 || /\bor\b/i.test(closing)) return [];
   const offered = [...new Set(asked(closing).mergeNamed.filter((n) => /^\d+$/.test(n)))];
   return (closing.match(/\d+/g) ?? []).every((n) => offered.includes(n)) ? offered : [];
