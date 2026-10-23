@@ -159,6 +159,9 @@ describe('isKept', () => {
     ['a pushed commit in a list', (k) => (k.pushed[0][1] = [SHA])],
     ['a pushed commit with a prefix', (k) => (k.pushed[0][1] = `x${SHA}`)],
     ['a pushed commit with a suffix', (k) => (k.pushed[0][1] = `${SHA}x`)],
+    ['a pushed commit in upper case', (k) => (k.pushed[0][1] = SHA.toUpperCase())],
+    ['a push entry with three parts', (k) => k.pushed[0].push(SHA)],
+    ['review trees that are null', (k) => (k.reviews[0].trees = null)],
     // A record whose lists are missing or hold null is refused, not thrown on.
     ...(['reviews', 'legs', 'misses', 'dropped', 'pushed'] as const).flatMap(
       (list): [string, Mutate][] => [

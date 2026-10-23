@@ -36,9 +36,12 @@ export function keptOf(s: KeptSource): Kept {
         capped: l.capped,
         counted: l.counted,
         spawnedAt: l.spawnedAt,
-      },
+      } satisfies Record<keyof KeptLeg, unknown>,
     ]),
-    message: { tree, nudged, prWindow, grant, pointed },
+    message: { tree, nudged, prWindow, grant, pointed } satisfies Record<
+      keyof Kept['message'],
+      unknown
+    >,
     messages: s.messages,
     lastAnswer: s.lastAnswer,
     misses: s.misses,
