@@ -81,13 +81,18 @@ const REFUSED = new RegExp(
   ].join('|'),
 );
 
+// gh prints the same login prompt for every host, so only github.com's is GitHub's refusal.
+export function isRefused(error: string, host: string): boolean {
+  return REFUSED.test(error) || (host === 'github.com' && /\bgh auth login\b/.test(error));
+}
+
 // A push unread in the grace, such as one on a host gh does not know, leaves
 // quietly; one GitHub refused gives up and says so, as a pull request does.
 export function isUnreadable(w: Watch, now: number): boolean {
   return (
     w.push !== undefined &&
     w.pull === undefined &&
-    !REFUSED.test(w.error ?? '') &&
+    !w.refused &&
     now - w.push.pushedAt >= MERGE_GRACE_MS
   );
 }

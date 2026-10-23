@@ -3546,6 +3546,24 @@ describe('GitHub out of reach', () => {
     ]);
   });
 
+  test('a refused push stays though a later read fails another way, and still gives up', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), pushError: 'gh: Bad credentials (HTTP 401)' };
+    const seen = world(on, gh, PUSH_OUT);
+    await start($);
+    await create($, 'git push -u origin feat/x');
+    await clock.advance(1000);
+    gh.pushError = 'gh: Something went wrong while executing your query.';
+    await clock.advance(200_000);
+    expect(await pushLineIn(await band($))).toBe(
+      '⟳ push feat/x gh failed: Something went wrong while executing your query.',
+    );
+    await clock.advance(16 * MINUTE);
+    expect(await pushLineIn(await band($))).toBeUndefined();
+    expect(seen.toasts).toHaveLength(1);
+    expect(seen.wakes).toHaveLength(1);
+  });
+
   test('a push to a host that is not GitHub leaves quietly once the grace is over', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const seen = world(on, { pr: prJson(), pushError: 'gh: HTTP 404' }, PUSH_OUT);

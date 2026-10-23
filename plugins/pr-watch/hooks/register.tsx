@@ -54,6 +54,7 @@ import {
   isChecking,
   isMergeFresh,
   isQuotaLow,
+  isRefused,
   isNetworkError,
   isRateLimited,
   OFFLINE_TELL_MS,
@@ -649,6 +650,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         pull: read.pull,
         error: undefined,
         failures: undefined,
+        refused: undefined,
         offline: undefined,
         limitedUntil,
         checkedAt: now,
@@ -680,10 +682,12 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
           kept.error = `GitHub could not be reached (${errorText(error)}); pr-watch keeps trying`;
         next = { ...target, offline: count, limitedUntil: await pausedUntil() };
       } else {
+        const why = errorText(error);
         next = {
           ...target,
-          error: `gh failed: ${errorText(error)}`,
+          error: `gh failed: ${why}`,
           failures: (target.failures ?? 0) + 1,
+          refused: isRefused(why, target.host) ? true : target.refused,
           offline: undefined,
           limitedUntil: await pausedUntil(),
         };
