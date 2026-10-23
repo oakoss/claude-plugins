@@ -531,6 +531,10 @@ describe('merge: only what was asked, and a stack as one', () => {
     expect(text).toContain('a refusal is never retried in another shape');
   });
 
+  test('the question a refusal names lists pull requests by number, with no notes', () => {
+    expect(text).toContain('Name each pull request in that question by its number alone');
+  });
+
   test('it merges only on an ask, and adds --auto or --admin only when asked', () => {
     expect(text).toContain('this skill runs only on an explicit ask, never offers a merge itself');
     expect(text).toContain('arms auto-merge (`--auto`) only when the user asked');
