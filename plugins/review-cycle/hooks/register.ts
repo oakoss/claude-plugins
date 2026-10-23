@@ -45,7 +45,6 @@ import {
   UNGRANTED,
   unreadOffer,
   type Grant,
-  type HoldStep,
   type Mandate,
   type Pointed,
   type UnreadOffer,
@@ -67,8 +66,6 @@ import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
-  holds,
-  lowerHold,
   judgeGh,
   notAsked,
   parsePullRequest,
@@ -76,7 +73,6 @@ import {
   PR_FIELDS,
   PR_JQ,
   type GhLookups,
-  type Hold,
   type InForce,
   type Lookup,
   type ModelSteps,
@@ -111,6 +107,7 @@ import {
 } from './git';
 import type { Finishes, PushSpec } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
+import { declinedSince, holdAfter, holds, type Hold, type HoldState, type HoldStep } from './hold';
 import { isKept, keptOf, offKept } from './kept';
 import {
   configured,
@@ -311,9 +308,7 @@ type GateState = {
   // The user's /config value for showing a step the setting ran unasked.
   unaskedNotice: boolean;
   // "don't push yet" holds the push and later steps until a message asks.
-  held: Hold;
-  // A message declined a step since the hold began, which keeps the model check off.
-  declined: boolean;
+  hold: HoldState;
   // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
   mandate: Kept['mandate'];
   // "merge 46 once CI passes" outlasts its message until used, held or retracted.
@@ -364,8 +359,7 @@ const state: GateState = {
   stopBefore: null,
   nudge: true,
   unaskedNotice: false,
-  held: null,
-  declined: false,
+  hold: null,
   mandate: null,
   standing: NO_STANDING,
   roundsFrom: 0,
@@ -373,12 +367,14 @@ const state: GateState = {
   reviewing: null,
 };
 
+const held = (): Hold => state.hold?.floor ?? null;
+
 // The gate's memory as the host keeps it: module variables start over when the
 // module reloads (a saved hooks file, a /config change), so what the gate
 // remembers is copied here after each change and read back at the start, the
 // latest message's grant included, so a reload mid-step does not ask twice.
 // Bump the shape whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-7' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-8' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -551,8 +547,7 @@ async function recall($: $): Promise<void> {
       state.message = { ...kept.message, unread: null, said: null };
       state.messages = kept.messages;
       state.lastAnswer = kept.lastAnswer;
-      state.held = kept.held;
-      state.declined = kept.declined;
+      state.hold = kept.hold;
       state.mandate = kept.mandate;
       state.misses = kept.misses;
       state.dropped = kept.dropped;
@@ -610,7 +605,7 @@ type Unkept =
 const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
 const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
 const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
-const _keptHold: Equal<Hold, Kept['held']> = true;
+const _keptHold: Equal<HoldState, Kept['hold']> = true;
 const _keptMandate: Equal<Mandate | null, Kept['mandate']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
 const _keptMessage: Equal<Omit<Message, 'unread' | 'said'>, Kept['message']> = true;
@@ -866,15 +861,7 @@ async function onPromptSubmit(
     const unread = unreadOffer(e.text, state.lastAnswer);
     const hold = holdOf(e.text, state.lastAnswer);
     state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
-    // A request lifts what came before; what the same message holds still holds.
-    if (liftsHold(grant)) {
-      state.held = null;
-      state.declined = false;
-    }
-    if (hold !== null) {
-      state.held = lowerHold(state.held, hold);
-      state.declined ||= hold.how === 'declined';
-    }
+    state.hold = holdAfter(state.hold, liftsHold(grant), hold);
     state.mandate = mandateAfter(state.mandate, e.text, state.lastAnswer);
     const ends = endsReady(e.text, state.lastAnswer);
     const ended = ends ? endedNote(state.standing) : null;
@@ -1463,7 +1450,7 @@ async function onGithubTool(
     shown,
     [action],
     granted,
-    state.held,
+    held(),
     ghLookups($),
     {},
     state.message.unread,
@@ -1617,7 +1604,7 @@ async function onBashEdits(
 function modelRead($: $): ModelAsk | null {
   const { text, before, origin } = state.said;
   if (!state.modelCheck || origin === 'sdk' || text.trim() === '') return null;
-  if (state.declined) return null;
+  if (declinedSince(state.hold)) return null;
   if (state.model?.message !== state.messages) {
     const ask = { message: state.messages, text, before, read: askModel($, text, before) };
     state.model = ask;
@@ -1751,7 +1738,7 @@ async function offeredUnnamed(
   // A grant a queued message joined is not one message the model can be shown.
   const text = state.message.said;
   if (!state.modelCheck || origin === 'sdk' || text === null || text.trim() === '') return null;
-  if (state.declined) return null;
+  if (declinedSince(state.hold)) return null;
   const n = closingNamed(granted, text);
   if (n === null) return null;
   if (state.target?.message !== state.messages || state.target.n !== n) {
@@ -1789,7 +1776,7 @@ async function ghUnnamed(
     shown,
     actions,
     read.grant,
-    state.held,
+    held(),
     ghLookups($),
     {},
     state.message.unread,
@@ -1841,7 +1828,7 @@ async function ghWithModel(
     shown,
     actions,
     granted,
-    state.held,
+    held(),
     ghLookups($),
     second.steps,
     state.message.unread,
@@ -1881,7 +1868,7 @@ async function judgeBash(
       quote(e.command),
       actions,
       granted,
-      state.held,
+      held(),
       ghLookups($),
       {},
       state.message.unread,
@@ -1962,7 +1949,7 @@ async function judgeBash(
   const asked = granted.commit || (finishes !== null && granted.finish.includes(finishes));
   if (cls.commit && !cls.commit.dryRun && !asked) {
     const ladder = await ladderOf($);
-    if (!permitted(granted, ladder, state.held).commit) {
+    if (!permitted(granted, ladder, held()).commit) {
       return deny(commitRefusal(e.command, ladder, finishes));
     }
   }
@@ -2255,13 +2242,12 @@ async function judgePush(
     return 'deny' in c ? { deny: c.deny, final: true } : { ran: null, note: c.note };
   }
   const ladder = await ladderOf($);
-  const forPr = granted.pr && !holds(state.held, 'push');
-  const bySetting = forPr || permitted(granted, ladder, state.held).push;
+  const forPr = granted.pr && !holds(held(), 'push');
+  const bySetting = forPr || permitted(granted, ladder, held()).push;
   // The model's yes to a push, or to the pull request it needs, lets it through
   // as the setting does, so the pushes that always ask still ask.
   const byModel =
-    (model.pr === true && !holds(state.held, 'push')) ||
-    permitted(granted, ladder, state.held, model).push;
+    (model.pr === true && !holds(held(), 'push')) || permitted(granted, ladder, held(), model).push;
   const outcome = await pushOutcome(missing, bySetting || byModel, () => alwaysAsks($, top, spec));
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
@@ -2289,7 +2275,7 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
     finishes === null
       ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
       : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
-  return `${notAsked('commit', ladder, state.held, state.message.unread)}${setting}, so nothing ran. ${ask}`;
+  return `${notAsked('commit', ladder, held(), state.message.unread)}${setting}, so nothing ran. ${ask}`;
 }
 
 // How long the user waits on a gh read before the step asks.
@@ -2545,9 +2531,9 @@ function pushRefusal(
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
       if (always === DELETES) {
-        return `${notAsked('push', ladder, state.held, state.message.unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
+        return `${notAsked('push', ladder, held(), state.message.unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
       }
-      return `${notAsked('push', ladder, state.held, state.message.unread)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+      return `${notAsked('push', ladder, held(), state.message.unread)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {
       const unhandled: never = missing;
@@ -2642,7 +2628,7 @@ async function watch(
       if (pushed.length > 0 && !covers(granted, 'push') && !judged) {
         const ladder = await ladderOf($);
         notes.push(
-          permitted(granted, ladder, state.held).push
+          permitted(granted, ladder, held()).push
             ? ranUnasked($, { step: 'push', ladder })
             : `review-cycle: this command pushed to ${pushed.map((p) => p.name).join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -2830,13 +2816,13 @@ async function onStatus(
     worktreeTree: null,
   };
   const ladder = await ladderOf($);
-  const may = permitted(state.message.grant, ladder, state.held);
+  const may = permitted(state.message.grant, ladder, held());
   const from = ladder.unreadable === undefined ? where(ladder.source) : 'unreadable settings';
   status.stopBefore = {
     ...ladder,
     from,
-    held: state.held !== null,
-    heldBy: state.held,
+    held: state.hold !== null,
+    heldBy: held(),
     mandate: state.mandate,
   };
   status.mayCommit = may.commit;

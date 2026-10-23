@@ -1,5 +1,6 @@
 import type { Kept, KeptLeg } from '../types';
-import { EPIC_ID, HOLD_STEPS, isGrant, isPointed, isStrings, UNGRANTED } from './consent';
+import { EPIC_ID, isGrant, isPointed, isStrings, UNGRANTED } from './consent';
+import { HOLD_STEPS } from './hold';
 
 // A SHA-1 or SHA-256 object name.
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -37,8 +38,7 @@ export function keptOf(s: KeptSource): Kept {
     capped: s.capped,
     scratch: s.scratch,
     reviewerChanges: s.reviewerChanges,
-    held: s.held,
-    declined: s.declined,
+    hold: s.hold,
     mandate: s.mandate,
     roundsFrom: s.roundsFrom,
     pushed: s.pushed,
@@ -74,10 +74,11 @@ function isLeg(entry: unknown): boolean {
   );
 }
 
-function isHeld(h: unknown): boolean {
-  return (
-    h === null || (isRecord(h) && isStep(h.step) && (h.how === 'mentioned' || h.how === 'declined'))
-  );
+function isHold(h: unknown): boolean {
+  if (h === null) return true;
+  if (!isRecord(h) || typeof h.declined !== 'boolean' || !isRecord(h.floor)) return false;
+  const { step, how } = h.floor;
+  return isStep(step) && (how === 'mentioned' || how === 'declined');
 }
 
 // While off, a running leg finishes and a hold or question is answered unseen;
@@ -88,8 +89,7 @@ export function offKept(k: Kept): Kept {
     legs: k.legs.filter(([, leg]) => leg.done || leg.capped),
     message: { tree: null, nudged: false, prWindow: false, ...UNGRANTED },
     lastAnswer: '',
-    held: null,
-    declined: false,
+    hold: null,
     mandate: null,
     reviewing: null,
   };
@@ -133,12 +133,7 @@ export function isKept(k: unknown): k is Kept {
     isStrings(k.capped) &&
     isStrings(k.scratch) &&
     isStrings(k.reviewerChanges) &&
-    isHeld(k.held) &&
-    typeof k.declined === 'boolean' &&
-    // A decline flagged with nothing held, or a declined hold not flagged.
-    (k.held === null
-      ? !k.declined
-      : k.declined || (isRecord(k.held) && k.held.how !== 'declined')) &&
+    isHold(k.hold) &&
     (k.mandate === null ||
       (isRecord(k.mandate) &&
         typeof k.mandate.epic === 'string' &&

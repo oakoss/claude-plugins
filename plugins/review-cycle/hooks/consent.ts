@@ -12,6 +12,7 @@
 // closing question offered to do.
 
 import type { Finishes } from './git-args';
+import { HOLD_STEPS, lowerHold, type HoldReason, type HoldStep } from './hold';
 
 // How far the user's message lets a push go; each level covers those before
 // it.
@@ -1478,10 +1479,6 @@ const APPROVE_WORD = /\b(approve|approves|approving|approved)\b/i;
 const RELEASE_WORD =
   /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
-// A step mentioned without being asked for, or an offer of one held off ("not yet").
-export const HOLD_STEPS = ['push', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
-export type HoldStep = (typeof HOLD_STEPS)[number];
-
 // Deleting a remote branch is a push.
 const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
   ['push', PUSH_WORD],
@@ -1503,7 +1500,6 @@ export function stepsNamed(text: string): HoldStep[] {
   const read = prPhrase(unquote(forcePhrase(landPhrase(text))));
   return [...new Set(STEP_WORDS.filter(([, word]) => word.test(read)).map(([step]) => step))];
 }
-export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
 
 const ID = String.raw`[a-z][a-z0-9-]*-[a-z0-9]+(?:\.\d+)*`;
 export const EPIC_ID = new RegExp(`^${ID}$`, 'i');
@@ -1545,15 +1541,25 @@ const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
 // A step mentioned without being asked for holds it and the steps above it,
 // read by mention rather than grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
+  return readHold(prompt, previousAnswer).hold;
+}
+
+// The hold, and the steps a decline put off, which a hold of the lowest alone loses.
+function readHold(
+  prompt: string,
+  previousAnswer: string,
+): { hold: HoldReason | null; putOff: HoldStep[] } {
   prompt = landPhrase(prompt);
   const grant = grantOf(prompt, previousAnswer);
   const text = prPhrase(unquote(forcePhrase(prompt)));
   const said = mentionOf(text, grant);
-  const declined = declineOf(text, grant, previousAnswer);
-  // The lower of the two, so a later step named beside a decline ("not yet, the
-  // release notes need work") never frees an earlier step it declined.
-  if (said === null || declined === null) return said ?? declined;
-  return HOLD_STEPS.indexOf(declined.step) <= HOLD_STEPS.indexOf(said.step) ? declined : said;
+  const offered = declines(text, grant) ? offeredSteps(previousAnswer) : [];
+  // The nearest step offered, since a hold holds the steps after it too.
+  const step = offered[0];
+  const declined = step === undefined ? null : ({ step, how: 'declined' } as const);
+  // The lower of the two, the decline on a tie, so a later step named beside a
+  // decline ("not yet, the release notes need work") never frees one it declined.
+  return { hold: lowerHold(declined, said), putOff: offered };
 }
 
 function mentionOf(text: string, grant: Grant): HoldReason | null {
@@ -1575,11 +1581,8 @@ function mentionOf(text: string, grant: Grant): HoldReason | null {
   return null;
 }
 
-function declineOf(text: string, grant: Grant, previousAnswer: string): HoldReason | null {
-  if (!HOLD.test(text) || covers(grant, 'push') || asksBeyondPush(grant)) return null;
-  // The nearest step offered, since a hold holds the steps after it too.
-  const step = offeredSteps(previousAnswer)[0];
-  return step === undefined ? null : { step, how: 'declined' };
+function declines(text: string, grant: Grant): boolean {
+  return HOLD.test(text) && !covers(grant, 'push') && !asksBeyondPush(grant);
 }
 
 // The steps an offer names, lowest first: those the grammar reads as asked,
@@ -1623,12 +1626,11 @@ export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
 export function endsReady(prompt: string, previousAnswer = ''): boolean {
   prompt = landPhrase(prompt);
   if (!dropsGrant(prompt, previousAnswer)) return false;
-  const hold = holdOf(prompt, previousAnswer);
+  const { hold, putOff } = readHold(prompt, previousAnswer);
   if (hold === null || hold.step === 'merge' || hold.step === 'release') return true;
   // A decline holds from its lowest step, but ends a merge it also offered.
-  if (hold.how === 'declined') {
-    const steps = offeredSteps(previousAnswer);
-    if (steps.includes('merge') || steps.includes('release')) return true;
+  if (hold.how === 'declined' && (putOff.includes('merge') || putOff.includes('release'))) {
+    return true;
   }
   const text = prPhrase(unquote(forcePhrase(prompt)));
   if (MERGE_WORD.test(text) || RELEASE_WORD.test(text)) return true;
