@@ -52,6 +52,9 @@ const EVADE_ANCHOR = 'slip past a guard';
 // the target's; another ran git from an unset directory and created ~/.git.
 const NO_SYMLINK_ANCHOR = 'never symlink anything from the target';
 const NO_INSTALL_ANCHOR = 'no package-manager install';
+// pnpm 12 installs before `pnpm <script>` or `pnpm exec` in a copy without
+// node_modules, running lefthook's postinstall there.
+const BY_PATH_ANCHOR = "the project's tools by path";
 const SCRIPT_DIR_ANCHOR = /set -u.*cd <dir> &&`? before any git command/;
 // Claude Code stops to ask about an rm whose path a variable starts, even under
 // set -u; its own fix guards every variable in the path with :?.
@@ -111,6 +114,7 @@ test('every measuring agent requires a private mktemp -d it names in its report'
       [WRITE_NOWHERE_ANCHOR, 'write-nowhere clause lost'],
       [NO_SYMLINK_ANCHOR, 'symlink ban lost'],
       [NO_INSTALL_ANCHOR, 'install ban lost'],
+      [BY_PATH_ANCHOR, 'tools may run through the package manager, which installs'],
       [SCRIPT_DIR_ANCHOR, 'script directory rule lost'],
       [RM_PATH_ANCHOR, 'rm path rule lost'],
       [SCRIPT_GIT_ANCHOR, 'script git-location rule lost'],
@@ -167,6 +171,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
       [WRITE_NOWHERE_ANCHOR, 'the reviewer prompt lost the write-nowhere clause'],
       [NO_SYMLINK_ANCHOR, 'the reviewer prompt lost the symlink ban'],
       [NO_INSTALL_ANCHOR, 'the reviewer prompt lost the install ban'],
+      [BY_PATH_ANCHOR, 'the reviewer prompt lost the tools-by-path rule'],
       [SCRIPT_DIR_ANCHOR, 'the reviewer prompt lost the script directory rule'],
       [RM_PATH_ANCHOR, 'the reviewer prompt lost the rm path rule'],
     ]);
@@ -193,6 +198,7 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
     [WRITE_NOWHERE_ANCHOR, 'Phase 7 sentence lost the write-nowhere clause'],
     [NO_SYMLINK_ANCHOR, 'Phase 7 sentence lost the symlink ban'],
     [NO_INSTALL_ANCHOR, 'Phase 7 sentence lost the install ban'],
+    [BY_PATH_ANCHOR, 'Phase 7 sentence lost the tools-by-path rule'],
     [SCRIPT_DIR_ANCHOR, 'Phase 7 sentence lost the script directory rule'],
     [RM_PATH_ANCHOR, 'Phase 7 sentence lost the rm path rule'],
   ]);
