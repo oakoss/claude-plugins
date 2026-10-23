@@ -1479,7 +1479,8 @@ const RELEASE_WORD =
   /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
 // A step mentioned without being asked for, or an offer of one held off ("not yet").
-export type HoldStep = 'push' | 'pr' | 'merge' | 'approve' | 'release' | 'comment';
+export const HOLD_STEPS = ['push', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
+export type HoldStep = (typeof HOLD_STEPS)[number];
 
 // Deleting a remote branch is a push.
 const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
@@ -1879,7 +1880,7 @@ function namedFrom(
 export const NAMED_ELSEWHERE = '?';
 
 // The pull request numbers a text names: #131, PR 131, /pull/131.
-export function prNumbers(text: string): readonly string[] {
+function prNumbers(text: string): readonly string[] {
   return [...numbers(text)];
 }
 
@@ -1887,6 +1888,35 @@ function numbers(text: string): Set<string> {
   return new Set(
     [...text.matchAll(/(?:#|\b(?:pr|pull request)\s+#?|\/pull\/)(\d+)\b/gi)].map((m) => m[1] ?? ''),
   );
+}
+
+// A number the grammar could not place ("do not merge 130") voids the answers'.
+export type Pointed = { named: readonly string[]; answer: readonly string[]; unplaced: boolean };
+export const NOTHING_POINTED: Pointed = { named: [], answer: [], unplaced: false };
+export const isPointed = (x: unknown): x is Pointed =>
+  typeof x === 'object' &&
+  x !== null &&
+  isStrings((x as Pointed).named) &&
+  isStrings((x as Pointed).answer) &&
+  typeof (x as Pointed).unplaced === 'boolean';
+// What a message keeps of its consent, which /clear and switching the gate off drop.
+export const UNGRANTED = { grant: NO_GRANT, pointed: NOTHING_POINTED } as const;
+
+export function pointedBy(text: string, before: string, grant: Grant): Pointed {
+  const all = [...grant.mergeNamed, ...grant.readyNamed];
+  return {
+    named: all.filter((n) => n !== NAMED_ELSEWHERE),
+    answer: prNumbers(before),
+    unplaced: all.includes(NAMED_ELSEWHERE) && /\d/.test(text),
+  };
+}
+
+export function joinPointed(a: Pointed, b: Pointed): Pointed {
+  return {
+    named: [...new Set([...a.named, ...b.named])],
+    answer: [...new Set([...a.answer, ...b.answer])],
+    unplaced: a.unplaced || b.unplaced,
+  };
 }
 
 // What "merge it" names: the pull requests the end of the previous answer

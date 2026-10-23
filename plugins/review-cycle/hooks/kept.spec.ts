@@ -1,16 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
 import type { Kept } from '../types';
-import { NO_GRANT } from './consent';
-import {
-  isKept,
-  isPointed,
-  keptOf,
-  NOTHING_POINTED,
-  offKept,
-  UNGRANTED,
-  type KeptSource,
-} from './kept';
+import { NO_GRANT, UNGRANTED } from './consent';
+import { isKept, keptOf, offKept, type KeptSource } from './kept';
 
 const SHA = 'a'.repeat(40);
 
@@ -121,6 +113,8 @@ describe('isKept', () => {
     ['a capped leg that is not a string', (k) => (k.capped = [1])],
     ['a hold of an unknown kind', (k) => (k.held = { step: 'push', how: 'asked' })],
     ['a hold of an unknown step', (k) => (k.held = { step: 'deploy', how: 'mentioned' })],
+    ['a hold of a prototype name', (k) => (k.held = { step: 'toString', how: 'mentioned' })],
+    ['a miss naming a prototype name', (k) => (k.misses[0].steps = ['constructor'])],
     ['a mandate that is not an epic id', (k) => (k.mandate = { epic: 'not an id' })],
     ['rounds counted past the reviews', (k) => (k.roundsFrom = 2)],
     ['negative rounds', (k) => (k.roundsFrom = -1)],
@@ -200,14 +194,6 @@ describe('isKept', () => {
 
   test('refuses what is not a record', () => {
     for (const x of [null, [], 'gate', 1]) expect(isKept(x)).toBe(false);
-  });
-});
-
-describe('isPointed', () => {
-  test('takes nothing pointed and refuses a missing list', () => {
-    expect(isPointed(NOTHING_POINTED)).toBe(true);
-    expect(isPointed({ named: [], unplaced: false })).toBe(false);
-    expect(isPointed(null)).toBe(false);
   });
 });
 
