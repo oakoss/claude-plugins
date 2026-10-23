@@ -1,5 +1,0 @@
----
-pr-kit: minor
----
-
-`/pr-kit:ship` ships a github/gh-stack stack. When the branch is a layer, it pushes every layer and opens each missing pull request with `gh stack submit --auto --open`, then rewrites each new pull request's title and body from that layer's own commits. It checks each layer's pull request first and leaves `--open` off when one is a draft or you asked for drafts, since `--open` would mark existing drafts ready; new layers then open as drafts, and the report says so. Shipping from a lower layer asks first when it would open pull requests for layers above it that have none, since those may still be in progress; updating layers that already have one needs no question. It merges nothing into a layer, stops to offer `gh stack rebase --no-trunk` when a layer is missing commits from the one below, runs the checks on the top layer and returns to your branch, closes each layer's tracker items and lists its known issues from that layer's own commits, and treats a `⚠ failed` line from `submit` as a failure even though it exits 0. A stack it cannot read stops the ship rather than being shipped as an ordinary branch.

@@ -1,5 +1,0 @@
----
-pr-watch: patch
----
-
-A merged pull request's line now follows the branch it merged into past its own merge commit. A push to a branch runs CI on its newest commit only, so the lower layer of a stack merged with `gh stack merge` got no runs and its line sat on `waiting on checks` before leaving; past the 90-second grace it now follows the oldest later commit that has runs, reading `✓ checks passed on a later commit` once they pass. Outside a stack, a merge commit with no runs, as from a path filter, still leaves. A workflow that failed on the merge commit settles once its newest finished run on a later commit passes, reading `✓ <workflow> failed, since passed` before it clears, where before it stayed failing until someone re-ran it. A later commit counts only when it descends from the merge commit among the branch's newest 10, so a failure on a merge buried deeper settles only by a re-run, as before, and a stack layer buried deeper leaves. While a line looks past its merge commit, each read also reads those 10 commits, 2 more GraphQL points.

@@ -1,5 +1,0 @@
----
-review-cycle: patch
----
-
-A hold now stops only the step it names and the steps after it. A message that mentions merging without asking for it ("anything else before we merge 77?"), or a "not yet" to a merge offer, holds merges, approvals and releases, and a push or pull request your stop-before setting allows still runs. It used to hold every step, so a setting of `merge` stopped pushes after any question about merging. A "not yet" to an offer of several steps holds the first one offered and everything after it, so a declined "push and open a PR?" still holds the push, and so does a declined "merge #116 and delete the branch?", since deleting a branch is a push. A step the offer names only by its verb counts too, so a "not yet" to "Push `#130`?" now holds the push, and a later step named beside the decline ("not yet, the release notes need work") does not free it. A later hold keeps what an earlier one held until a message asks for a step, so "don't push yet" followed by "don't merge yet" still holds the push. A hold never stops a commit, every hold stops a reply on GitHub, and a held reply holds only replies.

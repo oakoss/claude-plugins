@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.6.0 (2026-10-23)
+
+### Added
+
+A stack layer reads ready to merge only once every layer below it has merged or is ready itself, since `gh stack merge` on a layer merges the open layers below it too and GitHub reports each layer ready by itself. Until then its line shows `○ waiting on layer 2/3`, it raises no ready toast or `merge #N` suggestion, and a `watch` with `wake` on the top layer wakes Claude when the whole stack is ready. A layer below that pr-watch does not watch counts as not ready unless GitHub's stacks API reports it merged. When a layer's line changes, the layers above it are read again at once, so a stack turns ready without waiting out their read delay.
+
+The `watch` tool takes `wake`, so Claude can ask to be woken when a pull request turns ready to merge or its merge's checks pass, instead of running its own `gh` polling loop for an ask like "merge it once it's green". Without it nothing changes: a ready pull request and passed checks still wait for your next message. With it, each wakes Claude once, a merge Claude made included; it lasts while the pull request is watched in the session, and `Wake Claude: off` still wins.
+
+### Fixed
+
+pr-watch now follows a github/gh-stack stack's layers without a watch call. A `gh stack submit` Claude runs starts a line for each pull request it prints as `✓ Created PR #<n>`, as `gh pr create` does, even when it failed after opening some; before, its pull requests showed only once watched by hand. Each layer's line carries its place after its number, `#235 ≡ #236 2/3`, counted from the bottom as GitHub's badge is, and a stack's lines sit together, top layer first. An open pull request's stack is asked of GitHub's stacks API again after a `gh stack` command that can change it, and every 10 minutes for a change made elsewhere; a merged layer is asked once it has merged and keeps that answer, and a lookup that fails keeps the last one. A token that may not read the stacks API (HTTP 403) now counts as no stack, as a host without it does, unless a stack is already known. `gh stack submit`, `push`, `sync` and `merge` also have every line read again soon, as a push does.
+
+A merged layer of a gh-stack stack now reads `merged into main` (the stack's trunk) rather than naming the layer below it. GitHub keeps a merged layer based on the branch beneath it even though its commit landed on the trunk, so pr-watch asks GitHub's stacks API for the trunk, at most once a minute until it answers, then keeps it. A pull request in no stack keeps its base, as does one on a host without the stacks API, and one whose lookup failed until a later try gets an answer. The lookup is a REST call, so its rate limit pauses none of the host's other reads.
+
+A merged pull request's line now follows the branch it merged into past its own merge commit. A push to a branch runs CI on its newest commit only, so the lower layer of a stack merged with `gh stack merge` got no runs and its line sat on `waiting on checks` before leaving; past the 90-second grace it now follows the oldest later commit that has runs, reading `✓ checks passed on a later commit` once they pass. Outside a stack, a merge commit with no runs, as from a path filter, still leaves. A workflow that failed on the merge commit settles once its newest finished run on a later commit passes, reading `✓ <workflow> failed, since passed` before it clears, where before it stayed failing until someone re-ran it. A later commit counts only when it descends from the merge commit among the branch's newest 10, so a failure on a merge buried deeper settles only by a re-run, as before, and a stack layer buried deeper leaves. While a line looks past its merge commit, each read also reads those 10 commits, 2 more GraphQL points.
+
 ## 0.5.0 (2026-10-16)
 
 ### Added

@@ -1,5 +1,0 @@
----
-review-cycle: patch
----
-
-A merge you asked for without naming a pull request ("merge it", "ok, lets merge") now covers only a pull request the conversation pointed at: one your messages or the answer you replied to name anywhere, not just in its last lines; one in this repository headed by the branch the checkout is on; or oakum's version pull request. Before, it covered any pull request the agent ran `gh pr merge` on. Any other is refused, and the agent asks you to confirm it by number ("Merge #200?"), so an agent that offered #40 and then merged #200 is caught rather than let through. When your message names a number the gate cannot place ("merge it; do not merge 130"), the answer's numbers do not count. A merge sharing its command with other steps (`gh pr merge 40 && git pull`) runs only when it names a number the conversation pointed at. Where your setting lets merges through without asking, an unnamed request is never stricter than the setting. A bare `gh pr merge` needs no lookup, as before; any other unnamed merge makes the lookups a named merge does, plus one of its head branch when nothing named it.
