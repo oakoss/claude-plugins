@@ -1202,9 +1202,12 @@ function namesOnly(clause: string): string[] | null {
 
 // Sentences keep their closing mark, so a question can be told from a request.
 // A period before a digit is a number's: "push tag 0.2.0 but not yet". Before
-// a letter it still ends one, so "done.if CI passes, push it" waits.
+// a letter it still ends one, so "done.if CI passes, push it" waits. A period
+// opening a word is a path's: "push .github later".
 function sentences(text: string): string[] {
-  return text.match(/(?:[^.!?;\n]|(?<=[A-Za-z0-9])\.(?=\d))+[.!?;]*/g) ?? [];
+  return (
+    text.match(/(?:[^.!?;\n]|(?<=[A-Za-z0-9])\.(?=\d)|(?<!\S)\.(?=[A-Za-z_/]))+[.!?;]*/g) ?? []
+  );
 }
 
 // Clauses split on commas and "but", so "don't push, but commit it" withholds

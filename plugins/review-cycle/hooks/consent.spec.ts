@@ -630,6 +630,15 @@ describe('grants on a request', () => {
     // A period before a letter still ends a sentence, so a condition after it counts.
     ['done.if CI passes, push it', NONE],
     ['fixed.not yet, push it', NONE],
+    // A period opening a word is a path's, so a deferral after it still counts.
+    ['push .github later', NONE],
+    ['push the .github changes later', NONE],
+    ['push .gitignore when CI passes', NONE],
+    ['push .github workflows tomorrow', NONE],
+    ['push ./scripts tomorrow', NONE],
+    ['push the .github changes', PUSH],
+    // A dotted name reads as its bare name: "push the gitignore changes" holds.
+    ['push the .gitignore changes', NONE],
     ['push it from main', NONE],
     ['open a pull request', PR],
     ['create a new draft PR', PR],
