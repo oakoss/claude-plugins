@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.3.0 (2026-10-23)
+
+### Added
+
+New `/pr-kit:do-epic` skill: type "do epic <id>" (or `/pr-kit:do-epic <id>`, adding "as drafts" for draft pull requests) and the agent runs that beads epic to open pull requests without asking anything until its report. It plans the epic's beads into branches and records the plan in the epic's notes, then implements, reviews and commits each branch in turn. Independent branches ship as their own pull requests, and dependent ones as a gh-stack stack. It drives CI to green with `fix-ci`, then reports each pull request with its beads, CI state and review rounds, plus shelved beads, deferred findings, questions and refusals. A bead it cannot finish is stashed and left open, and the skill never merges. It needs review-cycle and `bd`.
+
+Adds `/pr-kit:merge`, which merges the pull request you asked to merge with the repository's merge method, asking which when it allows several, and reports the merge commit and what is left. It stops on a closed, draft, blocked, behind or conflicted pull request, and asks before merging past a failing check that is not required. On a github/gh-stack layer it merges with `gh stack merge`, which merges every unmerged layer below too, so it names them all and asks when your message did not, and checks each is ready; "merge the stack" merges every open layer from any of them. It checks that the number names no stack, since `gh stack merge` reads a stack's number first, and offers `gh stack sync` for the layers left open. `/pr-kit:ship` now reads a stack sync's output, since a diverged stack prints `Sync aborted` and still exits 0.
+
+`/pr-kit:ship` ships a github/gh-stack stack. When the branch is a layer, it pushes every layer and opens each missing pull request with `gh stack submit --auto --open`, then rewrites each new pull request's title and body from that layer's own commits. It checks each layer's pull request first and leaves `--open` off when one is a draft or you asked for drafts, since `--open` would mark existing drafts ready; new layers then open as drafts, and the report says so. Shipping from a lower layer asks first when it would open pull requests for layers above it that have none, since those may still be in progress; updating layers that already have one needs no question. It merges nothing into a layer, stops to offer `gh stack rebase --no-trunk` when a layer is missing commits from the one below, runs the checks on the top layer and returns to your branch, closes each layer's tracker items and lists its known issues from that layer's own commits, and treats a `⚠ failed` line from `submit` as a failure even though it exits 0. A stack it cannot read stops the ship rather than being shipped as an ordinary branch.
+
+### Fixed
+
+The merge skill no longer waits on a check the repository does not require. GitHub reports a pull request as `UNSTABLE` both when such a check failed and while one is still running, and the skill used to treat both as a failure to ask about, so "merge 56" sat waiting for a CodeQL scan while pr-watch already showed the pull request ready. It now reads the checks and the required ones: a failed or cancelled check is still named and asked about, and when the others are only still running and every required check passed, it merges and names them in the report. With no required checks, or one still running, it asks. A repository that wants a check to hold merges makes it a required check.
+
+`/pr-kit:fix-ci` no longer asks "Should I commit and push the fixes?" when review-cycle's gate already lets a push run (its status tool reports `mayPush`), as under a job started with "do epic <id>". Nobody is there to answer during a job, so the question stopped it. On a layer of a gh-stack stack it now pushes with `gh stack push`, rebasing the layers above first, since review-cycle's gate refuses a plain `git push` of a layer.
+
+Merge now checks for open pull requests built on the one being merged when GitHub knows no stack for it. A plain squash merge can leave each such pull request conflicting with the default branch, needing a rebase and a force-push, so merge stops, names them, and gives the user the `gh stack link` command to run in their own terminal; asking to merge again once they are linked takes the stack path, and asking again without linking them merges the one alone, as before. Ship's `gh stack submit` and `gh stack sync`, merge's `gh stack merge` and `gh stack sync`, and fix-ci's `gh stack push` now say to run each as its own command with nothing before it, not even a `cd`, since review-cycle's commit gate can refuse a stack push or merge that runs beside other commands.
+
 ## 0.2.1 (2026-10-16)
 
 ### Fixed
