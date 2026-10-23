@@ -33,17 +33,21 @@ import {
   endsReady,
   grantOf,
   holdOf,
-  prNumbers,
+  joinPointed,
   liftsHold,
   mandateAfter,
   NAMED_ELSEWHERE,
   NO_GRANT,
+  NOTHING_POINTED,
   isReply,
+  pointedBy,
   stepsNamed,
+  UNGRANTED,
   unreadOffer,
   type Grant,
   type HoldStep,
   type Mandate,
+  type Pointed,
   type UnreadOffer,
 } from './consent';
 import {
@@ -106,7 +110,7 @@ import {
 } from './git';
 import type { Finishes, PushSpec } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
-import { isKept, keptOf, NOTHING_POINTED, offKept, UNGRANTED, type Pointed } from './kept';
+import { isKept, keptOf, offKept } from './kept';
 import {
   configured,
   STRICTEST,
@@ -1429,23 +1433,6 @@ function endedNote(s: Standing): string | null {
 function pointedNow(): readonly string[] {
   const { named, answer, unplaced } = state.message.pointed;
   return unplaced ? named : [...new Set([...named, ...answer])];
-}
-
-function pointedBy(text: string, before: string, grant: Grant): Pointed {
-  const all = [...grant.mergeNamed, ...grant.readyNamed];
-  return {
-    named: all.filter((n) => n !== NAMED_ELSEWHERE),
-    answer: prNumbers(before),
-    unplaced: all.includes(NAMED_ELSEWHERE) && /\d/.test(text),
-  };
-}
-
-function joinPointed(a: Pointed, b: Pointed): Pointed {
-  return {
-    named: [...new Set([...a.named, ...b.named])],
-    answer: [...new Set([...a.answer, ...b.answer])],
-    unplaced: a.unplaced || b.unplaced,
-  };
 }
 
 // A GitHub MCP tool is judged as the gh command it stands for would be.

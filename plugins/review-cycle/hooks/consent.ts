@@ -1889,6 +1889,35 @@ function numbers(text: string): Set<string> {
   );
 }
 
+// A number the grammar could not place ("do not merge 130") voids the answers'.
+export type Pointed = { named: readonly string[]; answer: readonly string[]; unplaced: boolean };
+export const NOTHING_POINTED: Pointed = { named: [], answer: [], unplaced: false };
+export const isPointed = (x: unknown): x is Pointed =>
+  typeof x === 'object' &&
+  x !== null &&
+  isStrings((x as Pointed).named) &&
+  isStrings((x as Pointed).answer) &&
+  typeof (x as Pointed).unplaced === 'boolean';
+// What a message keeps of its consent, which /clear and switching the gate off drop.
+export const UNGRANTED = { grant: NO_GRANT, pointed: NOTHING_POINTED } as const;
+
+export function pointedBy(text: string, before: string, grant: Grant): Pointed {
+  const all = [...grant.mergeNamed, ...grant.readyNamed];
+  return {
+    named: all.filter((n) => n !== NAMED_ELSEWHERE),
+    answer: prNumbers(before),
+    unplaced: all.includes(NAMED_ELSEWHERE) && /\d/.test(text),
+  };
+}
+
+export function joinPointed(a: Pointed, b: Pointed): Pointed {
+  return {
+    named: [...new Set([...a.named, ...b.named])],
+    answer: [...new Set([...a.answer, ...b.answer])],
+    unplaced: a.unplaced || b.unplaced,
+  };
+}
+
 // What "merge it" names: the pull requests the end of the previous answer
 // names (#131, PR 131, /pull/131), none meaning any the conversation pointed
 // at, which the gate checks. Several, or a message naming numbers or the

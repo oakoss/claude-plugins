@@ -8,11 +8,15 @@ import {
   holdOf,
   holdsOf,
   isGrant,
+  isPointed,
+  joinPointed,
   liftsHold,
   mandateAfter,
   mandateOf,
   NAMED_ELSEWHERE,
   NO_GRANT,
+  NOTHING_POINTED,
+  pointedBy,
   stepsNamed,
   unreadOffer,
   VERB_FORMS,
@@ -2322,5 +2326,86 @@ describe('isGrant', () => {
     ['a list', []],
   ])('refuses %s', (_name, value) => {
     expect(isGrant(value)).toBe(false);
+  });
+});
+
+const named = (mergeNamed: string[], readyNamed: string[] = []) => ({
+  ...NONE,
+  mergeNamed,
+  readyNamed,
+});
+const unplacedIs = (unplaced: boolean) => ({ ...NOTHING_POINTED, unplaced });
+
+describe('pointedBy', () => {
+  test('names what the merge and ready grants name, merge first', () => {
+    expect(pointedBy('merge 12, ready 14', '', named(['12'], ['14'])).named).toEqual(['12', '14']);
+  });
+
+  test('keeps a number both grants name twice', () => {
+    expect(pointedBy('merge 12', '', named(['12'], ['12'])).named).toEqual(['12', '12']);
+  });
+
+  test.each([
+    ['merge', [NAMED_ELSEWHERE], []],
+    ['ready', [], [NAMED_ELSEWHERE]],
+  ])('names nothing for a %s number it could not place', (_step, mergeNamed, readyNamed) => {
+    expect(pointedBy('merge it', '', named(mergeNamed, readyNamed)).named).toEqual([]);
+  });
+
+  test('reads the answer before the message, not the message', () => {
+    expect(pointedBy('merge #9', 'Opened #12 and PR 14.', named([])).answer).toEqual(['12', '14']);
+  });
+
+  const PLACED = named(['12']);
+  const UNPLACED = named([NAMED_ELSEWHERE]);
+  const READY_UNPLACED = named([], [NAMED_ELSEWHERE]);
+  test.each([
+    [
+      'a number it could not place, in a message with a digit',
+      'do not merge 130',
+      '',
+      UNPLACED,
+      true,
+    ],
+    ['a ready number it could not place', 'merge 130 once ready', '', READY_UNPLACED, true],
+    ['a number it could not place, in a message without one', 'merge it', '', UNPLACED, false],
+    ['digits only in the answer before', 'merge it', 'Opened #12 and #14.', UNPLACED, false],
+    ['a placed number', 'merge 12', '', PLACED, false],
+  ])('unplaced for %s', (_name, text, before, grant, unplaced) => {
+    expect(pointedBy(text, before, grant).unplaced).toBe(unplaced);
+  });
+});
+
+describe('joinPointed', () => {
+  test('joins each list once, the first pointing first', () => {
+    const a = { named: ['12', '14'], answer: ['3'], unplaced: false };
+    const b = { named: ['14', '15'], answer: ['3', '4'], unplaced: false };
+    expect(joinPointed(a, b)).toEqual({
+      named: ['12', '14', '15'],
+      answer: ['3', '4'],
+      unplaced: false,
+    });
+  });
+
+  test.each([
+    [false, true],
+    [true, false],
+  ])('stays unplaced when either was (%s, %s)', (first, second) => {
+    expect(joinPointed(unplacedIs(first), unplacedIs(second)).unplaced).toBe(true);
+  });
+});
+
+describe('isPointed', () => {
+  test('takes nothing pointed', () => {
+    expect(isPointed(NOTHING_POINTED)).toBe(true);
+  });
+
+  test.each([
+    ['null', null],
+    ['a missing answer', { named: [], unplaced: false }],
+    ['a number in named', { named: [12], answer: [], unplaced: false }],
+    ['unplaced as a string', { named: [], answer: [], unplaced: 'no' }],
+  ])('refuses %s', (_name, value) => {
+    expect(isPointed(value)).toBe(false);
   });
 });

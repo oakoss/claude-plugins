@@ -1,17 +1,5 @@
 import type { Kept, KeptLeg, KeptStep } from '../types';
-import { EPIC_ID, isGrant, isStrings, NO_GRANT } from './consent';
-
-// A number the grammar could not place ("do not merge 130") voids the answers'.
-export type Pointed = { named: readonly string[]; answer: readonly string[]; unplaced: boolean };
-export const NOTHING_POINTED: Pointed = { named: [], answer: [], unplaced: false };
-export const isPointed = (x: unknown): x is Pointed =>
-  typeof x === 'object' &&
-  x !== null &&
-  isStrings((x as Pointed).named) &&
-  isStrings((x as Pointed).answer) &&
-  typeof (x as Pointed).unplaced === 'boolean';
-// What a message keeps of its consent, which /clear and switching the gate off drop.
-export const UNGRANTED = { grant: NO_GRANT, pointed: NOTHING_POINTED } as const;
+import { EPIC_ID, isGrant, isPointed, isStrings, UNGRANTED } from './consent';
 
 // A SHA-1 or SHA-256 object name.
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;

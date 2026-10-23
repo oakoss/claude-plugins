@@ -1,16 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
 import type { Kept } from '../types';
-import { NO_GRANT } from './consent';
-import {
-  isKept,
-  isPointed,
-  keptOf,
-  NOTHING_POINTED,
-  offKept,
-  UNGRANTED,
-  type KeptSource,
-} from './kept';
+import { NO_GRANT, UNGRANTED } from './consent';
+import { isKept, keptOf, offKept, type KeptSource } from './kept';
 
 const SHA = 'a'.repeat(40);
 
@@ -200,14 +192,6 @@ describe('isKept', () => {
 
   test('refuses what is not a record', () => {
     for (const x of [null, [], 'gate', 1]) expect(isKept(x)).toBe(false);
-  });
-});
-
-describe('isPointed', () => {
-  test('takes nothing pointed and refuses a missing list', () => {
-    expect(isPointed(NOTHING_POINTED)).toBe(true);
-    expect(isPointed({ named: [], unplaced: false })).toBe(false);
-    expect(isPointed(null)).toBe(false);
   });
 });
 
