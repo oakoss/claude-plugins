@@ -12,7 +12,7 @@ import {
   type UnreadOffer,
 } from './consent';
 import type { GhAction, PushRef, Unlookable } from './github';
-import { asks, type Ladder, type Step } from './ladder';
+import { asks, atOrAbove, type Ladder, type Step } from './ladder';
 import {
   askingReason,
   pushOutcome,
@@ -91,16 +91,30 @@ function read(r: Lookup, what: string): Lookup {
 // applies, and a hold raised by mention does not stop them.
 export type ModelSteps = Readonly<Partial<Record<Step, true>>>;
 
+// A reply on GitHub sits above every rung: any hold holds one, and a hold of
+// one holds only another.
+export function holds(held: Hold, step: Step | 'comment'): boolean {
+  if (held === null || step === 'commit') return false;
+  if (step === 'comment') return true;
+  return held.step !== 'comment' && atOrAbove(step, held.step);
+}
+
+// The hold that holds more, so a later hold never frees what an earlier one held.
+export function lowerHold(a: Hold, b: Hold): Hold {
+  if (a === null || b === null) return a ?? b;
+  return holds(a, b.step) ? a : b;
+}
+
 // What may run: what the user asked for, and what the ladder or the model
-// check lets through. A hold stops every step but a commit.
+// check lets through.
 type Allowed = Readonly<Record<Step, boolean>>;
 export function permitted(
   granted: Grant,
   ladder: Ladder,
-  held: boolean,
+  held: Hold,
   model: ModelSteps = {},
 ): Allowed {
-  const free = (step: Step) => (!held && !asks(ladder, step)) || model[step] === true;
+  const free = (step: Step) => (!holds(held, step) && !asks(ladder, step)) || model[step] === true;
   return {
     commit: granted.commit || !asks(ladder, 'commit'),
     push: covers(granted, 'push') || free('push'),
@@ -126,7 +140,7 @@ const STEP_NAME: Record<HoldStep, string> = {
   merge: 'a merge',
   approve: 'an approval',
   release: 'a release',
-  comment: 'a reply on GitHub',
+  comment: 'a comment on GitHub',
 };
 
 // What held the steps, so the agent can tell the user.
@@ -139,25 +153,28 @@ function heldWhy(held: HoldReason): string {
 
 // Why a reply granted nothing, when the refused step is one its offer named;
 // merging the version pull request is the release a merge offer covers.
-export function unreadFor(unread: UnreadOffer | null, step: HoldStep | 'commit'): string | null {
+function unreadFor(unread: UnreadOffer | null, step: HoldStep | 'commit'): string | null {
   if (unread === null) return null;
   const named =
     unread.steps.includes(step) || (step === 'release' && unread.steps.includes('merge'));
   return named ? unread.why : null;
 }
 
+const ASKED_FOR: Record<Step | 'comment', string> = { commit: 'a commit', ...STEP_NAME };
+
 // Why the user's latest message does not cover the step, the setting
-// included when its files could not be read. `unread` is `unreadFor`'s reason.
+// included when its files could not be read.
 export function notAsked(
-  what: string,
+  step: Step | 'comment',
   ladder: InForce,
-  holdable: boolean,
   held: Hold,
-  unread: string | null = null,
+  offered: UnreadOffer | null = null,
 ): string {
+  const what = ASKED_FOR[step];
+  const unread = unreadFor(offered, step);
   const offer = unread === null ? '' : ` (${unread})`;
   const why =
-    holdable && held !== null
+    held !== null && holds(held, step)
       ? `the user held off (${heldWhy(held)}) and hasn't asked for ${what} since`
       : `the user's latest message doesn't ask for ${what}${offer}`;
   return ladder.unreadable === undefined
@@ -166,7 +183,7 @@ export function notAsked(
 }
 
 function prRefusal(shown: string, ladder: InForce, held: Hold, unread: UnreadOffer | null): string {
-  return `${notAsked('a pull request', ladder, true, held, unreadFor(unread, 'pr'))}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
+  return `${notAsked('pr', ladder, held, unread)}, so nothing ran. To open one, ${askThem('the branch and the base it targets', '"Open a PR from `fix/x` into `main`?"', shown)}`;
 }
 
 function submitRefusal(
@@ -175,7 +192,7 @@ function submitRefusal(
   held: Hold,
   unread: UnreadOffer | null,
 ): string {
-  return `${notAsked('a pull request', ladder, true, held, unreadFor(unread, 'pr'))}, and \`gh stack submit\` also pushes every active branch of the stack with --force-with-lease, so nothing ran. To run it, ${askThem('the stack, that it force-pushes its branches with a lease and that it opens their pull requests,', '"Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?"', shown)}`;
+  return `${notAsked('pr', ladder, held, unread)}, and \`gh stack submit\` also pushes every active branch of the stack with --force-with-lease, so nothing ran. To run it, ${askThem('the stack, that it force-pushes its branches with a lease and that it opens their pull requests,', '"Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?"', shown)}`;
 }
 
 // The branch oakum's version pull request comes from: merging it is the release.
@@ -441,19 +458,12 @@ async function coveredAsks(
 }
 
 // Each example is one the consent grammar grants on a yes (consent.spec.ts).
-const GH_ASK: Record<
-  'merge' | 'approve' | 'release' | 'comment' | 'push',
-  [string, string, string]
-> = {
-  merge: ['a merge', 'the pull request', '"Merge #116?"'],
-  approve: ['an approval', 'the pull request', '"Approve #116?"'],
-  release: ['a release', 'the version it releases', '"Release `v0.25.0`?"'],
-  comment: [
-    'a comment on GitHub',
-    'where it goes and what it says',
-    '"Reply to the review on #116?"',
-  ],
-  push: ['a push', 'what it pushes and where', '"Push `fix/x` to `origin`?"'],
+const GH_ASK: Record<'merge' | 'approve' | 'release' | 'comment' | 'push', [string, string]> = {
+  merge: ['the pull request', '"Merge #116?"'],
+  approve: ['the pull request', '"Approve #116?"'],
+  release: ['the version it releases', '"Release `v0.25.0`?"'],
+  comment: ['where it goes and what it says', '"Reply to the review on #116?"'],
+  push: ['what it pushes and where', '"Push `fix/x` to `origin`?"'],
 };
 
 function ghRefusal(
@@ -464,11 +474,11 @@ function ghRefusal(
   held: Hold,
   unread: UnreadOffer | null,
 ): string {
-  const [what, naming, example] = GH_ASK[kind];
+  const [naming, example] = GH_ASK[kind];
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
   const unreviewed =
     kind === 'push' ? ' It writes to GitHub directly, so no review covers it.' : '';
-  return `${notAsked(what, ladder, true, held, unreadFor(unread, kind))}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
+  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
 }
 
 // A refusal no model reading can lift is `final`; `notes` tell the agent what
@@ -524,9 +534,9 @@ export async function judgeGh(
   for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
     const { action } = item;
     const granted = item.granted ?? asked;
-    const may = permitted(granted, ladder, held !== null, model);
+    const may = permitted(granted, ladder, held, model);
     // Only a step the setting let through is noted as run unasked.
-    const bySetting = permitted(granted, ladder, held !== null);
+    const bySetting = permitted(granted, ladder, held);
     switch (action.kind) {
       case 'pr': {
         if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
@@ -625,8 +635,7 @@ export async function judgeGh(
         // a refusal there still names the failure (`lost`).
         const settingMay =
           unnamedMay &&
-          permitted({ ...granted, merge: false, autoMerge: false }, ladder, held !== null, model)
-            .merge;
+          permitted({ ...granted, merge: false, autoMerge: false }, ladder, held, model).merge;
         let unasked = false;
         let lost: string | null = null;
         // "release when the PR is ready" covers oakum's version pull request
@@ -728,7 +737,7 @@ export async function judgeGh(
           const releases = permitted(
             { ...granted, merge: true, release: granted.release || readyRelease },
             ladder,
-            held !== null,
+            held,
             model,
           ).release;
           if ('asks' in now && !releases && !('cannot' in action.lookup)) {
@@ -768,15 +777,15 @@ export async function judgeGh(
           merge: covers.now || covers.ready,
           release: granted.release || readyRelease,
         };
-        const mayHere = permitted(asked, ladder, held !== null, model);
-        const setHere = permitted(asked, ladder, held !== null);
+        const mayHere = permitted(asked, ladder, held, model);
+        const setHere = permitted(asked, ladder, held);
         // A merge the user asked for covers oakum's version pull request too:
         // merging it is the only way to release, so "merge it" asks for that,
         // unless the same message held off a release ("merge 131. don't release yet")
         // or named other pull requests ("merge 131" never merges #130).
         const covered =
           granted.mergeNamed.length === 0 || (target !== null && nowNamed.includes(target.number));
-        if (covers.now && held?.step !== 'release' && covered) break;
+        if (covers.now && !holds(held, 'release') && covered) break;
         // Allowed either way, a merge needs no lookup to run, except one run
         // now on readiness alone: a release there is noted. One that runs
         // unasked is looked up only so its note names the step it is.
@@ -817,7 +826,7 @@ export async function judgeGh(
           // so one answer covers the command: a push asked for in this message
           // does not last to the answer.
           if (!may.pr && action.step === 'submit') {
-            const isPushSet = permitted(NO_GRANT, ladder, held !== null).push;
+            const isPushSet = permitted(NO_GRANT, ladder, held).push;
             const bound = !isPushSet
               ? null
               : 'unread' in action.where
@@ -925,7 +934,7 @@ export async function judgeGh(
         // without asking.
         const { now, ready } = namedOf(granted);
         const named = new Set([...now, ...ready]);
-        const ladderMerges = permitted({ ...granted, merge: false }, ladder, held !== null).merge;
+        const ladderMerges = permitted({ ...granted, merge: false }, ladder, held).merge;
         if (
           !stacked &&
           set.prs.length > 1 &&

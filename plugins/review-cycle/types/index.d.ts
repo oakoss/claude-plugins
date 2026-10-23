@@ -55,6 +55,9 @@ export type Kept = {
   scratch: string[];
   reviewerChanges: string[];
   held: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }> | null;
+  // Whether a message declined a step since the hold began, which `held` alone
+  // loses when an earlier, lower hold outranks the decline.
+  declined: boolean;
   // The epic a "do epic <id>" message started a job on, until a hold ends it.
   mandate: Readonly<{ epic: string }> | null;
   // Where in `reviews` the next commit's rounds start counting.

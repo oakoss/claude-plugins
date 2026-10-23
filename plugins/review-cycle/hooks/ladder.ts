@@ -85,6 +85,10 @@ export function withMandate(ladder: Ladder, epic: string | null): Ladder {
   return { stopBefore: MANDATE, source: 'mandate' };
 }
 
+export function atOrAbove(step: Step, floor: Step): boolean {
+  return rank(STEP_RUNG[step]) >= rank(STEP_RUNG[floor]);
+}
+
 // Whether the step needs the user's request under this ladder.
 export function asks(ladder: Ladder, step: Step): boolean {
   return rank(STEP_RUNG[step]) >= rank(ladder.stopBefore);

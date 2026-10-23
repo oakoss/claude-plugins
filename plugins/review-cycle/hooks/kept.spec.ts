@@ -40,6 +40,7 @@ function source(): KeptSource & { message: { unread: null; said: string } } {
     scratch: ['/tmp/s'],
     reviewerChanges: ['git add'],
     held: { step: 'push', how: 'mentioned' },
+    declined: true,
     mandate: { epic: 'cpl-7ktn' },
     roundsFrom: 1,
     pushed: [['/repo/.git\torigin/main', SHA]],
@@ -74,6 +75,7 @@ describe('keptOf', () => {
       messages: 3,
       lastAnswer: 'Pushed.',
       held: s.held,
+      declined: true,
       mandate: s.mandate,
       roundsFrom: 1,
       pushed: s.pushed,
@@ -112,6 +114,15 @@ describe('isKept', () => {
     ['a dropped review without its text', (k) => delete k.dropped[0].text],
     ['a capped leg that is not a string', (k) => (k.capped = [1])],
     ['a hold of an unknown kind', (k) => (k.held = { step: 'push', how: 'asked' })],
+    ['a decline that is not a flag', (k) => (k.declined = 'yes')],
+    [
+      'a decline flagged with nothing held',
+      (k) => Object.assign(k, { held: null, declined: true }),
+    ],
+    [
+      'a declined hold not flagged',
+      (k) => Object.assign(k, { held: { step: 'push', how: 'declined' }, declined: false }),
+    ],
     ['a hold of an unknown step', (k) => (k.held = { step: 'deploy', how: 'mentioned' })],
     ['a hold of a prototype name', (k) => (k.held = { step: 'toString', how: 'mentioned' })],
     ['a miss naming a prototype name', (k) => (k.misses[0].steps = ['constructor'])],
@@ -173,7 +184,14 @@ describe('isKept', () => {
 
   test('takes a record with nothing held, no mandate and no review running', () => {
     const k = roundTrip(keptOf(source())) as Record<string, any>;
-    Object.assign(k, { held: null, mandate: null, reviewing: null, legs: [], roundsFrom: 0 });
+    Object.assign(k, {
+      held: null,
+      declined: false,
+      mandate: null,
+      reviewing: null,
+      legs: [],
+      roundsFrom: 0,
+    });
     expect(isKept(k)).toBe(true);
   });
 
@@ -203,7 +221,13 @@ describe('offKept', () => {
     expect(off.legs.map(([id]) => id)).toEqual(['finished']);
     expect(off.reviews).toHaveLength(1);
     expect(off.message).toEqual({ tree: null, nudged: false, prWindow: false, ...UNGRANTED });
-    expect(off).toMatchObject({ lastAnswer: '', held: null, mandate: null, reviewing: null });
+    expect(off).toMatchObject({
+      lastAnswer: '',
+      held: null,
+      declined: false,
+      mandate: null,
+      reviewing: null,
+    });
     expect(isKept(roundTrip(off))).toBe(true);
   });
 

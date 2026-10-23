@@ -67,9 +67,10 @@ import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
+  holds,
+  lowerHold,
   judgeGh,
   notAsked,
-  unreadFor,
   parsePullRequest,
   permitted,
   PR_FIELDS,
@@ -309,8 +310,10 @@ type GateState = {
   nudge: boolean;
   // The user's /config value for showing a step the setting ran unasked.
   unaskedNotice: boolean;
-  // "don't push yet" makes every step ask until a message asks for one.
+  // "don't push yet" holds the push and later steps until a message asks.
   held: Hold;
+  // A message declined a step since the hold began, which keeps the model check off.
+  declined: boolean;
   // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
   mandate: Kept['mandate'];
   // "merge 46 once CI passes" outlasts its message until used, held or retracted.
@@ -362,6 +365,7 @@ const state: GateState = {
   nudge: true,
   unaskedNotice: false,
   held: null,
+  declined: false,
   mandate: null,
   standing: NO_STANDING,
   roundsFrom: 0,
@@ -374,7 +378,7 @@ const state: GateState = {
 // remembers is copied here after each change and read back at the start, the
 // latest message's grant included, so a reload mid-step does not ask twice.
 // Bump the shape whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-6' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-7' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -548,6 +552,7 @@ async function recall($: $): Promise<void> {
       state.messages = kept.messages;
       state.lastAnswer = kept.lastAnswer;
       state.held = kept.held;
+      state.declined = kept.declined;
       state.mandate = kept.mandate;
       state.misses = kept.misses;
       state.dropped = kept.dropped;
@@ -857,12 +862,19 @@ async function onPromptSubmit(
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
     // What a held message asks for still runs: "push it; don't open a PR yet".
-    state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
     const grant = grantOf(e.text, state.lastAnswer);
     const unread = unreadOffer(e.text, state.lastAnswer);
     const hold = holdOf(e.text, state.lastAnswer);
-    if (hold !== null) state.held = hold;
-    else if (liftsHold(grant)) state.held = null;
+    state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
+    // A request lifts what came before; what the same message holds still holds.
+    if (liftsHold(grant)) {
+      state.held = null;
+      state.declined = false;
+    }
+    if (hold !== null) {
+      state.held = lowerHold(state.held, hold);
+      state.declined ||= hold.how === 'declined';
+    }
     state.mandate = mandateAfter(state.mandate, e.text, state.lastAnswer);
     const ends = endsReady(e.text, state.lastAnswer);
     const ended = ends ? endedNote(state.standing) : null;
@@ -1605,7 +1617,7 @@ async function onBashEdits(
 function modelRead($: $): ModelAsk | null {
   const { text, before, origin } = state.said;
   if (!state.modelCheck || origin === 'sdk' || text.trim() === '') return null;
-  if (state.held?.how === 'declined') return null;
+  if (state.declined) return null;
   if (state.model?.message !== state.messages) {
     const ask = { message: state.messages, text, before, read: askModel($, text, before) };
     state.model = ask;
@@ -1739,7 +1751,7 @@ async function offeredUnnamed(
   // A grant a queued message joined is not one message the model can be shown.
   const text = state.message.said;
   if (!state.modelCheck || origin === 'sdk' || text === null || text.trim() === '') return null;
-  if (state.held?.how === 'declined') return null;
+  if (state.declined) return null;
   const n = closingNamed(granted, text);
   if (n === null) return null;
   if (state.target?.message !== state.messages || state.target.n !== n) {
@@ -1950,7 +1962,7 @@ async function judgeBash(
   const asked = granted.commit || (finishes !== null && granted.finish.includes(finishes));
   if (cls.commit && !cls.commit.dryRun && !asked) {
     const ladder = await ladderOf($);
-    if (!permitted(granted, ladder, state.held !== null).commit) {
+    if (!permitted(granted, ladder, state.held).commit) {
       return deny(commitRefusal(e.command, ladder, finishes));
     }
   }
@@ -2243,13 +2255,13 @@ async function judgePush(
     return 'deny' in c ? { deny: c.deny, final: true } : { ran: null, note: c.note };
   }
   const ladder = await ladderOf($);
-  const forPr = granted.pr && state.held === null;
-  const bySetting = forPr || permitted(granted, ladder, state.held !== null).push;
+  const forPr = granted.pr && !holds(state.held, 'push');
+  const bySetting = forPr || permitted(granted, ladder, state.held).push;
   // The model's yes to a push, or to the pull request it needs, lets it through
   // as the setting does, so the pushes that always ask still ask.
   const byModel =
-    (model.pr === true && state.held?.step !== 'push') ||
-    permitted(granted, ladder, state.held !== null, model).push;
+    (model.pr === true && !holds(state.held, 'push')) ||
+    permitted(granted, ladder, state.held, model).push;
   const outcome = await pushOutcome(missing, bySetting || byModel, () => alwaysAsks($, top, spec));
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
@@ -2277,7 +2289,7 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
     finishes === null
       ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
       : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
-  return `${notAsked('a commit', ladder, false, state.held, unreadFor(state.message.unread, 'commit'))}${setting}, so nothing ran. ${ask}`;
+  return `${notAsked('commit', ladder, state.held, state.message.unread)}${setting}, so nothing ran. ${ask}`;
 }
 
 // How long the user waits on a gh read before the step asks.
@@ -2533,9 +2545,9 @@ function pushRefusal(
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
       if (always === DELETES) {
-        return `${notAsked('a push', ladder, true, state.held, unreadFor(state.message.unread, 'push'))}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
+        return `${notAsked('push', ladder, state.held, state.message.unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
       }
-      return `${notAsked('a push', ladder, true, state.held, unreadFor(state.message.unread, 'push'))}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+      return `${notAsked('push', ladder, state.held, state.message.unread)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {
       const unhandled: never = missing;
@@ -2630,7 +2642,7 @@ async function watch(
       if (pushed.length > 0 && !covers(granted, 'push') && !judged) {
         const ladder = await ladderOf($);
         notes.push(
-          permitted(granted, ladder, state.held !== null).push
+          permitted(granted, ladder, state.held).push
             ? ranUnasked($, { step: 'push', ladder })
             : `review-cycle: this command pushed to ${pushed.map((p) => p.name).join(', ')} without the user asking for a push. Tell the user.`,
         );
@@ -2818,7 +2830,7 @@ async function onStatus(
     worktreeTree: null,
   };
   const ladder = await ladderOf($);
-  const may = permitted(state.message.grant, ladder, state.held !== null);
+  const may = permitted(state.message.grant, ladder, state.held);
   const from = ladder.unreadable === undefined ? where(ladder.source) : 'unreadable settings';
   status.stopBefore = {
     ...ladder,

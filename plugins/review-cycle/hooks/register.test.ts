@@ -1966,7 +1966,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-6');
+    expect(kept?.shape).toBe('gate-7');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     expect(kept?.value.message).toMatchObject({
@@ -2044,6 +2044,18 @@ describe('a reload of the module', () => {
     reloadInto(on, keptRecord({ held: { step: 'push', how: 'declined' } }));
     await startSession($);
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
+  });
+
+  test('takes back a decline under a lower hold, so the model is still not asked', async ($, on) => {
+    const w = fakeWorld(
+      on,
+      pushing({ model: verdictFor('push', 'sounds good'), git: remoteSide({}) }),
+    );
+    reloadInto(on, keptRecord({ held: { step: 'push', how: 'mentioned' }, declined: true }));
+    await startSession($);
+    await say($, 'sounds good');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
   });
 
   test("takes back the latest message's grant, so a step it covered still runs", async ($, on) => {
@@ -2414,6 +2426,7 @@ describe('a reload of the module', () => {
           lastAnswer: 'Push it?',
           misses: [miss],
           held: { step: 'push', how: 'declined' },
+          declined: true,
           mandate: { epic: 'cpl-czgp' },
           roundsFrom: 1,
         }),
@@ -2552,6 +2565,8 @@ function keptRecord(over: Record<string, unknown>) {
     scratch: [],
     reviewerChanges: [],
     held: null,
+    // A declined hold is flagged, as the gate writes one.
+    declined: (over.held as { how?: string } | undefined)?.how === 'declined',
     mandate: null,
     roundsFrom: 0,
     pushed: [],
@@ -2566,7 +2581,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-6', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-7', value: kept }, version: 1 } };
   });
 }
 
@@ -4259,6 +4274,11 @@ describe('the stop-before setting', () => {
     expect(has(contextOf(r), 'without')).toBe(false);
     expect(denied(await bash($, 'git push origin main'), 'the default branch')).toBe(true);
   });
+  test('a pull request request lets its push run past a merge hold', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await say($, 'open a PR. do not merge it yet.');
+    expect(ran(await bash($, 'git push -u origin HEAD'))).toBe(true);
+  });
   test('a held pull request request lets no push through', async ($, on) => {
     fakeWorld(on, pushing({}));
     await say($, 'open a PR. do not push.');
@@ -5250,6 +5270,12 @@ describe('the stop-before setting', () => {
     await say($, "merge #130. don't release yet.");
     expect(denied(await bash($, 'gh pr merge 130'), 'held off')).toBe(true);
   });
+  test('a release held off beside a merge holds past an earlier hold', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await say($, "don't merge yet");
+    await say($, "merge #130. don't release yet.");
+    expect(denied(await bash($, 'gh pr merge 130'), 'held off')).toBe(true);
+  });
   test('"merge it" naming another pull request elsewhere asks before releasing', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
     await say($, 'merge it; do not merge 130');
@@ -5997,6 +6023,45 @@ describe('the stop-before setting', () => {
     await say($, 'rename it back');
     expect(ran(await bash($, 'gh pr create'))).toBe(true);
   });
+  test('a mentioned merge holds no step below it', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, 'Anything else before we merge 77?');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    expect(ran(await bash($, 'gh pr create'))).toBe(true);
+  });
+  test('a request lifts an earlier hold before holding what it puts off', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, "don't push yet");
+    await say($, "push it; don't open a PR yet");
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+  });
+  test('a later hold of a merge keeps an earlier hold of the push', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, "don't push yet");
+    await say($, "don't merge yet");
+    expect(denied(await bash($, 'git push'), 'held off (')).toBe(true);
+  });
+  test('a merge put off holds no push', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await endTurn($, 'answer', 'Merge #77?');
+    await say($, 'not yet');
+    expect(ran(await bash($, 'git push'))).toBe(true);
+  });
+  test('a push and pull request put off hold the push', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await endTurn($, 'answer', 'Push `fix/x` to `origin` and open a PR into `main`?');
+    await say($, 'not yet');
+    expect(denied(await bash($, 'git push'), 'held off (')).toBe(true);
+  });
+  test('a mentioned pull request holds the pull request, not the push', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
+    await say($, "don't open a PR yet");
+    expect(ran(await bash($, 'git push'))).toBe(true);
+    expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
+  });
   test('a subagent is refused at every rung', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') } });
     await say($, 'ship it');
@@ -6661,6 +6726,11 @@ describe('the model check', () => {
     expect(ran(r)).toBe(true);
     expect(has(contextOf(r), 'pushed to origin/fix/x without the user asking')).toBe(true);
   });
+  test('its yes to a pull request lets the push run past a merge hold', async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
+    await say($, "send it up for review, but don't merge it yet");
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+  });
   test('its yes to a pull request leaves a push hold in place', async ($, on) => {
     fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
     await say($, 'send it up for review, but keep my local commits off the push');
@@ -6783,6 +6853,45 @@ describe('the model check', () => {
     const w = fakeWorld(on, pushing({ model: verdictFor('push', 'not yet') }));
     await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
     await say($, 'not yet');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('a decline under an earlier, lower hold keeps later messages unasked', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'sounds good') }));
+    await say($, "don't push yet");
+    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
+    await say($, 'not yet');
+    await ($ as any).turn.complete({ answer: 'Ok, holding.', reason: 'answer' });
+    await say($, 'sounds good');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('a request that lifts a decline lets the next message be asked', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
+    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
+    await say($, 'not yet');
+    await say($, 'open a PR');
+    await ($ as any).turn.complete({ answer: 'Opened.', reason: 'answer' });
+    await say($, 'ship the react aria update');
+    await bash($, 'git push origin fix/x');
+    expect(w.modelPrompts).toBeDefined();
+  });
+  test('a decline outlasts a later mention, which keeps later messages unasked', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'sounds good') }));
+    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
+    await say($, 'not yet');
+    await say($, 'did the merge go through?');
+    await ($ as any).turn.complete({ answer: 'Not yet.', reason: 'answer' });
+    await say($, 'sounds good');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(w.modelPrompts).toBeUndefined();
+  });
+  test('a decline under an earlier, lower hold keeps a queued message unasked', async ($, on) => {
+    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'thanks') }));
+    await say($, "don't push yet");
+    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
+    await say($, 'not yet');
+    await queue($, 'thanks');
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
     expect(w.modelPrompts).toBeUndefined();
   });
