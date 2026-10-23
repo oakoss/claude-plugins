@@ -9,7 +9,7 @@
 /* oxlint-disable eslint/no-console -- a command-line report: printing is its output */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -17,7 +17,8 @@ import { Worker } from 'node:worker_threads';
 
 import type { Grammar, Group, Share } from './consent-diff.worker.ts';
 
-const CONSENT = 'plugins/review-cycle/hooks/consent.ts';
+const HOOKS = 'plugins/review-cycle/hooks';
+const CONSENT = `${HOOKS}/consent.ts`;
 const SOURCES = [CONSENT.replace('.ts', '.spec.ts'), 'plugins/review-cycle/hooks/register.test.ts'];
 
 const ref = process.argv[2] ?? 'main';
@@ -518,15 +519,35 @@ const REMEMBER = `
 // mutated module-level const goes unseen.
 const stateful = (source: string): boolean => /^(?:export\s+)?(?:let|var)\s/m.test(source);
 
-async function compare(base: string, current: string): Promise<void> {
+// A version is consent.ts and the modules it imports at runtime; Node erases a
+// type-only import, so that module needs no copy.
+const RUNTIME_IMPORT = /^import\s+(?!type\b)[^;]*?\sfrom\s+'\.\/([\w-]+)'/gm;
+function modules(read: (path: string) => string): Map<string, string> {
+  const found = new Map<string, string>();
+  const visit = (name: string) => {
+    if (found.has(name)) return;
+    const source = read(`${HOOKS}/${name}.ts`);
+    found.set(name, source);
+    for (const [, next] of source.matchAll(RUNTIME_IMPORT)) if (next) visit(next);
+  };
+  visit('consent');
+  return found;
+}
+
+async function compare(base: Map<string, string>, current: Map<string, string>): Promise<void> {
   // Copied to .mts so Node reads both versions as ES modules, without warnings.
   const dir = mkdtempSync(join(tmpdir(), 'consent-diff-'));
   const groups = new Map<string, Group>();
   let cases = 0;
   try {
-    const load = async (name: string, source: string): Promise<[string, Grammar]> => {
-      const file = join(dir, `${name}.mts`);
-      writeFileSync(file, stateful(source) ? source : source + REMEMBER);
+    const load = async (name: string, sources: Map<string, string>): Promise<[string, Grammar]> => {
+      mkdirSync(join(dir, name));
+      for (const [module, text] of sources) {
+        const linked = text.replaceAll(/(\sfrom\s+'\.\/[\w-]+)'/g, "$1.mts'");
+        const source = module === 'consent' && !stateful(linked) ? linked + REMEMBER : linked;
+        writeFileSync(join(dir, name, `${module}.mts`), source);
+      }
+      const file = join(dir, name, 'consent.mts');
       const module = (await import(pathToFileURL(file).href)) as Partial<Grammar>;
       if (typeof module.grantOf !== 'function' || typeof module.holdsOf !== 'function') {
         throw new TypeError(`${CONSENT} (${name}) exports no grantOf and holdsOf to compare`);
@@ -548,8 +569,9 @@ async function compare(base: string, current: string): Promise<void> {
       [...offers],
     ]);
     cases = entries.reduce((n, [, offers]) => n + offers.length, 0);
-    const workers =
-      stateful(base) || stateful(current) ? 1 : Math.max(1, availableParallelism() - 1);
+    const workers = [...base.values(), ...current.values()].some((text) => stateful(text))
+      ? 1
+      : Math.max(1, availableParallelism() - 1);
     const shares: Share[] = [];
     let start = 0;
     let share: Share['entries'] = [];
@@ -614,10 +636,12 @@ async function compare(base: string, current: string): Promise<void> {
   }
 }
 
-const base = atRef(CONSENT);
-const current = readFileSync(CONSENT, 'utf8');
-if (base === current) {
-  console.log(`${CONSENT} is the same at ${ref} and in the working tree: 0 changed`);
+const base = modules(atRef);
+const current = modules((path) => readFileSync(path, 'utf8'));
+const same = (a: Map<string, string>, b: Map<string, string>) =>
+  a.size === b.size && [...a].every(([name, text]) => b.get(name) === text);
+if (same(base, current)) {
+  console.log(`${CONSENT} and its imports are the same at ${ref} and here: 0 changed`);
 } else {
   await compare(base, current);
 }
