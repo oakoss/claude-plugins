@@ -2,17 +2,10 @@
 // the refusals when they may not. Pure: what it needs from gh or the settings
 // comes through `GhLookups`, which register.ts builds.
 
-import {
-  covers,
-  NAMED_ELSEWHERE,
-  NO_GRANT,
-  type Grant,
-  type HoldReason,
-  type HoldStep,
-  type UnreadOffer,
-} from './consent';
+import { covers, NAMED_ELSEWHERE, NO_GRANT, type Grant, type UnreadOffer } from './consent';
 import type { GhAction, PushRef, Unlookable } from './github';
-import { asks, atOrAbove, type Ladder, type Step } from './ladder';
+import { holds, type Hold, type HoldReason, type HoldStep } from './hold';
+import { asks, type Ladder, type Step } from './ladder';
 import {
   askingReason,
   pushOutcome,
@@ -91,20 +84,6 @@ function read(r: Lookup, what: string): Lookup {
 // applies, and a hold raised by mention does not stop them.
 export type ModelSteps = Readonly<Partial<Record<Step, true>>>;
 
-// A reply on GitHub sits above every rung: any hold holds one, and a hold of
-// one holds only another.
-export function holds(held: Hold, step: Step | 'comment'): boolean {
-  if (held === null || step === 'commit') return false;
-  if (step === 'comment') return true;
-  return held.step !== 'comment' && atOrAbove(step, held.step);
-}
-
-// The hold that holds more, so a later hold never frees what an earlier one held.
-export function lowerHold(a: Hold, b: Hold): Hold {
-  if (a === null || b === null) return a ?? b;
-  return holds(a, b.step) ? a : b;
-}
-
 // What may run: what the user asked for, and what the ladder or the model
 // check lets through.
 type Allowed = Readonly<Record<Step, boolean>>;
@@ -130,9 +109,6 @@ export function permitted(
 export function askThem(naming: string, example: string, shown: string): string {
   return `stop and ask them in your reply, naming ${naming} with branch and version names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${shown}`;
 }
-
-// Why the steps are held, or null when nothing holds them.
-export type Hold = HoldReason | null;
 
 const STEP_NAME: Record<HoldStep, string> = {
   push: 'a push',

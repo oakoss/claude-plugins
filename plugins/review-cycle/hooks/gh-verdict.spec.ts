@@ -1,19 +1,17 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant, type HoldStep } from './consent';
+import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
 import {
-  holds,
   judgeGh,
-  lowerHold,
   NO_STANDING,
   parsePullRequest,
   type GhLookups,
-  type Hold,
   type InForce,
   type Lookup,
   type Standing,
 } from './gh-verdict';
 import type { GhAction } from './github';
+import type { Hold, HoldStep } from './hold';
 import type { StopBefore } from './ladder';
 import type { StackRead } from './stack';
 
@@ -1633,40 +1631,3 @@ function beside(selector?: string): GhAction {
     lookup: { cannot: 'beside', ...(selector !== undefined && { selector }) },
   };
 }
-
-describe('holds', () => {
-  const STEPS = ['commit', 'push', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
-  // The steps each hold holds; approval shares merge's rung.
-  const HELD: Record<HoldStep, readonly string[]> = {
-    push: ['push', 'pr', 'merge', 'approve', 'release', 'comment'],
-    pr: ['pr', 'merge', 'approve', 'release', 'comment'],
-    merge: ['merge', 'approve', 'release', 'comment'],
-    approve: ['merge', 'approve', 'release', 'comment'],
-    release: ['release', 'comment'],
-    comment: ['comment'],
-  };
-  test.each(Object.entries(HELD))('a hold of %s holds %j', (step, held) => {
-    for (const how of ['mentioned', 'declined'] as const) {
-      const hold = { step: step as HoldStep, how };
-      expect(STEPS.filter((s) => holds(hold, s))).toEqual(held);
-    }
-  });
-
-  test('nothing held holds nothing', () => {
-    expect(STEPS.filter((s) => holds(null, s))).toEqual([]);
-  });
-
-  test.each([
-    ['push', 'merge', 'push'],
-    ['merge', 'push', 'push'],
-    ['comment', 'release', 'release'],
-    ['release', 'comment', 'release'],
-    ['merge', 'approve', 'merge'],
-  ] as const)('after a hold of %s, a hold of %s keeps %s', (first, then, kept) => {
-    const a = { step: first, how: 'mentioned' } as const;
-    const b = { step: then, how: 'declined' } as const;
-    expect(lowerHold(a, b)?.step).toBe(kept);
-    expect(lowerHold(null, b)).toBe(b);
-    expect(lowerHold(a, null)).toBe(a);
-  });
-});

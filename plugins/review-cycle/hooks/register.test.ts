@@ -1966,7 +1966,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-7');
+    expect(kept?.shape).toBe('gate-8');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     expect(kept?.value.message).toMatchObject({
@@ -2041,7 +2041,10 @@ describe('a reload of the module', () => {
 
   test('takes back a hold, so a push the user put off still waits', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
-    reloadInto(on, keptRecord({ held: { step: 'push', how: 'declined' } }));
+    reloadInto(
+      on,
+      keptRecord({ hold: { floor: { step: 'push', how: 'declined' }, declined: true } }),
+    );
     await startSession($);
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
   });
@@ -2051,7 +2054,10 @@ describe('a reload of the module', () => {
       on,
       pushing({ model: verdictFor('push', 'sounds good'), git: remoteSide({}) }),
     );
-    reloadInto(on, keptRecord({ held: { step: 'push', how: 'mentioned' }, declined: true }));
+    reloadInto(
+      on,
+      keptRecord({ hold: { floor: { step: 'push', how: 'mentioned' }, declined: true } }),
+    );
     await startSession($);
     await say($, 'sounds good');
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
@@ -2112,7 +2118,7 @@ describe('a reload of the module', () => {
     await say($, "don't push yet");
     await settle();
     expect(kept?.value.message.grant.push).toBe('none');
-    expect(kept?.value.held).toMatchObject({ step: 'push' });
+    expect(kept?.value.hold).toMatchObject({ floor: { step: 'push' } });
   });
 
   test('a message heard before the take-back applies on top of the record', async ($, on) => {
@@ -2130,7 +2136,12 @@ describe('a reload of the module', () => {
 
   test('a kept hold outlives an unrelated message heard before the take-back', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
-    await sayBeforeRecall($, on, { held: { step: 'push', how: 'declined' } }, 'fix the parser');
+    await sayBeforeRecall(
+      $,
+      on,
+      { hold: { floor: { step: 'push', how: 'declined' }, declined: true } },
+      'fix the parser',
+    );
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
   });
 
@@ -2235,7 +2246,7 @@ describe('a reload of the module', () => {
 
   for (const [name, fields] of [
     ['a review without its paths', { reviews: [{ type: 'code-reviewer', trees: ['a', 'b'] }] }],
-    ['a hold on no step', { held: { step: 'tag', how: 'declined' } }],
+    ['a hold on no step', { hold: { floor: { step: 'tag', how: 'declined' }, declined: true } }],
     ['a mandate on no epic', { mandate: { epic: '' } }],
     ['a mandate that is not one', { mandate: 'cpl-czgp' }],
     ['a message without its flags', { message: {} }],
@@ -2425,8 +2436,7 @@ describe('a reload of the module', () => {
           messages: 4,
           lastAnswer: 'Push it?',
           misses: [miss],
-          held: { step: 'push', how: 'declined' },
-          declined: true,
+          hold: { floor: { step: 'push', how: 'declined' }, declined: true },
           mandate: { epic: 'cpl-czgp' },
           roundsFrom: 1,
         }),
@@ -2454,7 +2464,7 @@ describe('a reload of the module', () => {
           messages: 4,
           lastAnswer: '',
           misses: [miss],
-          held: null,
+          hold: null,
           roundsFrom: 1,
         }),
       );
@@ -2564,9 +2574,7 @@ function keptRecord(over: Record<string, unknown>) {
     capped: [],
     scratch: [],
     reviewerChanges: [],
-    held: null,
-    // A declined hold is flagged, as the gate writes one.
-    declined: (over.held as { how?: string } | undefined)?.how === 'declined',
+    hold: null,
     mandate: null,
     roundsFrom: 0,
     pushed: [],
@@ -2581,7 +2589,7 @@ function reloadInto(on: any, kept: unknown) {
   on('state.get', ($$: unknown, e: { key: string }, next: any) => {
     if (e.key !== 'gate' || isRead) return next(e);
     isRead = true;
-    return { value: { value: { shape: 'gate-7', value: kept }, version: 1 } };
+    return { value: { value: { shape: 'gate-8', value: kept }, version: 1 } };
   });
 }
 
