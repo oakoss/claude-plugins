@@ -486,6 +486,8 @@ describe('merges, approvals, releases and review replies', () => {
     ],
     ['not yet, did the push go through?', 'Merge #116?', { step: 'push', how: 'mentioned' }],
     ['not yet, hold the push', 'Push `fix/x` to `origin`?', { step: 'push', how: 'declined' }],
+    // Approval shares merge's rung, so the decline wins the tie.
+    ['not yet, before we merge', 'Should I approve #12?', { step: 'approve', how: 'declined' }],
     ['not yet', 'Push `fix/x` and merge #116?', { step: 'push', how: 'declined' }],
     ['not yet', 'Open a PR and merge it?', { step: 'pr', how: 'declined' }],
     ['not yet', 'Delete the branch `fix/x`?', { step: 'push', how: 'declined' }],

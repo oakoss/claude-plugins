@@ -12,7 +12,7 @@
 // closing question offered to do.
 
 import type { Finishes } from './git-args';
-import { HOLD_STEPS, type HoldReason, type HoldStep } from './hold';
+import { HOLD_STEPS, lowerHold, type HoldReason, type HoldStep } from './hold';
 
 // How far the user's message lets a push go; each level covers those before
 // it.
@@ -1557,11 +1557,9 @@ function readHold(
   // The nearest step offered, since a hold holds the steps after it too.
   const step = offered[0];
   const declined = step === undefined ? null : ({ step, how: 'declined' } as const);
-  // The lower of the two, so a later step named beside a decline ("not yet, the
-  // release notes need work") never frees an earlier step it declined.
-  if (said === null || declined === null) return { hold: said ?? declined, putOff: offered };
-  const lower = HOLD_STEPS.indexOf(declined.step) <= HOLD_STEPS.indexOf(said.step);
-  return { hold: lower ? declined : said, putOff: offered };
+  // The lower of the two, the decline on a tie, so a later step named beside a
+  // decline ("not yet, the release notes need work") never frees one it declined.
+  return { hold: lowerHold(declined, said), putOff: offered };
 }
 
 function mentionOf(text: string, grant: Grant): HoldReason | null {
