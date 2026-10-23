@@ -1540,13 +1540,23 @@ export function mandateAfter(
   return epic === null ? current : { epic };
 }
 
-// A step mentioned without being asked for holds every step but a commit, read
-// by mention rather than grammar since a hold only makes the agent ask.
+const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
+
+// A step mentioned without being asked for holds it and the steps above it,
+// read by mention rather than grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   prompt = landPhrase(prompt);
   const grant = grantOf(prompt, previousAnswer);
   const text = prPhrase(unquote(forcePhrase(prompt)));
-  const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
+  const said = mentionOf(text, grant);
+  const declined = declineOf(text, grant, previousAnswer);
+  // The lower of the two, so a later step named beside a decline ("not yet, the
+  // release notes need work") never frees an earlier step it declined.
+  if (said === null || declined === null) return said ?? declined;
+  return HOLD_STEPS.indexOf(declined.step) <= HOLD_STEPS.indexOf(said.step) ? declined : said;
+}
+
+function mentionOf(text: string, grant: Grant): HoldReason | null {
   if (PUSH_WORD.test(text) && !covers(grant, 'push')) return mentioned('push');
   if (PR_WORD.test(text) && !grant.pr) return mentioned('pr');
   if (
@@ -1562,24 +1572,32 @@ export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   if (RELEASE_WORD.test(text) && !grant.release && !grant.readyRelease) {
     return mentioned('release');
   }
+  return null;
+}
+
+function declineOf(text: string, grant: Grant, previousAnswer: string): HoldReason | null {
   if (!HOLD.test(text) || covers(grant, 'push') || asksBeyondPush(grant)) return null;
-  // The furthest step offered: "merge #116 and delete the branch?" offers a
-  // merge, though deleting the branch is a push too.
+  // The nearest step offered, since a hold holds the steps after it too.
+  const step = offeredSteps(previousAnswer)[0];
+  return step === undefined ? null : { step, how: 'declined' };
+}
+
+// The steps an offer names, lowest first: those the grammar reads as asked,
+// and any its offer sentences name by verb ("push the feature branch"), a
+// branch deletion counted as a push.
+function offeredSteps(previousAnswer: string): HoldStep[] {
   const offered = asked(previousAnswer);
-  const step: HoldStep | null = offered.release
-    ? 'release'
-    : offered.merge || offered.autoMerge || offered.mergeStack.length > 0
-      ? 'merge'
-      : offered.approve
-        ? 'approve'
-        : offered.pr
-          ? 'pr'
-          : covers(offered, 'push')
-            ? 'push'
-            : offered.comment
-              ? 'comment'
-              : null;
-  return step === null ? null : { step, how: 'declined' };
+  const sentences = offerSentences(closingOf(previousAnswer));
+  const named = sentences === null ? [] : stepsNamed(sentences.read.join(' '));
+  const asks: Record<HoldStep, boolean> = {
+    push: covers(offered, 'push'),
+    pr: offered.pr,
+    merge: offered.merge || offered.autoMerge || offered.mergeStack.length > 0,
+    approve: offered.approve,
+    release: offered.release,
+    comment: offered.comment,
+  };
+  return HOLD_STEPS.filter((step) => asks[step] || named.includes(step));
 }
 
 // Whether a message typed into the running turn replaces the turn's grant
@@ -1607,6 +1625,11 @@ export function endsReady(prompt: string, previousAnswer = ''): boolean {
   if (!dropsGrant(prompt, previousAnswer)) return false;
   const hold = holdOf(prompt, previousAnswer);
   if (hold === null || hold.step === 'merge' || hold.step === 'release') return true;
+  // A decline holds from its lowest step, but ends a merge it also offered.
+  if (hold.how === 'declined') {
+    const steps = offeredSteps(previousAnswer);
+    if (steps.includes('merge') || steps.includes('release')) return true;
+  }
   const text = prPhrase(unquote(forcePhrase(prompt)));
   if (MERGE_WORD.test(text) || RELEASE_WORD.test(text)) return true;
   return sentences(spoken(unquote(prompt))).some((raw) => {

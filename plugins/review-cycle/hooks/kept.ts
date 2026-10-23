@@ -38,6 +38,7 @@ export function keptOf(s: KeptSource): Kept {
     scratch: s.scratch,
     reviewerChanges: s.reviewerChanges,
     held: s.held,
+    declined: s.declined,
     mandate: s.mandate,
     roundsFrom: s.roundsFrom,
     pushed: s.pushed,
@@ -88,6 +89,7 @@ export function offKept(k: Kept): Kept {
     message: { tree: null, nudged: false, prWindow: false, ...UNGRANTED },
     lastAnswer: '',
     held: null,
+    declined: false,
     mandate: null,
     reviewing: null,
   };
@@ -132,6 +134,11 @@ export function isKept(k: unknown): k is Kept {
     isStrings(k.scratch) &&
     isStrings(k.reviewerChanges) &&
     isHeld(k.held) &&
+    typeof k.declined === 'boolean' &&
+    // A decline flagged with nothing held, or a declined hold not flagged.
+    (k.held === null
+      ? !k.declined
+      : k.declined || (isRecord(k.held) && k.held.how !== 'declined')) &&
     (k.mandate === null ||
       (isRecord(k.mandate) &&
         typeof k.mandate.epic === 'string' &&

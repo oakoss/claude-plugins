@@ -466,8 +466,30 @@ describe('merges, approvals, releases and review replies', () => {
     ['no need to approve it', '', { step: 'approve', how: 'mentioned' }],
     ['not yet', 'Should I push `fix/x` to `origin`?', { step: 'push', how: 'declined' }],
     ['hold off', 'Merge #116 now?', { step: 'merge', how: 'declined' }],
-    ['not yet', 'Merge #116 and delete the branch?', { step: 'merge', how: 'declined' }],
-    ['not yet', 'Push and open a PR?', { step: 'pr', how: 'declined' }],
+    ['not yet', 'Merge #116 and delete the branch?', { step: 'push', how: 'declined' }],
+    [
+      'not yet',
+      'Should I delete the branch and push it and merge #116?',
+      { step: 'push', how: 'declined' },
+    ],
+    [
+      'not yet',
+      'Should I push the feature branch and merge #116?',
+      { step: 'push', how: 'declined' },
+    ],
+    ['not yet', 'I pushed the branch.\nMerge #116?', { step: 'merge', how: 'declined' }],
+    ['not yet', 'Push and open a PR?', { step: 'push', how: 'declined' }],
+    [
+      'not yet, the release notes need work',
+      'Push `fix/x` to `origin` and open a PR into `main`?',
+      { step: 'push', how: 'declined' },
+    ],
+    ['not yet, did the push go through?', 'Merge #116?', { step: 'push', how: 'mentioned' }],
+    ['not yet, hold the push', 'Push `fix/x` to `origin`?', { step: 'push', how: 'declined' }],
+    ['not yet', 'Push `fix/x` and merge #116?', { step: 'push', how: 'declined' }],
+    ['not yet', 'Open a PR and merge it?', { step: 'pr', how: 'declined' }],
+    ['not yet', 'Delete the branch `fix/x`?', { step: 'push', how: 'declined' }],
+    ['not yet', 'Approve #12 and cut the release?', { step: 'approve', how: 'declined' }],
     ['wait', 'Reply to the review on #116?', { step: 'comment', how: 'declined' }],
     ['merge it', '', null],
     ['not yet', 'Should I rename the helper?', null],
@@ -558,6 +580,13 @@ describe('a message ends the asks for once ready that outlast it', () => {
     ['thanks', false],
   ] as const)('%s → %s', (prompt, ends) => {
     expect(endsReady(prompt)).toBe(ends);
+  });
+  test.each([
+    ['Merge #116 and delete the branch?', true],
+    ['Push `fix/x` and merge #116?', true],
+    ['Should I push `fix/x` to `origin`?', false],
+  ])('"not yet" after "%s" → %s', (offer, ends) => {
+    expect(endsReady('not yet', offer)).toBe(ends);
   });
 });
 

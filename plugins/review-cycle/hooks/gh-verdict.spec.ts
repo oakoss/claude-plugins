@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
+import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant, type HoldStep } from './consent';
 import {
+  holds,
   judgeGh,
+  lowerHold,
   NO_STANDING,
   parsePullRequest,
   type GhLookups,
@@ -126,20 +128,38 @@ describe('GitHub writes on the ladder', () => {
     });
   });
 
-  test.each<GhAction>([{ kind: 'pr' }, { kind: 'release' }, { kind: 'approve' }])(
-    'a hold stops %j at every rung',
-    async (action) => {
-      const r = await judge([action], world('never stop'), grant(), {
-        step: 'merge',
-        how: 'mentioned',
-      });
-      expect(r).toMatchObject({
-        deny: expect.stringContaining(
-          'the user held off (their message mentioned a merge without asking for one)',
-        ),
-      });
-    },
-  );
+  test.each<[GhAction, HoldStep, string]>([
+    [{ kind: 'pr' }, 'pr', 'a pull request'],
+    [{ kind: 'release' }, 'merge', 'a merge'],
+    [{ kind: 'approve' }, 'merge', 'a merge'],
+  ])('a hold stops %j at every rung', async (action, step, named) => {
+    const r = await judge([action], world('never stop'), grant(), { step, how: 'mentioned' });
+    expect(r).toMatchObject({
+      deny: expect.stringContaining(
+        `the user held off (their message mentioned ${named} without asking for one)`,
+      ),
+    });
+  });
+
+  test.each([
+    ['a release', 'release'],
+    ['a reply on GitHub', 'comment'],
+  ] as const)('a hold of %s lets the setting merge', async (_name, step) => {
+    const hold = { step, how: 'mentioned' } as const;
+    expect(await judge([merge(false)], world('release'), grant(), hold)).toMatchObject({
+      ran: [{ step: 'merge' }],
+    });
+  });
+
+  test('a hold of a merge lets a pull request run, and a refusal below it names no hold', async () => {
+    const hold = { step: 'merge', how: 'mentioned' } as const;
+    expect(await judge([{ kind: 'pr' }], world('never stop'), grant(), hold)).toEqual({
+      ran: [{ step: 'pr', ladder: { stopBefore: 'never stop', source: 'local' } }],
+    });
+    const at = await judge([{ kind: 'pr' }], world('open PR'), grant(), hold);
+    expect(at).toMatchObject({ deny: expect.stringContaining("doesn't ask for a pull request") });
+    expect(at).not.toMatchObject({ deny: expect.stringContaining('held off') });
+  });
 
   test('a hold says why it held', async () => {
     const r = await judge([{ kind: 'pr' }], world('never stop'), grant(), {
@@ -433,6 +453,13 @@ describe('a merge', () => {
     expect(w.calls).toEqual(['ladder', 'pullRequest 62 --repo o/r']);
   });
 
+  test("asked for under a hold below release, oakum's version pull request still asks", async () => {
+    const w = world('release', { pullRequest: { out: VERSION_PR } });
+    const held = { step: 'push', how: 'mentioned' } as const;
+    const r = await judge([merge(false)], w, grant({ merge: true }), held);
+    expect(r).toMatchObject({ deny: expect.stringContaining('release') });
+  });
+
   test("asked for, covers oakum's version pull request, found by its branch", async () => {
     const w = world('merge', { pullRequest: { out: `false ${PR1} oakum/version-packages` } });
     const r = await judge([merge(false)], w, grant({ merge: true }));
@@ -623,6 +650,12 @@ describe('a merge', () => {
       expect(await judge([elsewhere], w, grant({ merge: true }), null, ['40'])).toMatchObject({
         deny: expect.stringContaining('the gate cannot tell whether this is it'),
       });
+    });
+
+    test('beside other steps, a held reply still lets the setting merge it', async () => {
+      const held = { step: 'comment', how: 'mentioned' } as const;
+      const r = await judge([beside()], world('never stop', away), grant({ merge: true }), held);
+      expect(r).not.toHaveProperty('deny');
     });
   });
 
@@ -1148,6 +1181,16 @@ describe('a merge', () => {
       expect(r).not.toMatchObject({ deny: expect.stringContaining('--auto') });
     });
 
+    test('a version pull request not ready yet under a held reply points to --auto', async () => {
+      const w = world('never stop', {
+        mergeTarget: pull(155, 'BLOCKED'),
+        pullRequest: { out: VERSION_PR },
+      });
+      const held = { step: 'comment', how: 'mentioned' } as const;
+      const r = await judge([merge(false)], w, asked('merge 155 once CI passes'), held);
+      expect(r).toMatchObject({ deny: expect.stringContaining('--auto') });
+    });
+
     test('a ready version pull request merged now at a permissive rung is noted as a release', async () => {
       const w = world('never stop', {
         mergeTarget: pull(46, 'CLEAN'),
@@ -1242,6 +1285,12 @@ describe('gh stack', () => {
       });
     },
   );
+
+  test('submit under a held pull request checks the lease the setting would push on', async () => {
+    const w = world('never stop', {}, undefined, undefined, { ok: true });
+    await judge([stack('submit')], w, grant(), { step: 'pr', how: 'mentioned' });
+    expect(w.calls).toContain('stackLease submit -');
+  });
 
   test('a push request does not cover a lease that could overwrite another push', async () => {
     const w = world('push', {}, undefined, undefined, {
@@ -1452,6 +1501,12 @@ describe('gh stack merge', () => {
     expect(r).toMatchObject({ ran: [{ step: 'merge' }, { step: 'merge' }] });
   });
 
+  test('a release held still lets the setting merge several layers', async () => {
+    const held = { step: 'release', how: 'mentioned' } as const;
+    const r = await judge([m(4)], world('release', {}, undefined, STACKS), grant(), held);
+    expect(r).toMatchObject({ ran: [{ step: 'merge' }, { step: 'merge' }] });
+  });
+
   test('a layer named for once ready counts as named, and is judged on readiness', async () => {
     const named = grant({ merge: true, mergeNamed: ['2'], autoMerge: true, readyNamed: ['3'] });
     expect(await judge([m(3)], world('push', {}, undefined, STACKS), named)).toMatchObject({
@@ -1568,3 +1623,40 @@ function beside(selector?: string): GhAction {
     lookup: { cannot: 'beside', ...(selector !== undefined && { selector }) },
   };
 }
+
+describe('holds', () => {
+  const STEPS = ['commit', 'push', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
+  // The steps each hold holds; approval shares merge's rung.
+  const HELD: Record<HoldStep, readonly string[]> = {
+    push: ['push', 'pr', 'merge', 'approve', 'release', 'comment'],
+    pr: ['pr', 'merge', 'approve', 'release', 'comment'],
+    merge: ['merge', 'approve', 'release', 'comment'],
+    approve: ['merge', 'approve', 'release', 'comment'],
+    release: ['release', 'comment'],
+    comment: ['comment'],
+  };
+  test.each(Object.entries(HELD))('a hold of %s holds %j', (step, held) => {
+    for (const how of ['mentioned', 'declined'] as const) {
+      const hold = { step: step as HoldStep, how };
+      expect(STEPS.filter((s) => holds(hold, s))).toEqual(held);
+    }
+  });
+
+  test('nothing held holds nothing', () => {
+    expect(STEPS.filter((s) => holds(null, s))).toEqual([]);
+  });
+
+  test.each([
+    ['push', 'merge', 'push'],
+    ['merge', 'push', 'push'],
+    ['comment', 'release', 'release'],
+    ['release', 'comment', 'release'],
+    ['merge', 'approve', 'merge'],
+  ] as const)('after a hold of %s, a hold of %s keeps %s', (first, then, kept) => {
+    const a = { step: first, how: 'mentioned' } as const;
+    const b = { step: then, how: 'declined' } as const;
+    expect(lowerHold(a, b)?.step).toBe(kept);
+    expect(lowerHold(null, b)).toBe(b);
+    expect(lowerHold(a, null)).toBe(a);
+  });
+});
