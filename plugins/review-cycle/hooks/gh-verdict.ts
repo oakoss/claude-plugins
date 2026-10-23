@@ -140,7 +140,7 @@ const STEP_NAME: Record<HoldStep, string> = {
   merge: 'a merge',
   approve: 'an approval',
   release: 'a release',
-  comment: 'a reply on GitHub',
+  comment: 'a comment on GitHub',
 };
 
 // What held the steps, so the agent can tell the user.
@@ -160,15 +160,7 @@ function unreadFor(unread: UnreadOffer | null, step: HoldStep | 'commit'): strin
   return named ? unread.why : null;
 }
 
-const ASKED_FOR: Record<Step | 'comment', string> = {
-  commit: 'a commit',
-  push: 'a push',
-  pr: 'a pull request',
-  merge: 'a merge',
-  approve: 'an approval',
-  release: 'a release',
-  comment: 'a comment on GitHub',
-};
+const ASKED_FOR: Record<Step | 'comment', string> = { commit: 'a commit', ...STEP_NAME };
 
 // Why the user's latest message does not cover the step, the setting
 // included when its files could not be read.

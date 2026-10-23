@@ -1246,6 +1246,16 @@ test('one write that may not run refuses the whole call', async () => {
   expect(r).toMatchObject({ deny: expect.stringContaining('a comment on GitHub') });
 });
 
+test('a held comment is named as the refusal names it', async () => {
+  const held = { step: 'comment', how: 'declined' } as const;
+  const r = await judge([{ kind: 'comment' }], world('never stop'), grant(), held);
+  expect(r).toMatchObject({
+    deny: expect.stringContaining(
+      "they put off a comment on GitHub the agent offered) and hasn't asked for a comment on GitHub",
+    ),
+  });
+});
+
 const stack = (step: 'push' | 'sync' | 'submit' | 'link'): GhAction => ({
   kind: 'stack',
   step,
