@@ -52,23 +52,29 @@ const HOOKS = 'plugins/review-cycle/hooks';
 const REPLIES = join(HOOKS, 'consent-model.replies.json');
 const read = (name: string) => readFileSync(join(HOOKS, name), 'utf8');
 
-// Node strips types but resolves only full paths, and consent-model.ts imports
-// './consent' bare; copies with that one import spelled out load as they are.
+// Node strips types but resolves only full paths, and the hooks import each
+// other bare ('./consent'); each module is copied with the modules it imports
+// at runtime, every relative import spelled out.
+const RUNTIME_IMPORT = /^import\s+(?!type\b)[^;]*?\sfrom\s+'\.\/([\w-]+)'/gm;
 const dir = mkdtempSync(join(tmpdir(), 'consent-model-'));
+const copy = (name: string): void => {
+  if (existsSync(join(dir, `${name}.ts`))) return;
+  const source = read(`${name}.ts`);
+  writeFileSync(
+    join(dir, `${name}.ts`),
+    source.replaceAll(/from '\.\/([\w-]+)'/g, "from './$1.ts'"),
+  );
+  for (const [, next] of source.matchAll(RUNTIME_IMPORT)) if (next) copy(next);
+};
 let grantOf: (prompt: string, offer?: string) => Grant;
 let model: Model;
 // The spec's check of the replies' rules, by the same hash.
 let rulesHash: (rules: string) => string;
 try {
-  writeFileSync(join(dir, 'consent.ts'), read('consent.ts'));
-  writeFileSync(join(dir, 'ledger.ts'), read('ledger.ts'));
+  for (const name of ['consent', 'consent-model', 'ledger']) copy(name);
   ({ hashOf: rulesHash } = (await import(pathToFileURL(join(dir, 'ledger.ts')).href)) as {
     hashOf: typeof rulesHash;
   });
-  writeFileSync(
-    join(dir, 'consent-model.ts'),
-    read('consent-model.ts').replace("from './consent';", "from './consent.ts';"),
-  );
   ({ grantOf } = (await import(pathToFileURL(join(dir, 'consent.ts')).href)) as {
     grantOf: typeof grantOf;
   });
