@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.6.1 (2026-10-24)
+
+### Fixed
+
+A push whose reads GitHub refuses (a bad token; a token missing a scope or not granted the repository; an organization's SAML SSO, IP allow list or OAuth app restrictions; a repository gh's account cannot see; or, on github.com, no gh login at all) no longer stops being watched silently after 90 seconds, even when a later read fails another way. It retries like a pull request's line and, after 8 failed reads, toasts and tells Claude that pr-watch stopped watching it. A push to a host that is not GitHub still leaves quietly once its 90 seconds are up.
+
+When a pull request turns ready to merge while workflows the merge does not wait on are still running, the toast and what Claude is told now name them and say they are not required ("#128 is ready to merge; Visual capture still running, not required"; Claude is told they were still running when pr-watch read it), so a merge state of `UNSTABLE` no longer needs working out by hand.
+
+A release tool's version pull request is now named "release #259" in the band and in pr-watch's toasts, so it reads apart from ordinary pull requests at a glance. Other pull requests keep their "#N".
+
+A release tool's version pull request (headed `*/version-packages`, as oakum's is, or `changeset-release/*`) is never offered for merging: when it turns ready, its news says that merging it is the release and leaves it for you to ask, it waits for your next message even where review-cycle lets Claude merge unasked, and it puts no `merge #<number>` suggestion in the prompt box.
+
 ## 0.6.0 (2026-10-23)
 
 ### Added
