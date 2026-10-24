@@ -19,6 +19,7 @@ import { readCodexLog } from './codex-log';
 import {
   aliasCommits,
   classify,
+  endsInFilter,
   ghActions,
   possibleAliases,
   shownCommand,
@@ -1886,6 +1887,13 @@ async function judgeBash(
         ? await ghWithModel($, quote(e.command), actions, read.granted, first)
         : { gh: first, yes: null };
     if ('deny' in gh) return deny(gh.deny);
+    // Only a merge that succeeded ends a standing ask, and a filter's status hides that.
+    const standing = gh.used !== undefined && (gh.used.ready.length > 0 || gh.used.release);
+    if (standing && endsInFilter(e.command, state.shellAliases)) {
+      return deny(
+        `this merge would end the user's standing ask to merge once ready, which only a merge that succeeded ends, and the pipe at its end reports the filter's exit status, not gh's, so nothing ran. Run it without the pipe. The command: ${quote(e.command)}`,
+      );
+    }
     // Only a GitHub step is stopped by a newer message; other commands run.
     const since = actions.length > 0 ? message : null;
     const candidates = possibleAliases(e.command, state.shellAliases);

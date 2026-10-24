@@ -4702,6 +4702,13 @@ describe('the stop-before setting', () => {
     await say($, 'merge 62');
     expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
   });
+  test('a merge piped into tail is judged as the merge alone', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
+    await say($, 'merge 62');
+    expect(ran(await bash($, 'gh pr merge 62 --squash --delete-branch 2>&1 | tail -4'))).toBe(true);
+    const r = await bash($, 'gh pr merge 62 --squash | grep -v warning');
+    expect(denied(r, 'other steps in the same command')).toBe(true);
+  });
   test('a slow lookup on a merge the user did not ask for still asks them', async ($, on) => {
     const w = fakeWorld(on, {
       settings: { local: stops('release') },
@@ -5421,6 +5428,14 @@ describe('the stop-before setting', () => {
     w.bashFails = false;
     expect(ran(await bash($, 'gh pr merge 46 --auto'))).toBe(true);
   });
+  test('a merge on a standing ask is refused behind a pipe, which hides whether it failed', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'thanks');
+    const r = await bash($, 'gh pr merge 46 --auto 2>&1 | tail -4');
+    expect(denied(r, "reports the filter's exit status")).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 46 --auto'))).toBe(true);
+  });
   test('using one standing ask leaves the others', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await say($, 'merge 46 once CI passes');
@@ -5490,6 +5505,22 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'gh pr merge 62 --auto'))).toBe(true);
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 62 --auto'), 'release')).toBe(true);
+  });
+  test('a standing release ask is refused behind a pipe, and still stands', async ($, on) => {
+    fakeWorld(on, {
+      git: (a) => {
+        if (a.startsWith('gh api graphql')) return { stdout: 'main SUCCESS\n' };
+        if (a.startsWith('gh pr list --head oakum/version-packages')) {
+          return { stdout: '62:OPEN 55:MERGED\n' };
+        }
+        return github('oakum/version-packages')(a);
+      },
+    });
+    await say($, 'Ok, when main is done and the release PR is ready lets merge it');
+    await say($, 'thanks');
+    const r = await bash($, 'gh pr merge 62 --auto 2>&1 | tail -4');
+    expect(denied(r, "reports the filter's exit status")).toBe(true);
+    expect(ran(await bash($, 'gh pr merge 62 --auto'))).toBe(true);
   });
   test('a queued message keeps what the earlier one pointed at, until it retracts', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });

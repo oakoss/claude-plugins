@@ -738,6 +738,23 @@ function isOutputFilter({ st, k }: { st: Statement; k: Kind }, fed: Statement): 
   );
 }
 
+// How many statements run before a pipe into plain output filters at the very
+// end: those read what the step printed and run nothing.
+function beforeFilters(all: readonly { st: Statement; k: Kind }[]): number {
+  let end = all.length;
+  while (end > 1 && isOutputFilter(all[end - 1]!, all[end - 2]!.st)) end--;
+  return end;
+}
+
+// A pipeline reports its last command's exit status, so a step that ends in
+// filters reads as succeeded whether or not it did.
+export function endsInFilter(command: string, aliases: ShellAliases = new Map()): boolean {
+  const parsed = parse(command, aliases);
+  if ('error' in parsed) return false;
+  const all = parsed.statements.map((st) => ({ st, k: kindOf(st) }));
+  return beforeFilters(all) < all.length;
+}
+
 function judge(command: string, aliases: ShellAliases): Classification {
   const parsed = parse(command, aliases);
   if ('error' in parsed) {
@@ -768,10 +785,7 @@ function judge(command: string, aliases: ShellAliases): Classification {
   if (sensitive?.kind !== 'git') return { kind: 'none' };
   // Named in refusals, so a step refused for sharing a command says what it shared it with.
   const alongside = `alongside \`git ${sensitive.git.sub}\`, which the gate checks as a commit or push`;
-  // A pipe into a plain output filter at the very end reads what the commit or
-  // push printed and runs nothing, so it is set aside before judging.
-  let end = all.length;
-  while (end > 1 && isOutputFilter(all[end - 1]!, all[end - 2]!.st)) end--;
+  const end = beforeFilters(all);
   const pairs = all.slice(0, end);
   if (end < all.length) {
     const tail = pairs[end - 1]!;
@@ -1521,7 +1535,8 @@ export function ghActions(command: string, aliases: ShellAliases = new Map()): G
     return found;
   }
   const found: GhAction[] = [];
-  const alone = parsed.statements.length === 1;
+  const all = parsed.statements.map((st) => ({ st, k: kindOf(st) }));
+  const alone = beforeFilters(all) === 1;
   every(parsed.statements, (st, nested) => {
     found.push(...ghActionsOf(st, alone && !nested));
     return null;

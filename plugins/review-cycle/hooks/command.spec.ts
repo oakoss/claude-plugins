@@ -1907,6 +1907,25 @@ describe('gh steps', () => {
     expect(ghActions('export GH_REPO=o/r; gh pr merge 62')).toEqual(cannot('beside', '62'));
     expect(ghActions('gh pr merge 116 && echo merged')).toEqual(cannot('beside', '116'));
     expect(ghActions('cd x && gh pr merge feat/y')).toEqual(cannot('beside', 'feat/y'));
+    // Only a filter that reads to the end and runs nothing is set aside.
+    expect(ghActions('gh pr merge 62 | head -3')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 62 | grep merged')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 62 | tail -3 > out')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 62; tail -3')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 62 && wc -l')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 62 | tail -3 &')).toEqual(cannot('beside', '62'));
+    expect(ghActions('gh pr merge 62 | X=$(git checkout main) tail -3')).toEqual(
+      cannot('beside', '62'),
+    );
+    expect(ghActions('gh pr merge 62 | tail -3 && gh pr checkout 5')[0]).toEqual(
+      cannot('beside', '62')[0],
+    );
+    // A pipe into tail or wc at the very end reads what the merge printed.
+    for (const piped of ['gh pr merge 62 2>&1 | tail -4', 'gh pr merge 62 | tail -n 3 | wc -l']) {
+      expect(ghActions(piped)).toEqual([
+        { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
+      ]);
+    }
     // gh's settings that pick no pull request leave the lookup in place.
     expect(ghActions('GH_PROMPT_DISABLED=1 gh pr merge 62')).toEqual([
       { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
