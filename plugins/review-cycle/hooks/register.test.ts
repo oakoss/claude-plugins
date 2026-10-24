@@ -107,6 +107,11 @@ type World = {
   modelPrompts?: string[];
   // Each call's instructions and token budget, by prompt.
   modelCalls?: { prompt: string; system: string; maxTokens: number }[];
+  // What a reload left in the host's store, which the load's first read of it
+  // gets; 'unreadable' refuses that read. Unset, the store starts empty.
+  kept?: { record: unknown } | 'unreadable';
+  // The load has read its record, so seeding one now would go unread.
+  keptRead?: boolean;
 };
 
 type Run = { exitCode: number; stdout: string; stderr: string };
@@ -153,6 +158,8 @@ function ok(stdout = '') {
   return { value: { exitCode: 0, stdout, stderr: '' } };
 }
 
+const worlds = new WeakMap<object, World>();
+
 function fakeWorld(on: any, setup: Partial<World> = {}): World {
   const w: World = {
     work: { 'a.ts': 'one' },
@@ -164,6 +171,17 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     fail: () => false,
     ...setup,
   };
+  worlds.set(on, w);
+  // The kit keeps one store for a file's tests, where a save an earlier test
+  // left running can land after this one starts, so the load's first read of
+  // the gate's record answers from the world.
+  on('state.get', ($: unknown, e: { key: string }, next: any) => {
+    if (e.key !== 'gate' || w.keptRead) return next(e);
+    w.keptRead = true;
+    if (w.kept === 'unreadable') return { deny: 'store unreadable' };
+    if (w.kept === undefined) return { value: { version: 0 } };
+    return { value: { value: { shape: 'gate-8', value: w.kept.record }, version: 1 } };
+  });
   const filesOf = (ref: string) => w.trees.get(ref) ?? w.commits[ref] ?? {};
   on(
     'process.run',
@@ -2306,19 +2324,13 @@ describe('a reload of the module', () => {
   }
 
   test('a take-back that fails starts fresh, says so once, and keeps from then on', async ($, on) => {
-    fakeWorld(on);
+    fakeWorld(on, { kept: 'unreadable' });
     const toasts: string[] = [];
     on('ui.toast', ($$: unknown, e: { text: string }) => {
       toasts.push(e.text);
       return { value: undefined };
     });
     let writes = 0;
-    let isDenied = false;
-    on('state.get', ($$: unknown, e: { key: string }, next: any) => {
-      if (e.key !== 'gate' || isDenied) return next(e);
-      isDenied = true;
-      return { deny: 'store unreadable' };
-    });
     on('state.set', ($$: unknown, e: { key: string }, next: any) => {
       if (e.key === 'gate') writes += 1;
       return next(e);
@@ -2585,12 +2597,10 @@ function keptRecord(over: Record<string, unknown>) {
 
 // What a reload finds: the host's copy of what the gate remembered, read once.
 function reloadInto(on: any, kept: unknown) {
-  let isRead = false;
-  on('state.get', ($$: unknown, e: { key: string }, next: any) => {
-    if (e.key !== 'gate' || isRead) return next(e);
-    isRead = true;
-    return { value: { value: { shape: 'gate-8', value: kept }, version: 1 } };
-  });
+  const w = worlds.get(on);
+  if (!w) throw new Error('reloadInto needs fakeWorld(on) first');
+  if (w.keptRead) throw new Error('reloadInto after the gate already read its record');
+  w.kept = { record: kept };
 }
 
 describe('what the gate reports', () => {
