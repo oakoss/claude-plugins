@@ -401,7 +401,20 @@ describe('ship: what it may do unasked', () => {
     expect(text).toContain(
       'the **publish** path on "ship it". On "push it" there is nothing to update, so ask whether to publish.',
     );
-    expect(text).toContain('A merged or closed one: stop and ask.');
+    expect(text).toContain(
+      'gh pr view --json number,url,state,isDraft,title,body,headRefOid,closedAt',
+    );
+    expect(text).toContain('A merged or closed one: stop and ask, unless the name was reused');
+    expect(text).toContain('the branch is no stack layer');
+    expect(text).toContain(
+      '`git merge-base --is-ancestor <headRefOid> HEAD` exits other than 0 (1, or 128 when that commit is not here)',
+    );
+    expect(text).toContain("was authored after the pull request's `closedAt`");
+    expect(text).toContain(
+      '`gh pr list --head <name> --state all` lists no pull request for, and use it as `<branch>` from here on',
+    );
+    expect(text).toContain('Say so in the report, and go on as for no pull request found');
+    expect(text).toContain('on "push it", ask whether to publish before renaming.');
     expect(text).toContain('Any other failure of `gh pr view`: stop and show it.');
   });
 
