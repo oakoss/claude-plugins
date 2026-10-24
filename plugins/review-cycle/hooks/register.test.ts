@@ -6475,6 +6475,20 @@ describe('reviewer containment', () => {
       'review-cycle:code-reviewer: could not check HEAD while `ls` ran',
     ]);
   });
+  test('a leg capped mid-command keeps its could-not-check, marked over budget', async ($, on) => {
+    const w = fakeWorld(on);
+    const leg = await legUnderWay($);
+    let isCapped = false;
+    w.fail = (a) => isCapped && a === 'git add -A';
+    w.shell = () => {
+      w.timers?.[0]?.fire();
+      isCapped = true;
+    };
+    await bash($, 'sleep 60', { agentId: leg });
+    expect(await reviewerChanges($)).toEqual([
+      'review-cycle:code-reviewer: could not check the working tree (git add -A failed: fatal: injected) while `sleep 60` ran, its leg over budget',
+    ]);
+  });
   test('an unreadable HEAD is said, not reported as a change', async ($, on) => {
     const w = fakeWorld(on);
     const leg = await legUnderWay($);

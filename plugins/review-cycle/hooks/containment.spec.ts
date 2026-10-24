@@ -56,6 +56,7 @@ function report(after: RepoState, extra: Partial<Parameters<typeof containmentRe
     before: { state: STATE, why: null },
     after: { state: after, why: null },
     background: false,
+    capped: false,
     ...extra,
   });
 }
@@ -77,6 +78,18 @@ describe('containmentReport', () => {
       after: { state: UNREAD, why: 'lookup failed' },
     });
     expect(r.records[0]).toContain('(lookup failed) while');
+  });
+  test("a capped leg's could-not-check keeps its parts and reason, and says the leg is over budget", () => {
+    const r = report(UNREAD, { after: { state: UNREAD, why: 'aborted' }, capped: true });
+    expect(r.records).toEqual([
+      'review-cycle:code-reviewer: could not check HEAD, the staged content, the working tree, the local git config (aborted) while `sed -i x a.ts` ran, its leg over budget',
+    ]);
+  });
+  test('a capped leg still records what it changed, unmarked', () => {
+    const r = report({ ...STATE, work: 'x' }, { capped: true });
+    expect(r.records).toEqual([
+      'review-cycle:code-reviewer: the working tree changed while `sed -i x a.ts` ran',
+    ]);
   });
   test('a background command is said to be checked only until it returns', () => {
     expect(report(STATE, { background: true }).notes).toEqual([

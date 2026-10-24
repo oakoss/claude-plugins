@@ -93,6 +93,8 @@ export function containmentReport(r: {
   before: Capture;
   after: Capture;
   background: boolean;
+  // Past its budget, the leg is asked to stop, and a stop can cut the reads off.
+  capped: boolean;
 }): { notes: string[]; records: string[] } {
   const shown = firstLine(r.command).slice(0, 80);
   const { changed, unreadable } = repoChanges(r.before.state, r.after.state);
@@ -108,7 +110,8 @@ export function containmentReport(r: {
   if (unreadable.length > 0) {
     const whys = [...new Set([r.before.why, r.after.why])].filter((w) => w !== null);
     const what = `${unreadable.join(', ')}${whys.length === 0 ? '' : ` (${whys.join('; ')})`}`;
-    records.push(`${r.type}: could not check ${what} while \`${shown}\` ran`);
+    const capped = r.capped ? ', its leg over budget' : '';
+    records.push(`${r.type}: could not check ${what} while \`${shown}\` ran${capped}`);
     notes.push(
       `review-cycle could not check whether this command changed ${what} of the repository under review.`,
     );
