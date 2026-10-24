@@ -3801,6 +3801,82 @@ describe('a push the user asked for', () => {
     expect(after.rounds).toEqual([{ commit: 'd'.repeat(12), rounds: 2, date: expect.any(String) }]);
     expect(after.roundsSinceCommit).toBe(0);
   });
+  test("a commit ends the cycle its legs' drops and changes belong to", async ($, on) => {
+    fakeStore(on);
+    let isReading = false;
+    let lands = false;
+    fakeWorld(on, {
+      commits: {
+        ['c'.repeat(40)]: { 'a.ts': 'zero' },
+        ['d'.repeat(40)]: { 'a.ts': 'one' },
+        ['e'.repeat(40)]: { 'a.ts': 'zero' },
+      },
+      fail: (a) => isReading && a === 'git add -A',
+      shell(this: World, c: string) {
+        if (c === 'ls') isReading = true;
+        if (c.startsWith('git commit') && lands) this.head = 'd'.repeat(40);
+        if (c === './release.sh') this.head = 'e'.repeat(40);
+      },
+    });
+    const lists = async () => {
+      const s = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+      return [s.droppedReviews.length, s.reviewerChanges.length];
+    };
+    await review($, { answer: 'Looks fine.' });
+    const leg = await legUnderWay($);
+    await bash($, 'ls', { agentId: leg });
+    isReading = false;
+    await finishLeg($, leg, false);
+    await review($);
+    expect(await lists()).toEqual([1, 1]);
+    await say($, 'commit it');
+    // A commit that does not land, and one the gate did not judge, end nothing.
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    expect(await lists()).toEqual([1, 1]);
+    expect(ran(await bash($, './release.sh'))).toBe(true);
+    expect(await lists()).toEqual([1, 1]);
+    lands = true;
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    expect(await lists()).toEqual([0, 0]);
+  });
+  test('a commit while a leg still runs keeps the lists for the review to read', async ($, on) => {
+    fakeStore(on);
+    let isReading = false;
+    fakeWorld(on, {
+      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
+      fail: (a) => isReading && a === 'git add -A',
+      shell(this: World, c: string) {
+        if (c === 'ls') isReading = true;
+        if (c.startsWith('git commit')) this.head = 'd'.repeat(40);
+      },
+    });
+    await review($, { answer: 'Looks fine.' });
+    await review($);
+    const leg = await legUnderWay($);
+    await bash($, 'ls', { agentId: leg });
+    isReading = false;
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    const s = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect([s.droppedReviews.length, s.reviewerChanges.length]).toEqual([1, 1]);
+  });
+  test('a review-pr leg still running does not hold the lists past a commit', async ($, on) => {
+    fakeStore(on);
+    fakeWorld(on, {
+      commits: { ['c'.repeat(40)]: { 'a.ts': 'zero' }, ['d'.repeat(40)]: { 'a.ts': 'one' } },
+      shell(this: World, c: string) {
+        if (c.startsWith('git commit')) this.head = 'd'.repeat(40);
+      },
+    });
+    await review($, { answer: 'Looks fine.' });
+    await review($);
+    await $.tool.call({ tool: 'Skill', skill: 'review-cycle:review-pr' });
+    await legUnderWay($);
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
+    const s = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(s.droppedReviews).toEqual([]);
+  });
   test('rounds are recorded only for a commit or --continue the gate judged', async ($, on) => {
     fakeStore(on);
     let moves = false;
