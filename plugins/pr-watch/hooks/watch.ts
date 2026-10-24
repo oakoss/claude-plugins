@@ -62,9 +62,11 @@ export function pushedBranches(command: string, stdout: string): PushTarget[] {
   return found;
 }
 
-// How toasts and errors name a watch.
-export function labelOf(w: Pick<Watch, 'number' | 'push'>): string {
-  return w.push ? `push ${w.push.branch}` : `#${w.number}`;
+// How the band, toasts and errors name a watch: "release #259" tells a
+// release tool's version pull request from the others.
+export function labelOf(w: Pick<Watch, 'number' | 'push' | 'pull'>): string {
+  if (w.push) return `push ${w.push.branch}`;
+  return w.pull !== undefined && isReleasePull(w.pull) ? `release #${w.number}` : `#${w.number}`;
 }
 
 // GitHub refusing the token or hiding the repository; other hosts answer 404,
