@@ -16,7 +16,7 @@ git status --porcelain
 git branch --show-current
 gh api user --jq .login
 gh repo view --json owner,viewerPermission,defaultBranchRef,isFork
-gh pr view --json number,url,state,isDraft,title,body
+gh pr view --json number,url,state,isDraft,title,body,headRefOid,closedAt
 gh stack view --json
 ```
 
@@ -26,7 +26,7 @@ gh stack view --json
 - **Path:** pick it from the request and the pull request's state.
   - `gh pr view` exits 1 with `no pull requests found`: the **publish** path on "ship it". On "push it" there is nothing to update, so ask whether to publish.
   - An open pull request: the **update** path, whichever phrase the user used.
-  - A merged or closed one: stop and ask.
+  - A merged or closed one: stop and ask, unless the name was reused for new work. It was when all three hold: the branch is no stack layer (see **Stack**, below); `git merge-base --is-ancestor <headRefOid> HEAD` exits other than 0 (1, or 128 when that commit is not here); and every commit `git log --format=%aI origin/<default>..HEAD` lists was authored after the pull request's `closedAt`, compared as times, since a rebase keeps the earlier work's author dates. Then rename the local branch for its commits (`git branch -m <type>/<short-description>`) to a name `gh pr list --head <name> --state all` lists no pull request for, and use it as `<branch>` from here on. Say so in the report, and go on as for no pull request found; on "push it", ask whether to publish before renaming.
   - Any other failure of `gh pr view`: stop and show it.
 - **Stack:** when `gh stack view --json` exits 0 and one of its `branches` has `isCurrent: true`, the branch is a layer of a github/gh-stack stack: follow **Stack path**, below, on publish and update alike. Three answers mean an ordinary branch: an exit 2 that prints `is not part of a stack`, a listing with no current layer (the branch is a stack's trunk), and gh refusing `stack` because gh-stack is not installed. Any other failure, such as `failed to load stack state`, may be a stack it cannot read: stop and show it.
 
