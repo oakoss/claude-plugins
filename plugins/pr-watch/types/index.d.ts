@@ -118,7 +118,15 @@ export type Watch = {
   heard?: { since: string | null; keys: string[]; streak?: number };
 };
 
-export type Held = { id: string; label: string; url: string; news: string[]; ready: string | null };
+export type Held = {
+  id: string;
+  label: string;
+  url: string;
+  news: string[];
+  ready: string | null;
+  // A release tool's version pull request, whose merge is the release.
+  isRelease?: boolean;
+};
 
 declare module 'claude-code' {
   interface PluginState {

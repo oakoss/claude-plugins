@@ -20,6 +20,7 @@ import {
   isRefused,
   isUnreadable,
   isQuotaLow,
+  isReleasePull,
   isNetworkError,
   isRateLimited,
   offlineDelayOf,
@@ -1300,6 +1301,47 @@ describe('contextOf and suggestionOf', () => {
     );
     expect(contextOf([])).toBeNull();
     expect(contextOf([held('3', null)])).toBeNull();
+  });
+
+  test('offers no merge of a release pull request, whose merge is the release', () => {
+    const release = {
+      ...held('259', 'GitHub reports o/r#259, the release pull request, ready.'),
+      isRelease: true,
+    };
+    expect(contextOf([release])).toBe(
+      'pr-watch, since your last turn: GitHub reports o/r#259, the release pull request, ready.',
+    );
+    expect(suggestionOf([held('1', 'r1'), release])).toBe('merge #1');
+    expect(suggestionOf([release])).toBeNull();
+    expect(contextOf([release, held('1', 'r1')])).toBe(
+      [
+        'pr-watch, since your last turn: GitHub reports o/r#259, the release pull request, ready. r1',
+        'Merging needs the user to ask for it; offer #1 if it fits.',
+      ].join('\n'),
+    );
+    // A comment that comes after keeps it a release entry.
+    const later = heldWith(release, { ...held('259', null, ['@a commented']), isRelease: false });
+    expect(later.isRelease).toBe(true);
+    expect(suggestionOf([later])).toBeNull();
+  });
+
+  test.each([
+    ['oakum/version-packages', true],
+    ['changeset-release/main', true],
+    ['fix/version-packages-docs', false],
+    ['version-packages', true],
+    ['chore/bump-version-packages', false],
+    ['feat/x', false],
+  ])('a pull request headed %s is a release pull request: %s', (branch, isRelease) => {
+    expect(isReleasePull({ head: { branch, repo: 'o/r' } })).toBe(isRelease);
+  });
+
+  test('says a release pull request is ready, and leaves its merge to the user', () => {
+    const p = pull([green()], { head: { branch: 'oakum/version-packages', repo: 'o/r' } });
+    const pr = { repo: 'o/r', number: 128, url: p.url };
+    expect(wakeOf(pr, p, verdictAt(p), {}).ready).toBe(
+      'GitHub reports o/r#128, the release pull request, ready to merge. Merging it is the release: leave it for the user to ask.',
+    );
   });
 
   test('suggests merging the latest ready pull request', () => {
