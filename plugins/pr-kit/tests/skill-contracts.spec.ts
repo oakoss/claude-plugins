@@ -544,6 +544,20 @@ describe('merge: only what was asked, and a stack as one', () => {
     expect(text).toContain('a refusal is never retried in another shape');
   });
 
+  test('after a merge it watches the release pull request, and never offers its merge', () => {
+    expect(text).toContain(
+      "When pr-watch's watch tool exists and the repository has an open release pull request",
+    );
+    expect(text).toContain('`gh pr list --state open --json number,headRefName`');
+    expect(text).toContain(
+      'is `version-packages`, ends in `/version-packages`, or starts with `changeset-release/`',
+    );
+    expect(text).toContain('call the tool on it without `wake`');
+    expect(text).toContain(
+      "Never offer or run its merge: merging it is the release, and stays the user's ask.",
+    );
+  });
+
   test('the question a refusal names lists pull requests by number, with no notes', () => {
     expect(text).toContain('Name each pull request in that question by its number alone');
   });
