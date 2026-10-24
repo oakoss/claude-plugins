@@ -70,6 +70,7 @@ import {
   takeOverPush,
   settingsOf,
   tellsOf,
+  stillRunning,
   toastOf,
   toldAfter,
   verdictOf,
@@ -724,7 +725,8 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
           wakeOf(next, pull, verdict, last, { isEarly, isOwnMerge, tells: config.tells });
         // A ready pull request read as checking is not ready again afterwards.
         if (!isEarly && !isChecking(verdict)) {
-          toast = toastOf(labelOf(next), verdict, shown, next.push ? '' : ' merged');
+          const after = next.push ? '' : ' merged';
+          toast = toastOf(labelOf(next), verdict, shown, after, stillRunning(pull));
           // What someone away from the terminal comes back for; a passed merge is not.
           isUrgent = ['ready', 'failing', 'merged-failing'].includes(verdict.kind);
           next.shown = shownOf(verdict);
