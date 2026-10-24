@@ -24,4 +24,5 @@ test('a contaminated target is attributed from the gate, Codex by elimination', 
   expect(text).toContain("The status tool's `reviewerChanges` names each Claude reviewer command");
   expect(text).toContain('The gate never compares around the Codex leg');
   expect(text).toContain('read only the ones added since');
+  expect(text).toContain('or could not check (a failed read)');
 });

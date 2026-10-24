@@ -1546,6 +1546,7 @@ async function onBash($: $, e: Input<BashHook>, next: NextOf<BashHook>): Promise
       before,
       after: await capture(),
       background: e.run_in_background === true,
+      capped: leg.capped,
     });
     state.reviewerChanges.push(...records);
     return notes;
