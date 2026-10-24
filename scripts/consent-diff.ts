@@ -396,6 +396,14 @@ const OFFERS = [
   'Do we merge #130 or close it?',
   'Should I merge #130 when you are done?',
   'Should I merge #130 or #131?',
+  // A choice between pull requests, in one question or two.
+  'Should I merge #130 and #131? Or, merge #132 and #133?',
+  'Should I merge #130 and #131, or #132?',
+  'Merge #130, or #131?',
+  'Should I merge #130? Or #131?',
+  'Should I merge #130, or would you rather do it?',
+  'Should I merge #130, or close it?',
+  'Should I merge #130 now, or wait for #131?',
   // Notes beside a pull request: a branch name, and notes that are not one.
   'Merge #131 (fix/docs-typo) and #130 (chore/release-0-2)?',
   'Merge #131 (`fix/docs-typo`) and #130 (`chore/release-0-2`)?',

@@ -1230,6 +1230,69 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('yes', "I've committed it. Should I push?")).toEqual(PUSH);
     expect(grantOf('yes', 'Push `fix/x` to `origin`?')).toEqual(PUSH);
   });
+  test('a yes to a choice between pull requests grants none of them', () => {
+    for (const offer of [
+      'Should I merge #3 and #4? Or, merge #5 and #6?',
+      'Should I merge #3 and #4? Or merge #5 and #6?',
+      'Should I merge #3 and #4, or #5 and #6?',
+      'Merge #3, or #4?',
+      'Should I merge #3? Or #4?',
+      'Should I merge #3 and #4? Or merge #3?',
+      'Should I merge #3, #4, or both?',
+      'Should I merge #3? Alternatively, merge #4?',
+      'Should I merge #3? Should I merge #4, or #5?',
+      'Should I merge #3? Otherwise, merge #4?',
+      'Should I merge #3, #4, #5, or all of them?',
+      'Should I merge #3, or rather #4?',
+      'Should I merge #3 and #4, or only #3?',
+      'Should I merge #3, or #4 instead?',
+      'Should I merge #3, or #4 (tests)?',
+      'Should I merge #3, or would you prefer #4?',
+      'Merge #3? Or would you rather I merge #4?',
+      'Merge #3 now, or wait and merge #4?',
+      'Merge #3, or pull request #4?',
+    ])
+      expect(grantOf('yes', offer)).toEqual(NONE);
+    // An alternative that is not pull requests to merge hands back or declines; a yes still merges.
+    for (const offer of [
+      'Should I merge #3, or would you rather do it?',
+      'Should I merge #3, or close it?',
+      'Should I merge #3, or close #4?',
+      'Should I merge #3 now, or wait for #4 to land first?',
+      'Should I merge #3, or would you rather merge #4 yourself?',
+      'Should I merge #3, or would you rather merge #3 yourself?',
+      'Should I merge #3, or #4 yourself?',
+      'Should I merge #3? Or leave both open?',
+      'Should I merge #3? I could also merge #4, or #5.',
+    ])
+      expect(grantOf('yes', offer)).toEqual(merging('3'));
+    // Only a merge question offers a choice, and only between pull requests it names.
+    expect(grantOf('yes', 'Merge it? Is this #131 or #130?')).toEqual(merging(NAMED_ELSEWHERE));
+    // A pick still names its pull request.
+    expect(grantOf('merge 4', 'Merge #3, or #4?')).toEqual(merging('4'));
+  });
+  test('a yes to a choice between pull requests is told the menu to ask with', () => {
+    expect(unreadOffer('yes', 'Should I merge #3? Or #4?')?.why).toContain(
+      'Say "merge 3", "merge 4", or "merge both".',
+    );
+    expect(unreadOffer('yes', 'Should I merge #3 and #4? Or, merge #5 and #6?')?.why).toContain(
+      'Say "merge 3", "merge 4", "merge 5", "merge 6", or "merge all of them".',
+    );
+    expect(unreadOffer('yes', 'Should I merge #3, or close it?')).toBeNull();
+    // An "or" inside a note is the note's: the agent is told to drop the note.
+    expect(unreadOffer('yes', 'Merge #3 (fixes #2 or #1)?')?.why).toContain('note in parentheses');
+  });
+  test('the menu a refusal asks for answers to its picks', () => {
+    const menu = 'Which should I merge?\nSay "merge 3", "merge 4", or "merge both".';
+    expect(grantOf('merge both', menu)).toEqual(merging('3', '4'));
+    expect(grantOf('merge 4', menu)).toEqual(merging('4'));
+    expect(grantOf('yes', menu)).toEqual(NONE);
+    // A bare "both" says no step: it may answer another question.
+    expect(grantOf('both', menu)).toEqual(NONE);
+    const three = 'Say "merge 3", "merge 4", "merge 5", or "merge all of them".';
+    expect(grantOf('merge all of them', three)).toEqual(merging('3', '4', '5'));
+    expect(grantOf('merge both', three)).toEqual(NONE);
+  });
   test('a first alternative that hands the step back still grants nothing', () => {
     expect(grantOf('yes', 'Would you rather push it yourself, or should I?')).toEqual(NONE);
     expect(grantOf('yes', 'Should I leave it to you, or push it?')).toEqual(NONE);

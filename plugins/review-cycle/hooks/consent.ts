@@ -1347,9 +1347,53 @@ export const closingOf = (answer: string): string =>
     .replaceAll(BRANCH_NOTE, '$1')
     .replaceAll(NAME_NOTE, (note) => note.replaceAll('`', '').replaceAll('/', ' '));
 
-// What a yes grants: what the offer named, unless it set a condition a yes does not meet.
+const OR = /\b(?:or|alternatively|otherwise)\b/i;
+const YOURS = /\byourself\b|\byou\s+(?:merge|do|handle|take)\b/i;
+const OTHER_STEP =
+  /\b(?:clos(?:e|ing)|wait(?:ing)?|hold(?:ing)?|leav(?:e|ing)|rebas(?:e|ing)|review(?:ing)?|look(?:ing)?|check(?:ing)?|revert(?:ing)?|skip(?:ping)?|defer(?:ring)?|keep(?:ing)?|land(?:s|ing)?|fix(?:ing)?|updat(?:e|ing))\b/i;
+
+// Unknown wording counts as a choice, so a phrasing nobody listed fails closed.
+function mergesOthers(alternative: string, before: Set<string>): boolean {
+  if (YOURS.test(alternative)) return false;
+  const named = prNumbers(alternative);
+  const differs = named.length !== before.size || named.some((n) => !before.has(n));
+  if (named.length === 0)
+    return /\b(?:both|all\s+of\s+them)\b/i.test(alternative) && !OTHER_STEP.test(alternative);
+  if (MERGE_WORD.test(alternative)) return differs;
+  return differs && !OTHER_STEP.test(alternative);
+}
+
+// The pull requests a merge offer sets against each other ("Merge #3, or
+// #4?", "Merge #3 and #4? Or, merge #5?", "Merge #3, #4, or both?"); empty
+// when it offers no such choice. A yes cannot say which.
+function choiceOf(closing: string): string[] {
+  // A question opening "Or" continues the one before it.
+  const questions: string[] = [];
+  for (const s of offerSentences(closing)?.raw ?? []) {
+    if (!s.trim().endsWith('?')) continue;
+    const q = s.replaceAll(NOTE, '$1');
+    if (new RegExp(`^\\s*${OR.source}`, 'i').test(q) && questions.length > 0)
+      questions.push(`${questions.pop()} ${q}`);
+    else questions.push(q);
+  }
+  for (const q of questions) {
+    if (!MERGE_WORD.test(q)) continue;
+    const [first = '', ...alternatives] = q.split(OR);
+    const before = new Set(prNumbers(first));
+    if (before.size === 0) continue;
+    const chosen = alternatives.filter((a) => mergesOthers(a, before));
+    if (chosen.length > 0) return [...new Set([...before, ...chosen.flatMap((a) => prNumbers(a))])];
+  }
+  return [];
+}
+
+// What a yes grants: what the offer named, unless it set a condition a yes
+// does not meet or a choice it does not make.
 function accepted(answer: string, heard?: Set<Family>): Grant {
-  return conditional(closingOf(answer)) ? settled(fresh()) : asked(answer, heard);
+  const closing = closingOf(answer);
+  return conditional(closing) || choiceOf(closing).length > 0
+    ? settled(fresh())
+    : asked(answer, heard);
 }
 
 export type UnreadOffer = Readonly<{ why: string; steps: readonly (HoldStep | 'commit')[] }>;
@@ -1375,6 +1419,17 @@ export function unreadOffer(reply: string, previousAnswer: string): UnreadOffer 
       ? `their yes answered an offer whose question sets a condition ("${held.sentence}"); ask again once it is met, or without it`
       : `their yes answered an offer held by a condition word in a sentence after its question ("${held.sentence}"); ask again with any explanation before the question`;
     return { why, steps };
+  }
+  const choice = choiceOf(closing);
+  if (choice.length > 0) {
+    const menu = [
+      ...choice.map((n) => `"merge ${n}"`),
+      choice.length === 2 ? '"merge both"' : '"merge all of them"',
+    ];
+    return {
+      why: `their yes answered a choice between pull requests (${choice.map((n) => `#${n}`).join(', ')}) and does not say which; ask again with a menu as the answer's last line: Say ${menu.slice(0, -1).join(', ')}, or ${menu.at(-1)}.`,
+      steps,
+    };
   }
   // The offer's own notes, quoted as the agent wrote them, branch labels aside.
   const raw = offerSentences(lastLines(previousAnswer).replaceAll(BRANCH_NOTE, '$1'));
@@ -1708,10 +1763,10 @@ const PICK_BUT_NOT = new RegExp(
 
 // The closing's last line telling the user what to type, whole, every option a
 // merge or "both", bare or in a pair of quotes: 'Say "merge 3", "merge 4", or
-// both.' Its merges are offered to a pick alone; a yes names no option. One
-// that starts mid-line or indented may sit inside an example the agent quotes.
+// "merge both".' Its merges are offered to a pick alone; a yes names no option.
+// One that starts mid-line or indented may sit inside an example the agent quotes.
 const MENU_LEAD = /^(?:just\s+)?(?:say|type|reply(?:\s+with)?)\b:?\s*/i;
-const PICKABLE = String.raw`merge\s+#?\d+|both|all\s+of\s+them`;
+const PICKABLE = String.raw`merge\s+#?\d+|(?:merge\s+)?(?:both|all\s+of\s+them)`;
 const MENU_OPTION = new RegExp(
   `^(?:${['', '"', '“”', "'", '‘’', '`']
     .map((q) => `${q[0] ?? ''}(?:${PICKABLE})${q[1] ?? q[0] ?? ''}`)
