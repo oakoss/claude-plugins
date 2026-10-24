@@ -1072,8 +1072,34 @@ describe('an affirmative grants what the previous answer asked', () => {
     'Merge #131 (CI still running)?',
     'Should we merge #131 (or would you rather do it)?',
     'Do you want to merge #131 (from your terminal)?',
+    'Merge #131 (WIP/draft)?',
+    'Merge #131 (blocked/on-hold) and #132?',
+    'Merge #131 (`WIP`)?',
+    'Merge #131 (`do not merge`) and #132?',
+    'Merge #131 (wip/fix-a)?',
   ])('a note beside the pull request in %j keeps the offer from a yes', (offer) => {
     expect(grantOf('yes', offer)).toEqual(NONE);
+  });
+  test('a slashed or backticked note reads as its words, on every verb', () => {
+    expect(grantOf('yes', 'Release #46 (oakum/version-packages)?').release).toBe(true);
+    expect(grantOf('yes', 'Release #46 (`oakum/version-packages`)?').release).toBe(true);
+    expect(grantOf('yes', 'Merge #46 (changeset-release/main)?')).toEqual(merging('46'));
+    expect(grantOf('yes', 'Merge #3 (from your `terminal`), then release it?')).toEqual(NONE);
+    expect(grantOf('yes', 'Merge #3 (`and release it, if CI passes`)?')).toEqual(NONE);
+    expect(grantOf('yes', 'Merge #3 (and release it, if CI passes)?')).toEqual(NONE);
+    expect(grantOf('yes', 'Merge #3 (`if CI passes`)?')).toEqual(NONE);
+    expect(grantOf('yes', 'Merge #3 (`once green`)?')).toEqual(NONE);
+  });
+  test('a held note beside one pull request leaves a branch label beside another', () => {
+    const offer = 'Merge #131 (WIP/draft) and #132 (fix/docs)?';
+    expect(grantOf('yes', offer).mergeNamed).not.toContain('131');
+    expect(unreadOffer('yes', 'Merge #131 (WIP/draft)?')?.why).toContain('#131 (WIP/draft)');
+    const why = unreadOffer(
+      'yes',
+      'Opened #5 (WIP/draft) earlier.\nMerge #3 (do not merge yet)?',
+    )?.why;
+    expect(why).toContain('#3 (do not merge yet)');
+    expect(why).not.toContain('#5');
   });
   test('a note naming another step still offers it', () => {
     expect(grantOf('yes', 'Merge #131 (and release it)?')).toEqual({

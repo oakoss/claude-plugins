@@ -1328,14 +1328,24 @@ function conditionIn(closing: string): { sentence: string; question: boolean } |
 }
 
 // A branch name in parentheses beside a pull request labels it. Only a
-// conventional prefix tells one from a note that may hold it, such as
-// "(do not merge yet)" or "(WIP/draft)", which stays.
+// conventional or release tool's prefix tells one from a note that may hold
+// it, such as "(do not merge yet)" or "(WIP/draft)", which stays.
 const BRANCH_NOTE =
-  /(#\d+)\s*\(`?(?:feat|fix|chore|docs|test|refactor|perf|ci|build|style|release|hotfix|revert|deps|renovate|dependabot)\/[\w./-]*[\w-]`?\)/g;
+  /(#\d+)\s*\(`?(?:feat|fix|chore|docs|test|refactor|perf|ci|build|style|release|hotfix|revert|deps|renovate|dependabot|oakum|changeset-release)\/[\w./-]*[\w-]`?\)/g;
 
-// The answer's last three lines, which an offer is read from.
+const NOTE = /(#\d+)\s*\([^()\n]*\)/g;
+const NAME_NOTE = /(#\d+)\s*\((?=[^()\n]*[/`])[^()\n]*\)/g;
+
+const lastLines = (answer: string): string =>
+  answer.trim().split('\n').filter(Boolean).slice(-3).join('\n');
+
+// The answer's last three lines, which an offer is read from. Any other note
+// keeps its words but loses its backticks and slashes, so every reader takes
+// it as the words a plain note is, not as a name ("it").
 export const closingOf = (answer: string): string =>
-  answer.trim().split('\n').filter(Boolean).slice(-3).join('\n').replaceAll(BRANCH_NOTE, '$1');
+  lastLines(answer)
+    .replaceAll(BRANCH_NOTE, '$1')
+    .replaceAll(NAME_NOTE, (note) => note.replaceAll('`', '').replaceAll('/', ' '));
 
 // What a yes grants: what the offer named, unless it set a condition a yes does not meet.
 function accepted(answer: string, heard?: Set<Family>): Grant {
@@ -1343,8 +1353,6 @@ function accepted(answer: string, heard?: Set<Family>): Grant {
 }
 
 export type UnreadOffer = Readonly<{ why: string; steps: readonly (HoldStep | 'commit')[] }>;
-
-const NOTE = /(#\d+)\s*\([^()\n]*\)/g;
 
 // Why a yes to the agent's offer granted nothing, and the steps it offered,
 // for their refusals to name so the agent asks again in words the grammar
@@ -1368,7 +1376,9 @@ export function unreadOffer(reply: string, previousAnswer: string): UnreadOffer 
       : `their yes answered an offer held by a condition word in a sentence after its question ("${held.sentence}"); ask again with any explanation before the question`;
     return { why, steps };
   }
-  const notes = offered.match(NOTE) ?? [];
+  // The offer's own notes, quoted as the agent wrote them, branch labels aside.
+  const raw = offerSentences(lastLines(previousAnswer).replaceAll(BRANCH_NOTE, '$1'));
+  const notes = raw?.raw.join(' ').match(NOTE) ?? [];
   // Only notes whose removal lets the yes grant are what held it.
   if (notes.length > 0 && asksAny(grantOf(reply, previousAnswer.replaceAll(NOTE, '$1')))) {
     return {
