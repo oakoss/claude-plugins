@@ -1603,6 +1603,24 @@ describe('ready to merge, while merges need asking', () => {
     expect(seen.contexts[0]).toBeUndefined();
   });
 
+  test('keeps a release pull request from Claude even where merges run unasked', async ($, on) => {
+    const release = {
+      headRefName: 'oakum/version-packages',
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    const { seen } = await readyIn($, on, {
+      pr: prJson(release),
+      view: OPEN,
+      stopBefore: { user: 'release' },
+    });
+    expect(seen.wakes).toEqual([]);
+    expect(seen.suggested).toEqual([]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toEqual([
+      'pr-watch, since your last turn: GitHub reports o/r#128, the release pull request, ready to merge. Merging it is the release: leave it for the user to ask.',
+    ]);
+  });
+
   for (const [what, stopBefore] of [
     ['the project file stops earlier than the user', { user: 'release', project: 'merge' }],
     ['a managed value, as its /config row shows it', { policy: 'push', user: 'release' }],
@@ -1736,6 +1754,17 @@ describe('ready to merge, while merges need asking', () => {
     const { seen } = await readyIn($, on, gh);
     expect(seen.wakes).toHaveLength(1);
     expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.toasts.some((t) => t.startsWith("pr-watch could not keep #128's news"))).toBe(true);
+  });
+
+  test('a release ready line that cannot be kept is dropped, not woken', async ($, on) => {
+    const head = {
+      headRefName: 'oakum/version-packages',
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    const gh: Gh = { pr: prJson(head), view: OPEN, stopBefore: ASKED, quietFails: true };
+    const { seen } = await readyIn($, on, gh);
+    expect(seen.wakes).toEqual([]);
     expect(seen.toasts.some((t) => t.startsWith("pr-watch could not keep #128's news"))).toBe(true);
   });
 
@@ -4377,6 +4406,27 @@ describe('the tools', () => {
       expect(seen.wakes).toHaveLength(wake ? 1 : 0);
     });
   }
+
+  test('watch with wake still wakes Claude for a release pull request, and suggests nothing', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const head = {
+      headRefName: 'oakum/version-packages',
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    const gh: Gh = {
+      pr: prJson({ ...head, mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]),
+      view: OPEN_VIEW,
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128', wake: true });
+    gh.pr = prJson(head);
+    await clock.advance(70_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('the release pull request, ready to merge');
+    expect(seen.suggested).toEqual([]);
+  });
 
   test('watch with wake wakes Claude for that pull request only', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });

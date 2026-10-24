@@ -741,6 +741,13 @@ function passedOn({ followed, base }: Pull): string {
     : "the merge commit's checks passed";
 }
 
+// A release tool's version pull request (oakum's, Changesets'), whose merge is
+// the release.
+export function isReleasePull(pull: Pick<Pull, 'head'>): boolean {
+  const branch = pull.head?.branch ?? '';
+  return /(^|\/)version-packages$/.test(branch) || branch.startsWith('changeset-release/');
+}
+
 // The workflows still running on a ready pull request, which the merge does
 // not wait on, since it is ready only once every one it waits on is done.
 export function stillRunning(pull: Pick<Pull, 'workflows'>): string[] {
@@ -895,10 +902,10 @@ function conditionsOf(
       running.length === 0
         ? ''
         : ` When pr-watch read it, ${running.join(', ')} ${running.length === 1 ? 'was' : 'were'} still running, not required to merge.`;
-    found.push({
-      key: keyOf(watch, 'ready'),
-      text: `GitHub reports ${name} ready to merge.${note}`,
-    });
+    const text = isReleasePull(pull)
+      ? `GitHub reports ${name}, the release pull request, ready to merge.${note} Merging it is the release: leave it for the user to ask.`
+      : `GitHub reports ${name} ready to merge.${note}`;
+    found.push({ key: keyOf(watch, 'ready'), text });
   }
   if (verdict.kind === 'merged-passed' && !isEarly) {
     const text = watch.push
@@ -944,7 +951,8 @@ export type Wake = {
 
 export function heldWith(was: Held, next: Held): Held {
   const news = [...new Set([...was.news, ...next.news])];
-  return { ...next, news, ready: next.ready ?? was.ready };
+  const isRelease = next.isRelease === true || was.isRelease === true;
+  return { ...next, news, ready: next.ready ?? was.ready, ...(isRelease && { isRelease }) };
 }
 
 // The ready line leads: it is the news Claude acts on.
@@ -1083,16 +1091,22 @@ export function wakeOf(
 export function contextOf(quiet: readonly Held[]): string | null {
   const lines = quiet.flatMap((q) => [...(q.ready === null ? [] : [q.ready]), ...q.news]);
   if (lines.length === 0) return null;
-  const isReady = quiet.some((q) => q.ready !== null);
+  // A release pull request is not offered: its merge is the release. Beside
+  // one, the offer names the pull requests it covers.
+  const offerable = quiet.filter((q) => q.ready !== null && !q.isRelease);
+  const isBeside = quiet.some((q) => q.ready !== null && q.isRelease);
+  const what = isBeside ? offerable.map((q) => q.label).join(', ') : 'it';
   return [
     `pr-watch, since your last turn: ${lines.join(' ')}`,
-    ...(isReady ? ['Merging needs the user to ask for it; offer it if it fits.'] : []),
+    ...(offerable.length > 0
+      ? [`Merging needs the user to ask for it; offer ${what} if it fits.`]
+      : []),
   ].join('\n');
 }
 
 // The prompt-box suggestion for the latest pull request held ready.
 export function suggestionOf(quiet: readonly Held[]): string | null {
-  const ready = quiet.findLast((q) => q.ready !== null);
+  const ready = quiet.findLast((q) => q.ready !== null && !q.isRelease);
   return ready ? `merge ${ready.label}` : null;
 }
 

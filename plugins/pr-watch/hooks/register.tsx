@@ -54,6 +54,7 @@ import {
   isChecking,
   isMergeFresh,
   isQuotaLow,
+  isReleasePull,
   isRefused,
   isNetworkError,
   isRateLimited,
@@ -197,21 +198,21 @@ async function tell($: $, h: Held): Promise<void> {
   if (!(await hold($, h))) await deliver($, h);
 }
 
-// Ready wakes Claude only where it asked the watch tool to be woken, or
-// review-cycle lets it merge unasked; otherwise it waits with the passed checks
-// for the person's next prompt. Decided as it is sent, so a held line follows
-// /config as it is then.
+// Ready wakes Claude where it asked the watch tool to, or review-cycle lets it
+// merge unasked (not a release pull request: that merge is the release); else
+// it waits for the person's next prompt, decided as it is sent.
 async function deliver($: $, h: Held): Promise<void> {
   let { ready } = h;
   if (ready !== null) {
     const asked = await read($, wakeAsked);
-    if (asked.includes(h.id) || (await isMergeUnasked($))) {
+    if (asked.includes(h.id) || (!h.isRelease && (await isMergeUnasked($)))) {
       await forgetReady($, h.id).catch((error) =>
         $.ui.toast(`pr-watch could not clear ${h.label}'s kept ready line: ${errorText(error)}`),
       );
     }
-    // A ready line that cannot be kept wakes Claude instead of being lost.
-    else if (await keep($, { ...h, news: [] })) ready = null;
+    // A ready line that cannot be kept wakes Claude instead of being lost; a
+    // release's is dropped, its toast having told the person.
+    else if ((await keep($, { ...h, news: [] })) || h.isRelease) ready = null;
   }
   if (h.news.length === 0 && ready === null) return;
   // A turn that started while the settings were read holds it like any other.
@@ -800,7 +801,8 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       else if (isGivenUp || !woke) wake($, news, labelOf(next));
       else {
         const { news: lines, ready, passed } = woke;
-        const h = { id: idOf(next), label: labelOf(next), url: next.url };
+        const isRelease = next.pull !== undefined && isReleasePull(next.pull);
+        const h = { id: idOf(next), label: labelOf(next), url: next.url, isRelease };
         if (isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
         else {
           await tell($, { ...h, news: lines, ready });
@@ -1246,7 +1248,7 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; call this for them too to pass wake, and for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; call this for them too to pass wake, and for any other you are waiting on, instead of polling gh pr checks or sleeping.",
     inputSchema: {
       ...PULL_INPUT,
       properties: {
