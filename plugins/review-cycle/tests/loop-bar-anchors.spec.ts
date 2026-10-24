@@ -25,4 +25,5 @@ test('a contaminated target is attributed from the gate, Codex by elimination', 
   expect(text).toContain('The gate never compares around the Codex leg');
   expect(text).toContain('read only the ones added since');
   expect(text).toContain('or could not check (a failed read)');
+  expect(text).toContain('it resets at each commit, so note its count at the snapshot');
 });

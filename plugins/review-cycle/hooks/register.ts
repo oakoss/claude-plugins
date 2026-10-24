@@ -2708,6 +2708,13 @@ async function recordCommitRounds(
   const rounds = roundsOf(state.reviews.slice(from));
   state.roundsFrom = state.reviews.length;
   state.reviewing = null;
+  // What the legs dropped or changed describes the cycle this commit ends,
+  // unless a counted leg still runs: the review skill reads its entries once it
+  // finishes. A review-pr leg counts toward nothing, and nothing prunes it.
+  if (![...state.legs.values()].some((l) => l.counts && !l.done)) {
+    state.dropped = [];
+    state.reviewerChanges = [];
+  }
   void keep($);
   const now = await $.clock.now();
   roundsAt = Math.max(now, roundsAt + 1);
