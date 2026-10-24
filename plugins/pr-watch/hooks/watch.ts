@@ -741,14 +741,24 @@ function passedOn({ followed, base }: Pull): string {
     : "the merge commit's checks passed";
 }
 
+// The workflows still running on a ready pull request, which the merge does
+// not wait on, since it is ready only once every one it waits on is done.
+export function stillRunning(pull: Pick<Pull, 'workflows'>): string[] {
+  return [...new Set(pull.workflows.filter((w) => w.status !== 'done').map((w) => w.name))];
+}
+
 export function toastOf(
   label: string,
   verdict: Verdict,
   shown?: string,
   after = ' merged',
+  running: string[] = [],
 ): string | null {
   if (shownOf(verdict) === shown) return null;
-  if (verdict.kind === 'ready') return `${label} is ready to merge`;
+  if (verdict.kind === 'ready') {
+    const note = running.length === 0 ? '' : `; ${running.join(', ')} still running, not required`;
+    return `${label} is ready to merge${note}`;
+  }
   if (verdict.kind === 'failing') return `${label} ${verdict.workflow}: ${verdict.job} failed`;
   if (verdict.kind === 'merged-passed') return `${label}${after}: its checks passed`;
   if (verdict.kind === 'merged-failing') {
@@ -879,7 +889,16 @@ function conditionsOf(
 ): Condition[] {
   const found: Condition[] = [];
   if (verdict.kind === 'ready') {
-    found.push({ key: keyOf(watch, 'ready'), text: `GitHub reports ${name} ready to merge.` });
+    const running = stillRunning(pull);
+    // Said as of this read, since held news may reach Claude after they finish.
+    const note =
+      running.length === 0
+        ? ''
+        : ` When pr-watch read it, ${running.join(', ')} ${running.length === 1 ? 'was' : 'were'} still running, not required to merge.`;
+    found.push({
+      key: keyOf(watch, 'ready'),
+      text: `GitHub reports ${name} ready to merge.${note}`,
+    });
   }
   if (verdict.kind === 'merged-passed' && !isEarly) {
     const text = watch.push

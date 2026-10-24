@@ -28,7 +28,7 @@ When a workflow has run more than once on the same commit, only its newest run c
 
 Once nothing the merge waits on is running, a workflow it does not wait on still shows as a mark while it runs or after it fails.
 
-A toast says when a pull request turns ready to merge, a job fails in a workflow the merge waits on, or a merge's runs on the base branch pass or fail, once per change. A line says why when `gh` fails, and `· more checks not shown` when a commit has more check suites than one read returns (100). Hover a line and press `×` to stop watching it. A pull request closed without merging leaves the band.
+A toast says when a pull request turns ready to merge, a job fails in a workflow the merge waits on, or a merge's runs on the base branch pass or fail, once per change. A ready toast, and what Claude is told, name any workflow still running that the merge does not wait on. A line says why when `gh` fails, and `· more checks not shown` when a commit has more check suites than one read returns (100). Hover a line and press `×` to stop watching it. A pull request closed without merging leaves the band.
 
 pr-watch draws above whatever other plugins draw in the same band, rather than replacing it.
 

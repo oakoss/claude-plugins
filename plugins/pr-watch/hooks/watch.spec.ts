@@ -38,6 +38,7 @@ import {
   pushedPull,
   shownOf,
   submittedPulls,
+  stillRunning,
   toastOf,
   verdictOf,
   QUIET_CAP,
@@ -667,6 +668,18 @@ describe('toastOf', () => {
     expect(toastOf('#1', { kind: 'blocked', reason: 'conflicts' }, 'running')).toBeNull();
   });
 
+  test('names the workflows still running beside a ready verdict as not required', () => {
+    expect(toastOf('#1', { kind: 'ready' }, 'running', ' merged', ['Visual', 'Docs'])).toBe(
+      '#1 is ready to merge; Visual, Docs still running, not required',
+    );
+    const p = pull([green(), codeql(null), codeql(null)]);
+    expect(verdictAt(p, {}).kind).toBe('ready');
+    expect(stillRunning(p)).toEqual(['CodeQL']);
+    expect(stillRunning(pull([green()]))).toEqual([]);
+    const queued = flow(3, 'Docs', [job('Build', null)], 'queued');
+    expect(stillRunning(pull([green(), queued]))).toEqual(['Docs']);
+  });
+
   test('says when a different job fails next', () => {
     expect(toastOf('#1', build, shownOf(lint))).toBe('#1 CI: Build failed');
   });
@@ -859,7 +872,18 @@ describe('wakeOf', () => {
     expect(first.text).toContain('GitHub reports o/r#128 ready to merge.');
     expect(first.text).toContain('not a request to merge. https://github.com/o/r/pull/128');
     expect(first.text).not.toContain('checks passed');
+    expect(first.text).not.toContain('still running');
     expect(after(p, first).text).toBeNull();
+    const running = after(pull([green(), codeql(null)]));
+    expect(running.text).toContain(
+      'GitHub reports o/r#128 ready to merge. When pr-watch read it, CodeQL was still running, not required to merge.',
+    );
+    const docs = flow(3, 'Docs', [job('Build', null)], 'queued');
+    expect(after(pull([green(), codeql(null), docs])).text).toContain(
+      'When pr-watch read it, CodeQL, Docs were still running, not required to merge.',
+    );
+    // Told once by its key, whatever is still running on a later read.
+    expect(after(pull([green()]), running).text).toBeNull();
   });
 
   test('says ready again once it stopped being ready, but not after GitHub recomputes', () => {

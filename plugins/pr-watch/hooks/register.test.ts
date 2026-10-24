@@ -470,6 +470,16 @@ async function colorIn(ui: any, text: string): Promise<string | undefined> {
 const ESTIMATE_CALL = 'actions/workflows/7/runs';
 
 describe('a pull request Claude opens', () => {
+  test('a ready pull request names the workflows still running as not required', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const green = ciSuite({ status: 'COMPLETED', conclusion: 'SUCCESS' });
+    const seen = world(on, { pr: prJson({}, [green, docsRerun('IN_PROGRESS')]) });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.toasts).toEqual(['#128 is ready to merge; Docs still running, not required']);
+  });
+
   test('is watched, read, and drawn ready to merge, with one toast', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const seen = world(on, { pr: prJson() });
