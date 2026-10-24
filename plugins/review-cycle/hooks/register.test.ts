@@ -2044,17 +2044,16 @@ describe('a reload of the module', () => {
   test('takes back where the rounds count from', async ($, on) => {
     fakeStore(on);
     const w = fakeWorld(on);
-    const tree = treeId(w, w.work);
-    const review = {
-      type: 'review-cycle:code-reviewer',
-      trees: [tree, tree],
-      reviewedPaths: ['a.ts'],
+    const review = (files: Record<string, string>) => {
+      const tree = treeId(w, files);
+      return { type: 'review-cycle:code-reviewer', trees: [tree, tree], reviewedPaths: ['a.ts'] };
     };
-    reloadInto(on, keptRecord({ reviews: [review, review], roundsFrom: 2 }));
+    const reviews = [review({ 'a.ts': 'x' }), review({ 'a.ts': 'y' }), review(w.work)];
+    reloadInto(on, keptRecord({ reviews, roundsFrom: 1 }));
     await startSession($);
     const r = (await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any;
     const status = JSON.parse(r.result);
-    expect(status.roundsSinceCommit).toBe(0);
+    expect(status.roundsSinceCommit).toBe(2);
   });
 
   test('takes back a hold, so a push the user put off still waits', async ($, on) => {
@@ -2140,7 +2139,7 @@ describe('a reload of the module', () => {
   });
 
   test('a message heard before the take-back applies on top of the record', async ($, on) => {
-    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    const w = fakeWorld(on, pushing({ git: remoteSide({}) }));
     const message = {
       tree: null,
       nudged: true,
@@ -2148,8 +2147,15 @@ describe('a reload of the module', () => {
       grant: { ...NO_GRANT_KEPT, push: 'push', pr: true },
       pointed: { named: [], answer: [], unplaced: false },
     };
-    await sayBeforeRecall($, on, { message }, "don't push yet");
+    const tree = treeId(w, w.work);
+    const review = {
+      type: 'review-cycle:code-reviewer',
+      trees: [tree, tree],
+      reviewedPaths: ['a.ts'],
+    };
+    await sayBeforeRecall($, on, { message, reviews: [review] }, "don't push yet");
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
+    expect(ran(await bash($, 'git commit -am x'))).toBe(true);
   });
 
   test('a kept hold outlives an unrelated message heard before the take-back', async ($, on) => {
