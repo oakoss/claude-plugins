@@ -1,4 +1,12 @@
-import { describe, expect, mock, test } from 'claude-code/testing';
+import { describe, expect, mock, test as kitTest, type TestRest } from 'claude-code/testing';
+
+// A CI runner ran this file about four times slower than a laptop, so a test
+// that steps the clock many times outlasts the kit's 5 s there; each gets 15 s.
+const TIMEOUT_MS = 15_000;
+const test = (name: string, ...rest: TestRest): void => {
+  if (rest.length === 2) kitTest(name, { timeoutMs: TIMEOUT_MS, ...rest[0] }, rest[1]);
+  else kitTest(name, { timeoutMs: TIMEOUT_MS }, rest[0]);
+};
 
 const T0 = Date.parse('2026-10-03T22:01:10Z');
 const URL = 'https://github.com/o/r/pull/128';
