@@ -402,6 +402,12 @@ const OFFERS = [
   'Merge #131 (do not merge yet) and #130 (chore/release-0-2)?',
   'Merge #131 (blocked) and #130?',
   'Merge #131 (WIP/draft) and #130 (fix/docs-typo)?',
+  'Merge #131 (`WIP`) and #130?',
+  'Merge #131 (blocked/on-hold)?',
+  'Merge #131 (from your `terminal`), then release it?',
+  'Release #130 (oakum/version-packages)?',
+  'Release #130 (the version PR)?',
+  'Approve #131 (WIP/draft)?',
   '#131 and #130 are both ready to merge. Merge them?',
   // Menus that tell the user what to type.
   'Say "merge 131", "merge 130", or both.',
