@@ -4,6 +4,22 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.33.1 (2026-10-24)
+
+### Fixed
+
+A yes to a merge offer that sets pull requests against each other ("Merge #3, or #4?", "Should I merge #3 and #4? Or, merge #5 and #6?", "Merge #3, #4, or both?") now grants no merge, since it does not say which. The two-question form used to grant every pull request named in both. The refusal tells the agent to ask again with a menu ('Say "merge 3", "merge 4", or "merge both".'), and a menu may now offer "merge both" as one of its options. An alternative that hands the merge back or offers another step ("…, or would you rather do it?", "…, or close #4?", "…, or wait for #4?") still lets a yes take the first alternative.
+
+A "not yet" to an offered approval that also mentions a merge ("not yet, before we merge" after "Should I approve #12?") now records the declined approval rather than the mentioned merge. Both hold the same steps; the difference is that the model check stays off afterwards, as it does after any decline, and a refusal says the approval was put off.
+
+Reviewer legs now run no command that installs first. In a JavaScript project they run the project's tools by path (`node_modules/.bin/<tool>`) in their private copies, not through the package manager: in a copy without `node_modules`, `pnpm <script>` and `pnpm exec` install first and run the project's install hooks there, which on pnpm 12 ran lefthook's postinstall in a leg's copy. `/review-cycle:review-pr` legs copy `node_modules` from the main checkout, since the pull request's worktree has none, so when the pull request changes a JavaScript lockfile or a `package.json`'s dependencies, the briefs and the report's new `Dependencies:` line say that results depending on them are inferred.
+
+Replies that pick among offered merges now work in two more shapes. A branch name in parentheses beside a pull request, as in "Merge #277 (`fix/x`) and #278 (`test/y`)?", is read as a label when it starts with a conventional prefix such as `fix/` or `feat/`, so "yes" or "merge both" covers both pull requests rather than only the first. A closing whose last line tells you what to type, such as 'Say "merge 277", "merge 278", or both.', offers its merges to a pick: "merge both", "merge them", "merge only 277" and "merge 277 but not 278" work, while a bare "yes" still names no option. A note that holds a pull request, such as "(do not merge yet)", still keeps a yes from granting it, and a menu with an option that is not a merge, or one inside an example the agent quotes or indents, offers nothing to pick.
+
+A path that opens with a period no longer ends the sentence, so a deferral after it counts: "push .github later" and "push .gitignore when CI passes" no longer grant a push. A name opening with a period or `./` now reads as the bare name does: "push the .gitignore changes" holds as "push the gitignore changes" already did, and "run ./release.sh" holds the release as "run release.sh" did. Ask in other words, such as "push it", when the gate holds one of these.
+
+A note in parentheses beside an offered pull request is now read as its words when it contains a slash or backticks, as other notes already were: a yes to "Merge #3 (WIP/draft) and #4?" or "Approve #3 (`WIP`)?" grants nothing, where it used to. A branch name with a conventional or release tool's prefix, such as "(`fix/docs`)" or "(oakum/version-packages)", is still read as a label.
+
 ## 0.33.0 (2026-10-23)
 
 ### Added
