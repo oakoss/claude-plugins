@@ -1622,6 +1622,7 @@ describe('ready to merge, while merges need asking', () => {
       stopBefore: { user: 'release' },
     });
     expect(seen.wakes).toEqual([]);
+    expect(seen.toasts).toEqual(['release #128 is ready to merge']);
     expect(seen.suggested).toEqual([]);
     await $.prompt.submit(person());
     expect(seen.contexts[0]).toEqual([
@@ -1773,7 +1774,9 @@ describe('ready to merge, while merges need asking', () => {
     const gh: Gh = { pr: prJson(head), view: OPEN, stopBefore: ASKED, quietFails: true };
     const { seen } = await readyIn($, on, gh);
     expect(seen.wakes).toEqual([]);
-    expect(seen.toasts.some((t) => t.startsWith("pr-watch could not keep #128's news"))).toBe(true);
+    expect(
+      seen.toasts.some((t) => t.startsWith("pr-watch could not keep release #128's news")),
+    ).toBe(true);
   });
 
   test('held with a comment through a turn, the comment wakes and the ready line waits', async ($, on) => {

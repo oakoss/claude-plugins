@@ -2013,6 +2013,12 @@ describe('lineOf', () => {
     );
   });
 
+  test('names a release pull request as one', () => {
+    const release = pull([green()], { head: { branch: 'oakum/version-packages', repo: 'o/r' } });
+    expect(textOf(watched(release))).toBe('release #128 ✓ ready to merge');
+    expect(textOf(watched(pull([green()])))).toBe('#128 ✓ ready to merge');
+  });
+
   test('keeps one unreachable read quiet, then says so dim, never red', () => {
     const ready = pull([green()]);
     expect(textOf(watched(ready, { offline: 1 }))).toBe('#128 ✓ ready to merge');
