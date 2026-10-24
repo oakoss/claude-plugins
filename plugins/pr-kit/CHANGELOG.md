@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.3.1 (2026-10-24)
+
+### Fixed
+
+When review-cycle's gate refuses a merge, the merge skill asks its question naming each pull request by number alone ("Merge #41 and #42?"), so your yes covers every one of them.
+
+After a merge, `merge` asks pr-watch to watch the repository's open release pull request (headed `*/version-packages` or `changeset-release/*`), when pr-watch is installed, so the version pull request's rebuild and checks show above the prompt without polling. It never offers or runs that merge: merging it is the release, and stays your ask.
+
+`ship` no longer stops to ask when the branch's name was used before for a pull request that has since merged or closed and the branch holds only new work: that pull request's head commit is not in the branch's history, and every commit the branch adds was authored after it closed. `ship` then renames the local branch to one no pull request has used, says so in its report, and goes on as for a branch with no pull request. A branch that continues the earlier work, a rebased one included, or a gh-stack layer still stops and asks.
+
 ## 0.3.0 (2026-10-23)
 
 ### Added
