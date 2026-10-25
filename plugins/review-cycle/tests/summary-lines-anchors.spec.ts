@@ -33,7 +33,7 @@ test("the review skill records each round's cost as its legs report", () => {
   expect(six).toContain('Name every leg whose usage was not reported');
   expect(six).toContain('Codex runs the review in a child session of the `session id`');
   expect(six).toContain(
-    '`grep -rl --include=\'rollout-*.jsonl\' \'"parent_thread_id":"<session id>"\' ~/.codex/sessions | xargs grep -ho \'"total_token_usage":{[^}]*}\' | tail -1`',
+    'read its `total` from the `tokens` of the `mcp__review-cycle__codex_log` answer, or the `unavailable` reason',
   );
   expect(six).toContain('report it apart from the subagents');
   expect(section(3)).toContain("the time (`date +%s`, the start of the iteration's wall-clock)");

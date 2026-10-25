@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing';
 
+import { sessionDays } from './codex-log';
+
 // A scripted git: trees are maps of path to content, the working tree is
 // `world.work`, and HEAD points at a commit whose tree is `world.commits[head]`.
 // write-tree names the working tree by its content, so an edit made between
@@ -6310,6 +6312,11 @@ describe('the scratch directory', () => {
   });
 });
 
+// A count event as `grep -oE` prints it from a codex-cli 0.164.0 rollout.
+const rolloutUsage = (input: number, output: number) =>
+  `"type":"token_count","info":{"total_token_usage":{"input_tokens":${input},"cached_input_tokens":${input - 10},"cache_write_input_tokens":0,"output_tokens":${output},"reasoning_output_tokens":1,"total_tokens":${input + output}}`;
+const SESSION = '01a17142-615a-7521-991d-b512b86d3b59';
+
 describe('the Codex command log', () => {
   const E = String.fromCodePoint(27);
   const LOG = [
@@ -6340,7 +6347,96 @@ describe('the Codex command log', () => {
           lastOutputLine: 'failed to load config',
         },
       ],
+      tokens: { sessionId: null, unavailable: 'the log names no session id' },
     });
+  });
+  // A log naming SESSION, whose one child session finished with 100 + 5 tokens
+  // under <home>/sessions.
+  const tokensWith = async ($: any, on: any, env: Record<string, string>, home: string) => {
+    const dir = `${home}/sessions/${sessionDays(SESSION)[0]}`;
+    const child = `${dir}/rollout-2026-10-24T23-12-18-01a17142-6246-7073-970e-3dfdb1c5d68a.jsonl`;
+    const w = fakeWorld(on, {
+      env,
+      files: { '/tmp/codex.out': LOG.replace('\n', `\nsession id: ${SESSION}\n`), [dir]: '' },
+      git: (a: string) => {
+        if (a.includes(`"parent_thread_id":"${SESSION}"`)) return { stdout: `${child}\n` };
+        if (a.startsWith('grep -oE') && a.endsWith(child)) {
+          return {
+            stdout: `${rolloutUsage(10, 1)}\n${rolloutUsage(100, 5)}\n"type":"task_complete"\n`,
+          };
+        }
+        return null;
+      },
+    });
+    await $.session.start({ source: 'startup' });
+    const r = (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_log',
+      path: '/tmp/codex.out',
+    })) as {
+      result: string;
+    };
+    const search = w.calls.find((c) => c.argv[1] === '-rlF');
+    return { tokens: JSON.parse(r.result).tokens, search, dir, w };
+  };
+  test("codex_log sums the token totals of the review's sessions under CODEX_HOME", async ($, on) => {
+    const { tokens, search, dir } = await tokensWith($, on, { CODEX_HOME: '/codex' }, '/codex');
+    expect(tokens).toEqual({
+      sessionId: SESSION,
+      sessions: 1,
+      input: 100,
+      cachedInput: 90,
+      output: 5,
+      reasoningOutput: 1,
+      total: 105,
+    });
+    expect(search?.argv).toEqual([
+      'grep',
+      '-rlF',
+      '--include=rollout-*.jsonl',
+      '-e',
+      `"parent_thread_id":"${SESSION}"`,
+      dir,
+    ]);
+    // A search over a large sessions tree must not hold the tool open.
+    expect(search?.init).toMatchObject({ stdin: '', timeoutMs: 30_000 });
+  });
+  test('codex_log reads ~/.codex when CODEX_HOME is unset', async ($, on) => {
+    const { tokens, search } = await tokensWith($, on, {}, '/Users/tester/.codex');
+    expect(tokens.total).toBe(105);
+    expect(search?.argv.at(-1)).toMatch(/^\/Users\/tester\/\.codex\/sessions\//);
+  });
+  test('codex_log reads ~/.codex when CODEX_HOME is empty, as Codex does', async ($, on) => {
+    const { tokens, search } = await tokensWith($, on, { CODEX_HOME: '' }, '/Users/tester/.codex');
+    expect(tokens.total).toBe(105);
+    expect(search?.argv.at(-1)).toMatch(/^\/Users\/tester\/\.codex\/sessions\//);
+  });
+  test('codex_log says so when neither CODEX_HOME nor HOME is set', async ($, on) => {
+    const { tokens, search } = await tokensWith($, on, { HOME: '' }, '/nowhere');
+    expect(tokens).toEqual({
+      sessionId: SESSION,
+      unavailable: 'neither CODEX_HOME nor HOME is set',
+    });
+    expect(search).toBe(undefined);
+  });
+  test('codex_log keeps the commands when the token lookup throws', async ($, on) => {
+    fakeWorld(on, {
+      env: { CODEX_HOME: '/codex' },
+      files: {
+        '/tmp/codex.out': LOG.replace('\n', `\nsession id: ${SESSION}\n`),
+        [`/codex/sessions/${sessionDays(SESSION)[0]}`]: '',
+      },
+      reject: (a: string) => a.startsWith('grep'),
+      rejectWith: 'timed out after 30000ms',
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    const r = (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_log',
+      path: '/tmp/codex.out',
+    } as any)) as { result: string };
+    const answer = JSON.parse(r.result);
+    expect(answer.commands).toHaveLength(1);
+    expect(answer.tokens.sessionId).toBe(SESSION);
+    expect(answer.tokens.unavailable).toContain('timed out');
   });
   test('codex_log refuses a file that is not a Codex log, rather than list nothing', async ($, on) => {
     // Command-shaped lines without the banner are still refused.

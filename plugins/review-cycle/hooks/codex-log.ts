@@ -32,12 +32,43 @@ export type CodexCommand = {
 export type CodexLog = {
   // False when the text holds no Codex banner.
   recognized: boolean;
+  // The `session id:` line of the banner; the review itself runs in a child
+  // session whose rollout names this one as its `parent_thread_id`.
+  sessionId: string | null;
   commands: CodexCommand[];
 };
+
+export type TokenUsage = {
+  input: number;
+  cachedInput: number;
+  output: number;
+  reasoningOutput: number;
+  total: number;
+};
+
+// `sessions` counts the review's descendants: its child, and any session that
+// child started, such as Codex's guardian.
+export type CodexTokens =
+  | ({ sessionId: string; sessions: number; unavailable?: never } & TokenUsage)
+  | { sessionId: string | null; unavailable: string; sessions?: never; total?: never };
+
+type Run = (argv: readonly string[]) => Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  isStdoutTruncated?: boolean;
+}>;
 
 const ESC = String.fromCodePoint(27);
 const ANSI = new RegExp(`${ESC}\\[[0-9;]*m`, 'g');
 const BANNER = /^OpenAI Codex v\S+/;
+const SESSION = /^session id: ([0-9a-f-]{36})$/;
+// Measured on codex-cli 0.164.0: each count event carries the running total,
+// and a turn runs from `task_started` to `task_complete`.
+const USAGE = /"type":"token_count","info":\{"total_token_usage":(\{[^}]*\})/g;
+const EVENTS = String.raw`"type":"task_(started|complete)"|"type":"token_count","info":\{"total_token_usage":\{[^}]*\}`;
+const TURN = /"type":"task_(started|complete)"/g;
+const ROLLOUT_ID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 const STATUS = /^ (succeeded|exited (\d{1,9})) in (\d{1,9}(?:\.\d+)?)(ms|s):$/;
 // With color, the bold command ends in a reset right before ` in <cwd>`.
 const COLORED_CWD = new RegExp(`${ESC}\\[0m in (\\/.*)$`);
@@ -214,6 +245,10 @@ export function readCodexLog(log: string): CodexLog {
   // Read from the markers, since a command's own output may be colored.
   const colored = lines.some((l) => l.colored && l.text === 'exec');
   const recognized = lines.some((l) => BANNER.test(l.text));
+  // The banner precedes every command, so a later match is a command's output.
+  const firstExec = lines.findIndex((l) => l.text === 'exec');
+  const header = firstExec === -1 ? lines : lines.slice(0, firstExec);
+  const sessionId = header.map((l) => SESSION.exec(l.text)?.[1]).find(Boolean) ?? null;
   // With color, only colored lines are markers; without it, any line is.
   const isMarker = (l: Line) => !colored || l.colored;
   const isExec = (l: Line | undefined) => l !== undefined && isMarker(l) && l.text === 'exec';
@@ -317,5 +352,105 @@ export function readCodexLog(log: string): CodexLog {
     }
     i++;
   }
-  return { recognized, commands };
+  return { recognized, sessionId, commands };
+}
+
+// The last running total in a rollout's text, or null when it holds none or a
+// count is missing: a missing count must not read as a measured 0.
+export function lastTokenUsage(text: string): TokenUsage | null {
+  const last = [...text.matchAll(USAGE)].at(-1)?.[1];
+  if (last === undefined) return null;
+  let u: Record<string, unknown>;
+  try {
+    u = JSON.parse(last) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const n = (k: string): number | null => {
+    const v = u[k];
+    return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
+  };
+  const usage = {
+    input: n('input_tokens'),
+    cachedInput: n('cached_input_tokens'),
+    output: n('output_tokens'),
+    reasoningOutput: n('reasoning_output_tokens'),
+    total: n('total_tokens'),
+  };
+  return Object.values(usage).includes(null) ? null : (usage as TokenUsage);
+}
+
+const pad2 = (v: number) => String(v).padStart(2, '0');
+
+// Codex files a rollout under the local date it started, which a UUIDv7
+// session id carries. The days either side cover a review past midnight and a
+// reader in another time zone; calendar days, since a day is not always 24 hours.
+export function sessionDays(sessionId: string): string[] {
+  const start = new Date(Number.parseInt(sessionId.replaceAll('-', '').slice(0, 12), 16));
+  return [-1, 0, 1].map((n) => {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + n);
+    return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+  });
+}
+
+// Sums the last total of every descendant session of `sessionId` under
+// `sessions` (Codex's sessions directory). grep, not a file read: a review's
+// rollout runs to megabytes, past what one read may copy.
+export async function codexTokens(
+  run: Run,
+  exists: (path: string) => Promise<boolean>,
+  sessions: string | null,
+  sessionId: string | null,
+): Promise<CodexTokens> {
+  if (sessionId === null) return { sessionId, unavailable: 'the log names no session id' };
+  if (sessions === null) return { sessionId, unavailable: 'neither CODEX_HOME nor HOME is set' };
+  const no = (why: string): CodexTokens => ({ sessionId, unavailable: why });
+  // grep exits 2 for a missing path even when another one matches.
+  const dirs: string[] = [];
+  for (const day of sessionDays(sessionId)) {
+    if (await exists(`${sessions}/${day}`)) dirs.push(`${sessions}/${day}`);
+  }
+  if (dirs.length === 0) return no(`no rollouts under ${sessions} for the session's day`);
+  const files: string[] = [];
+  const seen = new Set([sessionId]);
+  // One search per generation: the review's child, then sessions it started.
+  let parents = [sessionId];
+  while (parents.length > 0) {
+    const found = await run([
+      'grep',
+      '-rlF',
+      '--include=rollout-*.jsonl',
+      ...parents.flatMap((id) => ['-e', `"parent_thread_id":"${id}"`]),
+      ...dirs,
+    ]);
+    if (found.isStdoutTruncated) return no('the list of child sessions passed 4 MiB');
+    // A signal reads as exit 1, which only stderr tells from no match.
+    if (found.exitCode > 1 || (found.exitCode === 1 && found.stderr.trim() !== '')) {
+      return no(`grep exited ${found.exitCode}: ${found.stderr.trim()}`);
+    }
+    parents = [];
+    for (const file of found.stdout.split('\n').filter(Boolean)) {
+      const id = ROLLOUT_ID.exec(file)?.[1];
+      if (id === undefined || seen.has(id)) continue;
+      seen.add(id);
+      files.push(file);
+      parents.push(id);
+    }
+  }
+  if (files.length === 0) return no(`no child session of ${sessionId} under ${dirs.join(', ')}`);
+  const sum: TokenUsage = { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0, total: 0 };
+  for (const file of files) {
+    const events = await run(['grep', '-oE', EVENTS, file]);
+    if (events.isStdoutTruncated) return no(`the token counts in ${file} passed 4 MiB`);
+    if (events.exitCode > 1 || (events.exitCode === 1 && events.stderr.trim() !== '')) {
+      return no(`grep exited ${events.exitCode}: ${events.stderr.trim()}`);
+    }
+    if ([...events.stdout.matchAll(TURN)].at(-1)?.[1] !== 'complete') {
+      return no(`${file} has not finished`);
+    }
+    const usage = lastTokenUsage(events.stdout);
+    if (usage === null) return no(`no token total in ${file}`);
+    for (const k of Object.keys(sum) as (keyof TokenUsage)[]) sum[k] += usage[k];
+  }
+  return { sessionId, sessions: files.length, ...sum };
 }
