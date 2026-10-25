@@ -51,6 +51,9 @@ const EVADE_ANCHOR = 'slip past a guard';
 // A reviewer once symlinked node_modules into its copy, and an install emptied
 // the target's; another ran git from an unset directory and created ~/.git.
 const NO_SYMLINK_ANCHOR = 'never symlink anything from the target';
+// The plugin's copy gives a leg node_modules and its own git directory, so it
+// can run the project's checks without an install or a write to the target.
+const COPY_ANCHOR = 'scripts/copy-tree.sh <PROJECT_ROOT> <dir>/tree';
 const NO_INSTALL_ANCHOR = 'no package-manager install';
 // pnpm 12 installs before `pnpm <script>` or `pnpm exec` in a copy without
 // node_modules, running lefthook's postinstall there.
@@ -145,6 +148,11 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
     review: 'prompt: "Review uncommitted changes in <PROJECT_ROOT>',
     'review-pr': 'prompt: "Review git diff',
   };
+  // A PR's worktree has no node_modules, so its legs take them from <ROOT>.
+  const copies: Record<string, string> = {
+    review: COPY_ANCHOR,
+    'review-pr': 'scripts/copy-tree.sh <WT> <dir>/tree <ROOT>',
+  };
   for (const skill of ['review', 'review-pr']) {
     // Each layer closes a measured survivor: a range that fails open past a
     // renamed heading, and a prose decoy defeating a file-wide or mid-line
@@ -169,6 +177,7 @@ test('every reviewer spawn prompt carries the containment clauses on its own lin
       ],
       [NAME_DIR_ANCHOR, 'the reviewer prompt lost the name-directory clause'],
       [WRITE_NOWHERE_ANCHOR, 'the reviewer prompt lost the write-nowhere clause'],
+      [copies[skill] ?? '', 'the reviewer prompt lost the copy command'],
       [NO_SYMLINK_ANCHOR, 'the reviewer prompt lost the symlink ban'],
       [NO_INSTALL_ANCHOR, 'the reviewer prompt lost the install ban'],
       [BY_PATH_ANCHOR, 'the reviewer prompt lost the tools-by-path rule'],
@@ -196,6 +205,7 @@ test("the review skill's Phase 7 containment sentence stands on its own", () => 
     ['reshape a command', 'Phase 7 sentence lost the never-evade clause'],
     [NAME_DIR_ANCHOR, 'Phase 7 sentence lost the name-directory clause'],
     [WRITE_NOWHERE_ANCHOR, 'Phase 7 sentence lost the write-nowhere clause'],
+    [COPY_ANCHOR, 'Phase 7 sentence lost the copy command'],
     [NO_SYMLINK_ANCHOR, 'Phase 7 sentence lost the symlink ban'],
     [NO_INSTALL_ANCHOR, 'Phase 7 sentence lost the install ban'],
     [BY_PATH_ANCHOR, 'Phase 7 sentence lost the tools-by-path rule'],
@@ -244,7 +254,7 @@ test('both skills carry the effort-argument contract', () => {
     ]);
   }
   expectAnchors(readFileSync(REVIEW_SKILL, 'utf8'), 'review', [
-    ['for reading, not measurement', 'reading-shaped Codex question rule lost'],
+    ['The Codex leg measures in a copy.', 'the Codex leg no longer measures'],
   ]);
 });
 
