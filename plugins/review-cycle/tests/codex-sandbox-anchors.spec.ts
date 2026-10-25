@@ -18,9 +18,9 @@ test('the Codex leg runs with the repository read-only and is told why', () => {
     'Write the absolute scratch path itself into the filesystem table and the brief on every Codex launch this cycle; when `mcp__review-cycle__scratch` failed, run `mktemp -d` once and use the path it prints. Then pass the filesystem table as one `-c` value, since a dotted key splits on the dot in the scratch path.',
   );
   expect(three).toContain(
-    '*The repository is read-only for this review, by design: write only inside <SCRATCH>, making your own directory there with mktemp -d <SCRATCH>/codex.XXXXXX and pointing TMPDIR at it. A command that writes inside the repository, such as a test runner writing a cache, fails with Operation not permitted; that is expected, not a defect in the change and not a reason to request wider permissions. Continue with checks that only read.*',
+    `*The repository is read-only for this review, by design: write only inside <SCRATCH>, making your own directory there with mktemp -d <SCRATCH>/codex.XXXXXX and pointing TMPDIR at it. A command that writes inside the repository, such as a test runner writing a cache, fails with Operation not permitted; that is expected, not a defect in the change and not a reason to request wider permissions. Run tests and builds in a copy you make with \${CLAUDE_PLUGIN_ROOT}/scripts/copy-tree.sh <PROJECT_ROOT> <your directory>/tree.*`,
   );
   expect(three).toContain(
-    'Under the step 1 profile, reading and checks that write nothing succeed — typecheck, lint, `git diff` — while a build or test runner that writes inside the repository is denied',
+    'Under the step 1 profile a build or test runner that writes inside the repository is denied, so its brief has it run them in a copy under `<SCRATCH>`',
   );
 });
