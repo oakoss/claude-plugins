@@ -75,6 +75,8 @@ function repo(): { root: string; repo: string } {
   write(path.join(r, 'sub/s.txt'), 'sub\n');
   symlinkSync('does-not-exist', path.join(r, 'dangling'));
   write(path.join(r, '.probe'), 'a project file\n');
+  // A listed name tar could read as an option; CI runs this against GNU tar.
+  write(path.join(r, '-dash.txt'), 'dash\n');
   git(r, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
   return { root, repo: r };
 }
@@ -103,6 +105,7 @@ test('the copy holds the working tree as git reports it, with no remote', () => 
   expect(existsSync(path.join(dest, 'sub/s.txt'))).toBe(true);
   expect(existsSync(path.join(dest, 'sub/.git'))).toBe(false);
   expect(readFileSync(path.join(dest, '.probe'), 'utf8')).toBe('a project file\n');
+  expect(readFileSync(path.join(dest, '-dash.txt'), 'utf8')).toBe('dash\n');
   expect(git(dest, 'remote')).toBe('');
   // A base a check diffs against still resolves.
   expect(git(dest, 'rev-parse', 'main', 'origin/main')).toBe(git(r, 'rev-parse', 'main', 'main'));
