@@ -22,7 +22,7 @@ git ls-files -co --exclude-standard -z \
   | while IFS= read -r -d '' f; do
     if [ -e "$f" ] || [ -L "$f" ]; then printf '%s\0' "$f"; fi
   done \
-  | tar --null -T - --exclude .git -cf - \
+  | tar -cf - --null --exclude .git -T - \
   | tar -xpf - -C "$dest"
 
 # Its own git directory, reading the repository's objects through alternates,
