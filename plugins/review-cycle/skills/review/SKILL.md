@@ -195,7 +195,7 @@ In a single conversation turn, invoke ALL of the following:
 
    **Reshape the brief for the flag**, falsifiable question included (step 2): the value is parsed as TOML through one layer of shell quoting, so flatten it into one line of plain prose with no double quotes, backslashes, backticks, or dollar signs (apostrophes are fine). Name files and identifiers bare; keep the changed-file list, comma-separated.
 
-   **Keep the repository read-only for Codex.** In a trusted project its sandbox is `workspace-write`, which can write the repository. Two more overrides run it under a permission profile that reads everything and writes only `<SCRATCH>`. Write the absolute scratch path itself into the filesystem table and the brief on every Codex launch this cycle; when `mcp__review-cycle__scratch` failed, run `mktemp -d` once and use the path it prints. Then pass the filesystem table as one `-c` value, since a dotted key splits on the dot in the scratch path. The brief says so in this sentence: *The repository is read-only for this review, by design: write only inside <SCRATCH>, making your own directory there with mktemp -d <SCRATCH>/codex.XXXXXX and pointing TMPDIR at it. A command that writes inside the repository, such as a test runner writing a cache, fails with Operation not permitted; that is expected, not a defect in the change and not a reason to request wider permissions. Run tests and builds in a copy you make with ${CLAUDE_PLUGIN_ROOT}/scripts/copy-tree.sh <PROJECT_ROOT> <your directory>/tree.*
+   **Keep the repository read-only for Codex.** In a trusted project its sandbox is `workspace-write`, which can write the repository. Three more overrides run it under a permission profile that reads everything, writes only `<SCRATCH>`, and has no network. Write the absolute scratch path itself into the filesystem table and the brief on every Codex launch this cycle; when `mcp__review-cycle__scratch` failed, run `mktemp -d` once and use the path it prints. Then pass the filesystem table as one `-c` value, since a dotted key splits on the dot in the scratch path. The brief says so in this sentence: *The repository is read-only for this review, by design: write only inside <SCRATCH>, making your own directory there with mktemp -d <SCRATCH>/codex.XXXXXX and pointing TMPDIR at it. A command that writes inside the repository fails with Operation not permitted, and you have no network; neither is a defect in the change nor a reason to request wider permissions. Run tests and builds in a copy you make with ${CLAUDE_PLUGIN_ROOT}/scripts/copy-tree.sh <PROJECT_ROOT> <your directory>/tree, using the project's own checks: <the commands Phase 2 ran, a JavaScript tool by path as node_modules/.bin/<tool>, since a package-manager script tries an install first; with none, end at tree>.*
 
    **An explicit effort argument wins over the tier.** When Argument parsing validated one, append `-c model_reasoning_effort="<that literal>"` on either tier, raising included. The rest of this paragraph and the next apply only without one. On the **full** tier pass no override: the user's `~/.codex/config.toml` decides. On the **light** tier, lower the effort only when it would actually be lower. Read the configured value from the root table only, since a `[profiles.*]` key is not what runs:
 
@@ -212,7 +212,7 @@ In a single conversation turn, invoke ALL of the following:
    ```bash
    # full tier, working-tree scope (re-derive the root in this call — shell values
    # don't survive between Bash calls):
-   cd "$(git rev-parse --show-toplevel)" && FORCE_COLOR=1 codex review --uncommitted -c 'default_permissions="review-cycle"' -c 'permissions.review-cycle.filesystem={":root"="read", ":workspace_roots"="read", "<SCRATCH>"="write"}' -c "developer_instructions=\"<brief>\""
+   cd "$(git rev-parse --show-toplevel)" && FORCE_COLOR=1 codex review --uncommitted -c 'default_permissions="review-cycle"' -c 'permissions.review-cycle.filesystem={":root"="read", ":workspace_roots"="read", "<SCRATCH>"="write"}' -c 'permissions.review-cycle.network.enabled=false' -c "developer_instructions=\"<brief>\""
    # base scope: swap --uncommitted for --base <ref>
    # light tier: append -c model_reasoning_effort="low"
    # explicit effort argument: append -c model_reasoning_effort="<validated literal>" on either tier
@@ -246,7 +246,7 @@ In a single conversation turn, invoke ALL of the following:
    - `silent-failure-hunter` — which of these error paths still reports success when the dependency genuinely fails?
    - `type-design-analyzer` — can an invalid value of this type be constructed through a public route?
 
-   **The Codex leg measures in a copy.** Under the step 1 profile a build or test runner that writes inside the repository is denied, so its brief has it run them in a copy under `<SCRATCH>`, and its question can need a run as much as a subagent's.
+   **The Codex leg measures in a copy.** Its question can need a run as much as a subagent's.
 
    If you cannot name what would answer a question, omit it for that leg (drop the `Settle this first...` sentence) rather than manufacture one that only sounds specific.
 
