@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       shell: ${{ steps.filter.outputs.shell }}
+      modules: ${{ steps.modules.outputs.plugins }}
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -58,6 +59,21 @@ jobs:
             shell=true
           fi
           echo "shell=$shell" >> "$GITHUB_OUTPUT"
+
+      # Every plugin with a hooks module, so a new one is tested without a
+      # workflow edit. An empty list fails rather than skipping Hook tests:
+      # grep exits 1 on no match and 2 on an unreadable file.
+      - name: List hooks modules
+        id: modules
+        run: |
+          set -o pipefail
+          files=$(grep -l '"modules"' plugins/*/hooks/hooks.json) || {
+            echo "::error title=Hook tests::no plugin with a hooks module found (grep exit $?)"
+            exit 1
+          }
+          plugins=$(printf '%s\n' "$files" | cut -d/ -f2 | jq -Rnc '[inputs]')
+          printf 'plugins with hooks modules: %s\n' "$plugins"
+          echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
 
   bump-files:
     name: Bump files
@@ -188,10 +204,9 @@ jobs:
       # the validate contract is stable, and a break from a CLI update should
       # surface here loudly rather than age silently behind a pin.
       #
-      # On the runner's Node, before pnpm/setup, on purpose: the CLI is a native
-      # binary (bin `claude.exe`), so only its postinstall runs on Node. After
-      # pnpm/setup, `npm` would run on pnpm's npm-less Node, whose real path is
-      # in pnpm's store, and would put `claude` in a global folder off PATH
+      # On the runner's Node, never after pnpm/setup: the CLI is a native
+      # binary (bin `claude.exe`), so only its postinstall runs on Node, and
+      # `npm` on pnpm's npm-less Node puts `claude` in a global folder off PATH
       # (measured on macOS).
       # jactionlint ignore=adhoc-packages
       - name: Install Claude Code CLI
@@ -205,22 +220,67 @@ jobs:
           done
           exit "$status"
 
+  # One job per plugin: the hook tests are the slowest step in CI, and the
+  # plugins' suites take about the same time.
+  hook-tests:
+    name: Hook tests (${{ matrix.plugin }})
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.changes.outputs.modules) }}
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Unpinned and on the runner's Node, as in Plugin manifests.
+      # jactionlint ignore=adhoc-packages
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
       # A Claude Code without mods (before v2.1.287) prints a notice and exits
-      # 0 having run nothing, so the step requires each run to report the
+      # 0 having run nothing, so the step requires the run to report the
       # tests it ran.
-      - name: Test hooks modules
+      - name: Test hooks module
+        env:
+          PLUGIN: plugins/${{ matrix.plugin }}
         run: |
           status=0
-          for plugin in plugins/*/; do
-            grep -qs '"modules"' "$plugin/hooks/hooks.json" || continue
-            out=$(claude plugin test "$plugin" 2>&1) || status=1
-            printf '%s\n' "$out"
-            if ! printf '%s\n' "$out" | grep -qE '^Ran [1-9][0-9]* tests?'; then
-              printf '::error::%s: claude plugin test ran no tests\n' "$plugin"
-              status=1
-            fi
-          done
+          out=$(claude plugin test "$PLUGIN" 2>&1) || status=1
+          printf '%s\n' "$out"
+          if ! printf '%s\n' "$out" | grep -qE '^Ran [1-9][0-9]* tests?'; then
+            printf '::error::%s: claude plugin test ran no tests\n' "$PLUGIN"
+            status=1
+          fi
           exit "$status"
+
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # In audit mode: logs unauthorized egress without blocking; promote to
+      # `egress-policy: block` once a stable allowlist emerges from runs.
+      - name: Harden Runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # workspace's dependencies, TypeScript among them.
@@ -236,7 +296,7 @@ jobs:
         run: pnpm typecheck
 
       # The modules' pure logic and the prose anchors; register.ts runs under
-      # `claude plugin test` above.
+      # `claude plugin test` in Hook tests.
       - name: Unit tests
         run: pnpm test
 
@@ -346,7 +406,7 @@ jobs:
     # always(), not !cancelled(): a skipped required check counts as
     # satisfied, so cancellation must yield a red X here, not a skip.
     if: always()
-    needs: [changes, bump-files, lint, validate, shellcheck, jactionlint]
+    needs: [changes, bump-files, lint, validate, hook-tests, typescript, shellcheck, jactionlint]
     steps:
       # In audit mode: logs unauthorized egress without blocking; promote to
       # `egress-policy: block` once a stable allowlist emerges from runs.
@@ -355,30 +415,65 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Summarize results
+      # Reads every job from `needs`, so a job listed there is gated without
+      # editing this step. A job skips by its own condition (Bump files on
+      # push, ShellCheck with no shell change) or because a job it needs
+      # failed, and that one is gated here too.
+      - name: Gate on all required jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
+          set -euo pipefail
+
+          # A gate that dies before its verdict must not read as a pass.
+          verdict=
+          trap 'rc=$?
+            if [ -z "$verdict" ]; then
+              [ "$rc" -ne 0 ] || rc=1
+              echo "::error title=CI gate::gate aborted (exit $rc) before reaching a verdict"
+              exit "$rc"
+            fi' EXIT INT TERM HUP
+
+          summary=${GITHUB_STEP_SUMMARY:-/dev/null}
+          results="$(mktemp)"
+          expected=$(printf '%s' "$NEEDS" | jq -r 'if type == "object" then length else error("needs is not an object") end')
+          case "$expected" in
+            ''|*[!0-9]*|0)
+              echo "::error title=CI gate::could not read any job from needs"
+              verdict=reached
+              exit 1
+              ;;
+          esac
+          printf '%s' "$NEEDS" | jq -r 'to_entries[] | [.key, .value.result] | @tsv' > "$results"
+
           {
             echo "## CI Summary"
             echo ""
-            echo "| Job | Status | Required |"
-            echo "| --- | --- | --- |"
-            echo "| Bump files | \`${{ needs.bump-files.result }}\` | Yes (PRs; skips on push) |"
-            echo "| Markdown | \`${{ needs.lint.result }}\` | Yes |"
-            echo "| Plugin manifests | \`${{ needs.validate.result }}\` | Yes |"
-            echo "| ShellCheck | \`${{ needs.shellcheck.result }}\` | Yes (skips when no shell surface changed) |"
-            echo "| Workflows | \`${{ needs.jactionlint.result }}\` | Yes |"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+          } >> "$summary" ||
+            echo "::warning title=CI gate::step summary unwritable; the verdict is unaffected"
 
-          fail_if_bad() {
-            if [ "$2" = "failure" ] || [ "$2" = "cancelled" ]; then
-              echo "Job '$1' failed or was cancelled"
-              exit 1
-            fi
-          }
+          seen=0
+          failed=0
+          while IFS=$'\t' read -r job result; do
+            seen=$((seen + 1))
+            # shellcheck disable=SC2016 # the backticks are markdown, not a subshell
+            printf '| %s | `%s` |\n' "$job" "$result" >> "$summary" || :
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error title=CI gate::Job '${job:-<empty>}' did not succeed (result: $result)"
+                failed=1
+                ;;
+            esac
+          done < "$results"
 
-          fail_if_bad "changes" "${{ needs.changes.result }}"
-          fail_if_bad "bump-files" "${{ needs.bump-files.result }}"
-          fail_if_bad "lint" "${{ needs.lint.result }}"
-          fail_if_bad "validate" "${{ needs.validate.result }}"
-          fail_if_bad "shellcheck" "${{ needs.shellcheck.result }}"
-          fail_if_bad "jactionlint" "${{ needs.jactionlint.result }}"
+          if [ "$seen" -ne "$expected" ]; then
+            echo "::error title=CI gate::read $seen of $expected jobs, so results were truncated"
+            verdict=reached
+            exit 1
+          fi
+
+          verdict=reached
+          exit "$failed"
