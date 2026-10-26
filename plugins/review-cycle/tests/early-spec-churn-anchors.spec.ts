@@ -2,9 +2,12 @@
 // and a file the fixes touch every round is named; only the skill's wording
 // carries either rule, and each rule only works in its own phase.
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { expect, test } from 'vitest';
 
-import { phase, skillText } from './agents';
+import { AGENTS_DIR, phase, skillText } from './agents';
 
 function section(n: number): string {
   return phase(skillText('review-cycle', 'review'), n, 'review').join('\n');
@@ -25,10 +28,28 @@ test('a scope finding stops the cycle before Phase 5 applies any fix', () => {
   expect(four).toContain('findings against an unverified source are caveated, never a stop');
   expect(four).toContain('as pending, not deferred');
   expect(section(3)).toContain(
-    'Name a source in its prompt only when the user named one or the reviewed commits reference it',
+    'Name a source in its prompt only when the user named one or the commits under review reference it',
   );
   expect(four).toContain('record only the scope finding in the ledger, as a `question`');
   expect(four).toContain("Scope creep against a current spec source needs the user's decision");
+});
+
+// A branch reviewed a commit at a time hands the spec leg only the newest
+// work, so without the earlier commits it reports them as scope creep.
+test("the spec leg is told the branch's earlier commits are reviewed work", () => {
+  expect(section(3)).toContain(
+    'Reviewing the working tree on a branch with commits, its prompt lists them with their trailers (`git log <default branch>..HEAD`) as reviewed work, not to be judged again.',
+  );
+  const agent = readFileSync(path.join(AGENTS_DIR, 'spec-conformance-analyzer.md'), 'utf8');
+  expect(agent).toContain(
+    "Work the caller lists as the branch's earlier, reviewed commits is not scope creep",
+  );
+  expect(agent).toContain(
+    "A requirement met by work the caller lists as the branch's earlier, reviewed commits is not missing.",
+  );
+  expect(agent).toContain(
+    'An ID that appears only in the commits the caller lists as earlier, reviewed work is context, not a handed source',
+  );
 });
 
 test('the review skill names a file the fixes touch in every round', () => {
