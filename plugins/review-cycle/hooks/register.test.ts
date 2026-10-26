@@ -6319,13 +6319,15 @@ const SESSION = '01a17142-615a-7521-991d-b512b86d3b59';
 
 describe('the Codex command log', () => {
   const E = String.fromCodePoint(27);
-  const LOG = [
+  const [BANNER, ...RUN] = [
     'OpenAI Codex v0.162.1',
     `${E}[35m${E}[3mexec${E}[0m${E}[0m`,
     `${E}[1m/bin/zsh -lc 'pnpm test'${E}[0m in /repo`,
     `${E}[31m exited 1 in 147ms:${E}[0m`,
     'failed to load config',
-  ].join('\n');
+  ];
+  const LOG = [BANNER, ...RUN].join('\n');
+  const SESSION_LOG = [BANNER, `session id: ${SESSION}`, ...RUN].join('\n');
   test('codex_log lists the commands in a Codex output file', async ($, on) => {
     fakeWorld(on, { files: { '/tmp/codex.out': LOG } });
     await ($ as any).session.start({ source: 'startup' });
@@ -6357,7 +6359,7 @@ describe('the Codex command log', () => {
     const child = `${dir}/rollout-2026-10-24T23-12-18-01a17142-6246-7073-970e-3dfdb1c5d68a.jsonl`;
     const w = fakeWorld(on, {
       env,
-      files: { '/tmp/codex.out': LOG.replace('\n', `\nsession id: ${SESSION}\n`), [dir]: '' },
+      files: { '/tmp/codex.out': SESSION_LOG, [dir]: '' },
       git: (a: string) => {
         if (a.includes(`"parent_thread_id":"${SESSION}"`)) return { stdout: `${child}\n` };
         if (a.startsWith('grep -oE') && a.endsWith(child)) {
@@ -6422,7 +6424,7 @@ describe('the Codex command log', () => {
     fakeWorld(on, {
       env: { CODEX_HOME: '/codex' },
       files: {
-        '/tmp/codex.out': LOG.replace('\n', `\nsession id: ${SESSION}\n`),
+        '/tmp/codex.out': SESSION_LOG,
         [`/codex/sessions/${sessionDays(SESSION)[0]}`]: '',
       },
       reject: (a: string) => a.startsWith('grep'),
