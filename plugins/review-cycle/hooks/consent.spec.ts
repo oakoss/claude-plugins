@@ -1563,6 +1563,10 @@ describe('where a push says it goes', () => {
     ['push the main branch', '', ['main']],
     ['push main to origin', '', ['main']],
     ['push to main please', '', ['main']],
+    ['push to origin/main', '', ['main']],
+    ['push origin/main', '', ['main']],
+    ['push it to upstream/main', '', ['main']],
+    ['yes, push to origin/main', 'Push to main?', ['main']],
     ['force push to main without a lease', '', ['main']],
     ['push the tag', '', ['tag:*']],
     ['push the tags', '', ['tag:*']],
@@ -1575,6 +1579,9 @@ describe('where a push says it goes', () => {
     ['push the main fix', '', []],
     ['push main to master', '', []],
     ['push it to the main remote', '', []],
+    ['push to origin/main-fix', '', []],
+    ['push to origin/develop', '', []],
+    ['push to fork/main', '', []],
     ['merge main into it and push', '', []],
     ['push it. Do not push the `v1.2.0` tag', '', []],
     ['push the fix, then cut the `v1.2.0` tag', '', []],
@@ -1596,6 +1603,15 @@ describe('where a push says it goes', () => {
     // An offer names it only as the closing question, in the refusal's wording.
     ['yes', 'Push to `main`?', ['main']],
     ['yes', 'Push to `develop`?', ['develop']],
+    // The default branch may go unquoted; any other name may not.
+    ['yes', 'Push to main?', ['main']],
+    ['yes', 'Nothing has been pushed yet.\n\nPush to main?', ['main']],
+    ['yes', 'Push it to master?', ['master']],
+    ['yes', 'Push to develop?', []],
+    ['yes', 'Push to main-fix?', []],
+    ['yes', 'Push to fix/x, not to main?', []],
+    ['yes', 'Push to main? Or to fix/x?', []],
+    ['yes', 'Can we push to main?\n\nPush to main?', ['main']],
     ['yes', 'Push the `v1.2.0-rc.1` tag?', ['tag:v1.2.0-rc.1']],
     ['yes', 'Push the `review-cycle@0.27.0` tag?', ['tag:review-cycle@0.27.0']],
     ['yes', 'Can we push to main?', []],
@@ -1653,6 +1669,45 @@ describe('a force push has to be named', () => {
     expect(grantOf('yes', 'Shall I go ahead with force pushing `fix/x`?')).toEqual(LEASE);
     expect(grantOf('yes', 'Force-push `fix/x`, without a lease?')).toEqual(BARE);
     expect(grantOf('yes', 'Push it with a message: `--force`?')).toEqual(PUSH);
+  });
+  test.each([
+    ['May I run git push --force-with-lease origin fix/x?', LEASE],
+    ['May I run `git push --force-with-lease origin fix/x`?', LEASE],
+    ['Run git push --force-with-lease?', LEASE],
+    ['Should I git push --force-with-lease=fix/x upstream fix/x?', LEASE],
+    ['May I run `git push --force-with-lease=fix/x:abc123 origin fix/x`?', LEASE],
+    ['May I run git push --force-with-lease=fix/x?', LEASE],
+    ['May I run git push --force-with-lease origin main?', LEASE],
+    // The remote and ref stay words, so one that defers or flags still counts.
+    ['Should I run git push --force-with-lease origin later?', NONE],
+    ['May I run `git push --force-with-lease origin tomorrow`?', NONE],
+    ['May I run git push --force-with-lease origin --tags?', NONE],
+    ['Should I run git push --force-with-lease and open a PR?', { ...LEASE, pr: true }],
+    ['Should I run git push --force-with-lease origin and open a PR?', { ...LEASE, pr: true }],
+    // A command mentioned before the question offers nothing itself.
+    ['I ran git push --force-with-lease earlier. Should I push?', PUSH],
+    ['I ran git push --force-with-lease. Anything else?', NONE],
+  ])('yes to %j, an offer writing out the push, grants it', (offer, grant) => {
+    expect(grantOf('yes', offer)).toEqual(grant);
+  });
+  test.each([
+    ['ok, push', 'Force-push `fix/x` to `origin` with a lease?', LEASE],
+    ['yes, push it', 'Force-push fix/x to origin with a lease?', LEASE],
+    ['ok, lets push', 'May I run git push --force-with-lease origin fix/x?', LEASE],
+    ['yes, push it now', 'Force-push `fix/x` without a lease?', BARE],
+    ['ok, push', 'Push `fix/x` to `origin`?', PUSH],
+    ['ok, please push that', 'Force-push `fix/x` with a lease?', LEASE],
+    ['ok, go ahead and push this please', 'Force-push `fix/x` with a lease?', LEASE],
+    // Beside a plain alternative, "push" picks the plain one.
+    ['ok, push', 'Want me to force-push `fix/x` with a lease, or a plain push?', PUSH],
+    ['sure, push it', 'Force-push `fix/x` with a lease, or push a new branch instead?', PUSH],
+    // Without the yes, or with any other word, it is the user's own push.
+    ['push it', 'Force-push `fix/x` to `origin` with a lease?', PUSH],
+    ['ok, push to origin', 'Force-push `fix/x` to `origin` with a lease?', PUSH],
+    ["yes, but don't force it", 'Force-push `fix/x` to `origin` with a lease?', NONE],
+    ['ok, push', 'Force-push `fix/x` with a lease, once CI passes?', PUSH],
+  ])('%j after %j takes the offer’s force only as a yes naming its push', (reply, offer, grant) => {
+    expect(grantOf(reply, offer)).toEqual(grant);
   });
   test("the agent's own mention of a bare force does not grant one", () => {
     const offers = [
@@ -1745,6 +1800,14 @@ describe('a message typed into the running turn', () => {
     'sorry, never mind',
     'merge it, nvm',
     'actually, don’t',
+    // A hold after "but", and one merge taken back with no offer to keep the rest of.
+    'yes, but not yet',
+    'ok but not now',
+    'both but not yet',
+    'yes, but wait',
+    'commit it, but hold off',
+    'skip #4',
+    '#4 can wait',
   ])('%s replaces it', (prompt) => {
     expect(dropsGrant(prompt)).toBe(true);
   });
@@ -2318,6 +2381,53 @@ describe('a reply picking among the pull requests a merge offer named', () => {
     expect(dropsGrant('merge both', OFFER)).toBe(false);
     expect(dropsGrant('and merge #4', OFFER)).toBe(false);
   });
+  test.each(['skip #4', 'skip 4', '#4 can wait', 'leave #4 for now', 'ok, skip #4', 'leave #4.'])(
+    '%j takes #4 back and keeps #3',
+    (reply) => {
+      expect(dropsGrant(reply, OFFER)).toBe(true);
+      expect(grantOf(reply, OFFER)).toEqual(merging('3'));
+    },
+  );
+  test.each(['skip #5', 'skip #4 and #3', 'skip #4?', 'skip the docs', 'leave #4 open'])(
+    '%j keeps no merge',
+    (reply) => {
+      expect(grantOf(reply, OFFER).merge).toBe(false);
+    },
+  );
+  test.each([
+    'Should I merge #3, then #4?\nOnly after CI passes.',
+    'Should I merge #3 and #4 when CI passes?',
+    'Should I merge #3 and #4, or #5?',
+    'If CI passes, should I merge #3 and #4?',
+    'Only after CI passes.\nSay "merge 3", "merge 4", or both.',
+    'Say "merge 3", "merge 4", or "merge 5".',
+  ])('after %j, which a yes would not grant, taking one back keeps none', (offer) => {
+    expect(dropsGrant('skip #4', offer)).toBe(true);
+    expect(grantOf('skip #4', offer).merge).toBe(false);
+  });
+  test('taking back the one merge a yes would grant now keeps none', () => {
+    const offer =
+      'Should I merge #3?\nShould I merge #4 when CI passes?\nSay "merge 3", "merge 4", or both.';
+    expect(dropsGrant('skip #3', offer)).toBe(true);
+    expect(grantOf('skip #3', offer).merge).toBe(false);
+  });
+  test('taking one back keeps what a yes would grant, whatever else the offer asks', () => {
+    const offer = 'Merge #131 and #130? Should I update the changelog or the README?';
+    expect(grantOf('yes', offer)).toEqual(merging('131', '130'));
+    expect(grantOf('skip 130', offer)).toEqual(merging('131'));
+  });
+  test.each(['Should I merge #3? Merge #3?', 'Merge #3 and #3?', 'Should I merge #3 and #03?'])(
+    'after %j, which offers one pull request twice, taking it back keeps none',
+    (offer) => {
+      expect(dropsGrant('skip #3', offer)).toBe(true);
+      expect(grantOf('skip #3', offer)).toEqual(NONE);
+      expect(grantOf('skip #03', offer)).toEqual(NONE);
+    },
+  );
+  test('taking one back from a single merge keeps none', () => {
+    expect(dropsGrant('skip #3', 'Should I merge #3?')).toBe(true);
+    expect(grantOf('skip #3', 'Should I merge #3?')).toEqual(NONE);
+  });
   test('with no merge offered, a pick names nothing', () => {
     expect(grantOf('merge both', 'Should I push?').mergeNamed).toEqual([]);
     expect(grantOf('only #3')).toEqual(NONE);
@@ -2458,6 +2568,11 @@ describe('a job started on an epic', () => {
   test('a decline read against the offer it answers starts none', () => {
     expect(mandateOf('Not yet. Do epic cpl-czgp.', 'Push it?')).toBeNull();
     expect(mandateOf('Do epic cpl-czgp.', 'Push it?')).toBe('cpl-czgp');
+  });
+  test('a yes starting one after a force-push offer starts it', () => {
+    expect(mandateOf('ok, lets do epic cpl-czgp', 'Force-push `fix/x` with a lease?')).toBe(
+      'cpl-czgp',
+    );
   });
   test('starting one asks for no step itself', () => {
     expect(grantOf('do epic cpl-czgp')).toEqual(NONE);

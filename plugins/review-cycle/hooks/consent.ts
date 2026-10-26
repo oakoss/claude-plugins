@@ -355,6 +355,18 @@ function forcePhrase(text: string): string {
     );
 }
 
+// An offer may write its force push out as the command: "May I run git push
+// --force-with-lease origin fix/x?" reads as "May I forcepush it origin fix/x?",
+// so the remote and ref stay words the tail must allow ("later" does not).
+function leaseCommand(text: string): string {
+  return text
+    .replaceAll(/`(git\s+push\s+--force-with-lease\b[^`\n]*)`/gi, '$1')
+    .replaceAll(
+      /\b(?:run\s+)?git\s+push\s+--force-with-lease(?:=[^\s,;?!]+)?(?=\s|$|[,;?!.])/gi,
+      'forcepush it',
+    );
+}
+
 // Words that may come before the verb in a request.
 const REQUEST_LEAD = new Set([
   'ok',
@@ -749,6 +761,12 @@ const AFFIRMATIVE = new RegExp(
   String.raw`^(?:${YES}|(?:${AGREEMENT}[\s,.!]+)+${GO_AHEAD}|${GO_AHEAD})\b[\s.!,]*(please|thanks|thank you)?[\s.!]*$`,
   'i',
 );
+// "ok, push" answering "Force-push `fix/x` with a lease?": a yes naming the
+// offer's own step takes the offer's force. Any other word narrows it.
+const YES_PUSH = new RegExp(
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)+(?:(?:let['’]?s|go ahead and|please)\s+)?push(?:\s+(?:it|this|that))?(?:\s+(?:now|please))?[\s.!]*$`,
+  'i',
+);
 // "ok continue", "keep going": a yes only to an offer to finish an operation.
 // Anywhere else "continue" means keep working, so it grants nothing.
 const CONTINUE_REPLY = new RegExp(
@@ -974,10 +992,10 @@ const TICK = '`';
 const NAME = `${TICK}?([^${TICK}\\s]+?)${TICK}?`;
 const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|sure|great|please|let'?s|go ahead and)[\s,]+)*`;
 const TAIL_WORDS = String.raw`(?:\s+(?:now|please|without a lease))*`;
-// "push to main", "push it to origin main", "push the main branch", "push main
-// to origin", "force push main".
+// "push to main", "push it to origin main", "push to origin/main", "push the
+// main branch", "push main to origin", "force push main".
 const TYPED_BRANCH = new RegExp(
-  String.raw`^${LEAD}(?:force\s+)?push(?:\s+(?:it|this))?(?:\s+to)?(?:\s+origin)?(?:\s+the)?\s+${TICK}?(main|master)${TICK}?(?:\s+branch)?(?:\s+to\s+origin)?${TAIL_WORDS}$`,
+  String.raw`^${LEAD}(?:force\s+)?push(?:\s+(?:it|this))?(?:\s+to)?(?:\s+origin)?(?:\s+the)?\s+${TICK}?(?:(?:origin|upstream)\/)?(main|master)${TICK}?(?:\s+branch)?(?:\s+to\s+origin)?${TAIL_WORDS}$`,
   'i',
 );
 // "push the tag", "push the tags", "push the v1.2.0 tag", "push tag 0.2.0".
@@ -986,8 +1004,9 @@ const TYPED_TAG = new RegExp(
   'i',
 );
 // The offers a refusal suggests: "Push to `develop`?", "Push the `v1.2.0` tag?".
+// The default branch may go unquoted: "Push to main?".
 const OFFERED_BRANCH = new RegExp(
-  String.raw`^push(?: it)? to ${TICK}([^${TICK}\s]+)${TICK}\?$`,
+  String.raw`^push(?: it)? to (?:${TICK}([^${TICK}\s]+)${TICK}|(main|master))\?$`,
   'i',
 );
 const OFFERED_TAG = new RegExp(String.raw`^push the ${TICK}([^${TICK}\s]+)${TICK} tag\?$`, 'i');
@@ -1020,7 +1039,7 @@ function offeredTargets(answer: string): string[] {
       .at(-1)
       ?.trim() ?? '';
   const branch = OFFERED_BRANCH.exec(asked);
-  if (branch) return [(branch[1] ?? '').toLowerCase()];
+  if (branch) return [(branch[1] ?? branch[2] ?? '').toLowerCase()];
   const tag = OFFERED_TAG.exec(asked);
   return tag ? [`tag:${(tag[1] ?? '').toLowerCase()}`] : [];
 }
@@ -1462,7 +1481,7 @@ function asked(answer: string, heard?: Set<Family>): Grant {
   // Only here, in the agent's offer: a user's "push it to `later`" defers. A
   // ref ends on a word character, so a sentence's closing period stays, and
   // one joining hand-back words ("rather/prefer") stays words.
-  const named = forcePhrase(closing)
+  const named = forcePhrase(leaseCommand(closing))
     // A path is deleted too, so a backticked or slashed name is a branch only
     // beside "branch" or a remote; a plain word is never read as one.
     .replaceAll(
@@ -1591,7 +1610,8 @@ export function mandateOf(typed: string, previousAnswer = ''): string | null {
   const prompt = typed.replace(DO_EPIC_COMMAND, 'do epic');
   const m = EPIC.exec(prompt);
   if (m === null || grantOf(prompt, previousAnswer).push !== 'none') return null;
-  const asked = grantOf(prompt.replace(m[0], 'push it'), previousAnswer);
+  // Read without the offer, whose force a yes to "push it" would take.
+  const asked = grantOf(prompt.replace(m[0], 'push it'));
   if (asked.push !== 'push' || holdOf(prompt, previousAnswer) !== null) return null;
   return m[1] ?? null;
 }
@@ -1686,10 +1706,20 @@ export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
   if (holdOf(prompt, previousAnswer) !== null) return true;
   const picked = pickedMerges(spoken(prompt.trim()), previousAnswer);
   if (picked !== null && picked.length < offeredMerges(previousAnswer).length) return true;
+  // With no plain offer to keep the rest of, taking one back takes back all.
+  if (PICK_SKIP.test(spoken(prompt.trim()))) return true;
   const typed = spoken(unquote(prompt));
   return sentences(typed).some((raw) => {
     const s = raw.replace(FILLER, '');
-    return RETRACT.test(raw) || RETRACT.test(s) || HOLD.test(s) || STOP.test(s);
+    // "yes, but not yet", "both but wait": a hold after "but" holds too.
+    const after = s.split(/\bbut\b/i).slice(1);
+    return (
+      RETRACT.test(raw) ||
+      RETRACT.test(s) ||
+      HOLD.test(s) ||
+      STOP.test(s) ||
+      after.some((part) => HOLD.test(part.replace(/^[\s,]+/, '')))
+    );
   });
 }
 
@@ -1760,6 +1790,11 @@ const PICK_BUT_NOT = new RegExp(
   String.raw`${PICK_LEAD}#?(\d+)(?:[\s,]+but)?[\s,]+not\s+#?(\d+)(?:\s+yet)?${PICK_END}`,
   'i',
 );
+// Taking one back keeps the rest: "skip #4", "#4 can wait", "leave #4 for now".
+const PICK_SKIP = new RegExp(
+  String.raw`^(?:(?:yes|yeah|yep|ok|okay|sure)[\s,]+)?(?:(?:skip|leave)\s+#?(\d+)(?:\s+for\s+now)?|#?(\d+)\s+can\s+wait)${PICK_END}`,
+  'i',
+);
 
 // The closing's last line telling the user what to type, whole, every option a
 // merge or "both", bare or in a pair of quotes: 'Say "merge 3", "merge 4", or
@@ -1799,13 +1834,25 @@ function offeredMerges(previousAnswer: string): string[] {
   return (closing.match(/\d+/g) ?? []).every((n) => offered.includes(n)) ? offered : [];
 }
 
+// "#03" is #3.
+const pr = (n: string) => n.replace(/^0+(?=\d)/, '');
+
 // The pull requests a reply picks from a merge offer naming them: all
 // ("merge both") or some ("merge only #3", "merge #3 but not #4"); null when
 // it is no such pick.
 function pickedMerges(reply: string, previousAnswer: string): string[] | null {
+  const text = reply.trim().replaceAll('’', "'");
+  const skip = PICK_SKIP.exec(text);
+  const skipped = skip?.[1] ?? skip?.[2];
+  // Taking one back keeps what a yes would have granted, less that one.
+  if (skipped !== undefined) {
+    const granted = [...new Set(accepted(previousAnswer).mergeNamed.map(pr))];
+    return granted.length >= 2 && granted.includes(skipped)
+      ? granted.filter((n) => n !== skipped)
+      : null;
+  }
   const offered = offeredMerges(previousAnswer);
   if (offered.length < 2) return null;
-  const text = reply.trim().replaceAll('’', "'");
   const all = PICK_ALL.exec(text)?.[1];
   // "both" after three offered is about something else.
   if (all !== undefined) return /\bboth\b/i.test(all) && offered.length !== 2 ? null : offered;
@@ -1981,6 +2028,9 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
       release: false,
     });
   }
+  // Not after "…with a lease, or a plain push?", where "push" picks the plain one.
+  const offered = offerSentences(closingOf(previousAnswer))?.read.join(' ') ?? '';
+  if (YES_PUSH.test(text) && !OR.test(offered)) raise(g, accepted(previousAnswer).push);
   // Read from the message as typed, before quoted or listed lines are dropped.
   return settled({ ...g, ...namedFrom(g, typed, previousAnswer, typedTargets(text)) });
 }
