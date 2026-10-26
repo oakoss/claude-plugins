@@ -61,14 +61,17 @@ jobs:
           echo "shell=$shell" >> "$GITHUB_OUTPUT"
 
       # Every plugin with a hooks module, so a new one is tested without a
-      # workflow edit. An empty list fails rather than skipping Hook tests:
-      # grep exits 1 on no match and 2 on an unreadable file.
+      # workflow edit. An empty list fails rather than skipping Hook tests.
       - name: List hooks modules
         id: modules
         run: |
           set -o pipefail
           files=$(grep -l '"modules"' plugins/*/hooks/hooks.json) || {
-            echo "::error title=Hook tests::no plugin with a hooks module found (grep exit $?)"
+            if [ "$?" -eq 1 ]; then
+              echo "::error title=Hook tests::no plugin with a hooks module found"
+            else
+              echo "::error title=Hook tests::could not read every plugins/*/hooks/hooks.json"
+            fi
             exit 1
           }
           plugins=$(printf '%s\n' "$files" | cut -d/ -f2 | jq -Rnc '[inputs]')
@@ -431,6 +434,7 @@ jobs:
             if [ -z "$verdict" ]; then
               [ "$rc" -ne 0 ] || rc=1
               echo "::error title=CI gate::gate aborted (exit $rc) before reaching a verdict"
+              trap - EXIT
               exit "$rc"
             fi' EXIT INT TERM HUP
 
