@@ -15,7 +15,7 @@ import {
 
 import type { Kept } from '../types';
 import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
-import { readCodexLog } from './codex-log';
+import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
 import {
   aliasCommits,
   classify,
@@ -2971,7 +2971,7 @@ async function registerCodexLog($: $): Promise<void> {
     await $.tool.register({
       name: 'codex_log',
       description:
-        "Reads a `codex review` output file and lists every command Codex ran, in order: the command, its working directory, `status` (`succeeded`, `exited`, `rejected` when Codex refused to run it, or `unfinished` when the log ends with no status for it), `exitCode`, `durationMs`, `guessed` (true when overlapping commands, or a log without color, leave it unclear which command a status belongs to), `masked` (true when the command chains parts with `;`, a newline, `||`, `|` or `&`, so its exit code is only the last part's), and the first and last non-empty lines of its output, each clipped at 200 characters. Answers with an error, not an empty list, for a file that is not a Codex log. Build the Codex leg's execution receipt from this, not from its verdict. Read-only.",
+        "Reads a `codex review` output file and lists every command Codex ran, in order: the command, its working directory, `status` (`succeeded`, `exited`, `rejected` when Codex refused to run it, or `unfinished` when the log ends with no status for it), `exitCode`, `durationMs`, `guessed` (true when overlapping commands, or a log without color, leave it unclear which command a status belongs to), `masked` (true when the command chains parts with `;`, a newline, `||`, `|` or `&`, so its exit code is only the last part's), and the first and last non-empty lines of its output, each clipped at 200 characters. `tokens` is the review's token usage, summed over the sessions Codex ran it in (`sessions`: its child, and any session that child started): `input`, `cachedInput` (counted within `input`), `output`, `reasoningOutput` and `total`, or `unavailable` saying why not, as for a review not yet finished. Answers with an error, not an empty list, for a file that is not a Codex log. Build the Codex leg's execution receipt from this, not from its verdict. Read-only.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2998,14 +2998,31 @@ async function onCodexLog(
     if (!(await $.fs.exists(path))) {
       return { result: `review-cycle codex_log: no file at ${path}.` };
     }
-    const { recognized, commands } = readCodexLog(await $.fs.read(path));
+    const { recognized, sessionId, commands } = readCodexLog(await $.fs.read(path));
     // An empty list would read as a Codex that ran nothing.
     if (!recognized) {
       return {
         result: `review-cycle codex_log: ${path} is not a codex review log (no \`OpenAI Codex v\` banner).`,
       };
     }
-    return { result: JSON.stringify({ commands }, null, 2) };
+    let tokens: CodexTokens;
+    try {
+      // An empty CODEX_HOME is unset to Codex too.
+      const codexHome = (await $.env.get('CODEX_HOME')) ?? '';
+      const userHome = (await $.env.get('HOME')) ?? '';
+      let home: string | null = null;
+      if (codexHome !== '') home = codexHome;
+      else if (userHome !== '') home = `${userHome}/.codex`;
+      tokens = await codexTokens(
+        (argv) => $.process.run(argv, { stdin: '', timeoutMs: 30_000 }),
+        (p) => $.fs.exists(p),
+        home ? `${home}/sessions` : null,
+        sessionId,
+      );
+    } catch (error) {
+      tokens = { sessionId, unavailable: messageOf(error) };
+    }
+    return { result: JSON.stringify({ commands, tokens }, null, 2) };
   } catch (error) {
     return { result: `review-cycle codex_log: could not read ${path}: ${messageOf(error)}` };
   }
