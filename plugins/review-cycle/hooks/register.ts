@@ -68,7 +68,6 @@ import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
   ASKED_FOR,
-  couldNotJudge,
   escalateGh,
   notAsked,
   parsePullRequest,
@@ -134,7 +133,7 @@ import {
 } from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
-import { judgePush, pushTargets, type PushConsent, type Unasked } from './push-judge';
+import { escalatePush, judgePush, pushTargets, type PushConsent, type Unasked } from './push-judge';
 import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
 import {
@@ -1900,16 +1899,10 @@ async function judgeBash(
         granted,
         model,
       );
-    let verdict = await judge();
-    if ('deny' in verdict && verdict.final) return deny(verdict.deny);
-    if ('deny' in verdict) {
-      const second = await secondRead($);
-      if (second === null) return deny(verdict.deny, verdict.step);
-      if ('why' in second) return deny(verdict.deny + couldNotJudge(second.why), verdict.step);
-      verdict = await judge(second.steps);
-      if ('deny' in verdict) return deny(verdict.deny, verdict.step);
-      yes = second;
-    }
+    const escalated = await escalatePush(judge, () => secondRead($));
+    const { verdict } = escalated;
+    if ('deny' in verdict) return deny(verdict.deny, verdict.step);
+    yes = escalated.yes;
     // Only a push that would run is steered, so its own refusals come first.
     const layer = await stackLayerPushed($, root, cls.push);
     if (layer !== null) {

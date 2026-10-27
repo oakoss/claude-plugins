@@ -1,14 +1,17 @@
 // Whether a git push may run, and the refusal when it may not. What it needs
-// from git comes through a `Git` runner and the setting through `ladder`, which
-// register.ts builds.
+// from git comes through a `Git` runner and the setting through `ladderOf`,
+// which register.ts builds.
 
 import { covers, type Grant, type UnreadOffer } from './consent';
 import {
   askThem,
+  couldNotJudge,
   notAsked,
   permitted,
   type InForce,
   type ModelSteps,
+  type ModelYesOf,
+  type SecondRead,
   type Unasked as GhUnasked,
 } from './gh-verdict';
 import { firstLine, type Git } from './git';
@@ -211,6 +214,23 @@ export async function judgePush(
   // request's, as a typed request's is.
   if (!bySetting) return { ran: model.pr === true ? { step: 'push', ladder, forPr: true } : null };
   return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
+}
+
+// A push judged, then, when it refuses short of final, judged again with the
+// model's yes. `yes` is the yes that let it through.
+export async function escalatePush<Y extends ModelYesOf>(
+  judge: (model?: ModelSteps) => Promise<PushVerdict>,
+  second: () => Promise<SecondRead<Y>>,
+): Promise<{ verdict: PushVerdict; yes: Y | null }> {
+  const first = await judge();
+  if (!('deny' in first) || first.final) return { verdict: first, yes: null };
+  const read = await second();
+  if (read === null) return { verdict: first, yes: null };
+  if (read.why !== undefined) {
+    return { verdict: { ...first, deny: first.deny + couldNotJudge(read.why) }, yes: null };
+  }
+  const verdict = await judge(read.steps);
+  return { verdict, yes: 'deny' in verdict ? null : read };
 }
 
 // The gate does not ask: the agent asks in its reply, so the user can answer
