@@ -8,6 +8,7 @@ import {
   parsePullRequest,
   type GhLookups,
   type GhModel,
+  type MissStep,
   type ModelSteps,
   type SecondRead,
   type TargetGrant,
@@ -142,6 +143,49 @@ describe('GitHub writes on the ladder', () => {
         `the user held off (their message mentioned ${named} without asking for one)`,
       ),
     });
+  });
+
+  // The misses list keeps a refusal of a push, pull request, merge or release
+  // the message named; approvals and comments are not consent the grammar misses.
+  test.each<[string, GhAction, () => ReturnType<typeof world>, Grant, MissStep | undefined]>([
+    ['a pull request', { kind: 'pr' }, () => world('open PR'), grant(), 'pr'],
+    ['a release', { kind: 'release' }, () => world('release'), grant(), 'release'],
+    ['a merge', merge(false), () => world('merge'), grant(), 'merge'],
+    ['a push', push({ branch: 'fix/x', repo: 'o/r' }), () => world('push'), grant(), 'push'],
+    [
+      'a bare force',
+      push({ asks: 'it force-updates `x`', force: true }),
+      () => world('never stop'),
+      grant({ push: 'lease' }),
+      'push',
+    ],
+    [
+      'a merge that may be a release',
+      { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
+      () => world('release', { pullRequest: { asks: 'looking it up failed (x)' } }),
+      grant(),
+      'release',
+    ],
+    [
+      'a stack submit whose lease is unbound',
+      { kind: 'stack', step: 'submit', where: { remote: null } },
+      () => world('open PR', {}, undefined, undefined, { asks: 'a branch moved' }),
+      grant(),
+      'pr',
+    ],
+    [
+      'a stack submit whose pull requests are not asked for',
+      { kind: 'stack', step: 'submit', where: { remote: null } },
+      () => world('open PR', {}, undefined, undefined, { ok: true }),
+      grant(),
+      'pr',
+    ],
+    ['an approval', { kind: 'approve' }, () => world('commit'), grant(), undefined],
+    ['a comment', { kind: 'comment' }, () => world('never stop'), grant(), undefined],
+  ])('a refused %s carries the step its miss is kept for', async (_name, action, w, g, step) => {
+    const r = await judge([action], w(), g);
+    expect(r).toHaveProperty('deny');
+    expect((r as { step?: MissStep }).step).toBe(step);
   });
 
   test.each([
@@ -1696,6 +1740,7 @@ describe('the escalation from grammar to model', () => {
     });
     expect(why.gh).toEqual({
       deny: `${(plain.gh as { deny: string }).deny} The model check could not judge the message (timed out).`,
+      step: 'pr',
     });
     expect(why.yes).toBeNull();
   });
@@ -1723,6 +1768,7 @@ describe('the escalation from grammar to model', () => {
     const r = await escalate([merge(false)], world('merge'), m);
     expect(r.gh).toEqual({
       deny: `${(first.gh as { deny: string }).deny} The model check could not judge whether the answer offered #7 (no answer).`,
+      step: 'merge',
     });
     expect(r.target).toBeNull();
     expect(m.asked).toEqual(['target', 'second']);

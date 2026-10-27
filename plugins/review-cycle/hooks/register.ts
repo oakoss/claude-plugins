@@ -67,6 +67,7 @@ import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
+  ASKED_FOR,
   couldNotJudge,
   escalateGh,
   notAsked,
@@ -77,6 +78,7 @@ import {
   type GhConsent,
   type GhLookups,
   type GhModel,
+  type MissStep,
   type InForce,
   type Lookup,
   type ModelSteps,
@@ -120,7 +122,6 @@ import {
   stopBeforeOf,
   where,
   withMandate,
-  type Step,
   type StopBefore,
 } from './ladder';
 import {
@@ -737,13 +738,13 @@ async function ensureRoot($: $): Promise<Repo | null> {
   return state.root;
 }
 
-function deny(reason: string): { deny: string } {
-  if (reason.includes(ASKS_THEM)) noteMiss(reason);
+// `step` is the step the refusal asks the user to decide, kept as a miss when
+// their message named it.
+function deny(reason: string, step?: MissStep): { deny: string } {
+  if (step !== undefined) noteMiss(reason, step);
   return { deny: `review-cycle: ${reason}` };
 }
 
-// What every refusal asking the user to decide a step says.
-const ASKS_THEM = 'stop and ask them in your reply';
 const MAX_MISSES = 20;
 const MISS_TEXT = 300;
 const clip = (s: string) => s.slice(0, MISS_TEXT);
@@ -755,21 +756,7 @@ function questionOf(closing: string): string {
   return sentences.findLast((s) => s.trim().endsWith('?'))?.trim() ?? '';
 }
 
-// The step a refusal is about, from how notAsked and the merge check word it:
-// "doesn't ask for a merge", "the merge may be a release". Commits and
-// approvals are not consent the grammar misses.
-function refusedStep(refusal: string): HoldStep | null {
-  if (/\bmay be a release\b/.test(refusal)) return 'release';
-  const named =
-    /\bask(?:ed)? for (a (?:force |forced |bare )?push|a bare force|a pull request|a merge|a release)\b/.exec(
-      refusal,
-    )?.[1];
-  if (named === undefined) return null;
-  if (named.endsWith('push') || named === 'a bare force') return 'push';
-  return named === 'a pull request' ? 'pr' : named === 'a merge' ? 'merge' : 'release';
-}
-
-function grants(grant: Grant, step: HoldStep): boolean {
+function grants(grant: Grant, step: MissStep): boolean {
   if (step === 'push') return covers(grant, 'push');
   if (step === 'merge') return grant.merge || grant.autoMerge || grant.mergeStack.length > 0;
   // A merge the user asked for covers the version pull request too.
@@ -777,9 +764,7 @@ function grants(grant: Grant, step: HoldStep): boolean {
   return grant.pr;
 }
 
-function noteMiss(refusal: string): void {
-  const step = refusedStep(refusal);
-  if (step === null) return;
+function noteMiss(refusal: string, step: MissStep): void {
   const { text, before } = state.said;
   // The whole closing is kept, so a spec row drafted from it reads as the gate did.
   const offer = isReply(text) ? closingOf(before) : '';
@@ -1457,7 +1442,7 @@ async function onGithubTool(
     () => ghLookups($),
     ghModel($),
   );
-  if ('deny' in gh) return deny(gh.deny);
+  if ('deny' in gh) return deny(gh.deny, gh.step);
   const told = target === null ? null : targetRan($, target);
   const stale = overtaken(message, next.signal, 'call');
   if (stale !== null) return stale;
@@ -1704,7 +1689,7 @@ const MODEL_STEPS = ['push', 'pr', 'approve', 'release'] as const;
 // for the grammar.
 function modelRan($: $, yes: ModelYes): string {
   const steps = MODEL_STEPS.filter((s) => yes.steps[s] === true);
-  const line = `review-cycle: the model check read "${yes.quote}" as asking for ${steps.map((s) => STEP_NAME[s]).join(' and ')}.`;
+  const line = `review-cycle: the model check read "${yes.quote}" as asking for ${steps.map((s) => ASKED_FOR[s]).join(' and ')}.`;
   $.ui.log(line);
   recordMiss({
     message: clip(yes.text),
@@ -1827,7 +1812,7 @@ async function judgeBash(
       ghModel($),
     );
     const { gh, yes } = read;
-    if ('deny' in gh) return deny(gh.deny);
+    if ('deny' in gh) return deny(gh.deny, gh.step);
     const told = read.target === null ? null : targetRan($, read.target);
     // Only a merge that succeeded ends a standing ask, and a filter's status hides that.
     const standing = gh.used !== undefined && (gh.used.ready.length > 0 || gh.used.release);
@@ -1913,10 +1898,10 @@ async function judgeBash(
     if ('deny' in verdict && verdict.final) return deny(verdict.deny);
     if ('deny' in verdict) {
       const second = await secondRead($);
-      if (second === null) return deny(verdict.deny);
-      if ('why' in second) return deny(verdict.deny + couldNotJudge(second.why));
+      if (second === null) return deny(verdict.deny, verdict.step);
+      if ('why' in second) return deny(verdict.deny + couldNotJudge(second.why), verdict.step);
       verdict = await judgePush($, root.top, e.command, commits, cls.push, granted, second.steps);
-      if ('deny' in verdict) return deny(verdict.deny);
+      if ('deny' in verdict) return deny(verdict.deny, verdict.step);
       yes = second;
     }
     // Only a push that would run is steered, so its own refusals come first.
@@ -2010,20 +1995,11 @@ async function ladderOf($: $): Promise<InForce> {
 
 // Told to the agent, so the step is never silent. Worded as having run, not
 // succeeded: the command may still fail.
-const STEP_NAME: Record<Step, string> = {
-  commit: 'a commit',
-  push: 'a push',
-  pr: 'a pull request',
-  merge: 'a merge',
-  approve: 'an approval',
-  release: 'a release',
-};
-
 function ranUnasked($: $, { step, ladder, ready }: Unasked): string {
   const line =
     ready === undefined
-      ? `review-cycle: ran ${STEP_NAME[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`
-      : `review-cycle: ran ${STEP_NAME[step]} now, though the user asked for it once the pull request is ready: ${ready}.`;
+      ? `review-cycle: ran ${ASKED_FOR[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`
+      : `review-cycle: ran ${ASKED_FOR[step]} now, though the user asked for it once the pull request is ready: ${ready}.`;
   // A step the setting lets through repeats a choice the user made once.
   if (ready !== undefined || state.unaskedNotice) $.ui.log(line);
   return line;
@@ -2185,7 +2161,7 @@ async function judgePush(
   spec: PushSpec,
   granted: Grant,
   model: ModelSteps = {},
-): Promise<{ deny: string; final?: true } | { ran: Unasked | null; note?: string }> {
+): Promise<{ deny: string; step?: 'push'; final?: true } | { ran: Unasked | null; note?: string }> {
   const missing = unasked(spec, granted);
   if (missing === null) {
     const c = await coveredAsks($, top, command, commits, spec, granted.pushNamed);
@@ -2204,6 +2180,7 @@ async function judgePush(
   if (outcome.kind === 'refused') {
     return {
       deny: pushRefusal(command, commits, outcome.missing, granted, ladder, outcome.always),
+      step: 'push',
     };
   }
   // A push the model's yes to a pull request let through is that pull

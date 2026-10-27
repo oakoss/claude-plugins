@@ -136,7 +136,7 @@ function unreadFor(unread: UnreadOffer | null, step: HoldStep | 'commit'): strin
   return named ? unread.why : null;
 }
 
-const ASKED_FOR: Record<Step | 'comment', string> = { commit: 'a commit', ...STEP_NAME };
+export const ASKED_FOR: Record<Step | 'comment', string> = { commit: 'a commit', ...STEP_NAME };
 
 // Why the user's latest message does not cover the step, the setting
 // included when its files could not be read.
@@ -457,10 +457,13 @@ function ghRefusal(
   return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
 }
 
+// Commits, approvals and comments are not consent the grammar misses.
+export type MissStep = 'push' | 'pr' | 'merge' | 'release';
+
 // A refusal no model reading can lift is `final`; `notes` tell the agent what
 // ran unchecked.
 export type GhVerdict =
-  | { deny: string; final?: true }
+  | { deny: string; step?: MissStep; final?: true }
   | { ran: Unasked[]; notes?: readonly string[]; used?: Used };
 
 // The asks for once ready that a merge allowed here fulfils, so they end.
@@ -503,6 +506,7 @@ export async function judgeGh(
   const ladder = await lookups.ladder();
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread),
+    ...(kind !== 'approve' && kind !== 'comment' && { step: kind }),
   });
   // A stack merge is judged as the merges it expands to, in its place, each
   // under the grant that covered the stack.
@@ -515,7 +519,7 @@ export async function judgeGh(
     const bySetting = permitted(granted, ladder, held);
     switch (action.kind) {
       case 'pr': {
-        if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
+        if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
         if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         break;
       }
@@ -570,6 +574,7 @@ export async function judgeGh(
         if (outcome.missing === 'bare') {
           return {
             deny: `a forced ref update overwrites whatever the branch holds, with no lease, and the user's latest message doesn't ask for a bare force, so nothing ran. If they want one, ${askThem('what it overwrites and where', '"Force-push `fix/x` to `origin` without a lease?"', shown)}`,
+            step: 'push',
           };
         }
         return refuse('push', outcome.always);
@@ -788,6 +793,7 @@ export async function judgeGh(
         if ('asks' in which && mayHere.merge) {
           return {
             deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('the pull request', '"Merge and release #62?"', shown)}`,
+            step: 'release',
           };
         }
         if ('asks' in which) return refuse('merge', which.asks);
@@ -809,10 +815,10 @@ export async function judgeGh(
                 ? { asks: action.where.unread }
                 : await lookups.stackLease(action.step, action.where.remote);
             if (bound === null || 'asks' in bound) {
-              return { deny: submitRefusal(shown, ladder, held, unread) };
+              return { deny: submitRefusal(shown, ladder, held, unread), step: 'pr' };
             }
           }
-          if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
+          if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
           if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         }
         // `link` pushes plainly; the rest lease every active branch.
@@ -868,6 +874,7 @@ export async function judgeGh(
         if (!may.push) {
           return {
             deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${ask}`,
+            step: 'push',
           };
         }
         // A push request covers gh-stack's own leased push while it can only
@@ -1029,7 +1036,9 @@ export async function escalateGh<Y extends ModelYesOf>(
   const second = actions.length > 0 ? await model.second() : null;
   if (second === null) return { gh: first, granted, yes: null, target };
   if (second.why !== undefined) {
-    return { gh: { deny: first.deny + couldNotJudge(second.why) }, granted, yes: null, target };
+    const deny = first.deny + couldNotJudge(second.why);
+    const gh = first.step === undefined ? { deny } : { deny, step: first.step };
+    return { gh, granted, yes: null, target };
   }
   const gh = await judge(granted, second.steps);
   return { gh, granted, yes: 'deny' in gh ? null : second, target };

@@ -4713,6 +4713,14 @@ describe('the stop-before setting', () => {
     const [miss] = JSON.parse((r as { result: string }).result).misses;
     expect(miss?.steps).toEqual(['push']);
   });
+  test('words in a refused command are not read as the step it asks about', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'should we merge?');
+    const r = await bash($, 'gh pr comment 5 --body "did you ask for a merge yet"');
+    expect(denied(r, 'comment')).toBe(true);
+    const res = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    expect(JSON.parse((res as { result: string }).result).misses).toEqual([]);
+  });
   test('a miss needs the refused step named, and an offer counts only when answered', async ($, on) => {
     fakeWorld(on, {
       settings: { local: stops('commit') },
@@ -6886,6 +6894,12 @@ describe('an epic mandate', () => {
   });
 });
 
+async function missedSteps($: any): Promise<string[][]> {
+  const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+  const { misses } = JSON.parse((r as { result: string }).result);
+  return misses.map((m: { steps: string[] }) => m.steps);
+}
+
 describe('the model check', () => {
   const SHIP = 'Ok, lets ship the react aria update';
   const LINE =
@@ -7086,6 +7100,19 @@ describe('the model check', () => {
       expect(denied(r, `The model check could not judge the message (${why}`)).toBe(true);
     });
   }
+  test('a push refused after the model could not judge is kept as a miss', async ($, on) => {
+    fakeWorld(on, pushing({ model: 'error' }));
+    await say($, 'should we push it?');
+    expect(denied(await bash($, 'git push origin fix/x'), 'could not judge')).toBe(true);
+    expect(await missedSteps($)).toEqual([['push']]);
+  });
+  test("a push the model's yes does not cover is kept as a miss", async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('approve', 'sign off on 116') }));
+    await say($, 'should we push it, and sign off on 116?');
+    expect(denied(await bash($, 'git push origin fix/x'), 'so nothing ran.')).toBe(true);
+    const steps = await missedSteps($);
+    expect(steps.flat()).toContain('push');
+  });
   test('a reply it cannot read refuses, saying so', async ($, on) => {
     fakeWorld(on, { model: 'it asks to push' });
     await say($, SHIP);
