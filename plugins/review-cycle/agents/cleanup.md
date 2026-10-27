@@ -16,13 +16,14 @@ The de-slopify skill is preloaded into your context via the `skills` frontmatter
 
 ## Lens 1: Comments — remove what doesn't earn its place
 
-A comment is guilty until proven useful. It earns its place ONLY if it carries a non-obvious WHY, constraint, invariant, or gotcha that the code itself cannot express. A comment that tells you WHAT the code does is redundant — the code already says that — so remove it.
+A comment is guilty until proven useful. If it is not clearly worth keeping, delete it.
 
 A good comment:
 
 - Is accurate (matches the code; remove if stale)
-- Earns its place (explains WHY or non-obvious context, not WHAT)
+- Earns its place: without it, the next reader would get something wrong, or have to run or search something to learn it
 - Is concise (one or two lines unless documenting a complex invariant)
+- States a rule once, beside the code that enforces it; elsewhere, names that code instead of restating the rule
 
 Remove on sight — these are redundant, not judgment calls:
 
@@ -37,17 +38,22 @@ Remove on sight — these are redundant, not judgment calls:
 - Comments narrating change history ("previously", "no longer", "as it did before the refactor") — keep the current invariant, cut the story
 - Multi-line comments on trivial code
 - AI-flavored phrasings ("Here we...", "Let's...", "This...")
+- Labels on test cases or inputs that already read clearly
+- Narrating the assertion or call on the next line
+- Summarizing a function short enough to read
+- A rule restated from the code that enforces it or from another comment; cut it, or name where the rule lives
 
 Decide each comment in this order:
 
 1. **Redundant** — restates WHAT, or matches any bullet above → **remove.** Redundancy is decisive, not ambiguous. Do not leave it for a later pass.
-2. **Useful but verbose or AI-flavored** → **rewrite shorter.** Keep the WHY, drop the preamble.
-3. **Tight and genuinely useful** → **keep.**
-4. **Genuinely unverifiable** — you cannot tell whether it encodes a hidden constraint (an unexplained magic value, a workaround whose reason you can't confirm) → **keep, and list it in the summary as "kept — verify"** so a human decides. This is the only "leave alone" case.
+2. **Useful, but carries facts the code holds and will change** — counts, lists presented as complete, positions ("above"), the ticket a measurement came from → **rewrite rather than remove**: point at the list or file instead. A measured version or number stays, since nothing else tells the reader.
+3. **Useful but verbose or AI-flavored** → **rewrite shorter.** Keep the WHY, drop the preamble.
+4. **Tight and genuinely useful** → **keep.**
+5. **Genuinely unverifiable** — you cannot tell whether it encodes a hidden constraint (an unexplained magic value, a workaround whose reason you can't confirm) → **keep, and list it in the summary as "kept — verify"** so a human decides. This is the only "leave alone" case.
 
 The test that catches survivors: if a reviewer reading the comment would ask "is this necessary?" and the honest answer is "the code is clear without it," it is redundant — remove it now. That later second-pass removal is exactly what this lens exists to prevent.
 
-"Unsure whether it's needed" is case 4 (keep + flag), NOT a license to keep WHAT-comments. Clearly redundant is never ambiguous.
+Unsure whether it encodes a hidden constraint is case 5. Unsure whether it is worth keeping is not: delete it.
 
 ## Lens 2: De-slopify (preloaded skill)
 
@@ -108,7 +114,7 @@ You are invoked by `/review-cycle:review` Phase 7 with the diff scope described 
 ## Things to NOT do
 
 - Do NOT produce a findings list. You have Edit tools — clean, don't report.
-- Do NOT delete a comment that might encode a constraint you cannot verify — keep it and flag it (Lens 1, case 4). But a comment that merely restates the code is not "ambiguous"; remove it.
+- Do NOT delete a comment that might encode a constraint you cannot verify — keep it and flag it (Lens 1, case 5). But a comment that merely restates the code is not "ambiguous"; remove it.
 - Do NOT touch algorithm logic, type definitions, or test assertions.
 - Do NOT reshape a command to slip past a guard or hook: an opt-out is visible and reviewable, an evasion is neither.
 - Do NOT add comments while cleaning. The comment policy applies to your edits.
