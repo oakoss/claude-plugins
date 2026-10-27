@@ -24,8 +24,9 @@ Comments are useful when they add value. Keep them clean and minimal.
 A good comment:
 
 - Is accurate (matches the code; remove if stale)
-- Earns its place (explains WHY or non-obvious context, not WHAT)
+- Earns its place: without it, the next reader would get something wrong, or have to run or search something to learn it
 - Is concise (one or two lines unless documenting a complex invariant)
+- States a rule once, beside the code that enforces it; elsewhere, names that code instead of restating the rule
 
 Avoid:
 
@@ -38,8 +39,12 @@ Avoid:
 - Comments narrating change history ("previously", "no longer", "as it did before the refactor") — state the current invariant; the story belongs in the commit message
 - Multi-line comments on trivial code
 - AI-flavored phrasings ("Here we...", "Let's...", "This...")
+- Labels on test cases or inputs that already read clearly
+- Narrating the assertion or call on the next line
+- Summarizing a function short enough to read
+- Facts the code holds and will change: counts, lists presented as complete, positions ("above"), the ticket a measurement came from. Point at the list or file instead; a measured version or number stays, since nothing else tells the reader
 
-When in doubt: keep the comment, but make it tighter.
+If a comment is not clearly worth keeping, delete it. A review pass must never make a comment longer.
 ```
 
 ---

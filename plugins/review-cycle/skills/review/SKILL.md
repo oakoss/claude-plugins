@@ -11,13 +11,13 @@ Automated multi-agent review cycle on uncommitted changes. Invoke it with `/revi
 
 ## Embedded policies
 
-The following three policies apply throughout this cycle. Standalone copies live in `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` if you want them active outside this cycle (paste into `~/.claude/CLAUDE.md` for global scope or `./CLAUDE.md` for project scope).
+These three policies apply throughout this cycle; `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` holds copies for use outside it.
 
 ### Evidence policy
 
 **A claim about what a command does cites a run of that command.** This binds everyone in the cycle — reviewers writing findings, and you writing fixes, prose, comments, and commit messages.
 
-A manifest, config file, lockfile, script entry, CI workflow, or flag in documentation says what someone *configured* or *intended*. It does not say what the tool does with it, and the two disagree often enough that the gap is where wrong findings come from. `doctest = false` in a Cargo manifest does not stop `cargo test --doc` from running the doctests — cargo compiles the crate and runs them anyway, and the flag only removes them from plain `cargo test`. A `skip` in a workflow does not prove the job was skipped on this run, and a `package.json` script does not prove what the script does when invoked. **A declaration is never evidence for behavior.**
+A manifest, config file, lockfile, script entry, CI workflow, or flag in documentation says what someone *configured* or *intended*. It does not say what the tool does with it. `doctest = false` in a Cargo manifest does not stop `cargo test --doc` from running the doctests — cargo compiles the crate and runs them anyway, and the flag only removes them from plain `cargo test`. A `skip` in a workflow does not prove the job was skipped on this run, and a `package.json` script does not prove what the script does when invoked. **A declaration is never evidence for behavior.**
 
 Three rules follow:
 
@@ -25,12 +25,10 @@ Three rules follow:
 - **A run you did not observe is not a run.** Read the output the command actually produced this time. A stale file, a redirect the shell refused, a cached artifact, or a job that skipped all look like success from a distance — check that what you are reading came from the invocation you just made.
 - **When you cannot run it, say so in the finding.** A claim the environment cannot exercise — another OS, another shell, a remote service, a build past your budget — is labeled inferred rather than measured, or verified against authoritative documentation. Never state it flatly.
 
-Two outcomes, decided in this order — the first that applies wins, so no claim qualifies for both:
+Two outcomes; the first that applies wins:
 
 1. **Could the run have happened here, given more time, a longer build, or a bigger sample?** Then the finding **keeps its place, labeled inferred**, and still reaches Phase 4. Budget is the reason you did not measure, not a reason to drop the finding.
 2. **Otherwise — no run was possible at all and no authoritative documentation settles it** — the claim is not a low-confidence finding: it is a **question**, and belongs in the summary as one rather than in the findings list.
-
-Rule 1 has priority. A claim you skipped for budget stays a finding even when nothing documents it; only a claim that was never runnable *here* reaches rule 2.
 
 Withdrawing is not a way to be quiet. A leg that could not build and therefore withdrew everything reports no findings, which the summary would otherwise read as clean — so a leg in that position says it could not build, in the summary, by name.
 
@@ -41,8 +39,9 @@ Comments are useful when they add value. Keep them clean and minimal.
 A good comment:
 
 - Is accurate (matches the code; remove if stale)
-- Earns its place (explains WHY or non-obvious context, not WHAT)
+- Earns its place: without it, the next reader would get something wrong, or have to run or search something to learn it
 - Is concise (one or two lines unless documenting a complex invariant)
+- States a rule once, beside the code that enforces it; elsewhere, names that code instead of restating the rule
 
 Avoid:
 
@@ -55,8 +54,12 @@ Avoid:
 - Comments narrating change history ("previously", "no longer", "as it did before the refactor") — state the current invariant; the story belongs in the commit message
 - Multi-line comments on trivial code
 - AI-flavored phrasings ("Here we...", "Let's...", "This...")
+- Labels on test cases or inputs that already read clearly
+- Narrating the assertion or call on the next line
+- Summarizing a function short enough to read
+- Facts the code holds and will change (counts, lists presented as complete, "above", a measurement's ticket): point at the list or file; a measured version or number stays
 
-When in doubt: keep the comment, but make it tighter. A review pass must never make a comment longer — explaining the previous version of a comment is accretion, not review.
+If a comment is not clearly worth keeping, delete it. A review pass must never make a comment longer.
 
 ### Fix-vs-defer policy
 
