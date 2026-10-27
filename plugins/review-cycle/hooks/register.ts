@@ -758,7 +758,7 @@ function questionOf(closing: string): string {
 function refusedStep(refusal: string): HoldStep | null {
   if (/\bmay be a release\b/.test(refusal)) return 'release';
   const named =
-    /\bask(?:ed)? for (a (?:force |bare )?push|a bare force|a pull request|a merge|a release)\b/.exec(
+    /\bask(?:ed)? for (a (?:force |forced |bare )?push|a bare force|a pull request|a merge|a release)\b/.exec(
       refusal,
     )?.[1];
   if (named === undefined) return null;
@@ -1356,10 +1356,11 @@ async function onMonitor(
     bashTouchesGate(e.command, marketplaceOf($.plugin.root), state.shellAliases) ||
     classify(e.command, state.shellAliases).kind !== 'none' ||
     ghActions(e.command, state.shellAliases).length > 0 ||
-    possibleAliases(e.command, state.shellAliases).length > 0;
+    possibleAliases(e.command, state.shellAliases).length > 0 ||
+    stackRewrite(e.command, state.shellAliases) !== null;
   if (!judged) return next(e);
   return deny(
-    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens, merges, approves or comments on a pull request, releases, calls a git alias or writes settings with the Bash tool.',
+    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens, merges, approves or comments on a pull request, releases, rewrites a gh stack, calls a git alias or writes settings with the Bash tool.',
   );
 }
 
