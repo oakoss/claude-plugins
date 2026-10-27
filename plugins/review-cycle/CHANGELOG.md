@@ -4,6 +4,26 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.35.0 (2026-10-27)
+
+### Added
+
+The comment policy now deletes a comment unless it is clearly worth keeping: one earns its place only when, without it, the next reader would get something wrong or have to run or search something to learn it. It also names three more kinds of noise: labels on test cases or inputs that already read clearly, narration of the assertion or call on the next line, and a summary of a function short enough to read. A rule is stated once, beside the code that enforces it, and named elsewhere rather than restated. Facts the code holds and will change (counts, lists presented as complete, positions such as "above", the ticket a measurement came from) give way to a pointer at the list or file; a measured version or number stays. The review skill, the cleanup agent and `reference/policies.md` carry the change; the cleanup agent rewrites a useful comment that carries such facts rather than removing it. Judged comment by comment over this repository's last 20 pull requests, the new test drops 21 of 116 added comments the old wording kept, and keeps none it dropped.
+
+`/review-cycle:init` appends a policy only when its heading is missing, so a `CLAUDE.md` that already holds the comment policy keeps the old wording; copy the new block from `reference/policies.md` to update it.
+
+The review loop stops chasing its own fixes. When most of a later round's findings point at fixes the cycle itself made, the cycle applies none of them and stops, as it does at the round limit, and asks you whether to rethink the approach, apply the held fixes, or commit with them deferred. In 138 recent reviews, 105 recorded where round 2's findings came from; in 55 of those most came from round 1's fixes, and stopping there would have skipped 44 of the 332 rounds run. Under a job, those findings shelve the bead as before.
+
+### Fixed
+
+A merge through the GitHub MCP tool now gets the same model check as `gh pr merge` when the answer offering the merge only mentioned another pull request. Before, after an answer that offered a merge and mentioned release PR #52 in passing, "ok, lets merge" let `gh pr merge` run but refused the same merge through the MCP tool.
+
+`/review-cycle:misses` no longer lists a refused command because of words in the command itself. The step a refusal asked about was read back out of its text, quoted command included, so a refused `gh pr comment` whose body said "ask for a merge" could be kept as a missed merge. Each refusal now carries its step.
+
+The Monitor tool now refuses `gh stack rebase` and points it to the Bash tool, where the gate checks it. The command rewrites commits, and Monitor ran it with no check while the Bash tool judged it as history.
+
+The consent-miss list now keeps a refused `gh stack push`, `sync` or `submit` that your message named. Its refusal says the message "doesn't ask for a forced push", which the miss recorder did not read, so `/review-cycle:misses` never listed it.
+
 ## 0.34.0 (2026-10-26)
 
 ### Added
