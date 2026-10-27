@@ -758,7 +758,7 @@ function questionOf(closing: string): string {
 function refusedStep(refusal: string): HoldStep | null {
   if (/\bmay be a release\b/.test(refusal)) return 'release';
   const named =
-    /\bask(?:ed)? for (a (?:force |bare )?push|a bare force|a pull request|a merge|a release)\b/.exec(
+    /\bask(?:ed)? for (a (?:force |forced |bare )?push|a bare force|a pull request|a merge|a release)\b/.exec(
       refusal,
     )?.[1];
   if (named === undefined) return null;

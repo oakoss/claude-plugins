@@ -4703,6 +4703,14 @@ describe('the stop-before setting', () => {
     expect(latest.offer).toBe(closing);
     expect(latest.steps).toEqual(['merge']);
   });
+  test('a refused gh stack push the message named is kept as a miss', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'should we push the stack?');
+    expect(denied(await bash($, 'gh stack push'), "doesn't ask for a forced push")).toBe(true);
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    const [miss] = JSON.parse((r as { result: string }).result).misses;
+    expect(miss?.steps).toEqual(['push']);
+  });
   test('a miss needs the refused step named, and an offer counts only when answered', async ($, on) => {
     fakeWorld(on, {
       settings: { local: stops('commit') },
