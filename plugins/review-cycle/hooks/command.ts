@@ -21,6 +21,7 @@ import {
 } from './git-args';
 import { apiActions, asking, type GhAction, type GhContext, type Unlookable } from './github';
 import { PUBLISH_TEXT, publishActionsOf } from './publish';
+import { bashTouchesGate } from './settings';
 import {
   assignmentName,
   parse,
@@ -596,7 +597,7 @@ function joinDir(base: string, dirs: string[]): string {
 
 // Git calls anywhere in the command whose subcommand git does not ship under
 // that name, so it may be an alias. `inline` is a `-c alias.<sub>=…` value.
-export function possibleAliases(
+function possibleAliases(
   command: string,
   aliases: ShellAliases = new Map(),
 ): { sub: string; inline: string | null }[] {
@@ -685,7 +686,7 @@ function withoutGit(aliases: ShellAliases): ShellAliases {
 // A shell alias for git itself can run anything in git's place, or more than
 // git. A command that reaches it is judged on its expansion, which is what
 // runs; one whose expansion does not read as git is refused.
-export function classify(command: string, aliases: ShellAliases = new Map()): Classification {
+function classify(command: string, aliases: ShellAliases = new Map()): Classification {
   const git = aliases.get('git');
   const own = withoutGit(aliases);
   const plain = judge(command, own);
@@ -748,7 +749,7 @@ function beforeFilters(all: readonly { st: Statement; k: Kind }[]): number {
 
 // A pipeline reports its last command's exit status, so a step that ends in
 // filters reads as succeeded whether or not it did.
-export function endsInFilter(command: string, aliases: ShellAliases = new Map()): boolean {
+function endsInFilter(command: string, aliases: ShellAliases = new Map()): boolean {
   const parsed = parse(command, aliases);
   if ('error' in parsed) return false;
   const all = parsed.statements.map((st) => ({ st, k: kindOf(st) }));
@@ -1357,7 +1358,7 @@ function stackAt(words: Word[], from: number, context: GhContext, fed: boolean):
 // Whether the command runs `gh stack rebase` or `gh stack sync`, which rewrite
 // commits as `git rebase` does: `alone` when it is the whole command, so the
 // gate watches it as a history step; `joined` beside anything else.
-export function stackRewrite(
+function stackRewrite(
   command: string,
   aliases: ShellAliases = new Map(),
 ): 'alone' | 'joined' | null {
@@ -1524,7 +1525,7 @@ function ghActionsOf(st: Statement, alone: boolean): GhAction[] {
 // Every gh command or package publish in the command that opens, merges,
 // approves, comments on, releases or pushes, read as text when the command
 // does not parse.
-export function ghActions(command: string, aliases: ShellAliases = new Map()): GhAction[] {
+function ghActions(command: string, aliases: ShellAliases = new Map()): GhAction[] {
   const parsed = parse(command, aliases);
   if ('error' in parsed) {
     const found: GhAction[] = [];
@@ -1544,12 +1545,6 @@ export function ghActions(command: string, aliases: ShellAliases = new Map()): G
   return found;
 }
 
-// Whether the command opens a pull request with `gh pr create` (or its alias
-// `gh pr new`).
-export function opensPr(command: string, aliases: ShellAliases = new Map()): boolean {
-  return ghActions(command, aliases).some((a) => a.kind === 'pr');
-}
-
 // The command as the gate's push refusal quotes it: every line, runs of spaces
 // collapsed, and characters that could hide or reorder text replaced. A
 // command that uses shell aliases also shows their expansion, which is what runs.
@@ -1557,4 +1552,73 @@ export function shownCommand(command: string, aliases: ShellAliases = new Map())
   const raw = tame(command);
   const expanded = tame(parse(command, aliases).text);
   return expanded === raw ? raw : `${raw} (aliases expanded: ${expanded})`;
+}
+
+export type AliasCall = Readonly<{ sub: string; inline: string | null }>;
+
+// What the gate asks of a Bash command. `touchesGate` is whether it writes the
+// gate's settings or removes the plugin from `marketplace`.
+export type CommandReading = Readonly<{
+  classification: Classification;
+  gh: readonly GhAction[];
+  aliasCalls: readonly AliasCall[];
+  stackRewrite: 'alone' | 'joined' | null;
+  endsInFilter: boolean;
+  touchesGate: boolean;
+}>;
+
+function once<T>(read: () => T): () => T {
+  let kept: { value: T } | null = null;
+  return () => (kept ??= { value: read() }).value;
+}
+
+// Each answer is read when first asked for, so a caller that skips one never
+// pays for it or for a throw inside it: the Bash hook's failure handler reads
+// the command after the settings check threw, and must not run that check again.
+export function readCommand(
+  command: string,
+  aliases: ShellAliases = new Map(),
+  marketplace: string | null = null,
+): CommandReading {
+  const classification = once(() => classify(command, aliases));
+  const gh = once(() => ghActions(command, aliases));
+  const calls = once(() => possibleAliases(command, aliases));
+  const rewrite = once(() => stackRewrite(command, aliases));
+  const filtered = once(() => endsInFilter(command, aliases));
+  const touches = once(() => bashTouchesGate(command, marketplace, aliases));
+  return {
+    get classification() {
+      return classification();
+    },
+    get gh() {
+      return gh();
+    },
+    get aliasCalls() {
+      return calls();
+    },
+    get stackRewrite() {
+      return rewrite();
+    },
+    get endsInFilter() {
+      return filtered();
+    },
+    get touchesGate() {
+      return touches();
+    },
+  };
+}
+
+// The first of `calls` that runs a git alias which commits or pushes, read
+// against `git config --get-regexp '^alias\.'` output; a call's own
+// `-c alias.<sub>=…` overrides the configured one.
+export function committingAlias(config: string, calls: readonly AliasCall[]): string | null {
+  const defined = new Map<string, string>();
+  for (const line of config.split('\n')) {
+    const m = /^alias\.(\S+)\s(.*)$/.exec(line);
+    if (m?.[1] && m[2] !== undefined) defined.set(m[1], m[2]);
+  }
+  for (const a of calls) {
+    if (a.inline !== null) defined.set(a.sub, a.inline);
+  }
+  return calls.find((a) => aliasCommits(a.sub, (name) => defined.get(name) ?? null))?.sub ?? null;
 }

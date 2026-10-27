@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 
-import { ghActions } from './command';
+import { readCommand } from './command';
 import { MCP_GITHUB, mcpAction, shownCall, type GhAction } from './github';
 
+const ghActions = (command: string) => readCommand(command).gh;
 const kinds = (command: string) => ghActions(command).map((a) => a.kind);
 const one = (command: string): GhAction | undefined => ghActions(command)[0];
 const q = (query: string, extra = '') => kinds(`gh api graphql -f query='${query}' ${extra}`);

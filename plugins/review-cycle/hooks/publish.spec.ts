@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { ghActions } from './command';
+import { readCommand } from './command';
 
-const kinds = (command: string) => ghActions(command).map((a) => a.kind);
+const kinds = (command: string) => readCommand(command).gh.map((a) => a.kind);
 
 describe('package publishes are the release step', () => {
   test.each([
