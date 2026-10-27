@@ -5427,6 +5427,22 @@ describe('the stop-before setting', () => {
       maxTokens: 100,
     });
   });
+  test('the GitHub MCP merge gets the same reading of a pull request only mentioned', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('release') },
+      git: github('fix/x'),
+      target: MENTIONED,
+    });
+    await endTurn($, 'answer', mentioned);
+    await say($, 'ok, lets merge');
+    const r = await mcp($, 'mcp__github__merge_pull_request', {
+      owner: 'o',
+      repo: 'r',
+      pullNumber: 74,
+    });
+    expect(ran(r)).toBe(true);
+    expect(r.context?.join('\n')).toContain('the model check read #52 as mentioned');
+  });
   test('a merge of the pull request the answer offered runs no other', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x'), target: OFFERED });
     await endTurn($, 'answer', mentioned);

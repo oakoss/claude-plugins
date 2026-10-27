@@ -1450,14 +1450,15 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const { gh, yes } = await escalateGh(
+  const { gh, yes, target } = await escalateGh(
     shown,
     [action],
     ghConsent(state.message.grant),
     () => ghLookups($),
-    ghModel($, false),
+    ghModel($),
   );
   if ('deny' in gh) return deny(gh.deny);
+  const told = target === null ? null : targetRan($, target);
   const stale = overtaken(message, next.signal, 'call');
   if (stale !== null) return stale;
   const r = await next(e);
@@ -1465,6 +1466,7 @@ async function onGithubTool(
   // A merge that failed fulfilled nothing, so its ask stands.
   if (r.isError !== true) spend(gh.used);
   const notes = [
+    ...(told === null ? [] : [told]),
     ...(yes === null ? [] : [modelRan($, yes)]),
     ...unaskedNotes($, gh.ran),
     ...(gh.notes ?? []),
@@ -1760,11 +1762,9 @@ function ghConsent(grant: Grant): () => GhConsent {
   });
 }
 
-// The model reads for escalateGh; `target` asks whether a merge's pull
-// request was only mentioned.
-function ghModel($: $, target: boolean): GhModel<ModelYes> {
-  const second = () => secondRead($);
-  return target ? { second, target: (granted) => offeredUnnamed($, granted) } : { second };
+// The model reads for escalateGh.
+function ghModel($: $): GhModel<ModelYes> {
+  return { second: () => secondRead($), target: (granted) => offeredUnnamed($, granted) };
 }
 
 type TargetRead =
@@ -1824,7 +1824,7 @@ async function judgeBash(
       actions,
       ghConsent(granted),
       () => ghLookups($),
-      ghModel($, true),
+      ghModel($),
     );
     const { gh, yes } = read;
     if ('deny' in gh) return deny(gh.deny);
