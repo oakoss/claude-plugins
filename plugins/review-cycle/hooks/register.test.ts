@@ -1407,6 +1407,8 @@ describe('the switch in settings files', () => {
       $.tool.call({ tool: 'Monitor', description: 'x', timeout_ms: 1000, command });
     expect(denied(await monitor('git commit -am x'), 'Monitor runs commands')).toBe(true);
     expect(denied(await monitor('claude plugin disable review-cycle'), 'Monitor runs')).toBe(true);
+    expect(denied(await monitor('gh stack rebase'), 'Monitor runs')).toBe(true);
+    expect(ran(await monitor('gh stack view'))).toBe(true);
     expect(ran(await monitor('tail -f log'))).toBe(true);
     expect(ran(await monitor('claude plugin uninstall --help'))).toBe(true);
   });

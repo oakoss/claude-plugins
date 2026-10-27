@@ -1356,10 +1356,11 @@ async function onMonitor(
     bashTouchesGate(e.command, marketplaceOf($.plugin.root), state.shellAliases) ||
     classify(e.command, state.shellAliases).kind !== 'none' ||
     ghActions(e.command, state.shellAliases).length > 0 ||
-    possibleAliases(e.command, state.shellAliases).length > 0;
+    possibleAliases(e.command, state.shellAliases).length > 0 ||
+    stackRewrite(e.command, state.shellAliases) !== null;
   if (!judged) return next(e);
   return deny(
-    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens, merges, approves or comments on a pull request, releases, calls a git alias or writes settings with the Bash tool.',
+    'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens, merges, approves or comments on a pull request, releases, rewrites a gh stack, calls a git alias or writes settings with the Bash tool.',
   );
 }
 
