@@ -2,10 +2,16 @@ import { describe, expect, test } from 'vitest';
 
 import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
 import {
+  escalateGh,
   judgeGh,
   NO_STANDING,
   parsePullRequest,
   type GhLookups,
+  type GhModel,
+  type MissStep,
+  type ModelSteps,
+  type SecondRead,
+  type TargetGrant,
   type InForce,
   type Lookup,
   type Standing,
@@ -137,6 +143,49 @@ describe('GitHub writes on the ladder', () => {
         `the user held off (their message mentioned ${named} without asking for one)`,
       ),
     });
+  });
+
+  // The misses list keeps a refusal of a push, pull request, merge or release
+  // the message named; approvals and comments are not consent the grammar misses.
+  test.each<[string, GhAction, () => ReturnType<typeof world>, Grant, MissStep | undefined]>([
+    ['a pull request', { kind: 'pr' }, () => world('open PR'), grant(), 'pr'],
+    ['a release', { kind: 'release' }, () => world('release'), grant(), 'release'],
+    ['a merge', merge(false), () => world('merge'), grant(), 'merge'],
+    ['a push', push({ branch: 'fix/x', repo: 'o/r' }), () => world('push'), grant(), 'push'],
+    [
+      'a bare force',
+      push({ asks: 'it force-updates `x`', force: true }),
+      () => world('never stop'),
+      grant({ push: 'lease' }),
+      'push',
+    ],
+    [
+      'a merge that may be a release',
+      { kind: 'merge', admin: false, auto: false, lookup: ['62'] },
+      () => world('release', { pullRequest: { asks: 'looking it up failed (x)' } }),
+      grant(),
+      'release',
+    ],
+    [
+      'a stack submit whose lease is unbound',
+      { kind: 'stack', step: 'submit', where: { remote: null } },
+      () => world('open PR', {}, undefined, undefined, { asks: 'a branch moved' }),
+      grant(),
+      'pr',
+    ],
+    [
+      'a stack submit whose pull requests are not asked for',
+      { kind: 'stack', step: 'submit', where: { remote: null } },
+      () => world('open PR', {}, undefined, undefined, { ok: true }),
+      grant(),
+      'pr',
+    ],
+    ['an approval', { kind: 'approve' }, () => world('commit'), grant(), undefined],
+    ['a comment', { kind: 'comment' }, () => world('never stop'), grant(), undefined],
+  ])('a refused %s carries the step its miss is kept for', async (_name, action, w, g, step) => {
+    const r = await judge([action], w(), g);
+    expect(r).toHaveProperty('deny');
+    expect((r as { step?: MissStep }).step).toBe(step);
   });
 
   test.each([
@@ -1631,3 +1680,130 @@ function beside(selector?: string): GhAction {
     lookup: { cannot: 'beside', ...(selector !== undefined && { selector }) },
   };
 }
+
+const consent = (g: Grant) => () => ({
+  grant: g,
+  held: null,
+  unread: null,
+  pointed: [],
+  standing: NO_STANDING,
+});
+
+describe('the escalation from grammar to model', () => {
+  type Yes = { steps: ModelSteps; quote: string };
+  // Model reads that count how often each was asked.
+  function model(
+    second: SecondRead<Yes>,
+    target?: TargetGrant,
+  ): GhModel<Yes> & { asked: string[] } {
+    const asked: string[] = [];
+    return {
+      asked,
+      second: () => {
+        asked.push('second');
+        return Promise.resolve(second);
+      },
+      ...(target !== undefined && {
+        target: () => {
+          asked.push('target');
+          return Promise.resolve(target);
+        },
+      }),
+    };
+  }
+  const escalate = (
+    actions: GhAction[],
+    w: ReturnType<typeof world>,
+    m: GhModel<Yes>,
+    g = grant(),
+  ) => escalateGh('the call', actions, consent(g), () => w.lookups, m);
+
+  test('a call the grammar allows asks the model nothing', async () => {
+    const m = model(null, null);
+    const r = await escalate([{ kind: 'pr' }], world('merge'), m);
+    expect('deny' in r.gh).toBe(false);
+    expect(m.asked).toEqual([]);
+  });
+
+  test("the model's yes lets a refused step through, and says so", async () => {
+    const m = model({ steps: { pr: true }, quote: 'open one' });
+    const r = await escalate([{ kind: 'pr' }], world('open PR'), m);
+    expect(r.gh).toEqual({ ran: [] });
+    expect(r.yes).toEqual({ steps: { pr: true }, quote: 'open one' });
+  });
+
+  test('a model that cannot judge adds why to the refusal; nothing to add keeps it', async () => {
+    const plain = await escalate([{ kind: 'pr' }], world('open PR'), model(null));
+    const why = await escalate([{ kind: 'pr' }], world('open PR'), model({ why: 'timed out' }));
+    expect(plain.gh).toMatchObject({
+      deny: expect.stringContaining("doesn't ask for a pull request"),
+    });
+    expect(why.gh).toEqual({
+      deny: `${(plain.gh as { deny: string }).deny} The model check could not judge the message (timed out).`,
+      step: 'pr',
+    });
+    expect(why.yes).toBeNull();
+  });
+
+  test('a final refusal asks neither read', async () => {
+    const tag = push({ asks: 'it pushes a tag', force: false, tag: 'v1.2.0' });
+    const m = model({ steps: { push: true }, quote: 'x' }, null);
+    const r = await escalate([tag], world('commit'), m, grant({ push: 'push' }));
+    expect(r.gh).toMatchObject({ final: true });
+    expect(m.asked).toEqual([]);
+  });
+
+  test("a merge's target read as only mentioned runs under the unnamed grant, and the model is not asked again", async () => {
+    const unnamed = grant({ merge: true });
+    const m = model({ steps: {}, quote: 'x' }, { grant: unnamed, n: '7' });
+    const r = await escalate([merge(false)], world('merge'), m);
+    expect('deny' in r.gh).toBe(false);
+    expect(r).toMatchObject({ granted: unnamed, target: '7', yes: null });
+    expect(m.asked).toEqual(['target']);
+  });
+
+  test('a target the model could not read adds why, and the second read still runs', async () => {
+    const m = model(null, { why: 'no answer', n: '7' });
+    const first = await escalate([merge(false)], world('merge'), model(null));
+    const r = await escalate([merge(false)], world('merge'), m);
+    expect(r.gh).toEqual({
+      deny: `${(first.gh as { deny: string }).deny} The model check could not judge whether the answer offered #7 (no answer).`,
+      step: 'merge',
+    });
+    expect(r.target).toBeNull();
+    expect(m.asked).toEqual(['target', 'second']);
+  });
+
+  test('consent is read again at each judgement, since a message can arrive while the model is asked', async () => {
+    let reads = 0;
+    const later = () => {
+      reads += 1;
+      return consent(grant())();
+    };
+    const m = model({ steps: { pr: true }, quote: 'open one' });
+    const r = await escalateGh(
+      'the call',
+      [{ kind: 'pr' }],
+      later,
+      () => world('open PR').lookups,
+      m,
+    );
+    expect(r.gh).toEqual({ ran: [] });
+    // Once for the grant, then once for each of the two judgements.
+    expect(reads).toBe(3);
+  });
+
+  test('a target grant the grammar still refuses keeps the first refusal', async () => {
+    const m = model(null, { grant: grant(), n: '7' });
+    const first = await escalate([merge(false)], world('merge'), model(null));
+    const r = await escalate([merge(false)], world('merge'), m);
+    expect(r.gh).toEqual(first.gh);
+    expect(r).toMatchObject({ granted: grant(), target: null });
+  });
+
+  test('without a target read the same refusal goes straight to the second read', async () => {
+    const m = model(null);
+    await escalate([merge(false)], world('merge'), m);
+    expect(m.asked).toEqual(['second']);
+  });
+});

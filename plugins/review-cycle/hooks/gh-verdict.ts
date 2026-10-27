@@ -136,7 +136,7 @@ function unreadFor(unread: UnreadOffer | null, step: HoldStep | 'commit'): strin
   return named ? unread.why : null;
 }
 
-const ASKED_FOR: Record<Step | 'comment', string> = { commit: 'a commit', ...STEP_NAME };
+export const ASKED_FOR: Record<Step | 'comment', string> = { commit: 'a commit', ...STEP_NAME };
 
 // Why the user's latest message does not cover the step, the setting
 // included when its files could not be read.
@@ -457,10 +457,13 @@ function ghRefusal(
   return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
 }
 
+// Commits, approvals and comments are not consent the grammar misses.
+export type MissStep = 'push' | 'pr' | 'merge' | 'release';
+
 // A refusal no model reading can lift is `final`; `notes` tell the agent what
 // ran unchecked.
 export type GhVerdict =
-  | { deny: string; final?: true }
+  | { deny: string; step?: MissStep; final?: true }
   | { ran: Unasked[]; notes?: readonly string[]; used?: Used };
 
 // The asks for once ready that a merge allowed here fulfils, so they end.
@@ -503,6 +506,7 @@ export async function judgeGh(
   const ladder = await lookups.ladder();
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread),
+    ...(kind !== 'approve' && kind !== 'comment' && { step: kind }),
   });
   // A stack merge is judged as the merges it expands to, in its place, each
   // under the grant that covered the stack.
@@ -515,7 +519,7 @@ export async function judgeGh(
     const bySetting = permitted(granted, ladder, held);
     switch (action.kind) {
       case 'pr': {
-        if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
+        if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
         if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         break;
       }
@@ -570,6 +574,7 @@ export async function judgeGh(
         if (outcome.missing === 'bare') {
           return {
             deny: `a forced ref update overwrites whatever the branch holds, with no lease, and the user's latest message doesn't ask for a bare force, so nothing ran. If they want one, ${askThem('what it overwrites and where', '"Force-push `fix/x` to `origin` without a lease?"', shown)}`,
+            step: 'push',
           };
         }
         return refuse('push', outcome.always);
@@ -788,6 +793,7 @@ export async function judgeGh(
         if ('asks' in which && mayHere.merge) {
           return {
             deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('the pull request', '"Merge and release #62?"', shown)}`,
+            step: 'release',
           };
         }
         if ('asks' in which) return refuse('merge', which.asks);
@@ -809,10 +815,10 @@ export async function judgeGh(
                 ? { asks: action.where.unread }
                 : await lookups.stackLease(action.step, action.where.remote);
             if (bound === null || 'asks' in bound) {
-              return { deny: submitRefusal(shown, ladder, held, unread) };
+              return { deny: submitRefusal(shown, ladder, held, unread), step: 'pr' };
             }
           }
-          if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread) };
+          if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
           if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
         }
         // `link` pushes plainly; the rest lease every active branch.
@@ -868,6 +874,7 @@ export async function judgeGh(
         if (!may.push) {
           return {
             deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${ask}`,
+            step: 'push',
           };
         }
         // A push request covers gh-stack's own leased push while it can only
@@ -942,4 +949,97 @@ export async function judgeGh(
   }
   const done = used.release || used.ready.length > 0 ? { used } : {};
   return notes.length === 0 ? { ran, ...done } : { ran, notes, ...done };
+}
+
+// What judgeGh weighs besides the call, read again at each judgement since a
+// message can arrive while the model is asked.
+export type GhConsent = Readonly<{
+  grant: Grant;
+  held: Hold;
+  unread: UnreadOffer | null;
+  pointed: readonly string[];
+  standing: Standing;
+}>;
+
+// The model check on a refused step: the steps its yes lets through, why it
+// could not judge the message, or nothing to add. A yes carries no `why`,
+// which is how the two are told apart.
+export type ModelYesOf = { readonly steps: ModelSteps; why?: never };
+export type SecondRead<Y extends ModelYesOf> = Y | { why: string } | null;
+
+// The merge's grant naming no pull request when the model reads #n, which the
+// grammar took from the answer, as only mentioned.
+export type TargetGrant = { grant: Grant; n: string } | { why: string; n: string } | null;
+
+export type GhModel<Y extends ModelYesOf> = {
+  second: () => Promise<SecondRead<Y>>;
+  target?: (granted: Grant) => Promise<TargetGrant>;
+};
+
+// `granted` is the grant the call ran under; `yes` the model's yes that let it
+// through; `target` the pull request the model read as only mentioned.
+export type Escalated<Y extends ModelYesOf> = {
+  gh: GhVerdict;
+  granted: Grant;
+  yes: Y | null;
+  target: string | null;
+};
+
+export const couldNotJudge = (why: string) =>
+  ` The model check could not judge the message (${why}).`;
+
+// A GitHub call judged by the grammar, then, when it refuses short of final,
+// with the merge's target read by the model, then with the model's yes.
+export async function escalateGh<Y extends ModelYesOf>(
+  shown: string,
+  actions: readonly GhAction[],
+  consent: () => GhConsent,
+  lookups: () => GhLookups,
+  model: GhModel<Y>,
+): Promise<Escalated<Y>> {
+  const judge = (granted: Grant, steps: ModelSteps = {}) => {
+    const c = consent();
+    return judgeGh(
+      shown,
+      actions,
+      granted,
+      c.held,
+      lookups(),
+      steps,
+      c.unread,
+      c.pointed,
+      c.standing,
+    );
+  };
+  const asked = consent().grant;
+  const typed = await judge(asked);
+  let first: GhVerdict = typed;
+  let granted = asked;
+  let target: string | null = null;
+  if ('deny' in typed && !typed.final && model.target !== undefined && actions.length > 0) {
+    const read = await model.target(asked);
+    if (read !== null && 'why' in read) {
+      first = {
+        ...typed,
+        deny: `${typed.deny} The model check could not judge whether the answer offered #${read.n} (${read.why}).`,
+      };
+    } else if (read !== null) {
+      const gh = await judge(read.grant);
+      if (!('deny' in gh)) {
+        first = gh;
+        granted = read.grant;
+        target = read.n;
+      }
+    }
+  }
+  if (!('deny' in first) || first.final) return { gh: first, granted, yes: null, target };
+  const second = actions.length > 0 ? await model.second() : null;
+  if (second === null) return { gh: first, granted, yes: null, target };
+  if (second.why !== undefined) {
+    const deny = first.deny + couldNotJudge(second.why);
+    const gh = first.step === undefined ? { deny } : { deny, step: first.step };
+    return { gh, granted, yes: null, target };
+  }
+  const gh = await judge(granted, second.steps);
+  return { gh, granted, yes: 'deny' in gh ? null : second, target };
 }
