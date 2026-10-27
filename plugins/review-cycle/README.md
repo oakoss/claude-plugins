@@ -4,7 +4,7 @@ Automated multi-agent code review cycle for Claude Code, with a commit gate that
 
 ## What it does
 
-After you implement changes, `review-cycle` fans out parallel reviewers, applies fixes per embedded policies, loops until a pass applies no fixes or reaches its round limit, and runs a final cleanup. Agents work as they like between commits; nothing prompts a review on every turn.
+After you implement changes, `review-cycle` fans out parallel reviewers, applies fixes per embedded policies, loops until a pass applies no fixes, reaches its round limit, or finds mostly problems in its own earlier fixes, and runs a final cleanup. Agents work as they like between commits; nothing prompts a review on every turn.
 
 The gate asks one question of a commit and one of a push:
 
@@ -33,7 +33,8 @@ Scope wrong for the spec? → stop and ask you
 Aggregate findings → apply fixes
        ↓
 Loop until a pass applies no fixes
-(at the round limit: hold the last findings, ask you)
+(at the round limit, or when a round's findings
+come mostly from its own fixes: hold them, ask you)
        ↓
 Post-loop pass, once: maintainability
 (report-only) + cleanup
