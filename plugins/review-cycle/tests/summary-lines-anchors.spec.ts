@@ -15,13 +15,21 @@ test("the review skill counts the findings this cycle's fixes caused", () => {
   expect(six).toContain("**Count the findings this cycle's fixes caused.**");
   expect(six).toContain("`git diff <iteration 1's spawnTree> <spawnTree>`");
   expect(six).toContain("`iteration N: X of Y from this cycle's fixes`");
-  expect(six).toContain('the loop is generating its own work');
-  expect(six).toContain('a fix a finding shows is wrong is still fixed, as the bar above requires');
-  expect(six).toContain('The count changes nothing in the loop');
+  expect(six).toContain(
+    "When most of a non-confirmation iteration's findings came from this cycle's fixes, the loop is generating its own work: hold them as at the ceiling, one showing a fix is wrong included, so Phase 10 offers the structural fix or a cut before more patches.",
+  );
+  expect(six).not.toContain('The count changes nothing in the loop');
+  expect(six).not.toContain('is still fixed');
+  expect(phase(skillText('review-cycle', 'review'), 5, 'Apply').join('\n')).toContain(
+    "On the iteration that reaches the ceiling, or a non-confirmation one whose findings came mostly from this cycle's fixes (Phase 6), apply no fix:",
+  );
   expect(six).not.toContain('stop before the next fan-out and ask');
   expect(section(3)).toContain("keep every iteration's");
   expect(section(9)).toContain(
     "Convergence: iteration 1 only | <iteration N: X of Y from this cycle's fixes",
+  );
+  expect(section(9)).toContain(
+    'Iterations: N (converged | ceiling of <max> reached, N findings held | generating its own work, N findings held |',
   );
 });
 
