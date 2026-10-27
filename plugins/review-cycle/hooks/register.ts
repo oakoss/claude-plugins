@@ -67,13 +67,16 @@ import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
-  judgeGh,
+  couldNotJudge,
+  escalateGh,
   notAsked,
   parsePullRequest,
   permitted,
   PR_FIELDS,
   PR_JQ,
+  type GhConsent,
   type GhLookups,
+  type GhModel,
   type InForce,
   type Lookup,
   type ModelSteps,
@@ -1447,22 +1450,13 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const granted = state.message.grant;
-  const first = await judgeGh(
+  const { gh, yes } = await escalateGh(
     shown,
     [action],
-    granted,
-    held(),
-    ghLookups($),
-    {},
-    state.message.unread,
-    pointedNow(),
-    state.standing,
+    ghConsent(state.message.grant),
+    () => ghLookups($),
+    ghModel($, false),
   );
-  const { gh, yes } =
-    'deny' in first && !first.final
-      ? await ghWithModel($, shown, [action], granted, first)
-      : { gh: first, yes: null };
   if ('deny' in gh) return deny(gh.deny);
   const stale = overtaken(message, next.signal, 'call');
   if (stale !== null) return stale;
@@ -1729,8 +1723,6 @@ async function ranByModel(
   return { ...r, context: [...(r.context ?? []), modelRan($, yes)] };
 }
 
-const couldNotJudge = (why: string) => ` The model check could not judge the message (${why}).`;
-
 // The merge's grant naming no pull request, when the model check reads the
 // one the grammar took from the answer as mentioned rather than offered.
 async function offeredUnnamed(
@@ -1757,36 +1749,22 @@ async function offeredUnnamed(
   return read.mentioned ? { grant: unnamed(granted, n), n } : null;
 }
 
-// A refused GitHub step judged again with the grant naming no pull request in
-// place of one the answer only mentioned; the refusal says why when the model
-// could not tell.
-async function ghUnnamed(
-  $: $,
-  shown: string,
-  actions: Parameters<typeof judgeGh>[1],
-  granted: Grant,
-  first: { deny: string },
-): Promise<{ gh: Awaited<ReturnType<typeof judgeGh>>; granted: Grant; told: string | null }> {
-  const kept = { gh: first, granted, told: null };
-  if (actions.length === 0) return kept;
-  const read = await offeredUnnamed($, granted);
-  if (read === null) return kept;
-  if ('why' in read) {
-    const why = ` The model check could not judge whether the answer offered #${read.n} (${read.why}).`;
-    return { ...kept, gh: { ...first, deny: first.deny + why } };
-  }
-  const gh = await judgeGh(
-    shown,
-    actions,
-    read.grant,
-    held(),
-    ghLookups($),
-    {},
-    state.message.unread,
-    pointedNow(),
-    state.standing,
-  );
-  return 'deny' in gh ? kept : { gh, granted: read.grant, told: targetRan($, read.n) };
+// The consent a GitHub call is judged against, as it stands at each judgement.
+function ghConsent(grant: Grant): () => GhConsent {
+  return () => ({
+    grant,
+    held: held(),
+    unread: state.message.unread,
+    pointed: pointedNow(),
+    standing: state.standing,
+  });
+}
+
+// The model reads for escalateGh; `target` asks whether a merge's pull
+// request was only mentioned.
+function ghModel($: $, target: boolean): GhModel<ModelYes> {
+  const second = () => secondRead($);
+  return target ? { second, target: (granted) => offeredUnnamed($, granted) } : { second };
 }
 
 type TargetRead =
@@ -1815,32 +1793,6 @@ function targetRan($: $, n: string): string {
   return line;
 }
 
-// A refused GitHub step judged again with the model check's yes letting steps
-// through, as the stop-before setting would.
-async function ghWithModel(
-  $: $,
-  shown: string,
-  actions: Parameters<typeof judgeGh>[1],
-  granted: Grant,
-  first: { deny: string },
-): Promise<{ gh: Awaited<ReturnType<typeof judgeGh>>; yes: ModelYes | null }> {
-  const second = actions.length > 0 ? await secondRead($) : null;
-  if (second === null) return { gh: first, yes: null };
-  if ('why' in second) return { gh: { deny: first.deny + couldNotJudge(second.why) }, yes: null };
-  const gh = await judgeGh(
-    shown,
-    actions,
-    granted,
-    held(),
-    ghLookups($),
-    second.steps,
-    state.message.unread,
-    pointedNow(),
-    state.standing,
-  );
-  return { gh, yes: 'deny' in gh ? null : second };
-}
-
 async function judgeBash(
   $: $,
   e: Input<BashHook>,
@@ -1867,27 +1819,16 @@ async function judgeBash(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
       );
     }
-    const typed = await judgeGh(
+    const read = await escalateGh(
       quote(e.command),
       actions,
-      granted,
-      held(),
-      ghLookups($),
-      {},
-      state.message.unread,
-      pointedNow(),
-      state.standing,
+      ghConsent(granted),
+      () => ghLookups($),
+      ghModel($, true),
     );
-    const read =
-      'deny' in typed && !typed.final
-        ? await ghUnnamed($, quote(e.command), actions, granted, typed)
-        : { gh: typed, granted, told: null };
-    const first = read.gh;
-    const { gh, yes } =
-      'deny' in first && !first.final
-        ? await ghWithModel($, quote(e.command), actions, read.granted, first)
-        : { gh: first, yes: null };
+    const { gh, yes } = read;
     if ('deny' in gh) return deny(gh.deny);
+    const told = read.target === null ? null : targetRan($, read.target);
     // Only a merge that succeeded ends a standing ask, and a filter's status hides that.
     const standing = gh.used !== undefined && (gh.used.ready.length > 0 || gh.used.release);
     if (standing && endsInFilter(e.command, state.shellAliases)) {
@@ -1923,7 +1864,7 @@ async function judgeBash(
     const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
     const ran = yes === null ? await watched : await ranByModel($, watched, yes);
     if (ran.deny === undefined && ran.isError !== true) spend(gh.used);
-    const notes = [...(read.told === null ? [] : [read.told]), ...(gh.notes ?? [])];
+    const notes = [...(told === null ? [] : [told]), ...(gh.notes ?? [])];
     const r =
       notes.length === 0 || ran.deny !== undefined
         ? ran

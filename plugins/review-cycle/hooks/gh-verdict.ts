@@ -943,3 +943,94 @@ export async function judgeGh(
   const done = used.release || used.ready.length > 0 ? { used } : {};
   return notes.length === 0 ? { ran, ...done } : { ran, notes, ...done };
 }
+
+// What judgeGh weighs besides the call, read again at each judgement since a
+// message can arrive while the model is asked.
+export type GhConsent = Readonly<{
+  grant: Grant;
+  held: Hold;
+  unread: UnreadOffer | null;
+  pointed: readonly string[];
+  standing: Standing;
+}>;
+
+// The model check on a refused step: the steps its yes lets through, why it
+// could not judge the message, or nothing to add. A yes carries no `why`,
+// which is how the two are told apart.
+export type ModelYesOf = { readonly steps: ModelSteps; why?: never };
+export type SecondRead<Y extends ModelYesOf> = Y | { why: string } | null;
+
+// The merge's grant naming no pull request when the model reads #n, which the
+// grammar took from the answer, as only mentioned.
+export type TargetGrant = { grant: Grant; n: string } | { why: string; n: string } | null;
+
+export type GhModel<Y extends ModelYesOf> = {
+  second: () => Promise<SecondRead<Y>>;
+  target?: (granted: Grant) => Promise<TargetGrant>;
+};
+
+// `granted` is the grant the call ran under; `yes` the model's yes that let it
+// through; `target` the pull request the model read as only mentioned.
+export type Escalated<Y extends ModelYesOf> = {
+  gh: GhVerdict;
+  granted: Grant;
+  yes: Y | null;
+  target: string | null;
+};
+
+export const couldNotJudge = (why: string) =>
+  ` The model check could not judge the message (${why}).`;
+
+// A GitHub call judged by the grammar, then, when it refuses short of final,
+// with the merge's target read by the model, then with the model's yes.
+export async function escalateGh<Y extends ModelYesOf>(
+  shown: string,
+  actions: readonly GhAction[],
+  consent: () => GhConsent,
+  lookups: () => GhLookups,
+  model: GhModel<Y>,
+): Promise<Escalated<Y>> {
+  const judge = (granted: Grant, steps: ModelSteps = {}) => {
+    const c = consent();
+    return judgeGh(
+      shown,
+      actions,
+      granted,
+      c.held,
+      lookups(),
+      steps,
+      c.unread,
+      c.pointed,
+      c.standing,
+    );
+  };
+  const asked = consent().grant;
+  const typed = await judge(asked);
+  let first: GhVerdict = typed;
+  let granted = asked;
+  let target: string | null = null;
+  if ('deny' in typed && !typed.final && model.target !== undefined && actions.length > 0) {
+    const read = await model.target(asked);
+    if (read !== null && 'why' in read) {
+      first = {
+        ...typed,
+        deny: `${typed.deny} The model check could not judge whether the answer offered #${read.n} (${read.why}).`,
+      };
+    } else if (read !== null) {
+      const gh = await judge(read.grant);
+      if (!('deny' in gh)) {
+        first = gh;
+        granted = read.grant;
+        target = read.n;
+      }
+    }
+  }
+  if (!('deny' in first) || first.final) return { gh: first, granted, yes: null, target };
+  const second = actions.length > 0 ? await model.second() : null;
+  if (second === null) return { gh: first, granted, yes: null, target };
+  if (second.why !== undefined) {
+    return { gh: { deny: first.deny + couldNotJudge(second.why) }, granted, yes: null, target };
+  }
+  const gh = await judge(granted, second.steps);
+  return { gh, granted, yes: 'deny' in gh ? null : second, target };
+}
