@@ -82,7 +82,6 @@ import {
   type InForce,
   type Lookup,
   type ModelSteps,
-  type Unasked as GhUnasked,
   type Standing,
   type Used,
   NO_STANDING,
@@ -113,7 +112,7 @@ import {
 } from './git';
 import type { Finishes, PushSpec } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
-import { declinedSince, holdAfter, holds, type Hold, type HoldState, type HoldStep } from './hold';
+import { declinedSince, holdAfter, type Hold, type HoldState, type HoldStep } from './hold';
 import { isKept, keptOf, offKept } from './kept';
 import {
   configured,
@@ -135,17 +134,7 @@ import {
 } from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
-import {
-  askingReason,
-  parseDryRun,
-  pushOutcome,
-  unasked,
-  unnamedTarget,
-  type DefaultBranch,
-  type DryRunRef,
-  type Unnamed,
-  type Needed,
-} from './push-verdict';
+import { judgePush, pushTargets, type PushConsent, type Unasked } from './push-judge';
 import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
 import {
@@ -1747,6 +1736,11 @@ function ghConsent(grant: Grant): () => GhConsent {
   });
 }
 
+// The consent a push is judged against, as it stands at each use.
+function pushConsent(command: string): PushConsent {
+  return () => ({ held: held(), unread: state.message.unread, shown: quote(command) });
+}
+
 // The model reads for escalateGh.
 function ghModel($: $): GhModel<ModelYes> {
   return { second: () => secondRead($), target: (granted) => offeredUnnamed($, granted) };
@@ -1894,13 +1888,25 @@ async function judgeBash(
   let note: string | null = null;
   if (cls.push) {
     const commits = cls.commit !== null && finishes === null;
-    let verdict = await judgePush($, root.top, e.command, commits, cls.push, granted);
+    const push = cls.push;
+    const judge = (model?: ModelSteps) =>
+      judgePush(
+        gitOf($),
+        () => ladderOf($),
+        root.top,
+        pushConsent(e.command),
+        commits,
+        push,
+        granted,
+        model,
+      );
+    let verdict = await judge();
     if ('deny' in verdict && verdict.final) return deny(verdict.deny);
     if ('deny' in verdict) {
       const second = await secondRead($);
       if (second === null) return deny(verdict.deny, verdict.step);
       if ('why' in second) return deny(verdict.deny + couldNotJudge(second.why), verdict.step);
-      verdict = await judgePush($, root.top, e.command, commits, cls.push, granted, second.steps);
+      verdict = await judge(second.steps);
       if ('deny' in verdict) return deny(verdict.deny, verdict.step);
       yes = second;
     }
@@ -1968,13 +1974,8 @@ async function reviewed(
 // Longer than this, the refusal quotes only the start of the command.
 const MAX_SHOWN = 300;
 
-const LEASE = '`--force-with-lease --force-if-includes`';
-
 const SUBAGENT =
   'subagents do not commit, push, open, merge, approve or comment on pull requests, or release, in this repository. Report back to the main session instead.';
-
-// A push a requested pull request needs (`forPr`) runs unasked, not noted.
-type Unasked = GhUnasked & { forPr?: true };
 
 // The rung in force: the local file's, else the user's, made earlier by the
 // project file's. Settings that cannot be read stop before every step.
@@ -2005,40 +2006,6 @@ function ranUnasked($: $, { step, ladder, ready }: Unasked): string {
   return line;
 }
 
-// Git's own credential prompt fails instead of waiting, so the push asks.
-const NO_PROMPT = { GIT_TERMINAL_PROMPT: '0' };
-// Also after the push's options, to beat a -q or --verify; the leading
-// --dry-run is the one no option value can swallow. Measured on git 2.56.
-// A submodule push runs that submodule's hooks, which --no-verify misses.
-const DRY_RUN = [
-  '--dry-run',
-  '--porcelain',
-  '--no-verify',
-  '--no-quiet',
-  '--recurse-submodules=no',
-];
-
-const DELETES = 'it deletes a remote branch';
-
-// Why a push asks whatever the setting, or null. Off the ladder: a push that
-// changes a remote's default branch, pushes a tag, deletes or force-updates a
-// ref, and one the gate cannot see the targets of. Git itself names the refs
-// a push updates, with its own push config applied, through a dry run.
-async function alwaysAsks($: $, top: string, spec: PushSpec): Promise<string | null> {
-  if (spec.deletes) return DELETES;
-  if (spec.every) return 'it pushes every branch';
-  if (spec.tags) return 'it pushes tags';
-  if (spec.argv === null) return 'its remote or branch is built at run time';
-  if (spec.after !== null) {
-    return `\`git ${spec.after}\` runs before it in the same command, which can change where it goes (run that step on its own first, and the push is judged after it)`;
-  }
-  const targets = await pushTargets($, top, spec.argv);
-  if (targets.failed !== null) {
-    return `a dry run of it, which shows what it would push, failed (${targets.failed})`;
-  }
-  return askingReason(targets.refs, targets.defaults);
-}
-
 // The unmerged stack layer a `git push` updates, when this clone tracks a
 // gh-stack stack. A catalog or dry run it cannot read leaves the push to the
 // other checks: this steers to `gh stack push`, and guards nothing they miss.
@@ -2048,7 +2015,7 @@ async function stackLayerPushed($: $, root: Repo, spec: PushSpec): Promise<strin
   const text = await io.catalog();
   const stacks = typeof text === 'string' ? parseCatalog(text) : null;
   if (stacks === null || stacks.length === 0) return null;
-  const { refs } = await pushTargets($, root.top, spec.argv);
+  const { refs } = await pushTargets(gitOf($), root.top, spec.argv);
   // A deleted ref, or one pushed to a remote other than the one gh-stack
   // pushes the layer to, leaves the stack's record as it was.
   for (const r of refs) {
@@ -2062,131 +2029,6 @@ async function stackLayerPushed($: $, root: Repo, spec: PushSpec): Promise<strin
     if (urls.push.split('\n').some((u) => anonymized(u.trim()) === r.url)) return layer;
   }
   return null;
-}
-
-// One dry run per push judged, shared by every check that reads its targets.
-const targetsRead = new WeakMap<object, ReturnType<typeof readPushTargets>>();
-
-function pushTargets($: $, top: string, argv: NonNullable<PushSpec['argv']>) {
-  const known = targetsRead.get(argv);
-  if (known !== undefined) return known;
-  const read = readPushTargets($, top, argv);
-  targetsRead.set(argv, read);
-  return read;
-}
-
-// The refs a push updates, from a dry run with git's own push config applied,
-// and the default branch of each remote it goes to. A dry run that fails
-// still lists the refs it would update: one ref rejected does not stop the rest.
-async function readPushTargets(
-  $: $,
-  top: string,
-  argv: NonNullable<PushSpec['argv']>,
-): Promise<{ refs: DryRunRef[]; defaults: Map<string, DefaultBranch>; failed: string | null }> {
-  const { config, args, end } = argv;
-  const probe = ['--dry-run', ...args.slice(0, end), ...DRY_RUN, ...args.slice(end)];
-  const dry = await run($, ['git', ...config, 'push', ...probe], { cwd: top, env: NO_PROMPT });
-  const failed = dry.exitCode === 0 ? null : firstLine(dry.stderr) || `exit ${dry.exitCode}`;
-  const refs = parseDryRun(dry.stdout);
-  const defaults = new Map<string, DefaultBranch>();
-  for (const url of new Set(refs.map((r) => r.url))) {
-    const head = await run($, ['git', 'ls-remote', '--symref', url, 'HEAD'], {
-      cwd: top,
-      env: NO_PROMPT,
-    });
-    const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(head.stdout)?.[1];
-    if (head.exitCode === 0 && branch !== undefined) defaults.set(url, { branch });
-    else defaults.set(url, { unreadable: firstLine(head.stderr) || 'no default branch named' });
-  }
-  return { refs, defaults, failed };
-}
-
-// What a push the user asked for still needs: their naming of the default
-// branch or tag it pushes, or a word to the agent that its targets went
-// unread. One whose targets a step before it can change asks.
-async function coveredAsks(
-  $: $,
-  top: string,
-  command: string,
-  commits: boolean,
-  spec: PushSpec,
-  named: readonly string[],
-): Promise<{ deny: string } | { note: string } | null> {
-  const asked = "the user's latest message asks for a push, but";
-  if (spec.after !== null) {
-    return {
-      deny: `${asked} \`git ${spec.after}\` runs before it in the same command, which can change where it goes, so nothing ran. Run that step on its own first, and the push is judged after it.`,
-    };
-  }
-  if (spec.argv === null) {
-    return {
-      deny: `${asked} its remote or branch is built at run time, so the gate cannot tell where it goes, and nothing ran. Write the remote and branch out.`,
-    };
-  }
-  const t = await pushTargets($, top, spec.argv);
-  // Exit 1 is a detached HEAD; any other failure leaves the branch unknown.
-  const branch = commits ? await run($, ['git', 'symbolic-ref', '-q', 'HEAD'], { cwd: top }) : null;
-  const moved =
-    branch === null
-      ? null
-      : branch.exitCode === 0
-        ? branch.stdout.trim()
-        : branch.exitCode === 1
-          ? 'HEAD'
-          : '*';
-  const u = unnamedTarget(t.refs, t.defaults, named, moved);
-  if (u !== null) return { deny: unnamedRefusal(command, commits, u) };
-  const unread = [...t.defaults].filter(([, head]) => 'unreadable' in head);
-  const why =
-    t.refs.length === 0
-      ? t.failed === null
-        ? 'its dry run named no ref it would update'
-        : `a dry run of it failed (${t.failed})`
-      : unread.length > 0
-        ? `the default branch of ${unread[0]?.[0]} could not be read, so only \`main\` and \`master\` were checked`
-        : null;
-  if (why === null) return null;
-  return {
-    note: `review-cycle ran the push the user asked for without fully checking where it goes: ${why}. If it may have reached the default branch or a tag they did not name, tell them.`,
-  };
-}
-
-// What the push may run, or why not: a grant covers it, or a plain push the
-// ladder or a requested pull request lets through, unless it always asks.
-async function judgePush(
-  $: $,
-  top: string,
-  command: string,
-  commits: boolean,
-  spec: PushSpec,
-  granted: Grant,
-  model: ModelSteps = {},
-): Promise<{ deny: string; step?: 'push'; final?: true } | { ran: Unasked | null; note?: string }> {
-  const missing = unasked(spec, granted);
-  if (missing === null) {
-    const c = await coveredAsks($, top, command, commits, spec, granted.pushNamed);
-    if (c === null) return { ran: null };
-    return 'deny' in c ? { deny: c.deny, final: true } : { ran: null, note: c.note };
-  }
-  const ladder = await ladderOf($);
-  const forPr = granted.pr && !holds(held(), 'push');
-  const bySetting = forPr || permitted(granted, ladder, held()).push;
-  // The model's yes to a push, or to the pull request it needs, lets it through
-  // as the setting does, so the pushes that always ask still ask.
-  const byModel =
-    (model.pr === true && !holds(held(), 'push')) || permitted(granted, ladder, held(), model).push;
-  const outcome = await pushOutcome(missing, bySetting || byModel, () => alwaysAsks($, top, spec));
-  if (outcome.kind === 'covered') return { ran: null };
-  if (outcome.kind === 'refused') {
-    return {
-      deny: pushRefusal(command, commits, outcome.missing, granted, ladder, outcome.always),
-      step: 'push',
-    };
-  }
-  // A push the model's yes to a pull request let through is that pull
-  // request's, as a typed request's is.
-  if (!bySetting) return { ran: model.pr === true ? { step: 'push', ladder, forPr: true } : null };
-  return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
 }
 
 function quote(command: string): string {
@@ -2433,52 +2275,6 @@ function leaseIoOf($: $, root: Repo): LeaseIo {
     ghApi: (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS),
     pushed,
   };
-}
-
-// The gate does not ask: the agent asks in its reply, so the user can answer
-// with anything at all. Their next message grants through the consent grammar.
-// `always` is why this push asks whatever the setting, when it does.
-function pushRefusal(
-  command: string,
-  commits: boolean,
-  missing: Needed,
-  granted: Grant,
-  ladder: InForce,
-  always: string | null,
-): string {
-  const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
-  const ask = (example: string) => askThem('what it pushes and where', example, quote(command));
-  switch (missing) {
-    case 'bare': {
-      const leaseToo = covers(granted, 'lease') ? '' : ', which also needs their request';
-      return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for a bare force, so nothing ran.${alone} Use ${LEASE} instead${leaseToo}; if they want a bare --force, ${ask('"Force-push `fix/x` to `origin` without a lease?"')}`;
-    }
-    case 'lease': {
-      return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('"Force-push `fix/x` to `origin` with a lease?"')}`;
-    }
-    case 'push': {
-      const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
-      if (always === DELETES) {
-        return `${notAsked('push', ladder, held(), state.message.unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
-      }
-      return `${notAsked('push', ladder, held(), state.message.unread)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
-    }
-    default: {
-      const unhandled: never = missing;
-      throw new Error(`no refusal for the push level ${String(unhandled)}`);
-    }
-  }
-}
-
-// A push the user asked for, to a target their request did not name.
-function unnamedRefusal(command: string, commits: boolean, u: Unnamed): string {
-  const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
-  const shown = quote(command);
-  const then =
-    u.offer === null
-      ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
-      : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
-  return `the user's latest message asks for a push, but ${u.why}, so nothing ran.${alone} ${then}`;
 }
 
 // `finishes`: a `--continue` of that history command.
