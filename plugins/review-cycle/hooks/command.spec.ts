@@ -1017,6 +1017,11 @@ describe('committingAlias', () => {
     expect(committingAlias(CONFIG, [call('st', 'commit')])).toBe('st');
     expect(committingAlias(CONFIG, [call('ci', 'status')])).toBeNull();
   });
+  test("one call's inline alias does not redefine another call's", () => {
+    const calls = readCommand('git -c alias.x=commit x -m y && git -c alias.x=status x').aliasCalls;
+    expect(committingAlias('', calls)).toBe('x');
+    expect(committingAlias('', [call('x'), call('x', 'status')])).toBeNull();
+  });
   test('an alias of an alias is followed through the configuration', () => {
     expect(committingAlias('alias.save ci\nalias.ci commit\n', [call('save')])).toBe('save');
   });
@@ -1900,6 +1905,24 @@ describe('gh steps', () => {
       ['bash -c true && gh stack rebase', 'joined'],
       ['gh stack push', null],
       ['git rebase main', null],
+      ['gh stack rebase --help', null],
+      ['gh stack rebase -h', null],
+      ['gh stack sync --help', null],
+      ['gh stack rebase --onto -h', 'alone'],
+      ['gh stack rebase -- --help', 'alone'],
+      ['gh stack rebase --help=x', 'alone'],
+      ['gh stack rebase --help $OPTS --continue', 'alone'],
+      ['gh stack rebase --help -h=false --no-trunk', 'alone'],
+      ['gh stack rebase --upstack --help', 'alone'],
+      ['gh -R o/r stack sync -h', null],
+      ['xargs gh stack rebase -h', 'alone'],
+      ['echo x | xargs gh stack rebase --help', 'joined'],
+      ['timeout 60 gh stack rebase --help', null],
+      ['gh stack rebase -h=false', 'alone'],
+      ['echo gh stack rebase --no-trunk | bash', 'joined'],
+      ['sudo gh stack rebase', 'alone'],
+      ['sudo -u gh gh stack rebase', 'alone'],
+      ['echo ok && gh stack rebase', 'joined'],
     ])('%s rewrites commits: %s', (command, expected) => {
       expect(stackRewrite(command)).toBe(expected);
     });

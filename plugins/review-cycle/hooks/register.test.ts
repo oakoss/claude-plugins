@@ -1409,6 +1409,7 @@ describe('the switch in settings files', () => {
     expect(denied(await monitor('claude plugin disable review-cycle'), 'Monitor runs')).toBe(true);
     expect(denied(await monitor('gh stack rebase'), 'Monitor runs')).toBe(true);
     expect(ran(await monitor('gh stack view'))).toBe(true);
+    expect(ran(await monitor('gh stack rebase --help'))).toBe(true);
     expect(ran(await monitor('tail -f log'))).toBe(true);
     expect(ran(await monitor('claude plugin uninstall --help'))).toBe(true);
   });
@@ -2645,6 +2646,12 @@ describe('what the gate reports', () => {
     expect(ran(r)).toBe(true);
     const context = (r as { context?: string[] }).context ?? [];
     expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);
+  });
+  test('a stack rebase the gate cannot watch is refused', async ($, on) => {
+    fakeWorld(on, {
+      fail: (a) => a.startsWith('git rev-parse --path-format=absolute --show-toplevel'),
+    });
+    expect(denied(await bash($, 'gh stack rebase'), 'the gate failed')).toBe(true);
   });
   test('a commit the settings check overflows on is refused', async ($, on) => {
     fakeWorld(on);

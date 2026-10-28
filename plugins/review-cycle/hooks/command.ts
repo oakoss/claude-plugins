@@ -1220,6 +1220,7 @@ const STACK_PUSHES = new Set(['push', 'sync', 'submit', 'link'] as const);
 const LINK_VALUED = new Set(['--base', '--remote']);
 // The verbs that rewrite this clone's commits, as `git rebase` does.
 const STACK_REWRITES = new Set(['rebase', 'sync']);
+const BARE_HELP = new Set(['--help', '-h']);
 
 function stackAt(words: Word[], from: number, context: GhContext, fed: boolean): GhAction | null {
   const verb = words[from];
@@ -1367,14 +1368,20 @@ function stackRewrite(
   let found = false;
   let nested = false;
   every(parsed.statements, (st, inner) => {
-    const at = st.words.findIndex((w) => basename(w.text) === 'gh');
-    if (at === -1) return null;
-    // gh's own options before `stack`, skipped as ghAt skips them.
-    const sub = pastOptions(st.words, at + 1, { repo: null });
-    if (st.words[sub]?.text !== 'stack') return null;
-    if (!STACK_REWRITES.has(st.words[sub + 1]?.text ?? '')) return null;
-    found = true;
-    nested ||= inner;
+    for (const [at, word] of st.words.entries()) {
+      if (basename(word.text) !== 'gh') continue;
+      // gh's own options before `stack`, skipped as ghAt skips them.
+      const sub = pastOptions(st.words, at + 1, { repo: null });
+      if (st.words[sub]?.text !== 'stack') continue;
+      if (!STACK_REWRITES.has(st.words[sub + 1]?.text ?? '')) continue;
+      // Only a bare help request is let off: any other argument, or input from
+      // xargs, can turn help off (`-h=false`) and rebase after all.
+      const args = st.words.slice(sub + 2);
+      const fed = st.words.slice(0, at).some((w) => FROM_INPUT.has(basename(w.text)));
+      if (!fed && args.length > 0 && args.every((w) => BARE_HELP.has(w.text))) continue;
+      found = true;
+      nested ||= inner;
+    }
     return null;
   });
   if (!found) return null;
@@ -1609,16 +1616,15 @@ export function readCommand(
 }
 
 // The first of `calls` that runs a git alias which commits or pushes, read
-// against `git config --get-regexp '^alias\.'` output; a call's own
-// `-c alias.<sub>=…` overrides the configured one.
+// against `git config --get-regexp '^alias\.'` output. A call's own
+// `-c alias.<sub>=…` overrides the configured one for that call alone.
 export function committingAlias(config: string, calls: readonly AliasCall[]): string | null {
   const defined = new Map<string, string>();
   for (const line of config.split('\n')) {
     const m = /^alias\.(\S+)\s(.*)$/.exec(line);
     if (m?.[1] && m[2] !== undefined) defined.set(m[1], m[2]);
   }
-  for (const a of calls) {
-    if (a.inline !== null) defined.set(a.sub, a.inline);
-  }
-  return calls.find((a) => aliasCommits(a.sub, (name) => defined.get(name) ?? null))?.sub ?? null;
+  const lookup = (a: AliasCall) => (name: string) =>
+    name === a.sub && a.inline !== null ? a.inline : (defined.get(name) ?? null);
+  return calls.find((a) => aliasCommits(a.sub, lookup(a)))?.sub ?? null;
 }

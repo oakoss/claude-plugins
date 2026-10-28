@@ -2908,7 +2908,7 @@ async function withNote(
 }
 
 // A throw is skipped by the engine and the call proceeds, so a failure while
-// judging a commit, a push or a possible alias is caught here and refused.
+// judging any step readCommand finds is caught here and refused.
 // Anything else runs, with a note that the gate could not watch it.
 function onBashError(
   $: $,
@@ -2922,7 +2922,12 @@ function onBashError(
       ? 'it ran out of time; running it again may work'
       : next.error.kind);
   const r = readCommand(e.command, state.shellAliases);
-  if (r.classification.kind === 'none' && r.aliasCalls.length === 0 && r.gh.length === 0) {
+  const quiet =
+    r.classification.kind === 'none' &&
+    r.aliasCalls.length === 0 &&
+    r.gh.length === 0 &&
+    r.stackRewrite === null;
+  if (quiet) {
     return withNote(
       next(e),
       `review-cycle could not watch this command (${why}); a commit it made would not be reported. Tell the user.`,
