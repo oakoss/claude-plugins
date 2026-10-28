@@ -1016,6 +1016,7 @@ describe('committingAlias', () => {
   test("a call's inline alias overrides the configured one", () => {
     expect(committingAlias(CONFIG, [call('st', 'commit')])).toBe('st');
     expect(committingAlias(CONFIG, [call('ci', 'status')])).toBeNull();
+    expect(committingAlias(CONFIG, [call('x', 'ci')])).toBe('x');
   });
   test("one call's inline alias does not redefine another call's", () => {
     const calls = readCommand('git -c alias.x=commit x -m y && git -c alias.x=status x').aliasCalls;

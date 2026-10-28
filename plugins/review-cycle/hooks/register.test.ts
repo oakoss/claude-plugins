@@ -2653,6 +2653,15 @@ describe('what the gate reports', () => {
     });
     expect(denied(await bash($, 'gh stack rebase'), 'the gate failed')).toBe(true);
   });
+  test('a stack help request the gate cannot watch runs with a note', async ($, on) => {
+    fakeWorld(on, {
+      fail: (a) => a.startsWith('git rev-parse --path-format=absolute --show-toplevel'),
+    });
+    const r = await bash($, 'gh stack rebase --help');
+    expect(ran(r)).toBe(true);
+    const context = (r as { context?: string[] }).context ?? [];
+    expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);
+  });
   test('a commit the settings check overflows on is refused', async ($, on) => {
     fakeWorld(on);
     expect(denied(await bash($, nested('git commit -m x')), 'the gate failed')).toBe(true);
