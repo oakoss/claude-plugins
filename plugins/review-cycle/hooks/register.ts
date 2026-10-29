@@ -2913,12 +2913,16 @@ export const register: Register = (on, options) => {
   on('session.start', onSessionStart);
   // `/clear` and a resume end the session without a fresh session.start.
   on('session.end', async ($, e, next) => {
+    // After a reload, take the record back first, or it would restore what this clears.
+    if (state.gateOn) await recallOnce($);
     state.standing = NO_STANDING;
     state.reviewing = null;
     state.message = { ...state.message, ...UNGRANTED, unread: null, said: null };
     // Neither the model's yes nor the last offer outlasts the conversation it read.
     state.said = { text: '', before: '', origin: null };
     state.lastAnswer = '';
+    // A fresh conversation may start something else, so an epic job ends here too.
+    state.mandate = null;
     void keep($);
     return next(e);
   });

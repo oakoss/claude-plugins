@@ -6890,6 +6890,29 @@ describe('an epic mandate', () => {
     expect(status.stopBefore).toMatchObject({ stopBefore: 'merge', source: 'mandate' });
     expect(status.stopBefore.mandate).toEqual({ epic: 'cpl-czgp' });
   });
+  test("the session's end ends it", async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    on('session.end', () => ({ sessionId: 's' }));
+    await say($, START);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await say($, 'start on the parser');
+    expect(await pushRan($)).toBe(false);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore.mandate).toBeNull();
+  });
+  test("the session's end right after a reload ends it, and drops the kept offer", async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    on('session.end', () => ({ sessionId: 's' }));
+    reloadInto(
+      on,
+      keptRecord({ mandate: { epic: 'cpl-czgp' }, lastAnswer: 'Want me to push it?' }),
+    );
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await say($, 'yes');
+    expect(await pushRan($)).toBe(false);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore.mandate).toBeNull();
+  });
   test('it lasts past a message that does not touch it', async ($, on) => {
     fakeWorld(on, pushing({ git: remoteSide({}) }));
     await say($, START);
