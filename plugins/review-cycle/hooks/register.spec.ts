@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { readCommand } from './command';
 import { register } from './register';
 
 // The test kit cannot load a plugin with options set, so the switch is
@@ -20,7 +21,7 @@ function load(
     const handler = (typeof a === 'function' ? a : b) as Handler;
     const key = `${event}:${matcher?.tool ?? matcher?.key ?? ''}`;
     hooks.set(key, [...(hooks.get(key) ?? []), handler]);
-    return { catch: () => null };
+    return { catch: (caught: Handler) => hooks.set(`${key}:catch`, [caught]) };
   };
   (register as unknown as (on: unknown, options: unknown) => void)(on, {
     enabled,
@@ -172,5 +173,35 @@ describe('with the gate on', () => {
         expect(r, key).toEqual({ deny: expect.stringContaining('only by the user') });
       }
     }
+  });
+});
+
+// Deep enough to overflow the settings check, which the handler must not run again.
+const deep = (command: string) => `${'('.repeat(2000)}${command}${')'.repeat(2000)}`;
+
+function failed(e: unknown) {
+  const [caught] = load(true).get('tool.call:Bash:catch') ?? [];
+  const next = Object.assign(() => edited(), {
+    called: false,
+    error: { kind: 'error', message: 'Maximum call stack size exceeded' },
+  });
+  return caught?.($, e, next);
+}
+
+describe('when the Bash check throws', () => {
+  // A worker thread's larger stack would let the handler read it unnoticed.
+  test('the command overflows the settings check', () => {
+    expect(() => readCommand(deep('ls')).touchesGate).toThrow(RangeError);
+  });
+  test('a commit is refused', async () => {
+    expect(await failed({ tool: 'Bash', command: deep('git commit -m x') })).toEqual({
+      deny: expect.stringContaining('the gate failed'),
+    });
+  });
+  test('a plain command runs with a note', async () => {
+    expect(await failed({ tool: 'Bash', command: deep('ls') })).toEqual({
+      result: 'edited',
+      context: [expect.stringContaining('could not watch this command')],
+    });
   });
 });
