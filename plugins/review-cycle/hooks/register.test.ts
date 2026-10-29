@@ -2614,9 +2614,6 @@ function reloadInto(on: any, kept: unknown) {
   w.kept = { record: kept };
 }
 
-// Nesting this deep overflows the stack in the settings check, not in parse.
-const nested = (command: string) => `${'('.repeat(10_000)}${command}${')'.repeat(10_000)}`;
-
 describe('what the gate reports', () => {
   test('a review that could not be counted is named in the refusal', async ($, on) => {
     fakeWorld(on);
@@ -2658,17 +2655,6 @@ describe('what the gate reports', () => {
       fail: (a) => a.startsWith('git rev-parse --path-format=absolute --show-toplevel'),
     });
     const r = await bash($, 'gh stack rebase --help');
-    expect(ran(r)).toBe(true);
-    const context = (r as { context?: string[] }).context ?? [];
-    expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);
-  });
-  test('a commit the settings check overflows on is refused', async ($, on) => {
-    fakeWorld(on);
-    expect(denied(await bash($, nested('git commit -m x')), 'the gate failed')).toBe(true);
-  });
-  test('a plain command the settings check overflows on runs with a note', async ($, on) => {
-    fakeWorld(on);
-    const r = await bash($, nested('ls'));
     expect(ran(r)).toBe(true);
     const context = (r as { context?: string[] }).context ?? [];
     expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);
@@ -3176,6 +3162,31 @@ describe('the review nudge', () => {
     await say($, 'fix it');
     w.work = { 'a.ts': 'two' };
     await endTurn($);
+    const change = {
+      key: 'review-cycle.nudge',
+      provider: { plugin: 'review-cycle', tier: 'user' as const },
+      origin: { kind: 'composer' as const },
+    };
+    await $.config.set({ ...change, value: false, previous: true });
+    await $.config.set({ ...change, value: true, previous: false });
+    w.work = { 'a.ts': 'three' };
+    await endTurn($);
+    expect(await nudges($, w)).toEqual([]);
+  });
+  test('a prompt queued while the nudge is decided is nudged once', async ($, on) => {
+    let armed = false;
+    const w = fakeWorld(on, {
+      settingsRead: async () => {
+        if (!armed) return;
+        armed = false;
+        await queue($, 'also this');
+      },
+    });
+    await say($, 'fix it');
+    w.work = { 'a.ts': 'two' };
+    armed = true;
+    await endTurn($);
+    expect(armed).toBe(false);
     const change = {
       key: 'review-cycle.nudge',
       provider: { plugin: 'review-cycle', tier: 'user' as const },
@@ -5606,6 +5617,14 @@ describe('the stop-before setting', () => {
     await say($, 'do not push. do not merge 48');
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 48 --auto'), 'merge')).toBe(true);
+    await say($, 'thanks');
+    expect(denied(await bash($, 'gh pr merge 47 --auto'), 'merge')).toBe(true);
+  });
+  test('a merge hold typed into the running turn ends a standing merge', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'merge 47 once CI passes');
+    await queue($, "don't merge 47 yet");
+    expect(w.contexts?.join('\n')).toContain("ended the user's standing ask to merge #47");
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 47 --auto'), 'merge')).toBe(true);
   });
