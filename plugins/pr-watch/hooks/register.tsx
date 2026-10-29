@@ -28,8 +28,18 @@ import {
   type Quota,
 } from './github';
 import { configured, loadedRung, mergesUnasked } from './ladder';
-import { dueOf, keptOf, type Down } from './pacing';
-import { idOf, isSame, judgedOf, reachedOn, savedAfter, type Judged } from './saving';
+import { downAfter, dueOf, isMovingOf, keptOf, type Down } from './pacing';
+import {
+  endOf,
+  givenUpOf,
+  idOf,
+  isSame,
+  judgedOf,
+  nameOf,
+  savedAfter,
+  type Outcome,
+  type Saving,
+} from './saving';
 import {
   changesStacks,
   createdPull,
@@ -52,12 +62,9 @@ import {
   movesPulls,
   isMergeFresh,
   isReleasePull,
-  isRefused,
   isNetworkError,
   isRateLimited,
   OFFLINE_TELL_MS,
-  offlineDelayOf,
-  GIVE_UP_AFTER,
   pauseOf,
   untilText,
   isSettled,
@@ -151,6 +158,23 @@ let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
 
 function errorText(error: unknown): string {
   return errorLine(error instanceof Error ? error.message : String(error));
+}
+
+// What `change` gave beside the list from its last run: `update` runs it again
+// after a write it lost. The engine reads which atom an update names from the
+// call itself, so this takes no atom.
+async function writeWatches<O>(
+  $: $,
+  change: (all: Watch[]) => { value: Watch[]; out: O },
+): Promise<O> {
+  let last: { out: O } | undefined;
+  await update($, watches, (value) => {
+    const r = change(value);
+    last = { out: r.out };
+    return r.value;
+  });
+  if (!last) throw new Error('the store wrote without reading');
+  return last.out;
 }
 
 // Not awaited: a plugin's prompt runs once the session is idle, so the news
@@ -584,134 +608,73 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
   restack.delete(id);
   tried.set(id, now);
   try {
-    let next: Watch;
-    let isLimited = false;
-    let isOffline = false;
     const pause = paused.get(target.host);
     // A read that began before another read paused the host still waits it out.
     const pausedUntil = async () => {
       const until = paused.get(target.host)?.until;
       return until !== undefined && (await $.clock.now()) < until ? until : undefined;
     };
+    let outcome: Outcome;
     try {
       const read = await readWatch($, target);
       // Only a whole read that began after the pause was set shows the limit
       // lifted: a merged pull request's second read may still be refused.
       if (paused.get(target.host) === pause) paused.delete(target.host);
       unreachable.delete(target.host);
-      const limitedUntil = await pausedUntil();
-      if (read.kind === 'gone') {
-        await update($, watches, (all) =>
-          all.filter((w) => !isSame(w, target)).map((w) => reachedOn(w, target.host)),
-        );
-        return;
-      }
-      if (read.kind === 'handoff') {
-        // The PR's runs are the push's, so what Claude was told of carries over.
-        const told = target.told ?? [];
-        const to = { ...read.to, told };
-        await update($, watches, (all) => {
-          if (!all.some((w) => isSame(w, target))) return all;
-          const rest = all.filter((w) => !isSame(w, target)).map((w) => reachedOn(w, target.host));
-          if (!rest.some((w) => idOf(w) === idOf(to))) return [...rest, to];
-          return rest.map((w) =>
-            idOf(w) === idOf(to) ? { ...w, told: [...new Set([...(w.told ?? []), ...told])] } : w,
-          );
-        });
-        return;
-      }
-      next = {
-        ...target,
-        pull: read.pull,
-        error: undefined,
-        failures: undefined,
-        refused: undefined,
-        offline: undefined,
-        limitedUntil,
-        checkedAt: now,
-      };
+      outcome = read.kind === 'pull' ? { ...read, limitedUntil: await pausedUntil() } : read;
     } catch (error) {
-      // checkedAt stays the last good read's: settling is judged by it, and
-      // `tried` already spaces the retries. A rate limit is GitHub's to lift,
-      // so it does not count toward giving up.
       if (!(error instanceof Offline)) unreachable.delete(target.host);
       if (error instanceof RateLimited) {
-        isLimited = true;
-        next = { ...target, offline: undefined, limitedUntil: error.until };
+        outcome = { kind: 'limited', until: error.until };
       } else if (error instanceof Offline) {
-        // Neither counted toward giving up nor shown in red: the line stays as last read.
-        isOffline = true;
-        const at = await $.clock.now();
-        const was = unreachable.get(target.host);
-        // Lines that fail in the same round count once, so the wait doubles per probe.
-        const isSameRound = was !== undefined && at < was.until;
-        const count = isSameRound ? was.count : (was?.count ?? 0) + 1;
-        unreachable.set(target.host, {
-          count,
-          since: was?.since ?? at,
-          isTold: was?.isTold ?? false,
-          until: isSameRound ? was.until : at + offlineDelayOf(count),
-          why: errorText(error),
-        });
-        if (kept)
-          kept.error = `GitHub could not be reached (${errorText(error)}); pr-watch keeps trying`;
-        next = { ...target, offline: count, limitedUntil: await pausedUntil() };
-      } else {
         const why = errorText(error);
-        next = {
-          ...target,
-          error: `gh failed: ${why}`,
-          failures: (target.failures ?? 0) + 1,
-          refused: isRefused(why, target.host) ? true : target.refused,
-          offline: undefined,
-          limitedUntil: await pausedUntil(),
-        };
+        // Read after the clock: a read that answered meanwhile ended the outage.
+        const at = await $.clock.now();
+        const down = downAfter(unreachable.get(target.host), at, why);
+        unreachable.set(target.host, down);
+        if (kept) kept.error = `GitHub could not be reached (${why}); pr-watch keeps trying`;
+        outcome = { kind: 'offline', count: down.count, limitedUntil: await pausedUntil() };
+      } else {
+        outcome = { kind: 'error', why: errorText(error), limitedUntil: await pausedUntil() };
       }
     }
-    // An offline read keeps the line, so failures left by earlier saves must not end it.
-    const isGivenUp = !isLimited && !isOffline && (next.failures ?? 0) >= GIVE_UP_AFTER;
-    // Only a read that answered is judged; a limited one keeps the last good state.
-    const isFresh = !isLimited && !isOffline && next.error === undefined;
-    let judged: Judged | null = null;
-    let isClosed = false;
-    if (next.pull && isFresh) {
-      const { pull } = next;
-      const verdict = verdictOf(pull, await read($, estimates), next.host, now);
-      isClosed = verdict.kind === 'closed';
-      if (kept) kept.isClosed = isClosed;
-      if (!isClosed) {
+    const end = endOf(target, outcome, now);
+    let saving: Saving;
+    if (end.kind === 'read') {
+      // Only a read that answered is judged; a limited one keeps the last good state.
+      const verdict = verdictOf(end.next.pull, await read($, estimates), target.host, now);
+      if (kept) kept.isClosed = verdict.kind === 'closed';
+      if (verdict.kind === 'closed') saving = { kind: 'closed' };
+      else {
         const seen = { merged: await read($, ownMerges), asked: await read($, wakeAsked) };
-        ({ next, judged } = judgedOf(target, { ...next, pull }, verdict, now, seen));
+        saving = { kind: 'judged', ...judgedOf(target, end.next, verdict, now, seen) };
       }
-    }
-    const end = { isOffline, isLimited, isClosed, isGivenUp };
-    let saved = null as ReturnType<typeof savedAfter> | null;
-    await update($, watches, (all) => {
-      saved = savedAfter(all, target, next, end, judged, config);
-      for (const layer of saved.restack) restack.add(layer);
-      return [...saved.list];
+    } else saving = end;
+    const {
+      isSaved,
+      woke,
+      restack: above,
+    } = await writeWatches($, (all) => {
+      const saved = savedAfter(all, target, saving, config);
+      return { value: saved.list, out: saved };
     });
-    const isSaved = saved?.isSaved ?? false;
-    const woke = saved?.woke ?? null;
-    next = saved?.next ?? next;
-    const toast = judged?.toast ?? null;
-    let news = config.isAwake ? (woke?.text ?? null) : null;
     isSaveFailing = false;
+    if (saving.kind === 'gone' || saving.kind === 'handoff') return;
+    for (const layer of above) restack.add(layer);
+    const judged = saving.kind === 'judged' ? saving.judged : null;
+    const next = saving.kind === 'closed' ? target : saving.next;
     // Only once the line says it, so a lost save does not toast or wake again.
+    const toast = judged?.moved?.toast;
     if (toast && isSaved) {
-      $.ui.toast(toast);
-      if (judged?.isUrgent) void $.ui.notify(toast).catch(() => null);
+      $.ui.toast(toast.text);
+      if (toast.isUrgent) void $.ui.notify(toast.text).catch(() => null);
     }
+    const isGivenUp = saving.kind === 'given-up';
+    let news = config.isAwake ? (woke?.text ?? null) : null;
     if (isGivenUp && isSaved) {
       $.ui.toast(`pr-watch stopped watching ${labelOf(next)}: ${next.error}`);
-      news = [
-        `pr-watch: ${GIVE_UP_AFTER} reads of ${nameOf(next)} in a row failed, so pr-watch stopped watching it. The last: ${next.error}`,
-        next.push
-          ? `pr-watch follows the branch again on its next push once gh can read it. ${next.url}`
-          : `Watch it again with pr-watch's watch tool once gh can read it. ${next.url}`,
-      ].join('\n');
       // A tool's caller is told in its answer, whatever /config says.
-      if (!kept && !config.isAwake) news = null;
+      news = kept || config.isAwake ? givenUpOf(next) : null;
     }
     if (news && isSaved) {
       if (kept) kept.news = news;
@@ -727,7 +690,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         }
       }
     }
-    if (!isClosed && isFresh) await learnEstimates($, next, now);
+    if (saving.kind === 'judged') await learnEstimates($, next, now);
   } catch (error) {
     // Kept on the line so the band says why; said once when even that fails.
     // The read itself succeeded or was caught above, so this is pr-watch's own,
@@ -786,15 +749,13 @@ async function tick($: $): Promise<void> {
     );
   }
   // Judged on the list as saved, so a push that replaced a watch since stays.
-  let list: readonly Watch[] = [];
-  await update($, watches, (all) => {
-    list = keptOf(all, now, known, { paused, unreachable });
-    return list === all ? all : [...list];
+  const list = await writeWatches($, (all) => {
+    const kept = keptOf(all, now, known, { paused, unreachable });
+    return { value: kept.isChanged ? kept.list : all, out: kept.list };
   });
   const pacing = { paused, unreachable, quota, busy, tried, restack, pushedAt, burstUntil };
-  const { due, isMoving } = dueOf(list, now, known, pacing);
-  for (const w of due) void refresh($, w, now);
-  if (isMoving) await update($, clock, () => now);
+  for (const w of dueOf(list, now, known, pacing)) void refresh($, w, now);
+  if (isMovingOf(list, known)) await update($, clock, () => now);
 }
 
 async function storeFailed($: $, what: string, error: unknown): Promise<void> {
@@ -935,9 +896,6 @@ function textOf(w: Watch, now: number, known: Record<string, number>): string {
     .join('');
 }
 
-const nameOf = (w: Pick<Watch, 'repo' | 'number' | 'push'>) =>
-  w.push ? `the push to ${w.push.branch} on ${w.repo}` : `${w.repo}#${w.number}`;
-
 type ToolInput = { pull: string; repo: string | null; wake: boolean };
 
 function toolInputOf(e: unknown): ToolInput | string {
@@ -987,12 +945,11 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
     if (typeof target === 'string') return { result: target };
     const id = idOf(target);
     name = nameOf(target);
-    let isNew = false;
-    await update($, watches, (all) => {
-      if (all.some((w) => idOf(w) === id)) return all;
-      isNew = true;
-      return [...all, { ...target, checkedAt: 0 }];
-    });
+    const isNew = await writeWatches($, (all) =>
+      all.some((w) => idOf(w) === id)
+        ? { value: all, out: false }
+        : { value: [...all, { ...target, checkedAt: 0 }], out: true },
+    );
     isAdded = true;
     if (input.wake) await update($, wakeAsked, (ids) => [...new Set([...ids, id])]);
     const now = await $.clock.now();

@@ -3320,6 +3320,24 @@ describe('a push to a branch with no pull request', () => {
     expect(await pushLineIn(await band($))).toBeUndefined();
   });
 
+  test('a gone branch whose removal cannot be saved says pr-watch failed, not gh', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gone = JSON.stringify({ data: { repository: { ref: null } } });
+    world(on, { pr: prJson(), push: gone }, PUSH_OUT);
+    let isRefusing = true;
+    on('state.set', ($: unknown, e: any, next: any) => {
+      if (!isRefusing || e.key !== 'watches' || !Array.isArray(e.value) || e.value.length > 0) {
+        return next(e);
+      }
+      isRefusing = false;
+      return next({ ...e, value: undefined });
+    });
+    await start($);
+    await create($, 'git push');
+    await clock.advance(1500);
+    expect(await pushLineIn(await band($))).toMatch(/pr-watch failed: /);
+  });
+
   test('a push that moved a branch is followed though another was rejected', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const gh: Gh = { pr: prJson(), push: pushJson('IN_PROGRESS') };
