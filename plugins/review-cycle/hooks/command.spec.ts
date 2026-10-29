@@ -1,15 +1,20 @@
 import { describe, expect, test } from 'vitest';
 
+import { aliasCommits, committingAlias, readCommand, shownCommand } from './command';
 import {
-  aliasCommits,
-  classify,
-  ghActions,
-  opensPr,
-  possibleAliases,
-  shownCommand,
-  stackRewrite,
-} from './command';
-import { aliasScript, aliasShell, parse, parseShellAliases, readAliases } from './shell';
+  aliasScript,
+  aliasShell,
+  parse,
+  parseShellAliases,
+  readAliases,
+  type ShellAliases,
+} from './shell';
+
+const classify = (c: string, a?: ShellAliases) => readCommand(c, a).classification;
+const ghActions = (c: string, a?: ShellAliases) => readCommand(c, a).gh;
+const possibleAliases = (c: string, a?: ShellAliases) => readCommand(c, a).aliasCalls;
+const stackRewrite = (c: string, a?: ShellAliases) => readCommand(c, a).stackRewrite;
+const opensPr = (c: string, a?: ShellAliases) => ghActions(c, a).some((x) => x.kind === 'pr');
 
 const HEREDOC_MESSAGE = `git commit -m "$(cat <<'EOF'
 feat(x): add a thing
@@ -977,6 +982,55 @@ describe('aliases', () => {
   });
 });
 
+describe('readCommand reads every answer through the shell aliases', () => {
+  test('a plugin removal behind an alias touches the gate', () => {
+    const cpu = new Map([['cpu', 'claude plugin uninstall']]);
+    expect(readCommand('cpu review-cycle@oakoss', cpu, 'oakoss').touchesGate).toBe(true);
+    expect(readCommand('cpu pr-kit@oakoss', cpu, 'oakoss').touchesGate).toBe(false);
+  });
+  test('a filter behind an alias still ends the command', () => {
+    expect(readCommand('gh pr merge 1 | tail -4').endsInFilter).toBe(true);
+    expect(readCommand('gh pr merge 1').endsInFilter).toBe(false);
+    expect(readCommand('gh pr merge 1 | t', new Map([['t', 'tail -4']])).endsInFilter).toBe(true);
+  });
+  test('a stack rebase behind an alias rewrites the stack', () => {
+    expect(readCommand('gsr', new Map([['gsr', 'gh stack rebase']])).stackRewrite).toBe('alone');
+  });
+  test('an answer nobody asks for is never read', () => {
+    // Deep enough to overflow the settings check, not so deep that parse refuses it.
+    const deep = `${'('.repeat(2000)}ls${')'.repeat(2000)}`;
+    expect(() => readCommand(deep).touchesGate).toThrow(RangeError);
+    expect(readCommand(deep).classification.kind).toBe('none');
+  });
+});
+
+const call = (sub: string, inline: string | null = null) => ({ sub, inline });
+
+describe('committingAlias', () => {
+  const CONFIG = 'alias.ci commit -v\nalias.st status -sb\nalias.up !git push origin HEAD\n';
+
+  test('names the first call whose configured alias commits or pushes', () => {
+    expect(committingAlias(CONFIG, [call('st'), call('up'), call('ci')])).toBe('up');
+    expect(committingAlias(CONFIG, [call('st'), call('lg')])).toBeNull();
+  });
+  test("a call's inline alias overrides the configured one", () => {
+    expect(committingAlias(CONFIG, [call('st', 'commit')])).toBe('st');
+    expect(committingAlias(CONFIG, [call('ci', 'status')])).toBeNull();
+    expect(committingAlias(CONFIG, [call('x', 'ci')])).toBe('x');
+  });
+  test("one call's inline alias does not redefine another call's", () => {
+    const calls = readCommand('git -c alias.x=commit x -m y && git -c alias.x=status x').aliasCalls;
+    expect(committingAlias('', calls)).toBe('x');
+    expect(committingAlias('', [call('x'), call('x', 'status')])).toBeNull();
+  });
+  test('an alias of an alias is followed through the configuration', () => {
+    expect(committingAlias('alias.save ci\nalias.ci commit\n', [call('save')])).toBe('save');
+  });
+  test('lines that define no alias are skipped', () => {
+    expect(committingAlias('\nnot an alias\nalias.ci\n', [call('ci')])).toBeNull();
+  });
+});
+
 // The second word of the first statement, as the gate reads it.
 function secondWord(cmd: string): string | undefined {
   const parsed = parse(cmd);
@@ -1852,6 +1906,24 @@ describe('gh steps', () => {
       ['bash -c true && gh stack rebase', 'joined'],
       ['gh stack push', null],
       ['git rebase main', null],
+      ['gh stack rebase --help', null],
+      ['gh stack rebase -h', null],
+      ['gh stack sync --help', null],
+      ['gh stack rebase --onto -h', 'alone'],
+      ['gh stack rebase -- --help', 'alone'],
+      ['gh stack rebase --help=x', 'alone'],
+      ['gh stack rebase --help $OPTS --continue', 'alone'],
+      ['gh stack rebase --help -h=false --no-trunk', 'alone'],
+      ['gh stack rebase --upstack --help', 'alone'],
+      ['gh -R o/r stack sync -h', null],
+      ['xargs gh stack rebase -h', 'alone'],
+      ['echo x | xargs gh stack rebase --help', 'joined'],
+      ['timeout 60 gh stack rebase --help', null],
+      ['gh stack rebase -h=false', 'alone'],
+      ['echo gh stack rebase --no-trunk | bash', 'joined'],
+      ['sudo gh stack rebase', 'alone'],
+      ['sudo -u gh gh stack rebase', 'alone'],
+      ['echo ok && gh stack rebase', 'joined'],
     ])('%s rewrites commits: %s', (command, expected) => {
       expect(stackRewrite(command)).toBe(expected);
     });

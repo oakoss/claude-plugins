@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { classify } from './command';
+import { readCommand } from './command';
 import { NO_GRANT, type Grant } from './consent';
 import type { InForce, ModelSteps, SecondRead } from './gh-verdict';
 import type { Git, Run } from './git';
@@ -10,7 +10,7 @@ import type { StopBefore } from './ladder';
 import { escalatePush, judgePush, LEASE, type PushConsent } from './push-judge';
 
 function specOf(command: string): PushSpec {
-  const c = classify(command);
+  const c = readCommand(command).classification;
   if (c.kind !== 'gated' || c.push === null) throw new Error(`not a push: ${command}`);
   return c.push;
 }

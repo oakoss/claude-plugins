@@ -1409,6 +1409,7 @@ describe('the switch in settings files', () => {
     expect(denied(await monitor('claude plugin disable review-cycle'), 'Monitor runs')).toBe(true);
     expect(denied(await monitor('gh stack rebase'), 'Monitor runs')).toBe(true);
     expect(ran(await monitor('gh stack view'))).toBe(true);
+    expect(ran(await monitor('gh stack rebase --help'))).toBe(true);
     expect(ran(await monitor('tail -f log'))).toBe(true);
     expect(ran(await monitor('claude plugin uninstall --help'))).toBe(true);
   });
@@ -2613,6 +2614,9 @@ function reloadInto(on: any, kept: unknown) {
   w.kept = { record: kept };
 }
 
+// Nesting this deep overflows the stack in the settings check, not in parse.
+const nested = (command: string) => `${'('.repeat(10_000)}${command}${')'.repeat(10_000)}`;
+
 describe('what the gate reports', () => {
   test('a review that could not be counted is named in the refusal', async ($, on) => {
     fakeWorld(on);
@@ -2639,6 +2643,32 @@ describe('what the gate reports', () => {
       fail: (a) => a.startsWith('git rev-parse --path-format=absolute --show-toplevel'),
     });
     const r = await bash($, 'ls');
+    expect(ran(r)).toBe(true);
+    const context = (r as { context?: string[] }).context ?? [];
+    expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);
+  });
+  test('a stack rebase the gate cannot watch is refused', async ($, on) => {
+    fakeWorld(on, {
+      fail: (a) => a.startsWith('git rev-parse --path-format=absolute --show-toplevel'),
+    });
+    expect(denied(await bash($, 'gh stack rebase'), 'the gate failed')).toBe(true);
+  });
+  test('a stack help request the gate cannot watch runs with a note', async ($, on) => {
+    fakeWorld(on, {
+      fail: (a) => a.startsWith('git rev-parse --path-format=absolute --show-toplevel'),
+    });
+    const r = await bash($, 'gh stack rebase --help');
+    expect(ran(r)).toBe(true);
+    const context = (r as { context?: string[] }).context ?? [];
+    expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);
+  });
+  test('a commit the settings check overflows on is refused', async ($, on) => {
+    fakeWorld(on);
+    expect(denied(await bash($, nested('git commit -m x')), 'the gate failed')).toBe(true);
+  });
+  test('a plain command the settings check overflows on runs with a note', async ($, on) => {
+    fakeWorld(on);
+    const r = await bash($, nested('ls'));
     expect(ran(r)).toBe(true);
     const context = (r as { context?: string[] }).context ?? [];
     expect(context.some((c) => c.includes('could not watch this command'))).toBe(true);

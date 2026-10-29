@@ -16,16 +16,7 @@ import {
 import type { Kept } from '../types';
 import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
 import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
-import {
-  aliasCommits,
-  classify,
-  endsInFilter,
-  ghActions,
-  possibleAliases,
-  shownCommand,
-  stackRewrite,
-  type Classification,
-} from './command';
+import { committingAlias, readCommand, shownCommand, type Classification } from './command';
 import {
   closingOf,
   combine,
@@ -136,14 +127,7 @@ import { asksUser, nudgeOf, nudgeOn } from './nudge';
 import { escalatePush, judgePush, pushTargets, type PushConsent, type Unasked } from './push-judge';
 import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
-import {
-  applyEdit,
-  bashTouchesGate,
-  isJsonPath,
-  marketplaceOf,
-  namesSwitch,
-  touchesGate,
-} from './settings';
+import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import {
@@ -1328,12 +1312,13 @@ async function onMonitor(
 ): Promise<Output<MonitorHook>> {
   if (e.command === undefined) return next(e);
   await loadShellAliases($);
+  const r = readCommand(e.command, state.shellAliases, marketplaceOf($.plugin.root));
   const judged =
-    bashTouchesGate(e.command, marketplaceOf($.plugin.root), state.shellAliases) ||
-    classify(e.command, state.shellAliases).kind !== 'none' ||
-    ghActions(e.command, state.shellAliases).length > 0 ||
-    possibleAliases(e.command, state.shellAliases).length > 0 ||
-    stackRewrite(e.command, state.shellAliases) !== null;
+    r.touchesGate ||
+    r.classification.kind !== 'none' ||
+    r.gh.length > 0 ||
+    r.aliasCalls.length > 0 ||
+    r.stackRewrite !== null;
   if (!judged) return next(e);
   return deny(
     'Monitor runs commands the gate does not check. Run a command that commits, pushes, opens, merges, approves or comments on a pull request, releases, rewrites a gh stack, calls a git alias or writes settings with the Bash tool.',
@@ -1780,18 +1765,17 @@ async function judgeBash(
   const message = state.messages;
   const granted = state.message.grant;
   await loadShellAliases($);
-  if (bashTouchesGate(e.command, marketplaceOf($.plugin.root), state.shellAliases)) {
-    return deny(SWITCHED_BY_USER);
-  }
-  const cls = classify(e.command, state.shellAliases);
+  const reading = readCommand(e.command, state.shellAliases, marketplaceOf($.plugin.root));
+  if (reading.touchesGate) return deny(SWITCHED_BY_USER);
+  const cls = reading.classification;
   if (cls.kind === 'refuse') return deny(cls.reason);
   // A gh command beside a commit or push is refused by classify.
   if (cls.kind === 'none') {
-    const actions = ghActions(e.command, state.shellAliases);
+    const actions = reading.gh;
     if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
     // It replays commits as `git rebase` does, so it is watched as history,
     // and alone, so no commit beside it goes unchecked.
-    const rewrite = stackRewrite(e.command, state.shellAliases);
+    const rewrite = reading.stackRewrite;
     if (rewrite === 'joined') {
       return deny(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
@@ -1809,32 +1793,22 @@ async function judgeBash(
     const told = read.target === null ? null : targetRan($, read.target);
     // Only a merge that succeeded ends a standing ask, and a filter's status hides that.
     const standing = gh.used !== undefined && (gh.used.ready.length > 0 || gh.used.release);
-    if (standing && endsInFilter(e.command, state.shellAliases)) {
+    if (standing && reading.endsInFilter) {
       return deny(
         `this merge would end the user's standing ask to merge once ready, which only a merge that succeeded ends, and the pipe at its end reports the filter's exit status, not gh's, so nothing ran. Run it without the pipe. The command: ${quote(e.command)}`,
       );
     }
     // Only a GitHub step is stopped by a newer message; other commands run.
     const since = actions.length > 0 ? message : null;
-    const candidates = possibleAliases(e.command, state.shellAliases);
-    if (candidates.length > 0) {
+    if (reading.aliasCalls.length > 0) {
       const configured = await run($, ['git', 'config', '--get-regexp', String.raw`^alias\.`]);
       if (configured.exitCode > 1)
         throw new Error(`git config failed: ${firstLine(configured.stderr)}`);
-      const aliases = new Map<string, string>();
-      for (const line of configured.stdout.split('\n')) {
-        const m = /^alias\.(\S+)\s(.*)$/.exec(line);
-        if (m?.[1] && m[2] !== undefined) aliases.set(m[1], m[2]);
-      }
-      for (const a of candidates) {
-        if (a.inline !== null) aliases.set(a.sub, a.inline);
-      }
-      for (const a of candidates) {
-        if (aliasCommits(a.sub, (name) => aliases.get(name) ?? null)) {
-          return deny(
-            `\`git ${a.sub}\` is an alias that commits or pushes. Run the git command directly so the gate can check it.`,
-          );
-        }
+      const sub = committingAlias(configured.stdout, reading.aliasCalls);
+      if (sub !== null) {
+        return deny(
+          `\`git ${sub}\` is an alias that commits or pushes. Run the git command directly so the gate can check it.`,
+        );
       }
     }
     const grant = yes === null ? read.granted : withModel(read.granted, yes.added);
@@ -2934,7 +2908,7 @@ async function withNote(
 }
 
 // A throw is skipped by the engine and the call proceeds, so a failure while
-// judging a commit, a push or a possible alias is caught here and refused.
+// judging any step readCommand finds is caught here and refused.
 // Anything else runs, with a note that the gate could not watch it.
 function onBashError(
   $: $,
@@ -2947,11 +2921,13 @@ function onBashError(
     (next.error.kind === 'timeout'
       ? 'it ran out of time; running it again may work'
       : next.error.kind);
-  const cls = classify(e.command, state.shellAliases);
+  const r = readCommand(e.command, state.shellAliases);
   const quiet =
-    possibleAliases(e.command, state.shellAliases).length === 0 &&
-    ghActions(e.command, state.shellAliases).length === 0;
-  if (cls.kind === 'none' && quiet) {
+    r.classification.kind === 'none' &&
+    r.aliasCalls.length === 0 &&
+    r.gh.length === 0 &&
+    r.stackRewrite === null;
+  if (quiet) {
     return withNote(
       next(e),
       `review-cycle could not watch this command (${why}); a commit it made would not be reported. Tell the user.`,

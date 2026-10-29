@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { classify } from '../hooks/command';
+import { readCommand } from '../hooks/command';
 import {
   coverageOf,
   headOf,
@@ -128,8 +128,8 @@ describe('the working tree as a tree', () => {
     commit('a.ts', 'a');
     write('a.ts', 'edited');
     write('b.ts', 'b');
-    const add = classify('git add b.ts && git commit -m x');
-    const all = classify('git commit -am x');
+    const add = readCommand('git add b.ts && git commit -m x').classification;
+    const all = readCommand('git commit -am x').classification;
     if (add.kind !== 'gated' || all.kind !== 'gated') throw new Error('not gated');
     const added = await prospectTree(git, repo, { ...add, dir: repo });
     expect(g('show', `${added}:a.ts`)).toBe('a');
@@ -142,7 +142,7 @@ describe('the working tree as a tree', () => {
   test("a commit's adds run in the command's directory, not the repository root", async () => {
     commit('a.ts', 'a');
     write('sub/b.ts', 'b');
-    const add = classify('git add b.ts && git commit -m x');
+    const add = readCommand('git add b.ts && git commit -m x').classification;
     if (add.kind !== 'gated') throw new Error('not gated');
     const added = await prospectTree(git, repo, { ...add, dir: join(repo, 'sub') });
     expect(g('show', `${added}:sub/b.ts`)).toBe('b');
