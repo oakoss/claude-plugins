@@ -19,27 +19,18 @@ import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
 import { committingAlias, readCommand, shownCommand, type Classification } from './command';
 import {
   closingOf,
-  combine,
   covers,
-  dropsGrant,
-  endsReady,
   grantOf,
-  holdOf,
-  joinPointed,
   liftsHold,
   mandateAfter,
   NAMED_ELSEWHERE,
   NO_GRANT,
   NOTHING_POINTED,
   isReply,
-  pointedBy,
   stepsNamed,
   UNGRANTED,
-  unreadOffer,
   type Grant,
   type Mandate,
-  type Pointed,
-  type UnreadOffer,
 } from './consent';
 import {
   askOf,
@@ -125,6 +116,7 @@ import {
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
 import { escalatePush, judgePush, pushTargets, type PushConsent, type Unasked } from './push-judge';
+import { consentJoined, consentOf, readMessage, type Consent } from './reading';
 import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './settings';
@@ -210,22 +202,14 @@ type Leg = {
 const LEG_BUDGET_MS = 30 * 60_000;
 
 // What the user's latest message settled: a fresh message replaces it, a
-// prompt queued into the running turn adds to its grant (dropsGrant).
-type Message = {
-  grant: Grant;
+// prompt queued into the running turn joins it (consentJoined).
+type Message = Consent & {
   // The working tree when it arrived; null when unreadable.
   tree: string | null;
   // Whether the agent was told to review since it arrived.
   nudged: boolean;
   // Legs spawned while review-pr runs review a PR worktree, not this tree.
   prWindow: boolean;
-  // Why the reply granted nothing the agent's offer named, for refusals.
-  unread: UnreadOffer | null;
-  // The one message its grant came from; null once a queued one joined it.
-  said: string | null;
-  // The pull requests a merge naming none may reach, kept apart from the
-  // grant since combining an unnamed merge with a named one names none.
-  pointed: Pointed;
 };
 
 type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
@@ -817,27 +801,23 @@ async function onPromptSubmit(
   await recallOnce($);
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
-    // What a held message asks for still runs: "push it; don't open a PR yet".
-    const grant = grantOf(e.text, state.lastAnswer);
-    const unread = unreadOffer(e.text, state.lastAnswer);
-    const hold = holdOf(e.text, state.lastAnswer);
+    const reading = readMessage(e.text, state.lastAnswer);
     state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
-    state.hold = holdAfter(state.hold, liftsHold(grant), hold);
+    // What a held message asks for still runs: "push it; don't open a PR yet".
+    state.hold = holdAfter(state.hold, liftsHold(reading.grant), reading.hold);
     state.mandate = mandateAfter(state.mandate, e.text, state.lastAnswer);
-    const ends = endsReady(e.text, state.lastAnswer);
-    const ended = ends ? endedNote(state.standing) : null;
-    state.standing = await standingAfter($, ends ? NO_STANDING : state.standing, grant);
+    const ended = reading.ends ? endedNote(state.standing) : null;
+    state.standing = await standingAfter(
+      $,
+      reading.ends ? NO_STANDING : state.standing,
+      reading.grant,
+    );
     if (ended !== null) e = { ...e, context: [...(e.context ?? []), ended] };
     // A prompt queued into a running turn neither ends a review-pr run nor
-    // replaces that turn's starting tree.
+    // replaces that turn's starting tree. Updated in place: nudgeReview tells
+    // a new message from this one by identity.
     if (e.turnId !== undefined) {
-      const drops = dropsGrant(e.text, state.lastAnswer);
-      state.message.grant = drops ? grant : combine(state.message.grant, grant);
-      // A retraction takes the reason with the yes it explained.
-      state.message.unread = drops ? null : (state.message.unread ?? unread);
-      state.message.said = drops ? e.text : null;
-      const more = pointedBy(e.text, state.lastAnswer, grant);
-      state.message.pointed = drops ? more : joinPointed(state.message.pointed, more);
+      Object.assign(state.message, consentJoined(state.message, reading));
       // An owed reminder already covers this turn's changes.
       state.message.nudged = state.owed !== null;
     } else {
@@ -854,15 +834,7 @@ async function onPromptSubmit(
       // A slash command may never reach the agent, so the reminder waits for
       // the next message; typing the review skill is the review itself.
       const waits = owed !== null && e.command !== undefined && !reviews;
-      state.message = {
-        grant,
-        tree,
-        nudged: waits || reviews,
-        prWindow: false,
-        unread,
-        said: e.text,
-        pointed: pointedBy(e.text, state.lastAnswer, grant),
-      };
+      state.message = { ...consentOf(reading), tree, nudged: waits || reviews, prWindow: false };
       if (owed === null || waits) return next(e);
       const reminder = reviews ? null : await reminderFor($, owed.since, tree);
       const r = await next(
