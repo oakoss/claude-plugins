@@ -322,7 +322,7 @@ pnpm install
 claude --plugin-dir ./plugins/review-cycle
 ```
 
-Then `/reload-plugins` to pick up subsequent edits without restarting; saving the hooks module reloads it on its own, and the gate keeps the reviews it had seen and what your latest message granted across the reload, unless the edit bumps the kept record's shape tag. A git command that rewrites the hooks files, such as a merge from the default branch, reloads it the same way. `/clear` and switching the gate off drop the grant. The module's pure logic is tested with `pnpm test` (vitest), the hooks themselves with `pnpm test:hooks` (`claude plugin test`; hooks modules must be on, see [Requirements](#requirements)), and its types with `pnpm typecheck`.
+Then `/reload-plugins` to pick up subsequent edits without restarting; saving the hooks module reloads it on its own, and the gate keeps the reviews it had seen and what your latest message granted across the reload, unless the edit bumps the kept record's shape tag. A git command that rewrites the hooks files, such as a merge from the default branch, reloads it the same way. `/clear` and switching the gate off drop the grant; `/clear` and a resume also drop the agent's last offer, so the next message's yes answers nothing from before. The module's pure logic is tested with `pnpm test` (vitest), the hooks themselves with `pnpm test:hooks` (`claude plugin test`; hooks modules must be on, see [Requirements](#requirements)), and its types with `pnpm typecheck`.
 
 ## License
 

@@ -2915,7 +2915,10 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     state.standing = NO_STANDING;
     state.reviewing = null;
-    state.message = { ...state.message, ...UNGRANTED };
+    state.message = { ...state.message, ...UNGRANTED, unread: null, said: null };
+    // Neither the model's yes nor the last offer outlasts the conversation it read.
+    state.said = { text: '', before: '', origin: null };
+    state.lastAnswer = '';
     void keep($);
     return next(e);
   });

@@ -5366,6 +5366,21 @@ describe('the stop-before setting', () => {
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 3 --squash'), 'held by a condition')).toBe(false);
   });
+  test("a session's end drops the reason a refused yes gave", async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    on('session.end', () => ({ sessionId: 's' }));
+    await endTurn(
+      $,
+      'answer',
+      'Should I squash-merge #3, then #4? They touch different files, so neither needs a rebase after the other merges.',
+    );
+    await say($, 'Ok, lets do that');
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), '"They touch')).toBe(true);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    const r = await bash($, 'gh pr merge 3 --squash');
+    expect(denied(r, 'merge')).toBe(true);
+    expect(denied(r, '"They touch')).toBe(false);
+  });
   test('a refused yes names its reason only for the steps the offer named', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('pr') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Should I open a PR? After that, CI will run.');
@@ -6970,6 +6985,21 @@ describe('the model check', () => {
     'review-cycle: the model check read "ship the react aria update" as asking for a push.';
   const OFF = { options: { modelCheck: false } };
 
+  test("its yes does not outlast the session's end", async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
+    on('session.end', () => ({ sessionId: 's' }));
+    await say($, SHIP);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+  });
+  test("a yes after the session's end answers no offer from before it", async ($, on) => {
+    fakeWorld(on, pushing({}));
+    on('session.end', () => ({ sessionId: 's' }));
+    await endTurn($, 'answer', 'Should I push fix/x?');
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+  });
   test('a push the grammar refuses runs on its yes, shown and kept with the misses', async ($, on) => {
     const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
     await say($, SHIP);
