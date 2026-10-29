@@ -28,6 +28,8 @@ import {
   type Quota,
 } from './github';
 import { configured, loadedRung, mergesUnasked } from './ladder';
+import { dueOf, keptOf, type Down } from './pacing';
+import { idOf, isSame, judgedOf, reachedOn, savedAfter, type Judged } from './saving';
 import {
   changesStacks,
   createdPull,
@@ -39,8 +41,6 @@ import {
   pushedBranches,
   pushedPull,
   belowOf,
-  layerOf,
-  delayOf,
   errorLine,
   followTrunk,
   layeredOf,
@@ -50,10 +50,7 @@ import {
   rerunKey,
   lineOf,
   movesPulls,
-  isGone,
-  isChecking,
   isMergeFresh,
-  isQuotaLow,
   isReleasePull,
   isRefused,
   isNetworkError,
@@ -61,21 +58,13 @@ import {
   OFFLINE_TELL_MS,
   offlineDelayOf,
   GIVE_UP_AFTER,
-  LOW_QUOTA_MS,
   pauseOf,
-  retryDelayOf,
   untilText,
   isSettled,
   labelOf,
-  shownOf,
-  takeOverPush,
   settingsOf,
   tellsOf,
-  stillRunning,
-  toastOf,
-  toldAfter,
   verdictOf,
-  wakeOf,
   noticeOf,
   heldWith,
   isToldReady,
@@ -87,11 +76,9 @@ import {
   contextOf,
   suggestionOf,
   type Merging,
-  type Memory,
   type Pause,
   type Segment,
   type Target,
-  type Wake,
 } from './watch';
 
 type $ = EngineInterface;
@@ -134,21 +121,13 @@ const quota = new Map<string, Quota>();
 // a limit hit again waits longer.
 const paused = new Map<string, Pause>();
 // Hosts gh could not reach: one read probes each until it answers.
-const unreachable = new Map<
-  string,
-  { count: number; until: number; since: number; isTold: boolean; why: string }
->();
+const unreachable = new Map<string, Down>();
 
-// GitHub answered, so no line on the host waits on it any more.
-// A push not yet read keeps its note until a read of its own.
-const reachedOn = (w: Watch, host: string): Watch =>
-  w.host === host && w.pull && w.offline !== undefined ? { ...w, offline: undefined } : w;
 // Finished runs a length was learned after, so each one re-learns it once.
 const learnedAfter = new Set<string>();
 // After Claude pushes, merges or starts a run, a watch last read before
 // pushedAt is read at once, and every watch every BURST_MS until burstUntil:
 // GitHub starts the new runs a few seconds later.
-const BURST_MS = 5000;
 const BURST_FOR_MS = 60_000;
 let pushedAt = 0;
 let burstUntil = 0;
@@ -169,12 +148,6 @@ let lastRemembered: string | null = null;
 let lastLive = new Set<string>();
 // From /config; a change there reloads the module with the new values.
 let config = { isAwake: true, tells: tellsOf('checks and comments', 'never') };
-
-const idOf = (w: Pick<Watch, 'host' | 'repo' | 'number' | 'push'>) =>
-  `${w.host}/${w.repo}${w.push ? `@${w.push.branch}` : `#${w.number}`}`;
-
-// The same watch, not a later push of the same branch that replaced it.
-const isSame = (a: Watch, b: Watch) => idOf(a) === idOf(b) && a.push?.pushedAt === b.push?.pushedAt;
 
 function errorText(error: unknown): string {
   return errorLine(error instanceof Error ? error.message : String(error));
@@ -699,91 +672,35 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
     const isGivenUp = !isLimited && !isOffline && (next.failures ?? 0) >= GIVE_UP_AFTER;
     // Only a read that answered is judged; a limited one keeps the last good state.
     const isFresh = !isLimited && !isOffline && next.error === undefined;
-    let toast: string | null = null;
-    let isUrgent = false;
-    let news: string | null = null;
-    let woke = null as Wake | null;
-    let wakeFor: ((last: Memory) => Wake) | null = null;
+    let judged: Judged | null = null;
     let isClosed = false;
-    let isMoved = false;
-    let isWakeAsked = false;
     if (next.pull && isFresh) {
-      const pull = next.pull;
+      const { pull } = next;
       const verdict = verdictOf(pull, await read($, estimates), next.host, now);
       isClosed = verdict.kind === 'closed';
       if (kept) kept.isClosed = isClosed;
       if (!isClosed) {
-        // A passed merge is said only once no later run can start: until then
-        // it is not yet what the line has said.
-        const isEarly = verdict.kind === 'merged-passed' && !isSettled(verdict, pull, now);
-        const shown = target.shown;
-        const merged = await read($, ownMerges);
-        const asked = await read($, wakeAsked);
-        isWakeAsked = asked.includes(idOf(next));
-        // A merge Claude made is news once it asked to hear its checks pass.
-        const isOwnMerge = merged.includes(idOf(next)) && !isWakeAsked;
-        wakeFor = (last) =>
-          wakeOf(next, pull, verdict, last, { isEarly, isOwnMerge, tells: config.tells });
-        // A ready pull request read as checking is not ready again afterwards.
-        if (!isEarly && !isChecking(verdict)) {
-          const after = next.push ? '' : ' merged';
-          toast = toastOf(labelOf(next), verdict, shown, after, stillRunning(pull));
-          // What someone away from the terminal comes back for; a passed merge is not.
-          isUrgent = ['ready', 'failing', 'merged-failing'].includes(verdict.kind);
-          next.shown = shownOf(verdict);
-          if (next.shown !== shown || next.shownAt === undefined) next.shownAt = now;
-          isMoved = next.shown !== shown;
-        }
+        const seen = { merged: await read($, ownMerges), asked: await read($, wakeAsked) };
+        ({ next, judged } = judgedOf(target, { ...next, pull }, verdict, now, seen));
       }
     }
-    let isSaved = false;
+    const end = { isOffline, isLimited, isClosed, isGivenUp };
+    let saved = null as ReturnType<typeof savedAfter> | null;
     await update($, watches, (all) => {
-      isSaved = all.some((w) => isSame(w, target));
-      // The host's other lines wait on this read's probe, so they say so too.
-      if (isOffline) {
-        const { offline } = next;
-        return all.map((w) =>
-          isSame(w, target) ? next : w.host === next.host ? { ...w, offline } : w,
-        );
-      }
-      // Any answer, a refusal or a limit included, shows GitHub is reachable.
-      const reached = all.map((w) => reachedOn(w, next.host));
-      if (isClosed || isGivenUp) return reached.filter((w) => !isSame(w, target));
-      // Every watch on the host waits out the pause, so each line says so.
-      if (isLimited) {
-        const { limitedUntil } = next;
-        return reached.map((w) =>
-          isSame(w, target) ? next : w.host === next.host ? { ...w, limitedUntil } : w,
-        );
-      }
-      if (wakeFor) {
-        // Judged against every watch on the host as saved now: a push and its
-        // pull request read the same runs, and either may be read first.
-        const known = all.filter((w) => w.host === next.host).flatMap((w) => w.told ?? []);
-        const told = [...new Set([...(target.told ?? []), ...known])];
-        woke = wakeFor({ told, heard: target.heard });
-        // With waking off, comments are still heard, so turning it on reports no
-        // history of them.
-        if (config.isAwake) news = woke.text;
-        next.told = toldAfter(woke.told, target.told, config.isAwake);
-        next.heard = woke.heard;
-      }
-      // A layer above one whose line changed is read at once, since it may
-      // wait on this one.
-      const layer = isMoved ? layerOf(next) : null;
-      for (const number of layer ? (next.pull?.stack?.layers.slice(layer.at) ?? []) : []) {
-        restack.add(idOf({ host: next.host, repo: next.repo, number }));
-      }
-      return takeOverPush(
-        reached.map((w) => (isSame(w, target) ? next : w)),
-        next,
-      );
+      saved = savedAfter(all, target, next, end, judged, config);
+      for (const layer of saved.restack) restack.add(layer);
+      return [...saved.list];
     });
+    const isSaved = saved?.isSaved ?? false;
+    const woke = saved?.woke ?? null;
+    next = saved?.next ?? next;
+    const toast = judged?.toast ?? null;
+    let news = config.isAwake ? (woke?.text ?? null) : null;
     isSaveFailing = false;
     // Only once the line says it, so a lost save does not toast or wake again.
     if (toast && isSaved) {
       $.ui.toast(toast);
-      if (isUrgent) void $.ui.notify(toast).catch(() => null);
+      if (judged?.isUrgent) void $.ui.notify(toast).catch(() => null);
     }
     if (isGivenUp && isSaved) {
       $.ui.toast(`pr-watch stopped watching ${labelOf(next)}: ${next.error}`);
@@ -803,7 +720,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         const { news: lines, ready, passed } = woke;
         const isRelease = next.pull !== undefined && isReleasePull(next.pull);
         const h = { id: idOf(next), label: labelOf(next), url: next.url, isRelease };
-        if (isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
+        if (judged?.isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
         else {
           await tell($, { ...h, news: lines, ready });
           await keep($, { ...h, news: passed, ready: null });
@@ -869,79 +786,14 @@ async function tick($: $): Promise<void> {
     );
   }
   // Judged on the list as saved, so a push that replaced a watch since stays.
-  let list: Watch[] = [];
+  let list: readonly Watch[] = [];
   await update($, watches, (all) => {
-    // A watch added while its host is paused waits it out like the rest, and
-    // says so; a push not yet read stays while it waits.
-    let isChanged = false;
-    list = all.flatMap((w) => {
-      const until = paused.get(w.host)?.until ?? 0;
-      const held = now < until && w.limitedUntil === undefined ? { ...w, limitedUntil: until } : w;
-      if (held !== w) isChanged = true;
-      // A line GitHub could not be asked about waits, as a paused unread push does,
-      // until its host has been out of reach long enough to be told.
-      const down = unreachable.get(held.host);
-      const isLongDown = down !== undefined && now - down.since >= OFFLINE_TELL_MS;
-      const isUnreached = down !== undefined && !isLongDown;
-      // An unread push waits for a read of its own: while its host is out of
-      // reach, 15 minutes from the later of the outage and the push; after, until read.
-      const waitedFrom = Math.max(down?.since ?? 0, held.push?.pushedAt ?? 0);
-      const isUnread =
-        !held.pull &&
-        (down === undefined
-          ? held.offline !== undefined || held.limitedUntil !== undefined
-          : now - waitedFrom < OFFLINE_TELL_MS);
-      const isWaiting = isUnreached || isUnread;
-      const isKept = !isGone(held, known, now) || isWaiting;
-      if (!isKept) isChanged = true;
-      return isKept ? [held] : [];
-    });
-    return isChanged ? list : all;
+    list = keptOf(all, now, known, { paused, unreachable });
+    return list === all ? all : [...list];
   });
-  let isMoving = false;
-  const probed = new Set<string>();
-  for (const w of list) {
-    // Settling and closing are judged at the last read, so a run that started
-    // after it is not missed.
-    const verdict = w.pull ? verdictOf(w.pull, known, w.host, w.checkedAt) : null;
-    if (verdict?.kind === 'running' || verdict?.kind === 'merged-running') isMoving = true;
-    const pauseEnd = paused.get(w.host)?.until ?? 0;
-    if (now < pauseEnd) continue;
-    // One read at a time tries a host gh could not reach, not every line on it.
-    const down = unreachable.get(w.host);
-    if (down) {
-      // A probe still in flight counts, so a slow one is not joined by another.
-      const isProbing = list.some((x) => x.host === w.host && busy.has(idOf(x)));
-      if (now < down.until || probed.has(w.host) || isProbing) continue;
-      probed.add(w.host);
-      void refresh($, w, now);
-      continue;
-    }
-    const usual = verdict && w.pull ? delayOf(verdict, w.pull, w.checkedAt, w.shownAt) : 10_000;
-    // A failing watch retries on its own schedule; low on quota, a watch waits
-    // its slow delay. Neither bursts.
-    const low = isQuotaLow(quota.get(w.host)) ? LOW_QUOTA_MS : 0;
-    const isSlowed = low > 0 || Boolean(w.failures);
-    const delay =
-      usual === null
-        ? null
-        : w.failures
-          ? Math.max(retryDelayOf(w.failures), low)
-          : low > 0
-            ? Math.max(usual, low)
-            : now < burstUntil
-              ? Math.min(usual, BURST_MS)
-              : usual;
-    if (delay === null || busy.has(idOf(w))) continue;
-    const last = Math.max(w.checkedAt, tried.get(idOf(w)) ?? 0);
-    // A line says the pause until a read of its own, so the end of one reads it at once.
-    const isDue =
-      w.limitedUntil !== undefined ||
-      (last <= pushedAt && !isSlowed) ||
-      now - last >= delay ||
-      (restack.has(idOf(w)) && !isSlowed);
-    if (isDue) void refresh($, w, now);
-  }
+  const pacing = { paused, unreachable, quota, busy, tried, restack, pushedAt, burstUntil };
+  const { due, isMoving } = dueOf(list, now, known, pacing);
+  for (const w of due) void refresh($, w, now);
   if (isMoving) await update($, clock, () => now);
 }
 
