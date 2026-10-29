@@ -46,6 +46,36 @@ export function keptOf(s: KeptSource): Kept {
   };
 }
 
+// The gate's state as a reload takes it back, keptOf's inverse: a leg's timer
+// is armed again by the caller, and what only the message's own text explains
+// is not kept, so it starts empty.
+export type Restored = Omit<Kept, 'legs' | 'message'> & {
+  legs: Map<string, KeptLeg & { timer: null }>;
+  message: Kept['message'] & { unread: null; said: null };
+};
+
+// Named field by field: a record isKept accepts may carry other keys, which
+// must not reach the gate's state.
+export function restoredOf(k: Kept): Restored {
+  return {
+    reviews: k.reviews,
+    legs: new Map(k.legs.map(([id, leg]) => [id, { ...leg, timer: null }])),
+    message: { ...k.message, unread: null, said: null },
+    messages: k.messages,
+    lastAnswer: k.lastAnswer,
+    misses: k.misses,
+    dropped: k.dropped,
+    capped: k.capped,
+    scratch: k.scratch,
+    reviewerChanges: k.reviewerChanges,
+    hold: k.hold,
+    mandate: k.mandate,
+    roundsFrom: k.roundsFrom,
+    pushed: k.pushed,
+    reviewing: k.reviewing,
+  } satisfies Record<keyof Restored, unknown>;
+}
+
 const isRecord = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
 const flags = (o: Record<string, unknown>, keys: readonly string[]) =>

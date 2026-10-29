@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import type { Kept } from '../types';
 import { NO_GRANT, UNGRANTED } from './consent';
-import { isKept, keptOf, offKept, type KeptSource } from './kept';
+import { isKept, keptOf, offKept, restoredOf, type KeptSource } from './kept';
 
 const SHA = 'a'.repeat(40);
 
@@ -89,6 +89,32 @@ describe('keptOf', () => {
 
   test('writes a record isKept takes back', () => {
     expect(isKept(roundTrip(keptOf(source())))).toBe(true);
+  });
+});
+
+describe('restoredOf', () => {
+  test('takes back every kept field, legs without a timer and the message without its text', () => {
+    const s = source();
+    const r = restoredOf(keptOf(s));
+    expect(r).toEqual({
+      ...s,
+      legs: new Map([
+        ['running', { ...leg(false), timer: null }],
+        ['finished', { ...leg(true), timer: null }],
+      ]),
+      message: { ...s.message, said: null },
+    });
+  });
+
+  test('takes back no key a record carries beyond the kept fields', () => {
+    const k = { ...keptOf(source()), gateOn: false, stopBefore: 'never stop' };
+    expect(isKept(k)).toBe(true);
+    expect(Object.keys(restoredOf(k)).toSorted()).toEqual(Object.keys(keptOf(source())).toSorted());
+  });
+
+  test('keeps again what it took back', () => {
+    const k = keptOf(source());
+    expect(keptOf(restoredOf(k))).toEqual(k);
   });
 });
 

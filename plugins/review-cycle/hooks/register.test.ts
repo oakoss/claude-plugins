@@ -2258,6 +2258,17 @@ describe('a reload of the module', () => {
     ]);
   });
 
+  test('a leg taken back and then finished is not capped by its budget', async ($, on) => {
+    const w = fakeWorld(on);
+    reloadInto(on, keptRecord({ legs: [['leg-back', runningLeg(w, NOW - 10 * 60_000)]] }));
+    await startSession($);
+    await finishLeg($, 'leg-back', false);
+    for (const t of legTimers(w)) t.fire();
+    await settle();
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([]);
+  });
+
   test('sets aside a record it cannot read, and says so', async ($, on) => {
     const w = fakeWorld(on);
     const toasts: string[] = [];
@@ -2307,7 +2318,7 @@ describe('a reload of the module', () => {
         ] as const,
     ),
     ['a miss that is not one', { misses: [null] }],
-    ['a rounds index past its reviews', { roundsFrom: 1 }],
+    ['a rounds index past its reviews', { roundsFrom: 2 }],
     ['a rounds index below zero', { roundsFrom: -1 }],
     ['no rounds index', { roundsFrom: undefined }],
     ['no pushes', { pushed: undefined }],
@@ -2320,17 +2331,21 @@ describe('a reload of the module', () => {
     ['a review skill that is not a path', { reviewing: 1 }],
   ] as const) {
     test(`sets aside a record holding ${name}`, async ($, on) => {
-      fakeWorld(on);
+      const w = fakeWorld(on);
       const toasts: string[] = [];
       on('ui.toast', ($$: unknown, e: { text: string }) => {
         toasts.push(e.text);
         return { value: undefined };
       });
-      reloadInto(on, { ...keptRecord({}), ...fields });
+      const tree = treeId(w, w.work);
+      const review = { type: 'review-cycle:code-reviewer', trees: [tree, tree], reviewedPaths: [] };
+      reloadInto(on, { ...keptRecord({ reviews: [review] }), ...fields });
       await startSession($);
       expect(toasts.filter((t) => t.includes('could not read the reviews it kept'))).toHaveLength(
         1,
       );
+      const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+      expect(status.reviews).toBe(0);
     });
   }
 
@@ -5351,6 +5366,21 @@ describe('the stop-before setting', () => {
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 3 --squash'), 'held by a condition')).toBe(false);
   });
+  test("a session's end drops the reason a refused yes gave", async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    on('session.end', () => ({ sessionId: 's' }));
+    await endTurn(
+      $,
+      'answer',
+      'Should I squash-merge #3, then #4? They touch different files, so neither needs a rebase after the other merges.',
+    );
+    await say($, 'Ok, lets do that');
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), '"They touch')).toBe(true);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    const r = await bash($, 'gh pr merge 3 --squash');
+    expect(denied(r, 'merge')).toBe(true);
+    expect(denied(r, '"They touch')).toBe(false);
+  });
   test('a refused yes names its reason only for the steps the offer named', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('pr') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Should I open a PR? After that, CI will run.');
@@ -6860,6 +6890,29 @@ describe('an epic mandate', () => {
     expect(status.stopBefore).toMatchObject({ stopBefore: 'merge', source: 'mandate' });
     expect(status.stopBefore.mandate).toEqual({ epic: 'cpl-czgp' });
   });
+  test("the session's end ends it", async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    on('session.end', () => ({ sessionId: 's' }));
+    await say($, START);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await say($, 'start on the parser');
+    expect(await pushRan($)).toBe(false);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore.mandate).toBeNull();
+  });
+  test("the session's end right after a reload ends it, and drops the kept offer", async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    on('session.end', () => ({ sessionId: 's' }));
+    reloadInto(
+      on,
+      keptRecord({ mandate: { epic: 'cpl-czgp' }, lastAnswer: 'Want me to push it?' }),
+    );
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await say($, 'yes');
+    expect(await pushRan($)).toBe(false);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.stopBefore.mandate).toBeNull();
+  });
   test('it lasts past a message that does not touch it', async ($, on) => {
     fakeWorld(on, pushing({ git: remoteSide({}) }));
     await say($, START);
@@ -6955,6 +7008,21 @@ describe('the model check', () => {
     'review-cycle: the model check read "ship the react aria update" as asking for a push.';
   const OFF = { options: { modelCheck: false } };
 
+  test("its yes does not outlast the session's end", async ($, on) => {
+    fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
+    on('session.end', () => ({ sessionId: 's' }));
+    await say($, SHIP);
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+  });
+  test("a yes after the session's end answers no offer from before it", async ($, on) => {
+    fakeWorld(on, pushing({}));
+    on('session.end', () => ({ sessionId: 's' }));
+    await endTurn($, 'answer', 'Should I push fix/x?');
+    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+  });
   test('a push the grammar refuses runs on its yes, shown and kept with the misses', async ($, on) => {
     const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
     await say($, SHIP);
