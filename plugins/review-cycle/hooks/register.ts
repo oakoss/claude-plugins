@@ -94,7 +94,7 @@ import {
 import type { Finishes, PushSpec } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
 import { declinedSince, holdAfter, type Hold, type HoldState, type HoldStep } from './hold';
-import { isKept, keptOf, offKept } from './kept';
+import { isKept, keptOf, offKept, restoredOf, type Restored } from './kept';
 import {
   configured,
   STRICTEST,
@@ -500,25 +500,9 @@ async function recall($: $): Promise<void> {
       );
     } else {
       const now = await $.clock.now();
-      const legs = new Map<string, Leg>(
-        kept.legs.map(([id, leg]) => [id, { ...leg, timer: null }]),
-      );
-      state.reviews = kept.reviews;
-      state.legs = legs;
-      state.message = { ...kept.message, unread: null, said: null };
-      state.messages = kept.messages;
-      state.lastAnswer = kept.lastAnswer;
-      state.hold = kept.hold;
-      state.mandate = kept.mandate;
-      state.misses = kept.misses;
-      state.dropped = kept.dropped;
-      state.capped = kept.capped;
-      state.scratch = kept.scratch;
-      state.reviewerChanges = kept.reviewerChanges;
-      state.roundsFrom = kept.roundsFrom;
-      state.pushed = kept.pushed;
-      state.reviewing = kept.reviewing;
-      for (const [id, leg] of legs) {
+      const restored: Pick<GateState, keyof Restored> = restoredOf(kept);
+      Object.assign(state, restored);
+      for (const [id, leg] of state.legs) {
         if (leg.done || leg.capped) continue;
         const left = Math.max(0, LEG_BUDGET_MS - (now - leg.spawnedAt));
         leg.timer = $.clock.after(left, () => overBudget($, id, leg));
@@ -571,6 +555,9 @@ const _keptMandate: Equal<Mandate | null, Kept['mandate']> = true;
 const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
 const _keptMessage: Equal<Omit<Message, 'unread' | 'said'>, Kept['message']> = true;
 const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
+// recall's Pick<GateState, keyof Restored> annotation is what type-checks the
+// values it assigns; this keeps it from reaching state that is never kept.
+const _restoredKeys: Equal<keyof Restored, keyof Kept> = true;
 
 // Without `cwd`, $.process.run runs in the Bash tool's current directory,
 // which is what a command's own relative paths resolve against.

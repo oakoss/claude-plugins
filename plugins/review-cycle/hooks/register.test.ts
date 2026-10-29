@@ -2258,6 +2258,17 @@ describe('a reload of the module', () => {
     ]);
   });
 
+  test('a leg taken back and then finished is not capped by its budget', async ($, on) => {
+    const w = fakeWorld(on);
+    reloadInto(on, keptRecord({ legs: [['leg-back', runningLeg(w, NOW - 10 * 60_000)]] }));
+    await startSession($);
+    await finishLeg($, 'leg-back', false);
+    for (const t of legTimers(w)) t.fire();
+    await settle();
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cappedReviews).toEqual([]);
+  });
+
   test('sets aside a record it cannot read, and says so', async ($, on) => {
     const w = fakeWorld(on);
     const toasts: string[] = [];
@@ -2307,7 +2318,7 @@ describe('a reload of the module', () => {
         ] as const,
     ),
     ['a miss that is not one', { misses: [null] }],
-    ['a rounds index past its reviews', { roundsFrom: 1 }],
+    ['a rounds index past its reviews', { roundsFrom: 2 }],
     ['a rounds index below zero', { roundsFrom: -1 }],
     ['no rounds index', { roundsFrom: undefined }],
     ['no pushes', { pushed: undefined }],
@@ -2320,17 +2331,21 @@ describe('a reload of the module', () => {
     ['a review skill that is not a path', { reviewing: 1 }],
   ] as const) {
     test(`sets aside a record holding ${name}`, async ($, on) => {
-      fakeWorld(on);
+      const w = fakeWorld(on);
       const toasts: string[] = [];
       on('ui.toast', ($$: unknown, e: { text: string }) => {
         toasts.push(e.text);
         return { value: undefined };
       });
-      reloadInto(on, { ...keptRecord({}), ...fields });
+      const tree = treeId(w, w.work);
+      const review = { type: 'review-cycle:code-reviewer', trees: [tree, tree], reviewedPaths: [] };
+      reloadInto(on, { ...keptRecord({ reviews: [review] }), ...fields });
       await startSession($);
       expect(toasts.filter((t) => t.includes('could not read the reviews it kept'))).toHaveLength(
         1,
       );
+      const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+      expect(status.reviews).toBe(0);
     });
   }
 
