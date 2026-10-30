@@ -523,6 +523,14 @@ const OFFERS = [
   'Merge #2, #3?',
   'Merge the stack?',
   'Merge stack #4 (#2 and #3)?',
+  // An offer that puts a step off, and one setting a force push against a plain one.
+  'Should I push later, then merge #3?',
+  'Merge #3 and #4 later?',
+  'Should I merge it, or leave #130 for later?',
+  'Merge #3 now and #4 later?',
+  'Should I push and open the PR, then merge #3 later?',
+  'Force-push fix/x with a lease, or push?',
+  'Should I force-push fix/x with a lease, then push the tags?',
 ];
 
 // Which offers each message is read against. Crossing every generated message
