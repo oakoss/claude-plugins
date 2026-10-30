@@ -28,6 +28,7 @@ import {
   type Needed,
   type Unnamed,
 } from './push-verdict';
+import { anonymized, layerOf, parseCatalog, remoteOf, type LeaseIo } from './stack';
 
 // A push a requested pull request needs (`forPr`) runs unasked, not noted.
 export type Unasked = GhUnasked & { forPr?: true };
@@ -277,4 +278,33 @@ function unnamedRefusal(shown: string, commits: boolean, u: Unnamed): string {
       ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
       : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
   return `the user's latest message asks for a push, but ${u.why}, so nothing ran.${alone} ${then}`;
+}
+
+// The unmerged stack layer a `git push` updates, when this clone tracks a
+// gh-stack stack. A catalog or dry run it cannot read leaves the push to the
+// other checks: this steers to `gh stack push`, and guards nothing they miss.
+export async function stackLayerPushed(
+  git: Git,
+  top: string,
+  spec: PushSpec,
+  io: Pick<LeaseIo, 'catalog' | 'config' | 'remotes' | 'urls'>,
+): Promise<string | null> {
+  if (spec.argv === null) return null;
+  const text = await io.catalog();
+  const stacks = typeof text === 'string' ? parseCatalog(text) : null;
+  if (stacks === null || stacks.length === 0) return null;
+  const { refs } = await pushTargets(git, top, spec.argv);
+  // A deleted ref, or one pushed to a remote other than the one gh-stack
+  // pushes the layer to, leaves the stack's record as it was.
+  for (const r of refs) {
+    if (r.flag === '-' || !r.to.startsWith('refs/heads/')) continue;
+    const layer = layerOf(stacks, [r.to.slice('refs/heads/'.length)]);
+    if (layer === null) continue;
+    const remote = await remoteOf(layer, io);
+    if (typeof remote !== 'string') continue;
+    const urls = await io.urls(remote);
+    if ('asks' in urls) continue;
+    if (urls.push.split('\n').some((u) => anonymized(u.trim()) === r.url)) return layer;
+  }
+  return null;
 }
