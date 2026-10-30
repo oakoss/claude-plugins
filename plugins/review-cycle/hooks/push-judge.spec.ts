@@ -7,7 +7,7 @@ import type { Git, Run } from './git';
 import type { PushSpec } from './git-args';
 import type { Hold } from './hold';
 import type { StopBefore } from './ladder';
-import { escalatePush, judgePush, LEASE, type PushConsent } from './push-judge';
+import { escalatePush, judgePush, LEASE, stackLayerPushed, type PushConsent } from './push-judge';
 
 function specOf(command: string): PushSpec {
   const c = readCommand(command).classification;
@@ -393,4 +393,143 @@ test('the refusal quotes the command as it stands when refusing', async () => {
     grant(),
   );
   expect(r).toMatchObject({ deny: expect.stringContaining('The command: after git') });
+});
+
+const layerRef = (branch: string) => `*\trefs/heads/${branch}:refs/heads/${branch}\t[new branch]`;
+
+describe('stackLayerPushed', () => {
+  const ORIGIN = 'https://github.com/o/r.git';
+  const CATALOG = JSON.stringify({
+    schemaVersion: 1,
+    stacks: [
+      {
+        trunk: { branch: 'main' },
+        branches: [
+          { branch: 'spike/one', pullRequest: { number: 1, merged: true } },
+          { branch: 'spike/two', pullRequest: { number: 2 } },
+          { branch: 'spike/three', pullRequest: { number: 3 } },
+        ],
+      },
+    ],
+  });
+
+  // git as the steer sees it: the dry run's ref lines under `To <to>`.
+  function gitOf(lines: readonly string[], to = ORIGIN) {
+    const calls: string[] = [];
+    const git: Git = (argv) => {
+      calls.push(argv.join(' '));
+      if (argv.includes('--porcelain')) {
+        return answer({ stdout: [`To ${to}`, ...lines, 'Done'].join('\n') });
+      }
+      return answer({ stdout: 'ref: refs/heads/main\tHEAD\n' });
+    };
+    return { git, calls };
+  }
+
+  type Io = Parameters<typeof stackLayerPushed>[3];
+  const io = (over: Partial<Io> = {}, config: Record<string, string> = {}): Io => ({
+    catalog: () => Promise.resolve(CATALOG),
+    config: (key) => Promise.resolve(config[key] ?? null),
+    remotes: () => Promise.resolve(['origin']),
+    urls: () => Promise.resolve({ fetch: ORIGIN, push: ORIGIN }),
+    ...over,
+  });
+
+  const steer = (command: string, w: ReturnType<typeof gitOf>, i = io()) =>
+    stackLayerPushed(w.git, '/repo', specOf(command), i);
+
+  test('names an unmerged layer pushed where gh-stack pushes it', async () => {
+    const w = gitOf([layerRef('spike/two')]);
+    expect(await steer('git push origin spike/two', w)).toBe('spike/two');
+    expect(w.calls.filter((c) => c.includes('--dry-run'))).toHaveLength(1);
+  });
+
+  test('a merged layer, the trunk, a branch in no stack, a tag or a deleted layer is not one', async () => {
+    for (const ref of [
+      layerRef('spike/one'),
+      layerRef('main'),
+      layerRef('fix/x'),
+      // `refs/tags/x` is as long as `refs/heads/`, so this names spike/two if read as a branch.
+      '*\trefs/tags/xspike/two:refs/tags/xspike/two\t[new tag]',
+      '-\t:refs/heads/spike/two\t[deleted]',
+    ]) {
+      expect(await steer('git push origin x', gitOf([ref])), ref).toBeNull();
+    }
+    const both = gitOf(['-\t:refs/heads/old\t[deleted]', layerRef('spike/two')]);
+    expect(await steer('git push origin :old spike/two', both)).toBe('spike/two');
+    const after = gitOf([layerRef('fix/x'), layerRef('spike/one'), layerRef('spike/two')]);
+    expect(await steer('git push origin fix/x spike/one spike/two', after)).toBe('spike/two');
+  });
+
+  test('matches the push URL as git prints it, without its user, among several', async () => {
+    const ssh = io({
+      urls: () => Promise.resolve({ fetch: ORIGIN, push: `${ORIGIN}\ngit@github.com:o/r.git ` }),
+    });
+    const w = gitOf([layerRef('spike/two')], 'github.com:o/r.git');
+    expect(await steer('git push origin spike/two', w, ssh)).toBe('spike/two');
+  });
+
+  test('a layer whose remote cannot be picked or read does not stop the next layer', async () => {
+    const pushed = [layerRef('spike/two'), layerRef('spike/three')];
+    const config = {
+      'branch.spike/two.pushRemote': 'gone',
+      'branch.spike/three.pushRemote': 'origin',
+    };
+    const unread = io(
+      {
+        urls: (remote) =>
+          Promise.resolve(
+            remote === 'gone' ? { asks: 'no such remote' } : { fetch: ORIGIN, push: ORIGIN },
+          ),
+      },
+      config,
+    );
+    const command = 'git push origin spike/two spike/three';
+    expect(await steer(command, gitOf(pushed), unread)).toBe('spike/three');
+    const unpicked = io(
+      { remotes: () => Promise.resolve(['origin', 'backup']) },
+      { 'branch.spike/three.pushRemote': 'origin' },
+    );
+    expect(await steer(command, gitOf(pushed), unpicked)).toBe('spike/three');
+    const elsewhere = io(
+      {
+        urls: (remote) =>
+          Promise.resolve(
+            remote === 'gone'
+              ? { fetch: '/backup.git', push: '/backup.git' }
+              : { fetch: ORIGIN, push: ORIGIN },
+          ),
+      },
+      config,
+    );
+    expect(await steer(command, gitOf(pushed), elsewhere)).toBe('spike/three');
+  });
+
+  test('a layer pushed to another remote than the one gh-stack picks is not steered', async () => {
+    const picked = io({}, { 'branch.spike/two.pushRemote': 'origin' });
+    const w = gitOf([layerRef('spike/two')], '/backup.git');
+    expect(await steer('git push backup spike/two', w, picked)).toBeNull();
+  });
+
+  test('a remote it cannot pick or read leaves the push to the other checks', async () => {
+    const several = io({ remotes: () => Promise.resolve(['origin', 'backup']) });
+    const pushed = [layerRef('spike/two')];
+    expect(await steer('git push origin spike/two', gitOf(pushed), several)).toBeNull();
+    const unread = io({ urls: () => Promise.resolve({ asks: 'no such remote' }) });
+    expect(await steer('git push origin spike/two', gitOf(pushed), unread)).toBeNull();
+  });
+
+  test('without a readable catalog with stacks, or a push it can rerun, there is no dry run', async () => {
+    const empty = JSON.stringify({ schemaVersion: 1, stacks: [] });
+    for (const catalog of [null, { asks: 'unreadable' }, 'not json', empty] as const) {
+      const w = gitOf([layerRef('spike/two')]);
+      const none = io({ catalog: () => Promise.resolve(catalog) });
+      expect(await steer('git push origin spike/two', w, none)).toBeNull();
+      expect(w.calls).toEqual([]);
+    }
+    const w = gitOf([layerRef('spike/two')]);
+    const spec = { ...specOf('git push origin spike/two'), argv: null };
+    expect(await stackLayerPushed(w.git, '/repo', spec, io())).toBeNull();
+    expect(w.calls).toEqual([]);
+  });
 });
