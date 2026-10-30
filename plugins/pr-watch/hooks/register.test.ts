@@ -3789,7 +3789,9 @@ describe('reads that fail', () => {
     gh.limited = true;
     await clock.advance(10_000);
     const before = reads(seen.runs);
-    expect(await tool($, 'watch', { pull: '128' })).toMatch(/rate limited until \d\d:\d\d/);
+    expect(await tool($, 'watch', { pull: '128' })).toMatch(
+      /GitHub's rate limit pauses its reads until \d\d:\d\d\./,
+    );
     expect(reads(seen.runs)).toBe(before);
   });
 
@@ -4400,7 +4402,10 @@ describe('the tools', () => {
     const seen = world(on, { pr: prJson(), view: OPEN_VIEW });
     await start($);
     const answer = await tool($, 'watch', { pull: '128' });
-    expect(answer).toContain('pr-watch is now watching o/r#128: #128 ✓ ready to merge');
+    // One line names it; the band, not the answer, draws its progress.
+    expect(answer.split('\n')[0]).toBe(
+      'pr-watch is now watching o/r#128 on its line above the prompt. It tells you when that changes, at once or with the next message, so there is no need to poll gh.',
+    );
     expect(answer).toContain('GitHub reports o/r#128 ready to merge.');
     expect(seen.order).toContain('gh pr view 128 --json url,state,mergedAt');
     expect(await lineIn(await band($))).toBe('#128 ✓ ready to merge');
@@ -4528,7 +4533,7 @@ describe('the tools', () => {
     await clock.advance(1000);
     expect(seen.wakes).toEqual([]);
     const answer = await tool($, 'watch', { pull: '128', wake: true });
-    expect(answer).toContain('It is ready to merge now, as its line says.');
+    expect(answer).toContain('It is ready to merge now.');
     expect(answer).not.toContain('wakes you when it turns ready');
   });
 
@@ -4576,7 +4581,7 @@ describe('the tools', () => {
     await clock.advance(120_000);
     expect(seen.wakes).toHaveLength(1);
     const late = await tool($, 'watch', { pull: '128', wake: true });
-    expect(late).toContain("Its merge's checks have passed now, as its line says.");
+    expect(late).toContain("Its merge's checks have passed now.");
   });
 
   test('a watch that closes takes its wake with it', async ($, on) => {
@@ -4649,7 +4654,7 @@ describe('the tools', () => {
     await create($);
     await clock.advance(1000);
     expect(await tool($, 'watch', { pull: '128' })).toBe(
-      'pr-watch was already watching o/r#128: #128 loading…\npr-watch tells you when that changes, at once or with the next message, so there is no need to poll gh.',
+      'pr-watch was already watching o/r#128 on its line above the prompt. It tells you when that changes, at once or with the next message, so there is no need to poll gh.',
     );
     expect(reads(seen.runs)).toBe(1);
     gh.release!();
@@ -4702,6 +4707,30 @@ describe('the tools', () => {
       const answer = await tool($, 'watch', { pull: '128' });
       expect(answer).toContain('Waking Claude is off in /config');
       expect(answer).not.toContain('no need to poll');
+      // Nothing tells it later, so the answer carries what the line shows.
+      expect(answer).toContain('it shows #128 ✓ ready to merge');
+    },
+  );
+
+  test('watch says when its first read failed, and does not call polling needless', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), view: OPEN_VIEW, readsFail: true });
+    await start($);
+    const answer = await tool($, 'watch', { pull: '128' });
+    expect(answer).toMatch(/Its last read failed \(gh failed: .+\); pr-watch tries again\./);
+    expect(answer.split('\n')).toHaveLength(1);
+  });
+
+  test(
+    'with waking off, watch names a failed read once, in the line it quotes',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      mock.clock(on, { now: T0 });
+      world(on, { pr: prJson(), view: OPEN_VIEW, readsFail: true });
+      await start($);
+      const answer = await tool($, 'watch', { pull: '128' });
+      expect(answer).toContain('it shows #128 gh failed: ');
+      expect(answer.match(/gh failed/g)).toHaveLength(1);
     },
   );
 
@@ -4731,8 +4760,19 @@ describe('the tools', () => {
     });
     await start($);
     const answer = await tool($, 'watch', { pull: '128' });
-    expect(answer).toContain('pr-watch could not finish its first read: ');
+    expect(answer).toContain('It could not finish its first read: ');
     expect(answer).not.toContain('no need to poll');
+  });
+
+  test('watch and unwatch take `pr` for `pull`', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    world(on, { pr: prJson(), view: OPEN_VIEW });
+    await start($);
+    expect(await tool($, 'watch', { pull: '', pr: '128' })).toContain(
+      'pr-watch is now watching o/r#128',
+    );
+    expect(await tool($, 'unwatch', { pr: '128' })).toBe('pr-watch stopped watching o/r#128.');
+    expect(await tool($, 'watch', {})).toContain('`pull` names a pull request');
   });
 
   test('unwatch stops a watch by number, URL, head branch or pushed branch', async ($, on) => {

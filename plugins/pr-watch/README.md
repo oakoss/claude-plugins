@@ -68,7 +68,7 @@ In `/config`:
 
 pr-watch gives Claude three tools, so it can follow a pull request it did not open, such as a teammate's, instead of polling `gh pr checks` or sleeping:
 
-- **`watch`** takes a pull request's number, URL or head branch, with a repository when it is not the current directory's, and `wake` to be woken when it turns ready to merge or its merge's checks pass. It reads the pull request at once and answers with what its line shows, along with any news that first read found; pr-watch then tells Claude when that changes. Calling it for a pull request already watched sets `wake` on it.
+- **`watch`** takes a pull request's number, URL or head branch as `pull` (or `pr`), with a repository when it is not the current directory's, and `wake` to be woken when it turns ready to merge or its merge's checks pass. It reads the pull request at once and answers in one line, which says so when a rate limit or an outage keeps it from reading; any news that first read found follows. Its progress is on its line above the prompt, not in the answer. pr-watch then tells Claude when that changes. Pull requests Claude opens or merges are watched already, so calling it for one of them only sets `wake`.
 - **`unwatch`** stops watching a pull request, by number, URL or head branch, or a pushed branch. A number two watched repositories share is refused until the repository is named.
 - **`watches`** lists what pr-watch is watching and what each line shows.
 
