@@ -4768,7 +4768,9 @@ describe('the tools', () => {
     mock.clock(on, { now: T0 });
     world(on, { pr: prJson(), view: OPEN_VIEW });
     await start($);
-    expect(await tool($, 'watch', { pr: '128' })).toContain('pr-watch is now watching o/r#128');
+    expect(await tool($, 'watch', { pull: '', pr: '128' })).toContain(
+      'pr-watch is now watching o/r#128',
+    );
     expect(await tool($, 'unwatch', { pr: '128' })).toBe('pr-watch stopped watching o/r#128.');
     expect(await tool($, 'watch', {})).toContain('`pull` names a pull request');
   });

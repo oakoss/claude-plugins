@@ -898,11 +898,14 @@ function textOf(w: Watch, now: number, known: Record<string, number>): string {
 
 type ToolInput = { pull: string; repo: string | null; wake: boolean };
 
-// Agents often name the pull request `pr`, so it stands in for `pull`.
+const named = (x: unknown) => typeof x === 'string' && x.trim() !== '';
+
+// Agents often name the pull request `pr`, so it stands in for `pull`; an
+// empty `pull` beside it counts as absent, as a live call sent one.
 function toolInputOf(e: unknown): ToolInput | string {
   const given = e as { pull?: unknown; pr?: unknown; repo?: unknown; wake?: unknown };
   const { repo, wake } = given;
-  const pull = given.pull ?? given.pr;
+  const pull = named(given.pull) ? given.pull : (given.pr ?? given.pull);
   if (typeof pull !== 'string' || pull.trim() === '') {
     return 'pr-watch: `pull` names a pull request: its number, URL or head branch.';
   }
