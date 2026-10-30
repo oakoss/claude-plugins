@@ -1,5 +1,6 @@
 // What the band says about a pull request, and when to look again. Pure.
 import type { Activity, Commit, Held, Job, Pull, Runs, Stack, Watch, Workflow } from '../types';
+import type { Quota } from './github';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -375,7 +376,7 @@ export function mergingPull(command: string): Merging | null {
 export const LOW_QUOTA_MS = 60_000;
 const LOW_QUOTA_SHARE = 0.1;
 
-export function isQuotaLow(q: { remaining: number; limit: number } | undefined): boolean {
+export function isQuotaLow(q: Pick<Quota, 'remaining' | 'limit'> | undefined): boolean {
   return q !== undefined && q.remaining < q.limit * LOW_QUOTA_SHARE;
 }
 
@@ -405,11 +406,7 @@ export type Pause = { until: number; backoff: number };
 
 // A spent quota waits for its reset; any other limit, a secondary one, waits
 // longer each time it is hit again.
-export function pauseOf(
-  q: { remaining: number; limit: number; resetAt: string } | undefined,
-  last: Pause | undefined,
-  now: number,
-): Pause {
+export function pauseOf(q: Quota | undefined, last: Pause | undefined, now: number): Pause {
   const backoff = last ? Math.min(last.backoff * 2, PAUSE_MAX_MS) : PAUSE_FIRST_MS;
   const reset = q && q.remaining <= 0 ? Date.parse(q.resetAt) : Number.NaN;
   return { until: reset > now ? reset : now + backoff, backoff };

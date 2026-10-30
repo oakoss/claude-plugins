@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import type { Activity, Job, Pull, RunStatus, Watch, Workflow } from '../types';
+import type { Activity, Job, Pull, Watch, Workflow } from '../types';
+import { flow, job, pull, watched } from './fixtures';
 import {
   barOf,
   belowOf,
@@ -65,55 +66,6 @@ const AT = Date.parse('2026-10-03T22:01:10Z');
 
 function verdictAt(p: Pull, estimates: Record<string, number> = {}, host = 'github.com', now = AT) {
   return verdictOf(p, estimates, host, now);
-}
-
-function job(name: string, conclusion: string | null, isRequired = false): Job {
-  return {
-    name,
-    status: conclusion === null ? 'running' : 'done',
-    conclusion,
-    url: `https://x/${name}`,
-    isRequired,
-  };
-}
-
-function flow(id: number, name: string, jobs: Job[], status?: RunStatus): Workflow {
-  const isDone = jobs.every((j) => j.status === 'done');
-  const bad = jobs.find((j) => j.conclusion !== 'SUCCESS' && j.conclusion !== null);
-  return {
-    id,
-    name,
-    status: status ?? (isDone ? 'done' : 'running'),
-    conclusion: isDone ? (bad?.conclusion ?? 'SUCCESS') : null,
-    startedAt: '2026-10-03T22:00:00Z',
-    isRerun: false,
-    attempt: 1,
-    url: `https://x/run/${id}`,
-    jobs,
-  };
-}
-
-function pull(workflows: Workflow[], over: Partial<Pull> = {}): Pull {
-  return {
-    number: 128,
-    title: 't',
-    url: 'https://github.com/o/r/pull/128',
-    state: 'OPEN',
-    isDraft: false,
-    merge: 'CLEAN',
-    review: null,
-    workflows,
-    isGated: workflows.some((w) => w.jobs.some((j) => j.isRequired)),
-    isRequiredPending: false,
-    isTruncated: false,
-    base: 'main',
-    mergedAt: null,
-    mergeRuns: null,
-    activity: [],
-    // As parsePull reads it: at least as new as anyone else's activity.
-    activityAt: over.activity?.at(-1)?.at ?? null,
-    ...over,
-  };
 }
 
 const ci = (jobs: Job[]) => flow(1, 'CI', jobs);
@@ -1383,18 +1335,6 @@ describe('clockText', () => {
 });
 
 const at = Date.parse('2026-10-03T22:01:10Z');
-
-function watched(p?: Pull, over: Partial<Watch> = {}): Watch {
-  return {
-    host: 'github.com',
-    repo: 'o/r',
-    number: 128,
-    url: 'https://github.com/o/r/pull/128',
-    pull: p,
-    checkedAt: 0,
-    ...over,
-  };
-}
 
 function textOf(w: Watch, estimates = {}, columns = 80): string {
   return lineOf(w, at, estimates, columns)
