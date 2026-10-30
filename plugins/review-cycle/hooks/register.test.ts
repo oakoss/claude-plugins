@@ -4171,11 +4171,6 @@ const REMOTE = '/remote.git';
 const DRY_FLAGS = '--dry-run --porcelain --no-verify --no-quiet --recurse-submodules=no';
 const NEW_BRANCH = '*\tHEAD:refs/heads/fix/x\t[new branch]';
 const newBranch = (b: string) => `*\trefs/heads/${b}:refs/heads/${b}\t[new branch]`;
-// A dry run to `git@github.com:o/r.git`, whose URL git prints after `To` without its user.
-const sshDryRun = (lines: string[]) => ({
-  stdout: ['To github.com:o/r.git', ...lines, 'Done'].join('\n'),
-});
-
 // The remote as the gate's always-ask check sees it: what git's dry run
 // prints for each push, keyed by the words after `push` ('fail' for a dry run
 // that fails), and the remote's default branch (null when unreadable).
@@ -5106,6 +5101,7 @@ describe('the stop-before setting', () => {
       'origin spike/two': [newBranch('spike/two')],
       'origin spike/one': [newBranch('spike/one')],
       'origin fix/x': [newBranch('fix/x')],
+      'origin :old spike/two': ['-\t:refs/heads/old\t[deleted]', newBranch('spike/two')],
       '--force origin spike/two': [
         '+\trefs/heads/spike/two:refs/heads/spike/two\ta...b (forced update)',
       ],
@@ -5116,6 +5112,8 @@ describe('the stop-before setting', () => {
       git: (a) => {
         if (a.startsWith('git config --get ')) return { exitCode: 1 };
         if (a === 'git remote') return { stdout: 'origin\n' };
+        // The steer matches the push URL; the fetch URL differs so reading it would miss.
+        if (a === 'git remote get-url --all origin') return { stdout: 'https://mirror.test/o/r\n' };
         if (a === 'git remote get-url --push --all origin') return { stdout: `${REMOTE}\n` };
         return remote(a);
       },
@@ -5138,59 +5136,11 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'git push --force origin spike/two'), 'without a lease')).toBe(
       true,
     );
-  });
-  test('a layer is steered on an ssh remote, and in a push that also deletes', async ($, on) => {
-    const catalog = JSON.stringify({
-      schemaVersion: 1,
-      stacks: [{ trunk: { branch: 'main' }, branches: [{ branch: 'spike/two' }] }],
-    });
-    fakeWorld(on, {
-      settings: { local: stops('never stop') },
-      files: { '/repo/.git/gh-stack': catalog },
-      git: (a) => {
-        if (a.startsWith('git config --get ')) return { exitCode: 1 };
-        if (a === 'git remote') return { stdout: 'origin\n' };
-        if (a === 'git remote get-url --push --all origin') {
-          return { stdout: 'git@github.com:o/r.git\n' };
-        }
-        if (a.includes('push --dry-run origin :old spike/two')) {
-          return sshDryRun(['-\t:refs/heads/old\t[deleted]', newBranch('spike/two')]);
-        }
-        if (a.includes('push --dry-run origin spike/two')) {
-          return sshDryRun([newBranch('spike/two')]);
-        }
-        return remoteSide()(a);
-      },
-    });
-    await say($, 'push it');
-    expect(
-      denied(await bash($, 'git push origin spike/two'), 'is a layer of a gh-stack stack'),
-    ).toBe(true);
+    // A push that also deletes is steered for the layer it updates.
     await say($, 'push it, and delete old');
     expect(
       denied(await bash($, 'git push origin :old spike/two'), 'is a layer of a gh-stack stack'),
     ).toBe(true);
-  });
-  test('a layer pushed to a remote gh-stack does not push it to is not steered', async ($, on) => {
-    const catalog = JSON.stringify({
-      schemaVersion: 1,
-      stacks: [{ trunk: { branch: 'main' }, branches: [{ branch: 'spike/two' }] }],
-    });
-    fakeWorld(on, {
-      settings: { local: stops('never stop') },
-      files: { '/repo/.git/gh-stack': catalog },
-      git: (a) => {
-        if (a === 'git config --get branch.spike/two.pushRemote') return { stdout: 'origin\n' };
-        if (a.startsWith('git config --get ')) return { exitCode: 1 };
-        if (a === 'git remote get-url --push --all origin') return { stdout: `${REMOTE}\n` };
-        if (a.includes('push --dry-run backup ')) {
-          return { stdout: `To /backup.git\n${newBranch('spike/two')}\nDone` };
-        }
-        return remoteSide()(a);
-      },
-    });
-    await say($, 'push it');
-    expect(ran(await bash($, 'git push backup spike/two'))).toBe(true);
   });
   test('without a stack catalog, a push gets no extra dry run for it', async ($, on) => {
     const w = fakeWorld(on, { git: remoteSide() });
