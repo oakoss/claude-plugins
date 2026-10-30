@@ -898,8 +898,11 @@ function textOf(w: Watch, now: number, known: Record<string, number>): string {
 
 type ToolInput = { pull: string; repo: string | null; wake: boolean };
 
+// Agents often name the pull request `pr`, so it stands in for `pull`.
 function toolInputOf(e: unknown): ToolInput | string {
-  const { pull, repo, wake } = e as { pull?: unknown; repo?: unknown; wake?: unknown };
+  const given = e as { pull?: unknown; pr?: unknown; repo?: unknown; wake?: unknown };
+  const { repo, wake } = given;
+  const pull = given.pull ?? given.pr;
   if (typeof pull !== 'string' || pull.trim() === '') {
     return 'pr-watch: `pull` names a pull request: its number, URL or head branch.';
   }
@@ -967,25 +970,37 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
           kept.news ?? `${name} is no longer watched: its line was removed while pr-watch read it.`,
       };
     }
-    const known = await read($, estimates);
-    const line = textOf(after, now, known);
-    const head = `pr-watch ${isNew ? 'is now watching' : 'was already watching'} ${name}: ${line}`;
+    // One line: its progress is on the band, and the watches tool reads it. Why
+    // a read failed or waits stays, since the agent would otherwise poll gh.
+    const head = `pr-watch ${isNew ? 'is now watching' : 'was already watching'} ${name} on its line above the prompt.`;
     if (kept.error !== undefined) {
-      return { result: `${head}\npr-watch could not finish its first read: ${kept.error}` };
+      return { result: `${head} It could not finish its first read: ${kept.error}` };
     }
-    // Already there, it was told before and will not wake: the line says it now.
+    // With waking off the closing quotes the line, which already says why.
+    const waits = !config.isAwake
+      ? ''
+      : after.limitedUntil !== undefined
+        ? ` GitHub's rate limit pauses its reads until ${untilText(after.limitedUntil)}.`
+        : after.offline !== undefined
+          ? ' GitHub could not be reached; pr-watch keeps trying.'
+          : after.error !== undefined
+            ? ` Its last read failed (${after.error}); pr-watch tries again.`
+            : '';
+    // Already there, it was told before and will not wake: the answer says it now.
     // A passed merge counts only once settled, as a read tells it.
+    const known = await read($, estimates);
     const verdict = after.pull ? verdictOf(after.pull, known, after.host, now) : null;
     const isPassed =
       verdict?.kind === 'merged-passed' && after.pull && isSettled(verdict, after.pull, now);
+    // With waking off nothing tells the agent later, so the line is the answer.
     const closing = !config.isAwake
-      ? 'Waking Claude is off in /config: changes show on the line, and the watches tool reads them.'
+      ? `Waking Claude is off in /config: it shows ${textOf(after, now, known)}, and the watches tool reads it again.`
       : !input.wake
-        ? 'pr-watch tells you when that changes, at once or with the next message, so there is no need to poll gh.'
+        ? 'It tells you when that changes, at once or with the next message, so there is no need to poll gh.'
         : verdict?.kind === 'ready' || isPassed
-          ? `${isPassed ? "Its merge's checks have passed" : 'It is ready to merge'} now, as its line says. pr-watch wakes you if that happens again after new checks, and tells you the rest when it changes.`
-          : 'pr-watch wakes you when it turns ready to merge or its checks pass, and tells you the rest when it changes, so there is no need to poll gh.';
-    return { result: [head, kept.news, closing].filter(Boolean).join('\n') };
+          ? `${isPassed ? "Its merge's checks have passed" : 'It is ready to merge'} now. pr-watch wakes you if that happens again after new checks, and tells you the rest when it changes.`
+          : 'It wakes you when it turns ready to merge or its checks pass, and tells you the rest when it changes, so there is no need to poll gh.';
+    return { result: [`${head}${waits} ${closing}`, kept.news].filter(Boolean).join('\n') };
   } catch (error) {
     const why = errorText(error);
     return {
@@ -1057,7 +1072,7 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and returns what it shows now. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already; call this for them too to pass wake, and for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
     inputSchema: {
       ...PULL_INPUT,
       properties: {
