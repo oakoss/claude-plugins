@@ -61,6 +61,8 @@ git push -u origin <branch>
 
 On the stack path, push as **Stack path** says instead.
 
+On the update path, when `git rev-parse HEAD` prints the pull request's head, read again now with `gh pr view <number> --json headRefOid --jq .headRefOid`, there is nothing to push: skip the push and go on, so the body is still rewritten from the branch. Any other HEAD, a branch behind its pull request included, pushes, and a refusal still ends the ship.
+
 A refused push ends the ship here, before any item is closed.
 
 ## 5. Close finished tracker items

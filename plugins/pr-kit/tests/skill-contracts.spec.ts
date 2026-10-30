@@ -485,6 +485,13 @@ describe('ship: what it may do unasked', () => {
     expect(text).not.toContain('reopen');
   });
 
+  test('an update with nothing to push still rewrites the body', () => {
+    expect(text).toContain(
+      "when `git rev-parse HEAD` prints the pull request's head, read again now with `gh pr view <number> --json headRefOid --jq .headRefOid`, there is nothing to push: skip the push and go on, so the body is still rewritten from the branch.",
+    );
+    expect(text).toContain('a branch behind its pull request included, pushes');
+  });
+
   test('the body follows the repository template, then the reference, without attribution', () => {
     expect(text).toContain('/reference/pr-body.md` and write the title and body by it.');
     expect(text).toContain(
