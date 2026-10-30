@@ -1406,11 +1406,32 @@ function choiceOf(closing: string): string[] {
   return [];
 }
 
+// A question that puts a step off grants nothing from it: a yes to "Should I
+// push later, then merge #3?" or "Merge #3 and #4 later?" says nothing about
+// doing any of it now. Read on any use of the word, so it fails closed.
+const DEFERS =
+  /\b(?:later|tomorrow|tonight|eventually|next\s+(?:week|time)|(?:at\s+)?some\s+point|another\s+time)\b/i;
+
+// The offer's question setting a force push against a plain one in another
+// alternative ("Force-push with a lease, or push?"); null when none does.
+function forceChoiceIn(closing: string): string | null {
+  const read = offerSentences(forcePhrase(leaseCommand(closing)))?.read ?? [];
+  const at = read.findIndex((s) => {
+    if (!s.trim().endsWith('?')) return false;
+    const sides = s.split(OR);
+    const force = sides.flatMap((x, i) => (/\bforcepush(?:ing)?\b/i.test(x) ? [i] : []));
+    const plain = sides.flatMap((x, i) => (/\bpush(?:ing)?\b/i.test(x) ? [i] : []));
+    return force.some((i) => plain.some((j) => i !== j));
+  });
+  // The raw sentences only quote it: the rewrite can split them differently.
+  return at === -1 ? null : (offerSentences(closing)?.raw[at] ?? read[at] ?? '').trim();
+}
+
 // What a yes grants: what the offer named, unless it set a condition a yes
 // does not meet or a choice it does not make.
 function accepted(answer: string, heard?: Set<Family>): Grant {
   const closing = closingOf(answer);
-  return conditional(closing) || choiceOf(closing).length > 0
+  return conditional(closing) || choiceOf(closing).length > 0 || forceChoiceIn(closing) !== null
     ? settled(fresh())
     : asked(answer, heard);
 }
@@ -1447,6 +1468,23 @@ export function unreadOffer(reply: string, previousAnswer: string): UnreadOffer 
     ];
     return {
       why: `their yes answered a choice between pull requests (${choice.map((n) => `#${n}`).join(', ')}) and does not say which; ask again with a menu as the answer's last line: Say ${menu.slice(0, -1).join(', ')}, or ${menu.at(-1)}.`,
+      steps,
+    };
+  }
+  const force = forceChoiceIn(closing);
+  if (force !== null) {
+    return {
+      why: `their yes answered a choice between a force push and a plain push ("${force}") and does not say which; ask again offering one`,
+      steps,
+    };
+  }
+  const put = offer.raw.find((s, i) => {
+    const read = offer.read[i] ?? s;
+    return read.trim().endsWith('?') && DEFERS.test(chosen(read));
+  });
+  if (put !== undefined) {
+    return {
+      why: `their yes answered an offer that puts a step off ("${put.trim()}"), so it names nothing to do now; ask again for what to do now`,
       steps,
     };
   }
@@ -1529,6 +1567,7 @@ function asked(answer: string, heard?: Set<Family>): Grant {
   for (const asked of sentences(tail)) {
     if (!asked.trim().endsWith('?')) continue;
     const q = chosen(asked);
+    if (DEFERS.test(q)) continue;
     if (words(q).some((x) => HANDBACK.has(x))) continue;
     let carry: Carry = 'none';
     let merging = false;

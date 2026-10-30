@@ -1553,6 +1553,54 @@ describe('a yes does not meet the condition an offer sets', () => {
   });
 });
 
+describe('a yes does not take a step the offer puts off or leaves to a choice', () => {
+  test.each([
+    'Should I push later, then merge #3?',
+    'Should I push it later and merge #3?',
+    'Push later, then merge #3?',
+    'Merge #3 and #4 later?',
+    'Should I merge #3 and #4 later?',
+    'Should I merge #3 and #4 tomorrow?',
+    'Should I push later, then merge #3 now?',
+    'Should we push, or merge #3 later?',
+    'Merge #3 and #4, but do that tomorrow?',
+    'Should I merge #3 and #4 at a later date?',
+    'Should I merge #3, which is ready now, later?',
+    'Should I merge #3 then, next week?',
+    'Force-push fix/x with a lease, or just push?',
+    'Should I force-push fix/x with a lease, or just push?',
+    'Should I push, or force-push with a lease?',
+    'Force-pushing with a lease, or pushing?',
+    'Should I force-push with a lease, or push instead?',
+    'Should I force-push with a lease and push tags, or push a fresh branch?',
+    'Should I run `git push --force-with-lease`, or just push?',
+    'Ready? `git push --force-with-lease origin a.b` is what I would run. Should I force-push with a lease, or push?',
+    // Missed on purpose: reading which steps a deferral reaches drew wrong
+    // yeses, so any deferral word in the question withholds all of it.
+    'Merge #3 now and #4 later?',
+    'Should I push now and release tomorrow?',
+    'Merge #3, which unblocks the later release?',
+    'Should I push it now, or would you rather force-push later?',
+  ])('"%s" offers nothing', (offer) => {
+    expect(grantOf('yes', offer)).toEqual(NONE);
+  });
+  test.each([
+    ['Merge #3 and #4?', merging('3', '4')],
+    ['Should I push? I will write the docs later.', PUSH],
+    ['Should I commit? Should I push later?', COMMIT],
+    // A yes takes the first alternative the agent offers, so the later one is not it.
+    ['Should I push now, or later?', PUSH],
+    ['Do we push feat/later?', PUSH],
+    // A force push and a plain one in the same alternative are steps, not a choice.
+    ['Should I force-push fix/x with a lease, then push the tags?', LEASE],
+    ['Force-push fix/x with a lease? I could also force-push or push a fresh branch.', LEASE],
+    ['Force-push fix/x with a lease?', LEASE],
+    ['Should I force-push with a lease, or would you rather do it?', LEASE],
+  ])('"%s" still offers what it names now', (offer, grant) => {
+    expect(grantOf('yes', offer)).toEqual(grant);
+  });
+});
+
 describe('where a push says it goes', () => {
   test.each([
     // A whole sentence of one exact form names where the push goes.
@@ -2200,6 +2248,26 @@ describe('why a yes to an offer granted nothing', () => {
       'Should I merge #3, or would you rather review #4 (docs fix)? After that, CI will run.',
       after('After that, CI will run.'),
       ['merge'],
+    ],
+    [
+      'Merge #3 and #4 later?',
+      'their yes answered an offer that puts a step off ("Merge #3 and #4 later?"), so it names nothing to do now; ask again for what to do now',
+      ['merge'],
+    ],
+    [
+      'Tests pass. Should I push later, then merge #3?',
+      'their yes answered an offer that puts a step off ("Should I push later, then merge #3?"), so it names nothing to do now; ask again for what to do now',
+      ['push', 'merge'],
+    ],
+    [
+      'Should I merge `#3` tonight?',
+      'their yes answered an offer that puts a step off ("Should I merge `#3` tonight?"), so it names nothing to do now; ask again for what to do now',
+      ['merge'],
+    ],
+    [
+      'Force-push `fix/x` with a lease, or push?',
+      'their yes answered a choice between a force push and a plain push ("Force-push `fix/x` with a lease, or push?") and does not say which; ask again offering one',
+      ['push'],
     ],
     [
       'Merge #3 (rust 1.99.1) and then #4 (jdx/mise-action v5.2.0)?',
