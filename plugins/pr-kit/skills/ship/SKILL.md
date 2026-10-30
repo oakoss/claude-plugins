@@ -50,6 +50,9 @@ On the stack path, run the fetch and the count against the trunk, skip the merge
 
 Then run the project's full checks: the commands its `AGENTS.md` or `CLAUDE.md` names for "done", else its pre-commit and CI configuration, else `package.json` scripts. Typically: the test suite, typecheck, lint, format check, and any validator or bump-file check the repository uses. Run each check unpiped and read its exit code: piped into `tail` or `head`, `$?` is that command's status, not the check's. For a long log, send it to a file (`<check> >| <log> 2>&1; echo $?`, where `>|` overwrites under `noclobber`) and read the file's end. On any failure, stop and show its output; shipping waits for a fix. Keep each command and the line it printed (counts, exit status): the body's Verification section is written from these, not from memory.
 
+- **A run already seen:** skip the run only when this conversation saw the same full set of checks pass on the tree now at HEAD, and the merge above brought nothing in. The tree is the same when `git status --porcelain` is empty and `git rev-parse HEAD^{tree}` prints the tree recorded when that run passed: that command's output on a clean tree then, or the `worktreeTree` that review-cycle's `mcp__review-cycle__status` tool reported. A partial run, a run on another tree, or one whose tree was not recorded counts as none. Verification then quotes that run and says it was reused. CI runs every check again after the push. On the stack path nothing is reused: its checks run on the top layer, and its merge never runs.
+- **Left to CI:** a check the project runs only in CI, such as a browser suite, is named in Verification as left to CI.
+
 ## 4. Push
 
 ```bash
@@ -57,6 +60,8 @@ git push -u origin <branch>
 ```
 
 On the stack path, push as **Stack path** says instead.
+
+On the update path, when `git rev-parse HEAD` prints the pull request's head, read again now with `gh pr view <number> --json headRefOid --jq .headRefOid`, there is nothing to push: skip the push and go on, so the body is still rewritten from the branch. Any other HEAD, a branch behind its pull request included, pushes, and a refusal still ends the ship.
 
 A refused push ends the ship here, before any item is closed.
 
@@ -112,7 +117,7 @@ gh pr create --base <default> --head <branch> --title "<title>" --body-file <fil
 
 Add `--draft` only when the user asked for a draft. When the user asked for auto-merge, arm it after creating, with the repository's merge method.
 
-**Update path:** rewrite the body for the whole branch, not an appended note: the new changes join Changes, Verification comes from this run's checks, and Known issues is current. Change the title only when the branch's scope outgrew it.
+**Update path:** rewrite the body for the whole branch, not an appended note: the new changes join Changes, Verification comes from step 3's checks, and Known issues is current. Change the title only when the branch's scope outgrew it.
 
 ```bash
 gh pr edit <number> --body-file <file>
