@@ -161,12 +161,14 @@ describe('do-epic: a job runs to its report', () => {
     ]);
   });
   test('a stack ships from its top and fixes CI from its bottom, each on its own branch', () => {
-    const ship = section(text, '4. Ship', 'do-epic');
-    expect(ship).toContain('plus `as drafts` when the user asked for drafts');
-    // Adopting only built layers keeps a shelved, empty layer out of gh-stack's record.
-    expect(ship).toContain(
-      '**A stack:** once every layer is built, adopt the layers that have commits, bottom first, then ship from the top layer.',
-    );
+    expectAnchors(section(text, '4. Ship', 'do-epic'), 'do-epic ship', [
+      ['plus `as drafts` when the user asked for drafts', 'drafts on request'],
+      // Adopting only built layers keeps a shelved, empty layer out of gh-stack's record.
+      [
+        '**A stack:** once every layer is built, adopt the layers that have commits, bottom first, then ship from the top layer.',
+        'adopt built layers',
+      ],
+    ]);
     expect(section(text, '3. Build each branch', 'do-epic')).toContain(
       'The stack itself is made at Ship, from the layers that have commits.',
     );
@@ -212,8 +214,10 @@ describe('get-pr-comments: nothing open is dropped', () => {
   test('the thread query pages the thread list', () => {
     // gh's --paginate needs an $endCursor variable fed back into `after`.
     expect(threads).toBeDefined();
-    expect(threads).toContain('gh api graphql --paginate --slurp');
-    expect(threads).toContain('$endCursor:String');
+    expectAnchors(threads ?? '', 'get-pr-comments threads', [
+      ['gh api graphql --paginate --slurp', 'paginated query'],
+      ['$endCursor:String', 'cursor variable'],
+    ]);
     expect(threads).toMatch(
       /reviewThreads\(first:100,after:\$endCursor\)\{\s*pageInfo\{hasNextPage endCursor\}/,
     );
@@ -221,9 +225,11 @@ describe('get-pr-comments: nothing open is dropped', () => {
 
   test('a thread with more comments is read to the end', () => {
     expect(followUp).toBeDefined();
-    expect(followUp).toContain('gh api graphql --paginate --slurp');
-    expect(followUp).toContain('$endCursor:String');
-    expect(followUp).toContain('comments(first:50,after:$endCursor)');
+    expectAnchors(followUp ?? '', 'get-pr-comments follow-up', [
+      ['gh api graphql --paginate --slurp', 'paginated query'],
+      ['$endCursor:String', 'cursor variable'],
+      ['comments(first:50,after:$endCursor)', 'comments paged'],
+    ]);
   });
 
   test('an outdated thread can still be located', () => {
@@ -232,8 +238,10 @@ describe('get-pr-comments: nothing open is dropped', () => {
   });
 
   test('outdated but unresolved threads are reported, not skipped', () => {
-    expect(text).toContain('Keep a thread that has `isOutdated` true and `isResolved` false.');
-    expect(text).toContain('**Possibly stale — verify**');
+    expectAnchors(text, 'get-pr-comments outdated', [
+      ['Keep a thread that has `isOutdated` true and `isResolved` false.', 'outdated kept'],
+      ['**Possibly stale — verify**', 'stale group'],
+    ]);
     expect(section(text, 'Output', 'get-pr-comments')).toContain('Possibly stale — verify (N):');
     const outdated = atLeast(
       prose(text)
@@ -265,8 +273,10 @@ describe('fix-merge-conflicts: markers and sides', () => {
         command,
       ).toBe(true);
     }
-    expect(finish).toContain('All three commands must print nothing.');
-    expect(finish).toContain('An exit of 128 or a `fatal:` line means the search did not run');
+    expectAnchors(finish, 'fix-merge-conflicts markers', [
+      ['All three commands must print nothing.', 'empty output'],
+      ['An exit of 128 or a `fatal:` line means the search did not run', 'failed search'],
+    ]);
   });
 
   test('no Finish fence falls back to git diff --check', () => {
@@ -276,26 +286,34 @@ describe('fix-merge-conflicts: markers and sides', () => {
   });
 
   test('conflicts without markers are resolved explicitly', () => {
-    expect(finish).toContain('Some conflicts leave no markers:');
-    expect(finish).toContain(
-      'take every path from `git diff --name-only --diff-filter=U` that has no text markers and decide it explicitly',
-    );
-    expect(finish).toContain('or drop the path with `git rm <path>`.');
-    expect(finish).toContain('which during a rebase is the upstream, not your commit.');
-    expect(finish).toContain('Name each choice in the report.');
-    expect(finish).toContain('A submodule conflict is out of scope:');
+    expectAnchors(finish, 'fix-merge-conflicts no markers', [
+      ['Some conflicts leave no markers:', 'markerless conflicts'],
+      [
+        'take every path from `git diff --name-only --diff-filter=U` that has no text markers and decide it explicitly',
+        'explicit decision',
+      ],
+      ['or drop the path with `git rm <path>`.', 'drop option'],
+      ['which during a rebase is the upstream, not your commit.', 'rebase sides'],
+      ['Name each choice in the report.', 'choices reported'],
+      ['A submodule conflict is out of scope:', 'submodules out of scope'],
+    ]);
   });
 
   test('a rebase is detected before sides are picked', () => {
-    expect(text).toContain(
-      'check its first lines for `rebase in progress`, because a rebase swaps the sides',
-    );
-    expect(text).toContain(
-      '| `git rebase <ref>` | `<ref>`, the upstream you are replaying onto | **your own commit** being replayed |',
-    );
-    expect(text).toContain(
-      'During a rebase, `git checkout --theirs` keeps your work and `--ours` keeps the upstream.',
-    );
+    expectAnchors(text, 'fix-merge-conflicts rebase', [
+      [
+        'check its first lines for `rebase in progress`, because a rebase swaps the sides',
+        'rebase detected',
+      ],
+      [
+        '| `git rebase <ref>` | `<ref>`, the upstream you are replaying onto | **your own commit** being replayed |',
+        'sides table',
+      ],
+      [
+        'During a rebase, `git checkout --theirs` keeps your work and `--ours` keeps the upstream.',
+        'swapped checkout',
+      ],
+    ]);
   });
 });
 
@@ -303,18 +321,24 @@ describe('ship: what it may do unasked', () => {
   const text = skillText('pr-kit', 'ship');
 
   test('each write runs alone, and a refusal is reported, not reshaped', () => {
-    expect(text).toContain(
-      'Run every command that writes, pushes, or closes as its own Bash call.',
-    );
-    expect(text).toContain('a refusal is never retried in another shape: report it and stop.');
+    expectAnchors(text, 'ship writes', [
+      [
+        'Run every command that writes, pushes, or closes as its own Bash call.',
+        'one write per call',
+      ],
+      ['a refusal is never retried in another shape: report it and stop.', 'refusals not reshaped'],
+    ]);
   });
 
   test('merge, auto-merge, ready and draft wait for the user', () => {
-    expect(text).toContain(
-      'Nothing here merges, arms auto-merge, or marks a draft ready unless the user asked for that in so many words.',
-    );
-    expect(text).toContain('Add `--draft` only when the user asked for a draft.');
-    expect(text).toContain('When the user asked for auto-merge, arm it after creating');
+    expectAnchors(text, 'ship asks', [
+      [
+        'Nothing here merges, arms auto-merge, or marks a draft ready unless the user asked for that in so many words.',
+        'no unasked merge',
+      ],
+      ['Add `--draft` only when the user asked for a draft.', 'drafts on request'],
+      ['When the user asked for auto-merge, arm it after creating', 'auto-merge on request'],
+    ]);
   });
 
   test('a gh-stack stack submits every layer, and readies none that is a draft', () => {
@@ -322,25 +346,31 @@ describe('ship: what it may do unasked', () => {
     expect(shellLines).toContain('gh stack view --json');
     expect(shellLines).toContain('gh pr view <number> --json isDraft');
     expect(shellLines).toContain('gh stack submit --auto --open');
-    expect(stack).toContain(
-      "Leave it off when any layer's pull request is a draft, or when the user asked for drafts.",
-    );
-    expect(stack).toContain('Merge nothing into a layer');
-    expect(stack).toContain(
-      'read its output, since a diverged stack prints `Sync aborted` and exits 0',
-    );
-    expect(stack).toContain('exits 0 even after printing `⚠ failed to create PR for <branch>`');
-    expect(stack).toContain("pass the gate's question to the user as written");
-    expect(stack).toContain(
-      'run `gh stack submit` as its own Bash call with nothing before it, not even a `cd`',
-    );
-    expect(stack).toContain(
-      'offer `gh stack sync`, which rebases the stack onto the trunk and pushes it; run it as its own Bash call with nothing before it',
-    );
-    expect(stack).toContain('name those layers and ask before pushing');
-    expect(stack).toContain('On a no, stop before pushing');
-    expect(stack).toContain('return with `git checkout <branch>` whether they pass or fail');
-    expect(stack).toContain("so each layer's pull request closes only what that layer finishes");
+    expectAnchors(stack, 'ship stack', [
+      [
+        "Leave it off when any layer's pull request is a draft, or when the user asked for drafts.",
+        'no --open on drafts',
+      ],
+      ['Merge nothing into a layer', 'no merge into layers'],
+      [
+        'read its output, since a diverged stack prints `Sync aborted` and exits 0',
+        'sync read by output',
+      ],
+      ['exits 0 even after printing `⚠ failed to create PR for <branch>`', 'submit read by output'],
+      ["pass the gate's question to the user as written", 'gate question passed on'],
+      [
+        'run `gh stack submit` as its own Bash call with nothing before it, not even a `cd`',
+        'submit runs alone',
+      ],
+      [
+        'offer `gh stack sync`, which rebases the stack onto the trunk and pushes it; run it as its own Bash call with nothing before it',
+        'sync offered',
+      ],
+      ['name those layers and ask before pushing', 'ask before pushing'],
+      ['On a no, stop before pushing', 'stop on no'],
+      ['return with `git checkout <branch>` whether they pass or fail', 'return to branch'],
+      ["so each layer's pull request closes only what that layer finishes", 'per-layer closes'],
+    ]);
     expect(text).toContain('one of its `branches` has `isCurrent: true`');
   });
 
@@ -387,86 +417,114 @@ describe('ship: what it may do unasked', () => {
   });
 
   test('it stops on branches and repositories that are not its to ship', () => {
-    expect(text).toContain('stop when the current branch is the default branch');
-    expect(text).toContain(
-      '(`*/version-packages`, `renovate/*`, `dependabot/*`), or the work is a `chore(release)` change.',
-    );
-    expect(text).toContain(
-      "proceed when the owner is the user's own login or `viewerPermission` is `ADMIN` or `MAINTAIN`, and `isFork` is false, since a fork's pull request goes to someone else's project. Otherwise stop before pushing",
-    );
-    expect(text).toContain('It may be `main`, `master`, or anything else; use what it says.');
+    expectAnchors(text, 'ship stops', [
+      ['stop when the current branch is the default branch', 'default branch'],
+      [
+        '(`*/version-packages`, `renovate/*`, `dependabot/*`), or the work is a `chore(release)` change.',
+        'bot and release branches',
+      ],
+      [
+        "proceed when the owner is the user's own login or `viewerPermission` is `ADMIN` or `MAINTAIN`, and `isFork` is false, since a fork's pull request goes to someone else's project. Otherwise stop before pushing",
+        'ownership and forks',
+      ],
+      [
+        'It may be `main`, `master`, or anything else; use what it says.',
+        'default read, not assumed',
+      ],
+    ]);
   });
 
   test('the path follows the request and the pull request state', () => {
-    expect(text).toContain(
-      'the **publish** path on "ship it". On "push it" there is nothing to update, so ask whether to publish.',
-    );
-    expect(text).toContain(
-      'gh pr view --json number,url,state,isDraft,title,body,headRefOid,closedAt',
-    );
-    expect(text).toContain('A merged or closed one: stop and ask, unless the name was reused');
-    expect(text).toContain('the branch is no stack layer');
-    expect(text).toContain(
-      '`git merge-base --is-ancestor <headRefOid> HEAD` exits other than 0 (1, or 128 when that commit is not here)',
-    );
-    expect(text).toContain("was authored after the pull request's `closedAt`");
-    expect(text).toContain(
-      '`gh pr list --head <name> --state all` lists no pull request for, and use it as `<branch>` from here on',
-    );
-    expect(text).toContain('Say so in the report, and go on as for no pull request found');
-    expect(text).toContain('on "push it", ask whether to publish before renaming.');
-    expect(text).toContain('Any other failure of `gh pr view`: stop and show it.');
+    expectAnchors(text, 'ship path', [
+      [
+        'the **publish** path on "ship it". On "push it" there is nothing to update, so ask whether to publish.',
+        'publish on ship it',
+      ],
+      ['gh pr view --json number,url,state,isDraft,title,body,headRefOid,closedAt', 'pr fields'],
+      ['A merged or closed one: stop and ask, unless the name was reused', 'closed pr stops'],
+      ['the branch is no stack layer', 'stack layers excluded'],
+      [
+        '`git merge-base --is-ancestor <headRefOid> HEAD` exits other than 0 (1, or 128 when that commit is not here)',
+        'reuse by ancestry',
+      ],
+      ["was authored after the pull request's `closedAt`", 'reuse by date'],
+      [
+        '`gh pr list --head <name> --state all` lists no pull request for, and use it as `<branch>` from here on',
+        'fresh name',
+      ],
+      ['Say so in the report, and go on as for no pull request found', 'rename reported'],
+      ['on "push it", ask whether to publish before renaming.', 'push it asks'],
+      ['Any other failure of `gh pr view`: stop and show it.', 'other failures stop'],
+    ]);
   });
 
   test('leftover work is reviewed before it is committed, then checked', () => {
-    expect(text).toContain(
-      'review them before committing: invoke `/review-cycle:review` via the Skill tool',
-    );
-    expect(text).toContain('otherwise show the user the diff and wait for their OK.');
-    expect(text).toContain('Never bypass hooks.');
+    expectAnchors(text, 'ship leftover', [
+      [
+        'review them before committing: invoke `/review-cycle:review` via the Skill tool',
+        'review first',
+      ],
+      ['otherwise show the user the diff and wait for their OK.', 'user OK fallback'],
+      ['Never bypass hooks.', 'hooks kept'],
+    ]);
     expect(text.indexOf('## 2. Commit leftover work')).toBeLessThan(text.indexOf('## 3. Check'));
   });
 
   test('the branch is brought current by merging, never rebasing', () => {
-    expect(text).toContain('by merging, since rebasing a pushed branch would force a force-push');
+    expectAnchors(text, 'ship current', [
+      ['by merging, since rebasing a pushed branch would force a force-push', 'merge, not rebase'],
+      [
+        'offer `/pr-kit:fix-merge-conflicts`, or `git merge --abort` to back out.',
+        'conflicts offered',
+      ],
+    ]);
     expect(shellLines).toContain('git merge origin/<default>');
-    expect(text).toContain(
-      'offer `/pr-kit:fix-merge-conflicts`, or `git merge --abort` to back out.',
-    );
   });
 
   test('checks gate the ship, and Verification comes from their output', () => {
-    expect(text).toContain("Then run the project's full checks");
-    expect(text).toContain('Run each check unpiped and read its exit code');
-    expect(text).toContain('On any failure, stop and show its output; shipping waits for a fix.');
-    expect(text).toContain(
-      "the body's Verification section is written from these, not from memory.",
-    );
-    expect(text).toContain("Verification comes from step 3's checks");
+    expectAnchors(text, 'ship checks', [
+      ["Then run the project's full checks", 'full checks'],
+      ['Run each check unpiped and read its exit code', 'exit codes read'],
+      ['On any failure, stop and show its output; shipping waits for a fix.', 'failure stops'],
+      [
+        "the body's Verification section is written from these, not from memory.",
+        'verification from output',
+      ],
+      ["Verification comes from step 3's checks", 'verification source'],
+    ]);
   });
 
   test('a full run already seen on the same tree is reused, and nothing else is', () => {
-    expect(text).toContain(
-      'skip the run only when this conversation saw the same full set of checks pass on the tree now at HEAD, and the merge above brought nothing in.',
-    );
-    expect(text).toContain(
-      'The tree is the same when `git status --porcelain` is empty and `git rev-parse HEAD^{tree}` prints the tree recorded when that run passed',
-    );
-    expect(text).toContain(
-      'A partial run, a run on another tree, or one whose tree was not recorded counts as none.',
-    );
-    expect(text).toContain('Verification then quotes that run and says it was reused.');
-    expect(text).toContain('On the stack path nothing is reused');
-    expect(text).toContain('is named in Verification as left to CI.');
+    expectAnchors(text, 'ship reuse', [
+      [
+        'skip the run only when this conversation saw the same full set of checks pass on the tree now at HEAD, and the merge above brought nothing in.',
+        'same full run',
+      ],
+      [
+        'The tree is the same when `git status --porcelain` is empty and `git rev-parse HEAD^{tree}` prints the tree recorded when that run passed',
+        'tree comparison',
+      ],
+      [
+        'A partial run, a run on another tree, or one whose tree was not recorded counts as none.',
+        'partial runs excluded',
+      ],
+      ['Verification then quotes that run and says it was reused.', 'reuse reported'],
+      ['On the stack path nothing is reused', 'no reuse on stacks'],
+      ['is named in Verification as left to CI.', 'left to CI'],
+    ]);
   });
 
   test('only finished items close, and only beads close here', () => {
-    expect(text).toContain(
-      'a `Refs` item only when this branch completes it, such as the bead the work was started for. Every other `Refs` item stays a `Refs` line, open.',
-    );
-    expect(text).toContain(
-      'Close only beads here, and on the update path only items the publish did not close:',
-    );
+    expectAnchors(text, 'ship closes', [
+      [
+        'a `Refs` item only when this branch completes it, such as the bead the work was started for. Every other `Refs` item stays a `Refs` line, open.',
+        'finished items only',
+      ],
+      [
+        'Close only beads here, and on the update path only items the publish did not close:',
+        'only beads',
+      ],
+    ]);
     expect([...anyFenceLines, ...inlineCode].filter((l) => /\bclose\b/.test(l))).toEqual([
       'bd close <id> --reason "<one line: what shipped>"',
     ]);
@@ -486,30 +544,37 @@ describe('ship: what it may do unasked', () => {
   });
 
   test('an update with nothing to push still rewrites the body', () => {
-    expect(text).toContain(
-      "when `git rev-parse HEAD` prints the pull request's head, read again now with `gh pr view <number> --json headRefOid --jq .headRefOid`, there is nothing to push: skip the push and go on, so the body is still rewritten from the branch.",
-    );
-    expect(text).toContain('a branch behind its pull request included, pushes');
+    expectAnchors(text, 'ship no push', [
+      [
+        "when `git rev-parse HEAD` prints the pull request's head, read again now with `gh pr view <number> --json headRefOid --jq .headRefOid`, there is nothing to push: skip the push and go on, so the body is still rewritten from the branch.",
+        'skip push, keep body',
+      ],
+      ['a branch behind its pull request included, pushes', 'behind still pushes'],
+    ]);
   });
 
   test('the body follows the repository template, then the reference, without attribution', () => {
-    expect(text).toContain('/reference/pr-body.md` and write the title and body by it.');
-    expect(text).toContain(
-      "read every file or directory the `find` lists; it sets the headings. Fill its headings by the reference's rules and remove its comment prompts.",
-    );
-    expect(text).toContain('and ask when none clearly fits.');
+    expectAnchors(text, 'ship body', [
+      ['/reference/pr-body.md` and write the title and body by it.', 'reference read'],
+      [
+        "read every file or directory the `find` lists; it sets the headings. Fill its headings by the reference's rules and remove its comment prompts.",
+        'template headings',
+      ],
+      ['and ask when none clearly fits.', 'ask on unclear template'],
+      ['run its linter on the title before using it', 'title linted'],
+      ['`mcp__review-cycle__ledger`', 'ledger read'],
+      ["entries dated on or after the branch's first commit", 'branch entries only'],
+      [
+        "**Attribution:** none, unless the repository's template or contribution guide asks for disclosure, or the user does.",
+        'no attribution',
+      ],
+      ['rewrite the body for the whole branch, not an appended note', 'whole-branch body'],
+    ]);
     // Fenced, because a model runs fenced commands but skipped the same step as a bullet.
     expect(shellLines).toContain(
       "find .github . docs -maxdepth 1 -iname 'pull_request_template*' 2>/dev/null || true",
     );
     expect(shellLines).toContain('gh pr list --state merged --limit 20 --json title');
-    expect(text).toContain('run its linter on the title before using it');
-    expect(text).toContain('`mcp__review-cycle__ledger`');
-    expect(text).toContain("entries dated on or after the branch's first commit");
-    expect(text).toContain(
-      "**Attribution:** none, unless the repository's template or contribution guide asks for disclosure, or the user does.",
-    );
-    expect(text).toContain('rewrite the body for the whole branch, not an appended note');
   });
 
   test('the description names the phrases that ship', () => {
@@ -539,19 +604,24 @@ describe('ship: the pull request body reference', () => {
   });
 
   test('the rules that keep the squash commit honest and short', () => {
-    expect(rules).toContain(
-      '**Verification:** the checks that ran for this pull request and what they printed. Never a check that was only configured',
-    );
-    expect(rules).toContain(
-      '**Leave out:** review rounds, conversation history, screenshots, and agent attribution.',
-    );
-    expect(rules).toContain('**Lines:** one line per bullet.');
-    expect(rules).toContain(
-      "**Closes:** one line per work item the branch finishes, in the tracker's own format",
-    );
-    expect(rules).toContain('A related item the branch leaves open gets a `Refs` line instead.');
-    expect(rules).toContain('or a question stays open');
-    expect(rules).toContain("**Title:** the repository's convention");
+    expectAnchors(rules, 'pr-body rules', [
+      [
+        '**Verification:** the checks that ran for this pull request and what they printed. Never a check that was only configured',
+        'verification ran',
+      ],
+      [
+        '**Leave out:** review rounds, conversation history, screenshots, and agent attribution.',
+        'leave out',
+      ],
+      ['**Lines:** one line per bullet.', 'one line per bullet'],
+      [
+        "**Closes:** one line per work item the branch finishes, in the tracker's own format",
+        'closes finished items',
+      ],
+      ['A related item the branch leaves open gets a `Refs` line instead.', 'refs for open items'],
+      ['or a question stays open', 'open questions'],
+      ["**Title:** the repository's convention", 'title convention'],
+    ]);
   });
 });
 
@@ -562,22 +632,29 @@ describe('merge: only what was asked, and a stack as one', () => {
   const stackLines = fenceLines(shellFences(stack, 'merge Stack')).map((line) => line.trim());
 
   test('each write runs alone, and a refusal is reported, not reshaped', () => {
-    expect(text).toContain('Run every command that writes as its own Bash call.');
-    expect(text).toContain('a refusal is never retried in another shape');
+    expectAnchors(text, 'merge writes', [
+      ['Run every command that writes as its own Bash call.', 'one write per call'],
+      ['a refusal is never retried in another shape', 'refusals not reshaped'],
+    ]);
   });
 
   test('after a merge it watches the release pull request, and never offers its merge', () => {
-    expect(text).toContain(
-      "When pr-watch's watch tool exists and the repository has an open release pull request",
-    );
-    expect(text).toContain('`gh pr list --state open --json number,headRefName`');
-    expect(text).toContain(
-      'is `version-packages`, ends in `/version-packages`, or starts with `changeset-release/`',
-    );
-    expect(text).toContain('call the tool on it without `wake`');
-    expect(text).toContain(
-      "Never offer or run its merge: merging it is the release, and stays the user's ask.",
-    );
+    expectAnchors(text, 'merge release watch', [
+      [
+        "When pr-watch's watch tool exists and the repository has an open release pull request",
+        'watch condition',
+      ],
+      ['`gh pr list --state open --json number,headRefName`', 'open pr list'],
+      [
+        'is `version-packages`, ends in `/version-packages`, or starts with `changeset-release/`',
+        'release branch names',
+      ],
+      ['call the tool on it without `wake`', 'no wake'],
+      [
+        "Never offer or run its merge: merging it is the release, and stays the user's ask.",
+        'release merge is user-only',
+      ],
+    ]);
   });
 
   test('the question a refusal names lists pull requests by number, with no notes', () => {
@@ -585,9 +662,11 @@ describe('merge: only what was asked, and a stack as one', () => {
   });
 
   test('it merges only on an ask, and adds --auto or --admin only when asked', () => {
-    expect(text).toContain('this skill runs only on an explicit ask, never offers a merge itself');
-    expect(text).toContain('arms auto-merge (`--auto`) only when the user asked');
-    expect(text).toContain('Pass `--admin` only when the user asked for it in so many words.');
+    expectAnchors(text, 'merge asks', [
+      ['this skill runs only on an explicit ask, never offers a merge itself', 'explicit ask'],
+      ['arms auto-merge (`--auto`) only when the user asked', 'auto on request'],
+      ['Pass `--admin` only when the user asked for it in so many words.', 'admin on request'],
+    ]);
     for (const line of lines) expect(line).not.toMatch(/--auto\b|--admin\b/);
   });
 
@@ -606,74 +685,93 @@ describe('merge: only what was asked, and a stack as one', () => {
       'gh pr view <number> --json number,state,isDraft,mergeStateStatus,baseRefName,headRefName,url',
     );
     expect(lines).toContain("gh api -X GET 'repos/{owner}/{repo}/stacks' -f pull_request=<number>");
-    expect(text).toContain('the stacks call answers `[]` for a pull request in no stack');
-    expect(text).toContain(
-      'stop and say why when `state` is not `OPEN`, `isDraft` is true, or `mergeStateStatus` is `BLOCKED`, `BEHIND` or `DIRTY`',
-    );
-    expect(text).toContain(
-      '`UNSTABLE` means a check has not passed: one that failed, or one still running.',
-    );
-    expect(text).toContain('`gh pr checks <number> --json name,bucket`');
-    expect(text).toContain('`gh pr checks <number> --required --json name,bucket`');
-    expect(text).toContain('Ignore `pass` and `skipping`.');
-    expect(text).toContain('When any is `fail` or `cancel`, name it and ask before merging.');
-    expect(text).toContain(
-      'When the others are `pending`, at least one check is required and every required check is `pass` or `skipping`, merge, and name the pending ones in the report as still running',
-    );
-    expect(text).toContain(
-      'when none is required the second exits 1 with `no required checks reported`, which means no check is required',
-    );
-    expect(text).toContain(
-      'When no check is required, or a required one is pending, name the pending ones and ask.',
-    );
-    expect(text).toContain('would merge it into the layer below, not into the trunk');
+    expectAnchors(text, 'merge ready', [
+      ['the stacks call answers `[]` for a pull request in no stack', 'no-stack answer'],
+      [
+        'stop and say why when `state` is not `OPEN`, `isDraft` is true, or `mergeStateStatus` is `BLOCKED`, `BEHIND` or `DIRTY`',
+        'state stops',
+      ],
+      [
+        '`UNSTABLE` means a check has not passed: one that failed, or one still running.',
+        'unstable meaning',
+      ],
+      ['`gh pr checks <number> --json name,bucket`', 'all checks read'],
+      ['`gh pr checks <number> --required --json name,bucket`', 'required checks read'],
+      ['Ignore `pass` and `skipping`.', 'passing ignored'],
+      ['When any is `fail` or `cancel`, name it and ask before merging.', 'failures ask'],
+      [
+        'When the others are `pending`, at least one check is required and every required check is `pass` or `skipping`, merge, and name the pending ones in the report as still running',
+        'pending non-required merge',
+      ],
+      [
+        'when none is required the second exits 1 with `no required checks reported`, which means no check is required',
+        'no required checks exit',
+      ],
+      [
+        'When no check is required, or a required one is pending, name the pending ones and ask.',
+        'pending required asks',
+      ],
+      ['would merge it into the layer below, not into the trunk', 'unlinked layer'],
+      [
+        'running the same `gh pr list` for each listed branch until it lists none',
+        'layers walked up',
+      ],
+      [
+        "Merge nothing: name them, and give the user the command to link them, to run in their own terminal: this pull request's number, then each one above it (`! gh stack link <number> <number above>…`)",
+        'link command given',
+      ],
+      [
+        'when this stop already named them earlier in the conversation and the user asks again to merge this one, merge it by step 2.',
+        'repeat ask merges',
+      ],
+    ]);
     expect(lines).toContain(
       'gh pr list --base <headRefName> --state open --json number,headRefName',
-    );
-    expect(text).toContain(
-      'running the same `gh pr list` for each listed branch until it lists none',
-    );
-    expect(text).toContain(
-      "Merge nothing: name them, and give the user the command to link them, to run in their own terminal: this pull request's number, then each one above it (`! gh stack link <number> <number above>…`)",
-    );
-    expect(text).toContain(
-      'when this stop already named them earlier in the conversation and the user asks again to merge this one, merge it by step 2.',
     );
     expect(stack).toContain('apply its stops to each');
   });
 
   test('the set is named, and the number is checked against stack numbers', () => {
-    expect(stack).toContain('an unmerged one has `merged_at: null`');
-    expect(stack).toContain('naming every one ("Merge #41 and #42?"), and end the turn');
-    expect(stack).toContain("reads a bare number as a stack's number first");
-    expect(stack).toContain('For "merge the stack", pass the stack\'s own `number`');
-    expect(stack).toContain('must fail with `HTTP 404`');
-    expect(stack).toContain('run `gh stack merge` with no number in their own terminal');
-    expect(stack).toContain('where it cannot prompt it merges the whole stack');
-    expect(stack).toContain('it takes no `--auto` and no `--admin`');
-    expect(stack).toContain('Run it as its own Bash call with nothing before it, not even a `cd`');
+    expectAnchors(stack, 'merge stack set', [
+      ['an unmerged one has `merged_at: null`', 'unmerged layers'],
+      ['naming every one ("Merge #41 and #42?"), and end the turn', 'set named'],
+      ["reads a bare number as a stack's number first", 'stack number first'],
+      ['For "merge the stack", pass the stack\'s own `number`', 'stack number passed'],
+      ['must fail with `HTTP 404`', 'number check'],
+      ['run `gh stack merge` with no number in their own terminal', 'no-number merge'],
+      ['where it cannot prompt it merges the whole stack', 'whole stack'],
+      ['it takes no `--auto` and no `--admin`', 'no auto or admin'],
+      ['Run it as its own Bash call with nothing before it, not even a `cd`', 'runs alone'],
+    ]);
   });
 
   test('a refusal is reported in its own words, and the report says what landed', () => {
-    expect(text).toContain('report its words and stop, or ask the question it names');
-    expect(text).toContain('`gh pr view <number> --json mergeCommit,mergedAt`');
-    expect(text).toContain("is the top pull request of the set, never the stack's number");
-    expect(text).toContain('say so rather than report it merged');
+    expectAnchors(text, 'merge report', [
+      ['report its words and stop, or ask the question it names', 'refusal words'],
+      ['`gh pr view <number> --json mergeCommit,mergedAt`', 'landed check'],
+      ["is the top pull request of the set, never the stack's number", 'top pull request'],
+      ['say so rather than report it merged', 'no false merged'],
+    ]);
   });
 
   test('sync is offered, not run, and read by its output, not its exit code', () => {
     for (const line of lines) expect(line).not.toMatch(/gh stack sync\b/);
-    expect(stack).toContain('offer it rather than run it');
-    expect(stack).toContain(
-      'When the user agrees, run it as its own Bash call with nothing before it, not even a `cd`',
-    );
-    expect(stack).toContain(
-      'read its output, not its exit code: a diverged stack prints `Sync aborted` and exits 0',
-    );
-    expect(stack).toContain('so report that');
-    expect(stack).toContain(
-      "(`gh stack modify`, `gh stack switch`) only from the user's own terminal",
-    );
+    expectAnchors(stack, 'merge sync', [
+      ['offer it rather than run it', 'offered'],
+      [
+        'When the user agrees, run it as its own Bash call with nothing before it, not even a `cd`',
+        'runs alone',
+      ],
+      [
+        'read its output, not its exit code: a diverged stack prints `Sync aborted` and exits 0',
+        'read by output',
+      ],
+      ['so report that', 'reported'],
+      [
+        "(`gh stack modify`, `gh stack switch`) only from the user's own terminal",
+        'user-terminal commands',
+      ],
+    ]);
   });
 
   test("the method is the repository's, asked when it allows several", () => {
