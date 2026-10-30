@@ -442,7 +442,22 @@ describe('ship: what it may do unasked', () => {
     expect(text).toContain(
       "the body's Verification section is written from these, not from memory.",
     );
-    expect(text).toContain("Verification comes from this run's checks");
+    expect(text).toContain("Verification comes from step 3's checks");
+  });
+
+  test('a full run already seen on the same tree is reused, and nothing else is', () => {
+    expect(text).toContain(
+      'skip the run only when this conversation saw the same full set of checks pass on the tree now at HEAD, and the merge above brought nothing in.',
+    );
+    expect(text).toContain(
+      'The tree is the same when `git status --porcelain` is empty and `git rev-parse HEAD^{tree}` prints the tree recorded when that run passed',
+    );
+    expect(text).toContain(
+      'A partial run, a run on another tree, or one whose tree was not recorded counts as none.',
+    );
+    expect(text).toContain('Verification then quotes that run and says it was reused.');
+    expect(text).toContain('On the stack path nothing is reused');
+    expect(text).toContain('is named in Verification as left to CI.');
   });
 
   test('only finished items close, and only beads close here', () => {
