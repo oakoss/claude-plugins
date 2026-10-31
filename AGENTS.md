@@ -154,7 +154,7 @@ To have every session in this repository run the working tree's plugins, set `CL
 
 ```toml
 [env]
-CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/prose:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
+CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
 ```
 
 The working tree's copies load beside the released installs, not instead of them: `claude plugin list` shows each plugin twice, once installed as `<name>@oakoss` and once as a session-only `<name>@inline`, so two review-cycle commit gates run and the released one can refuse what the working tree's allows. Switch the released copies off for this checkout in the gitignored `.claude/settings.local.json`:
@@ -164,7 +164,6 @@ The working tree's copies load beside the released installs, not instead of them
   "enabledPlugins": {
     "pr-kit@oakoss": false,
     "pr-watch@oakoss": false,
-    "prose@oakoss": false,
     "review-cycle@oakoss": false,
     "session@oakoss": false
   }

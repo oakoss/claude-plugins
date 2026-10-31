@@ -120,7 +120,7 @@ AFTER:  (delete the closer entirely; the reader just read the patterns)
 
 ## Wordiness and Instruction Patterns
 
-Rules shared with the `prose` plugin's output style and cleanup skill so both apply the same standard — mostly from the Google developer documentation style guide (the claims rows come from its excessive-claims page), plus LLM-era structural additions like the copula swap.
+Mostly from the Google developer documentation style guide (the claims rows come from its excessive-claims page), plus LLM-era structural additions like the copula swap.
 
 ### Word Swaps
 

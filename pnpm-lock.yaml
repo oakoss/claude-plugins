@@ -207,9 +207,9 @@ importers:
 
   plugins/pr-watch: {}
 
-  plugins/prose: {}
-
   plugins/review-cycle: {}
+
+  plugins/session: {}
 
 packages:
 

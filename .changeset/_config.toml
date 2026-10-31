@@ -42,16 +42,6 @@ path = "/.claude-plugin/marketplace.json"
 format = "json"
 key = "plugins.{name=review-cycle}.version"
 
-[[packages.prose.extra-files]]
-path = ".claude-plugin/plugin.json"
-format = "json"
-key = "version"
-
-[[packages.prose.extra-files]]
-path = "/.claude-plugin/marketplace.json"
-format = "json"
-key = "plugins.{name=prose}.version"
-
 [[packages.pr-kit.extra-files]]
 path = ".claude-plugin/plugin.json"
 format = "json"
