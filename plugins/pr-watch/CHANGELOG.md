@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.6.2 (2026-10-31)
+
+### Fixed
+
+`/branch` keeps the pull requests pr-watch was watching. The branched session continues under a new session id with no saved watches, so its line above the prompt came up empty; pr-watch now copies the parent session's saved watches to the new id when the branch starts, and restores them as it does after `claude --resume`. The copy is the parent's last save, which pr-watch makes at most once a second, so a watch changed in the second before `/branch` may not carry. `/clear` still starts with none.
+
+The `watch` tool is quieter:
+
+- It answers in one line naming the pull request, without its progress line, which stays on the band above the prompt. When a rate limit or an outage keeps it from reading, the line says so; news its first read found still follows.
+- Its description tells Claude that pull requests it opened or merged are watched already, so it calls the tool for one of them only to pass `wake`.
+- It takes `pr` as well as `pull`, so a first call naming the pull request `pr` no longer fails.
+
 ## 0.6.1 (2026-10-24)
 
 ### Fixed
