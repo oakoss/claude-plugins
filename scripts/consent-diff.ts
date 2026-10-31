@@ -531,6 +531,10 @@ const OFFERS = [
   'Should I push and open the PR, then merge #3 later?',
   'Force-push fix/x with a lease, or push?',
   'Should I force-push fix/x with a lease, then push the tags?',
+  'Should I force-push fix/x.y with a lease, or just push?',
+  'Should I force-push with a lease, or run `git push`?',
+  'Force-push now? Or a normal push?',
+  'Force-push `fix/x.y` with a lease? Or would you rather do it?',
 ];
 
 // Which offers each message is read against. Crossing every generated message
