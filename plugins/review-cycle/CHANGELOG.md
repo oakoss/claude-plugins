@@ -4,6 +4,36 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.35.1 (2026-10-31)
+
+### Fixed
+
+`/clear` and a resume now drop everything a grant came from, not only the grant:
+
+- A push or pull request the model check allowed for a message before the clear is refused after it, as one the grammar granted already was.
+- The first message after the clear is read against no offer, so a yes there no longer grants the last step the agent offered before it. After a resume this includes the resumed conversation's last offer, which the gate does not carry across the resume: ask again, or name the step.
+- A refused commit, push, pull request, merge or release no longer quotes why a yes from before the clear granted nothing.
+- An epic job started with "do epic <id>" ends, so the fresh conversation can start something else; say "do epic <id>" again to carry on.
+
+The commit check no longer refuses a `for` or `select` loop whose word list names git (`for x in git push; do …`) or a `[[ … ]]` test that does, matching how the GitHub check already reads them: neither runs those words. A loop body, a substitution in the list or the test, and zsh's `for x (a b) git push`, which runs what follows, are still judged as before. zsh's multi-name `for x y in …` is still read as running its words.
+
+A yes no longer grants a step the agent's offer put off or left to a choice:
+
+- An offer that puts a step off ("Should I push later, then merge #3?", "Merge #3 and #4 later?") grants nothing from that question, where a yes used to grant the merge of #3.
+- An offer that sets a force push against a plain one ("Force-push `fix/x` with a lease, or push?") grants neither, where a yes used to grant the lease.
+
+When such a yes grants nothing, the refusal says why, so the agent asks again for what to do now, or offers one push.
+
+The note that a Bash command changed files no longer fires for a package install. `pnpm install`, `npm install` and the like went into the note because the word `install` was read as the `install` copier wherever it appeared, so every install named the lockfile it rewrote. `install` now counts only as the command itself, so an install is not measured, as a package script already was not. `bun install` is still measured, since `bun` also runs scripts.
+
+A yes to an offer that sets a force push against a plain push grants neither in more phrasings: a ref with a dot in it (`fix/x.y`), a plain side written as a backticked `git push` with no flag but `-u` ("or run `git push -u origin fix/x`?"), a plain push asked as a follow-up question ("Force-push now? Or a normal push?"), and one after a semicolon ("Force-push with a lease; or push?"). The refusal now quotes the question that offered the choice, where a dotted ref could make it quote a later sentence.
+
+Asking `gh stack rebase` or `gh stack sync` for help (`--help`, `-h`) no longer counts as rewriting the stack, so Monitor runs it and the commit gate does not watch it as a rebase. Only a bare help request counts as one: with any other argument, or fed by `xargs`, it still counts as a rewrite, since an argument such as `-h=false` turns help off. `gh stack rebase` is now found wherever `gh` appears in a command, such as after `sudo -u gh`, not only at the first `gh` word.
+
+A `git -c alias.x=…` that commits is refused even when a later call in the same command redefines `x` inline: each call is read with its own definition.
+
+When the commit gate fails while checking `gh stack rebase` or `gh stack sync`, it refuses the command rather than letting it run with a note.
+
 ## 0.35.0 (2026-10-27)
 
 ### Added

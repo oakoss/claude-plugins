@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.4.0 (2026-10-31)
+
+### Added
+
+`/pr-kit:ship` on "push it" for a branch with nothing new to push skips the push and still rewrites the pull request body from the branch, so a body that has drifted from the commits can be brought current without a new commit.
+
+### Fixed
+
+`/pr-kit:ship` no longer re-runs the project's full checks when this conversation just saw them pass on the same tree: HEAD's tree matches the one recorded then, the working tree is clean, and bringing the branch current merged nothing. Verification then quotes that run and says it was reused; any other run, partial or on another tree, counts as none, a gh-stack stack never reuses one, and CI runs every check again after the push. A check the project runs only in CI is named in Verification as left to CI.
+
+`/pr-kit:ship` notes on each bead it closes the pull request and the Claude Code session that shipped it ("shipped in #297 from session <id> (claude -r <id>)"), so a bead leads back to the session that did the work even when that session shipped several pull requests. The `/resume` picker links a session only to its last one. The note is skipped when the session ID is not set; `claude -r` works until Claude Code's cleanup deletes the session after `cleanupPeriodDays` without use.
+
 ## 0.3.1 (2026-10-24)
 
 ### Fixed
