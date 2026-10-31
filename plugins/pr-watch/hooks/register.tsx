@@ -813,10 +813,29 @@ async function prune($: $): Promise<void> {
   for (const key of prunedOf(entries)) await $.store.delete(key);
 }
 
-// A resumed session keeps its id, so it finds what it watched; a new one, a
-// fork or a /clear does not. Each is read again at once, telling what changed
-// while the session was away. Done once per session: `restored` outlives a
-// reload of this module, so a reload brings back nothing the person unwatched.
+// A fork gets a new id, fresh atoms and no session.start; $.session.id() still
+// names the parent during its SessionStart (measured on 2.1.314). The copy is
+// the parent's last save, up to a tick behind its list.
+async function carryOver($: $, child: string): Promise<void> {
+  try {
+    const parent = await $.session.id();
+    const key = SESSION_PREFIX + child;
+    if ((await $.store.get(key)) !== undefined) return;
+    const saved = await $.store.get(SESSION_PREFIX + parent);
+    if (saved !== undefined) await $.store.set(key, saved);
+  } catch (error) {
+    // Once per fork, so no back-off: storeFailed's would hold up every later save.
+    $.ui.toast(
+      `pr-watch could not carry the session's watches into the branch: ${errorText(error)}`,
+    );
+  }
+}
+
+// A resumed session keeps its id, so it finds what it watched; a /branch finds
+// what carryOver copied; a new one or a /clear does not. Each is read again at
+// once, telling what changed while the session was away. Done once per
+// session: `restored` outlives a reload of this module, so a reload brings
+// back nothing the person unwatched.
 async function restore($: $, id: string): Promise<void> {
   try {
     const { pulls, skipped } = entryOf(await $.store.get(SESSION_PREFIX + id));
@@ -1155,6 +1174,11 @@ export const register: Register = (on, options) => {
       await putBack('a failed prompt carried');
       throw error;
     }
+  });
+
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'fork') await carryOver($, e.session_id);
+    return next(e);
   });
 
   on('session.start', async ($, e, next) => {

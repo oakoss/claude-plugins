@@ -95,7 +95,7 @@ type Gh = {
   store?: Map<string, unknown>;
   storeFails?: boolean;
   // Runs on each store write; a reason it returns refuses the write.
-  onStoreSet?: () => string | undefined;
+  onStoreSet?: (key: string) => string | undefined;
   release?: () => void;
 };
 
@@ -243,6 +243,7 @@ function world(
     suggested: [] as string[],
   };
   on('session.start', () => ({ cwd: '/repo' }));
+  on('classic.SessionStart', () => ({ additionalContext: ['below'] }));
   on('session.id', () => ({ value: gh.session ?? 's1' }));
   const store = (gh.store ??= new Map());
   on('store.get', ($: unknown, e: { key: string }) =>
@@ -250,7 +251,7 @@ function world(
   );
   on('store.set', async ($: unknown, e: { key: string; value: unknown }) => {
     await gh.storeHold?.();
-    const refused = gh.onStoreSet?.();
+    const refused = gh.onStoreSet?.(e.key);
     if (refused) return { deny: refused };
     store.set(e.key, structuredClone(e.value));
     return { value: undefined };
@@ -4278,6 +4279,66 @@ describe('a resumed session', () => {
     await start($);
     await clock.advance(1000);
     expect(await lineIn(await band($))).toBeUndefined();
+  });
+
+  test('a branch carries the parent session’s watches to its new id', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), store: resumed('s1', [saved([FAILED_RUN])]) };
+    world(on, gh);
+    await start($);
+    await clock.advance(1000);
+    const r = await ($ as any).classic.SessionStart({ source: 'fork', session_id: 's2' });
+    expect(r).toEqual({ additionalContext: ['below'] });
+    expect(gh.store!.get('session:s2')).toEqual(gh.store!.get('session:s1'));
+  });
+
+  test('a refused carry says so and holds back no later save', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    let isRefused = true;
+    const gh: Gh = {
+      pr: prJson(),
+      store: resumed('s1', [saved()]),
+      onStoreSet: (key) => {
+        if (!isRefused || key !== 'session:s2') return;
+        isRefused = false;
+        return 'disk full';
+      },
+    };
+    const seen = world(on, gh);
+    await start($);
+    await clock.advance(1000);
+    await ($ as any).classic.SessionStart({ source: 'fork', session_id: 's2' });
+    expect(seen.toasts).toContain(
+      "pr-watch could not carry the session's watches into the branch: pr-watch: $.store.set: disk full",
+    );
+    // A fork runs no session.start, so nothing clears a back-off before the branch saves.
+    gh.session = 's2';
+    await clock.advance(2000);
+    expect(gh.store!.has('session:s2')).toBe(true);
+  });
+
+  test('a branched session restores the watches carried to it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), session: 's1', store: resumed('s1', [saved()]) };
+    world(on, gh);
+    await ($ as any).classic.SessionStart({ source: 'fork', session_id: 's2' });
+    gh.session = 's2';
+    await start($);
+    await clock.advance(1000);
+    expect(await lineIn(await band($))).toMatch(/^#128 /);
+  });
+
+  test('a /clear, a startup, or a session already saved carries nothing', async ($, on) => {
+    mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: prJson(), store: resumed('s1', [saved()]) };
+    world(on, gh);
+    await ($ as any).classic.SessionStart({ source: 'clear', session_id: 's2' });
+    expect(gh.store!.has('session:s2')).toBe(false);
+    await ($ as any).classic.SessionStart({ source: 'startup', session_id: 's4' });
+    expect(gh.store!.has('session:s4')).toBe(false);
+    gh.store!.set('session:s3', { at: T0, pulls: [] });
+    await ($ as any).classic.SessionStart({ source: 'fork', session_id: 's3' });
+    expect(gh.store!.get('session:s3')).toEqual({ at: T0, pulls: [] });
   });
 
   test('a store that cannot be read says so and restores nothing', async ($, on) => {
