@@ -18,7 +18,6 @@ const WRITERS = new Set([
   'gawk',
   'cp',
   'mv',
-  'install',
   'truncate',
   'dd',
   'rsync',
@@ -37,11 +36,12 @@ const writesFile = (w: Word): boolean => w.dynamic || !w.text.startsWith('/dev/'
 
 const nameOf = (w: Word): string => basename(w.text).replace(/\.exe$/i, '');
 
-// Runners whose names are also ordinary words and paths (`git add .`,
-// `rg expect`, `pnpm run watch`): they count only as the command itself,
-// which runsScript checks.
+// Runners and writers whose names are also ordinary words and paths
+// (`git add .`, `rg expect`, `pnpm run watch`, `pnpm install`): they count
+// only as the command itself, which runsScript checks.
 const COMMAND_ONLY = new Set([
   ...BUILTIN_RUNNERS,
+  'install',
   'expect',
   'watch',
   'script',

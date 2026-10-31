@@ -34,6 +34,10 @@ describe('mayWrite', () => {
     ['a script behind if', 'if ./fix.sh; then :; fi'],
     ['a script in a group', '{ ./fix.sh; }'],
     ['a TypeScript runner', 'npx tsx fix.ts'],
+    ['install as the command', 'install -m 644 a.ts b.ts'],
+    ['install behind time', 'time install a.ts b.ts'],
+    ['install behind sudo', 'sudo install a.ts /usr/local/b.ts'],
+    ['install behind xargs', 'ls | xargs install -t dist'],
   ];
   test.each(yes)('measures %s', (_, command) => {
     expect(mayWrite(command)).toBe(true);
@@ -50,6 +54,9 @@ describe('mayWrite', () => {
     ['source as a word', 'grep -rn source src'],
     ['expect as a search term', 'rg -n expect src'],
     ['watch as a script name', 'pnpm run watch'],
+    ['a pnpm install', 'pnpm install'],
+    ['an npm install', 'npm install --save-dev foo'],
+    ['an install piped to tail', 'pnpm install 2>&1 | tail -1'],
   ];
   test.each(no)('skips %s', (_, command) => {
     expect(mayWrite(command)).toBe(false);
