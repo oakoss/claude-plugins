@@ -294,6 +294,11 @@ function kindOf(st: Statement): Kind {
       }
       assigned = true;
     } else if (!first.dynamic && KEYWORDS.has(first.text)) {
+      // `[[` tests its words and never runs them; `for x in a git b` lists
+      // words to the statement's end, as ghActionsOf reads it. zsh's
+      // `for x (a b) git push` has no `in` and runs what follows.
+      const list = (first.text === 'for' || first.text === 'select') && words[2]?.text === 'in';
+      if (first.text === '[[' || list) return { kind: 'other', head: first.text, words: [] };
       via ??= first.text;
     } else {
       break;
