@@ -1371,6 +1371,19 @@ const YOURS = /\byourself\b|\byou\s+(?:merge|do|handle|take)\b/i;
 const OTHER_STEP =
   /\b(?:clos(?:e|ing)|wait(?:ing)?|hold(?:ing)?|leav(?:e|ing)|rebas(?:e|ing)|review(?:ing)?|look(?:ing)?|check(?:ing)?|revert(?:ing)?|skip(?:ping)?|defer(?:ring)?|keep(?:ing)?|land(?:s|ing)?|fix(?:ing)?|updat(?:e|ing))\b/i;
 
+const OR_FIRST = new RegExp(`^\\s*${OR.source}`, 'i');
+
+// The questions among the sentences; a question opening "Or" continues the one before it.
+function questionsOf(sentences: readonly string[]): string[] {
+  const questions: string[] = [];
+  for (const s of sentences) {
+    if (!s.trim().endsWith('?')) continue;
+    const before = OR_FIRST.test(s) ? questions.pop() : undefined;
+    questions.push(before === undefined ? s.trim() : `${before} ${s.trim()}`);
+  }
+  return questions;
+}
+
 // Unknown wording counts as a choice, so a phrasing nobody listed fails closed.
 function mergesOthers(alternative: string, before: Set<string>): boolean {
   if (YOURS.test(alternative)) return false;
@@ -1386,15 +1399,9 @@ function mergesOthers(alternative: string, before: Set<string>): boolean {
 // #4?", "Merge #3 and #4? Or, merge #5?", "Merge #3, #4, or both?"); empty
 // when it offers no such choice. A yes cannot say which.
 function choiceOf(closing: string): string[] {
-  // A question opening "Or" continues the one before it.
-  const questions: string[] = [];
-  for (const s of offerSentences(closing)?.raw ?? []) {
-    if (!s.trim().endsWith('?')) continue;
-    const q = s.replaceAll(NOTE, '$1');
-    if (new RegExp(`^\\s*${OR.source}`, 'i').test(q) && questions.length > 0)
-      questions.push(`${questions.pop()} ${q}`);
-    else questions.push(q);
-  }
+  const questions = questionsOf(offerSentences(closing)?.raw ?? []).map((q) =>
+    q.replaceAll(NOTE, '$1'),
+  );
   for (const q of questions) {
     if (!MERGE_WORD.test(q)) continue;
     const [first = '', ...alternatives] = q.split(OR);
@@ -1412,19 +1419,45 @@ function choiceOf(closing: string): string[] {
 const DEFERS =
   /\b(?:later|tomorrow|tonight|eventually|next\s+(?:week|time)|(?:at\s+)?some\s+point|another\s+time)\b/i;
 
+// A backticked span or a dotted name ("fix/x.y") ends no sentence.
+const UNSPLIT = /`[^`\n]*`|(?<![\w./-])[\w/-]*\w\.(?=\w)[\w./-]*\w/g;
+
+// The offer's sentences as the agent wrote them, split where `sentences` would
+// split them with every UNSPLIT mark masked, and not at a semicolon before
+// "or" ("Force-push with a lease; or push?").
+function wholeSentences(closing: string): string[] {
+  const flat = closing.replaceAll('\n', ' ');
+  const masked = flat
+    .replaceAll(UNSPLIT, (m) => m.replaceAll(/[.!?;]/g, '_'))
+    .replaceAll(/;(?=\s*or\b)/gi, ',');
+  let from = 0;
+  return sentences(masked).map((s) => {
+    const at = masked.indexOf(s, from);
+    from = at + s.length;
+    return flat.slice(at, from);
+  });
+}
+
 // The offer's question setting a force push against a plain one in another
-// alternative ("Force-push with a lease, or push?"); null when none does.
+// alternative ("Force-push with a lease, or push?", "Force-push? Or push?"),
+// as the agent wrote it; null when none does. A backticked `git push` with no
+// flag but -u ("or run `git push -u origin fix/x`?") is the plain side.
 function forceChoiceIn(closing: string): string | null {
-  const read = offerSentences(forcePhrase(leaseCommand(closing)))?.read ?? [];
-  const at = read.findIndex((s) => {
-    if (!s.trim().endsWith('?')) return false;
-    const sides = s.split(OR);
+  const choice = questionsOf(wholeSentences(closing)).find((q) => {
+    const read = forcePhrase(
+      leaseCommand(
+        q.replaceAll(
+          /(\bor\s+(?:run\s+)?)`git\s+push(?:\s+(?:-u|--set-upstream|[\w./:][\w./:-]*))*`/gi,
+          '$1push',
+        ),
+      ),
+    ).replaceAll(/`[^`\n]*`/g, 'it');
+    const sides = read.split(OR);
     const force = sides.flatMap((x, i) => (/\bforcepush(?:ing)?\b/i.test(x) ? [i] : []));
     const plain = sides.flatMap((x, i) => (/\bpush(?:ing)?\b/i.test(x) ? [i] : []));
     return force.some((i) => plain.some((j) => i !== j));
   });
-  // The raw sentences only quote it: the rewrite can split them differently.
-  return at === -1 ? null : (offerSentences(closing)?.raw[at] ?? read[at] ?? '').trim();
+  return choice ?? null;
 }
 
 // What a yes grants: what the offer named, unless it set a condition a yes
