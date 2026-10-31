@@ -78,6 +78,20 @@
         "de-slop",
         "style-guide"
       ]
+    },
+    {
+      "name": "session",
+      "description": "Titles each Claude Code session after the git branch it works on, so its terminal tab and the /resume list name the work, and keeps a name you gave it.",
+      "version": "0.0.0",
+      "author": {
+        "name": "Oak OSS",
+        "email": "hello@oakoss.dev",
+        "url": "https://github.com/oakoss"
+      },
+      "category": "productivity",
+      "source": "./plugins/session",
+      "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/session",
+      "keywords": ["session", "title", "git", "branch", "mod", "resume"]
     }
   ]
 }

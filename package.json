@@ -11,8 +11,8 @@
     "lint:fix": "oxlint --fix",
     "setup": "bd bootstrap --yes",
     "test": "vitest run",
-    "test:hooks": "claude plugin test plugins/review-cycle && claude plugin test plugins/pr-watch",
-    "typecheck": "tsc -p plugins/review-cycle && tsc -p plugins/pr-watch"
+    "test:hooks": "claude plugin test plugins/review-cycle && claude plugin test plugins/pr-watch && claude plugin test plugins/session",
+    "typecheck": "tsc -p plugins/review-cycle && tsc -p plugins/pr-watch && tsc -p plugins/session"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^21.2.3",

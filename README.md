@@ -10,6 +10,7 @@ Curated [Claude Code](https://code.claude.com) plugins published by [Oak OSS](ht
 | [`pr-kit`](./plugins/pr-kit) | Pull-request workflow toolkit: summarize review feedback, resolve merge conflicts, make diffs reviewable, and drive CI to green. |
 | [`pr-watch`](./plugins/pr-watch) | A line above the prompt for each pull request Claude opens, merges by number, or is asked to watch: its GitHub workflows with a progress bar, then ready to merge, the failing job, or what blocks it. A branch Claude pushes gets a line too, until its checks pass. Claude is told of the same news, and of comments and reviews from others, without being asked. |
 | [`prose`](./plugins/prose) | Plain technical prose for Claude: an always-on output style and a cleanup skill that remove AI filler, distilled from the Google developer style guide. |
+| [`session`](./plugins/session) | Titles each session after the git branch it works on, so its terminal tab and the `/resume` list name the work, and keeps a name you gave it. |
 
 ## Install
 

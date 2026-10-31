@@ -37,7 +37,7 @@ Do not run `bd setup codex`. This repository is worked in Claude Code; that comm
 
 Four facts about a bead live in four places: labels say what it touches and what it does to a release, a parent says which branch it rides, a dependency says what comes first, and priority says how urgent it is. The scheme follows oakum's `docs/contributing/task-tracking.md`, with one label more because this repository ships several plugins.
 
-- **Labels are `<dimension>:<value>`.** Every bead carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every bead but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. A container carries no `bump:` label, since `bd create --parent` copies its labels onto every child. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label when filing (`bd create … -l plugin:review-cycle,bump:patch`), and re-label when a decision changes the bump.
+- **Labels are `<dimension>:<value>`.** Every bead carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, `plugin:session`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every bead but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. A container carries no `bump:` label, since `bd create --parent` copies its labels onto every child. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label when filing (`bd create … -l plugin:review-cycle,bump:patch`), and re-label when a decision changes the bump.
 - **The namespace is load-bearing.** `bd query` reads `label=none` as "has no labels", so a plain `none` label cannot be queried. Measured on bd 1.3.1 in oakum, which uses one: `bd query 'label=none'` returned 26 unlabelled beads, and `bd list --label none` the 71 that carry it.
 - **A parent is a branch or a finding set.** A branch that carries several beads gets a parent bead of type `task`, and `bd ready --parent <id>` is its checklist. `epic` is for a finding set or a rollout, such as `cpl-7ktn`, `cpl-bg0r` and `cpl-3utg`. `bd create --parent` copies the parent's labels onto the child; re-parenting copies nothing.
 - **A new finding joins the unclaimed parent whose branch already edits its file**, or takes a `related` link to it (`bd link <new> <parent> --type related`) when that parent's branch is in flight. Find that parent with `bd list --status open,in_progress,blocked,deferred --desc-contains <path> --limit 0`, since `bd search` matches only titles and ids.
@@ -154,7 +154,7 @@ To have every session in this repository run the working tree's plugins, set `CL
 
 ```toml
 [env]
-CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/prose:{{config_root}}/plugins/review-cycle"
+CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/prose:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
 ```
 
 The working tree's copies load beside the released installs, not instead of them: `claude plugin list` shows each plugin twice, once installed as `<name>@oakoss` and once as a session-only `<name>@inline`, so two review-cycle commit gates run and the released one can refuse what the working tree's allows. Switch the released copies off for this checkout in the gitignored `.claude/settings.local.json`:
@@ -165,7 +165,8 @@ The working tree's copies load beside the released installs, not instead of them
     "pr-kit@oakoss": false,
     "pr-watch@oakoss": false,
     "prose@oakoss": false,
-    "review-cycle@oakoss": false
+    "review-cycle@oakoss": false,
+    "session@oakoss": false
   }
 }
 ```
