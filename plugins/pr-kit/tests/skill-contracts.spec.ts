@@ -530,6 +530,21 @@ describe('ship: what it may do unasked', () => {
     ]);
   });
 
+  test('each closed bead notes the pull request and the session that shipped it', () => {
+    expectAnchors(text, 'ship session note', [
+      [
+        'when step 5 closed beads in this run and `echo "$CLAUDE_CODE_SESSION_ID"` prints an ID',
+        'only with a session',
+      ],
+      [
+        'bd note <id> "shipped in #<number> from session $CLAUDE_CODE_SESSION_ID (claude -r $CLAUDE_CODE_SESSION_ID)"',
+        'note command',
+      ],
+      ['then push the task graph again when step 5 pushed it', 'graph pushed after'],
+      ["and step 6's session note with that layer's number", 'per layer'],
+    ]);
+  });
+
   test('the task graph is pushed only when a remote exists', () => {
     expect(text).toMatch(/bd dolt remote list\nbd dolt push/);
     expect(text).toContain(
