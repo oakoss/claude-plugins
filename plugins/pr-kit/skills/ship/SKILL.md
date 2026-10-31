@@ -125,6 +125,15 @@ gh pr edit <number> --body-file <file>
 
 On the stack path, write each layer's pull request as **Stack path** says instead.
 
+**Session note:** when step 5 closed beads in this run and `echo "$CLAUDE_CODE_SESSION_ID"` prints an ID, note on each one the pull request and the session that shipped it, so the bead leads back to that session, then push the task graph again when step 5 pushed it:
+
+```bash
+bd note <id> "shipped in #<number> from session $CLAUDE_CODE_SESSION_ID (claude -r $CLAUDE_CODE_SESSION_ID)"
+bd dolt push
+```
+
+The note is plain text. `claude -r` resumes the session until Claude Code's cleanup deletes it after `cleanupPeriodDays` without use.
+
 ## 7. Report
 
 The pull request URL, the items closed, and anything the checks or review left for the user. Merging is theirs to ask for.
@@ -155,7 +164,7 @@ gh stack submit --auto --open
 
 **Tracker items and pull requests.** Open none: `submit` did. The layers to write are each one a `Created PR #<n>` line names, and on the update path the current layer too. For each, over that layer's range alone:
 
-- Run step 5's listing and closing (`git log --format=%B <range>`), so each layer's pull request closes only what that layer finishes.
+- Run step 5's listing and closing (`git log --format=%B <range>`), so each layer's pull request closes only what that layer finishes, and step 6's session note with that layer's number.
 - Read Known issues from the ledger for that range's changed files (`git diff --name-only <layer below>...<layer>`).
 - Write its title and body by the reference. Verification names the top layer as where the checks ran.
 
