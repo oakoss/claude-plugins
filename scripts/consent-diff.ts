@@ -534,6 +534,9 @@ const OFFERS = [
   'Should I force-push fix/x.y with a lease, or just push?',
   'Should I force-push with a lease, or run `git push`?',
   'Force-push now? Or a normal push?',
+  'Should I force-push with a lease, or run `git push -u origin fix/x`?',
+  'Should I force-push with a lease; or push?',
+  'I can force-push or push; should I push?',
   'Force-push `fix/x.y` with a lease? Or would you rather do it?',
 ];
 

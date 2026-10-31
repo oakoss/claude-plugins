@@ -1423,10 +1423,13 @@ const DEFERS =
 const UNSPLIT = /`[^`\n]*`|(?<![\w./-])[\w/-]*\w\.(?=\w)[\w./-]*\w/g;
 
 // The offer's sentences as the agent wrote them, split where `sentences` would
-// split them with every UNSPLIT mark masked.
+// split them with every UNSPLIT mark masked, and not at a semicolon before
+// "or" ("Force-push with a lease; or push?").
 function wholeSentences(closing: string): string[] {
   const flat = closing.replaceAll('\n', ' ');
-  const masked = flat.replaceAll(UNSPLIT, (m) => m.replaceAll(/[.!?;]/g, '_'));
+  const masked = flat
+    .replaceAll(UNSPLIT, (m) => m.replaceAll(/[.!?;]/g, '_'))
+    .replaceAll(/;(?=\s*or\b)/gi, ',');
   let from = 0;
   return sentences(masked).map((s) => {
     const at = masked.indexOf(s, from);
@@ -1438,12 +1441,15 @@ function wholeSentences(closing: string): string[] {
 // The offer's question setting a force push against a plain one in another
 // alternative ("Force-push with a lease, or push?", "Force-push? Or push?"),
 // as the agent wrote it; null when none does. A backticked `git push` with no
-// flag ("or run `git push origin fix/x`?") is the plain side.
+// flag but -u ("or run `git push -u origin fix/x`?") is the plain side.
 function forceChoiceIn(closing: string): string | null {
   const choice = questionsOf(wholeSentences(closing)).find((q) => {
     const read = forcePhrase(
       leaseCommand(
-        q.replaceAll(/(\bor\s+(?:run\s+)?)`git\s+push(?:\s+[\w./:][\w./:-]*)*`/gi, '$1push'),
+        q.replaceAll(
+          /(\bor\s+(?:run\s+)?)`git\s+push(?:\s+(?:-u|--set-upstream|[\w./:][\w./:-]*))*`/gi,
+          '$1push',
+        ),
       ),
     ).replaceAll(/`[^`\n]*`/g, 'it');
     const sides = read.split(OR);
