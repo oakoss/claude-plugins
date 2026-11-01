@@ -2667,7 +2667,7 @@ async function registerLedger($: $): Promise<void> {
     });
     await $.tool.register({
       name: 'ledger_record',
-      description: `Records what a review cycle settled without fixing into this repository's findings ledger. \`entries\` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at ${MAX_TEXT} characters, and the same finding at the same path replaces its entry. \`keep\` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. \`resolve\` removes entries by id. The ledger keeps the newest entries that fit in ${MAX_LEDGER_BYTES / 1024} KiB per repository, and ledgers for the ${MAX_REPOS} most recently recorded repositories.`,
+      description: `Records what a review cycle settled without fixing into this repository's findings ledger. \`entries\` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at ${MAX_TEXT} characters, and the same finding at the same path replaces its entry. \`keep\` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. \`move\` does the same for an entry whose code moved to another file, giving it that path and a new id; it needs no \`keep\`. \`resolve\` removes entries by id. The ledger keeps the newest entries that fit in ${MAX_LEDGER_BYTES / 1024} KiB per repository, and ledgers for the ${MAX_REPOS} most recently recorded repositories.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -2699,6 +2699,22 @@ async function registerLedger($: $): Promise<void> {
             type: 'array',
             items: { type: 'string' },
             description: 'Ids of carried entries settled again unchanged.',
+          },
+          move: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'The carried entry to move.' },
+                path: {
+                  type: 'string',
+                  description: 'Repository-relative path of the file its code moved to.',
+                },
+                line: { type: ['integer', 'null'], minimum: 1 },
+              },
+              required: ['id', 'path'],
+            },
+            description: 'Carried entries whose code moved to another file, still settled.',
           },
         },
       },

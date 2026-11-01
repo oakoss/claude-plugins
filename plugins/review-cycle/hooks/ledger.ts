@@ -210,33 +210,62 @@ export function storedOf(value?: unknown): Stored {
 }
 
 // `keep` carries entries a cycle settled again unchanged: each is stamped with
-// its file as that cycle reviewed it, and its date stays.
-export type Recording = { add: NewEntry[]; resolve: string[]; keep: string[] };
+// its file as that cycle reviewed it, and its date stays. `move` does the same
+// for one whose code moved to another file, under that file's path.
+export type Move = { id: string; path: string; line: number | null };
+export type Recording = { add: NewEntry[]; resolve: string[]; keep: string[]; move: Move[] };
+
+const isId = (r: unknown): r is string => typeof r === 'string' && /^[0-9a-f]{8}$/.test(r);
 
 function ids(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((r) => typeof r === 'string' && /^[0-9a-f]{8}$/.test(r));
+  return Array.isArray(v) && v.every((r) => isId(r));
+}
+
+function moveOf(raw: unknown): Move | { error: string } {
+  const m = (raw ?? {}) as Record<string, unknown>;
+  if (!isId(m.id)) return { error: 'id must be an entry id' };
+  const path = pathOf(m.path);
+  if (typeof path !== 'string') return path;
+  const line = m.line ?? null;
+  if (line !== null && !(Number.isSafeInteger(line) && (line as number) > 0)) {
+    return { error: 'line must be a positive integer' };
+  }
+  return { id: m.id, path, line: line as number | null };
 }
 
 // The record tool's input, whole or not at all: a batch half-written is
 // harder to read back than one refused with its first fault named.
 export function parseRecord(input: unknown): Recording | { error: string } {
-  const i = (input ?? {}) as { entries?: unknown; resolve?: unknown; keep?: unknown };
+  const i = (input ?? {}) as {
+    entries?: unknown;
+    resolve?: unknown;
+    keep?: unknown;
+    move?: unknown;
+  };
   const rawEntries = i.entries ?? [];
   const rawResolve = i.resolve ?? [];
   const rawKeep = i.keep ?? [];
+  const rawMove = i.move ?? [];
   if (!Array.isArray(rawEntries)) return { error: '`entries` must be an array' };
   if (!ids(rawResolve)) return { error: '`resolve` must be an array of entry ids' };
   if (!ids(rawKeep)) return { error: '`keep` must be an array of entry ids' };
+  if (!Array.isArray(rawMove)) return { error: '`move` must be an array' };
   const add: NewEntry[] = [];
   for (const [n, raw] of rawEntries.entries()) {
     const e = newEntryOf(raw);
     if ('error' in e) return { error: `entries[${n}]: ${e.error}` };
     add.push(e);
   }
-  if (add.length === 0 && rawResolve.length === 0 && rawKeep.length === 0) {
-    return { error: 'nothing to record: pass `entries`, `keep` or `resolve`' };
+  const move: Move[] = [];
+  for (const [n, raw] of rawMove.entries()) {
+    const m = moveOf(raw);
+    if ('error' in m) return { error: `move[${n}]: ${m.error}` };
+    move.push(m);
   }
-  return { add, resolve: rawResolve, keep: rawKeep };
+  if (add.length + rawResolve.length + rawKeep.length + move.length === 0) {
+    return { error: 'nothing to record: pass `entries`, `keep`, `move` or `resolve`' };
+  }
+  return { add, resolve: rawResolve, keep: rawKeep, move };
 }
 
 export type Merged = {
@@ -245,18 +274,19 @@ export type Merged = {
   updated: number;
   resolved: number;
   kept: number;
+  moved: number;
   // Kept entries whose file is gone from the working tree, and so dropped.
   gone: number;
-  // Ids in `resolve` or `keep` that named no entry.
+  // Ids in `resolve`, `keep` or `move` that named no entry.
   unknown: string[];
   evicted: number;
 };
 
-// Resolves first, then keeps, then adds, so a batch that resolves an entry and
-// records the same finding again keeps the new one. A kept or re-recorded
-// entry moves to the newest end, so eviction takes what no cycle has touched
-// longest. `blobs` must hold every added path; a kept entry whose path it
-// lacks is gone.
+// Resolves, moves, keeps, then adds, so a batch that resolves an entry and
+// records the same finding again keeps the new one. A moved entry replaces one
+// with its finding at the new path, counted as updated. A touched entry goes to the newest end, so
+// eviction takes what no cycle has touched longest. `blobs` must hold every
+// added and moved path; a kept entry whose path it lacks is gone.
 export function merge(
   existing: Entry[],
   rec: Recording,
@@ -270,6 +300,30 @@ export function merge(
     if (byId.delete(id)) resolved++;
     else unknown.push(id);
   }
+  let updated = 0;
+  // Sources are read before any move lands, so one move's destination is
+  // never taken for another's source.
+  const sources = rec.move.map((m) => byId.get(m.id));
+  const taken = new Set<string>();
+  const landing: Entry[] = [];
+  for (const [i, m] of rec.move.entries()) {
+    const e = sources[i];
+    if (!e || taken.has(m.id)) {
+      unknown.push(m.id);
+      continue;
+    }
+    const blob = blobs.get(m.path);
+    if (blob === undefined) throw new Error(`no blob for ${m.path}`);
+    taken.add(m.id);
+    const id = entryId(m.path, e.finding);
+    landing.push({ ...e, id, path: m.path, line: m.line, blob });
+  }
+  for (const id of taken) byId.delete(id);
+  for (const e of landing) {
+    if (byId.delete(e.id)) updated++;
+    byId.set(e.id, e);
+  }
+  const moved = landing.length;
   let kept = 0;
   let gone = 0;
   for (const id of rec.keep) {
@@ -288,7 +342,6 @@ export function merge(
     }
   }
   let added = 0;
-  let updated = 0;
   for (const n of rec.add) {
     const blob = blobs.get(n.path);
     if (blob === undefined) throw new Error(`no blob for ${n.path}`);
@@ -302,7 +355,17 @@ export function merge(
   let size = sizes.reduce((n, s) => n + s, 0);
   let evicted = 0;
   while (evicted < all.length && size > MAX_LEDGER_BYTES) size -= sizes[evicted++] ?? 0;
-  return { entries: all.slice(evicted), added, updated, resolved, kept, gone, unknown, evicted };
+  return {
+    entries: all.slice(evicted),
+    added,
+    updated,
+    resolved,
+    kept,
+    moved,
+    gone,
+    unknown,
+    evicted,
+  };
 }
 
 export function utf8Bytes(s: string): number {

@@ -117,14 +117,12 @@ export async function recordInto(
   const key = keyOf(common);
   const stored = storedOf(await store.get(key));
   const kept = new Set(rec.keep);
+  const named = [...rec.add.map((n) => n.path), ...rec.move.map((m) => m.path)];
   const paths = [
-    ...new Set([
-      ...rec.add.map((n) => n.path),
-      ...stored.entries.filter((e) => kept.has(e.id)).map((e) => e.path),
-    ]),
+    ...new Set([...named, ...stored.entries.filter((e) => kept.has(e.id)).map((e) => e.path)]),
   ];
   const found = await blobs(paths);
-  const absent = [...new Set(rec.add.map((n) => n.path))].filter((p) => !found.has(p));
+  const absent = [...new Set(named)].filter((p) => !found.has(p));
   if (absent.length > 0) {
     return `review-cycle ledger: nothing recorded: not a file in the working tree: ${absent.join(', ')}`;
   }

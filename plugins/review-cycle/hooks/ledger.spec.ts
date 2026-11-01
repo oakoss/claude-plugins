@@ -61,7 +61,7 @@ function refusal(input: unknown): string {
 describe('parseRecord', () => {
   test('accepts a well-formed batch', () => {
     const r = parseRecord({ entries: [finding()], resolve: ['0000beef'], keep: ['0000cafe'] });
-    expect(r).toEqual({ add: [finding()], resolve: ['0000beef'], keep: ['0000cafe'] });
+    expect(r).toEqual({ add: [finding()], resolve: ['0000beef'], keep: ['0000cafe'], move: [] });
   });
   test('refuses a fixed finding and points at resolve', () => {
     expect(refusal({ entries: [finding({ kind: 'fixed' as never })] })).toContain('`resolve`');
@@ -118,6 +118,7 @@ describe('parseRecord', () => {
       add: [finding({ line: null })],
       resolve: [],
       keep: [],
+      move: [],
     });
   });
   test('refuses an empty call', () => {
@@ -138,7 +139,27 @@ describe('parseRecord', () => {
       add: [],
       resolve: [],
       keep: ['0000cafe'],
+      move: [],
     });
+  });
+  test('accepts move alone, an absent line null', () => {
+    expect(parseRecord({ move: [{ id: '0000cafe', path: './scripts/a.sh' }] })).toEqual({
+      add: [],
+      resolve: [],
+      keep: [],
+      move: [{ id: '0000cafe', path: 'scripts/a.sh', line: null }],
+    });
+  });
+  test.each([
+    ['x', '`move` must be an array'],
+    [[{ id: 'beef', path: 'a.ts' }], 'move[0]: id must be an entry id'],
+    [[{ id: '0000cafe', path: '../a.ts' }], 'move[0]: path must be repository-relative'],
+    [[{ id: '0000cafe' }], 'move[0]: path is required'],
+    [[{ id: '0000cafe', path: 'a.ts', line: 0 }], 'move[0]: line must be a positive integer'],
+    [[{ id: '0000cafe', path: 'a.ts', line: 1.5 }], 'move[0]: line must be a positive integer'],
+    [[{ id: '0000cafe', path: 'a.ts', line: '7' }], 'move[0]: line must be a positive integer'],
+  ])('refuses move %j', (move, why) => {
+    expect(refusal({ move })).toContain(why);
   });
   test('normalizes the path and text, and clips every text field at MAX_TEXT', () => {
     const long = 'x'.repeat(MAX_TEXT + 1);
@@ -165,21 +186,26 @@ describe('parseRecord', () => {
 
 describe('merge', () => {
   test('adds new entries stamped with the blob of their path', () => {
-    const m = merge([], { add: [finding()], resolve: [], keep: [] }, blobs('a.ts'), DATE);
+    const m = merge([], { add: [finding()], resolve: [], keep: [], move: [] }, blobs('a.ts'), DATE);
     expect(m.entries).toEqual([recorded(finding())]);
     expect(m).toMatchObject({ added: 1, updated: 0, resolved: 0, evicted: 0, unknown: [] });
   });
   test('refuses an added path it has no blob for', () => {
-    expect(() => merge([], { add: [finding()], resolve: [], keep: [] }, blobs(), DATE)).toThrow(
-      'no blob for a.ts',
-    );
+    expect(() =>
+      merge([], { add: [finding()], resolve: [], keep: [], move: [] }, blobs(), DATE),
+    ).toThrow('no blob for a.ts');
   });
   test('the same finding at the same path replaces its entry and moves to the newest end', () => {
     const first = recorded(finding());
     const other = recorded(finding({ path: 'b.ts' }));
     const again = finding({ kind: 'rebutted', reason: 'measured: the cap exists' });
     const fresh = new Map([['a.ts', 'c'.repeat(40)]]);
-    const m = merge([first, other], { add: [again], resolve: [], keep: [] }, fresh, 'later');
+    const m = merge(
+      [first, other],
+      { add: [again], resolve: [], keep: [], move: [] },
+      fresh,
+      'later',
+    );
     expect(m.entries.map((e) => [e.path, e.kind, e.blob, e.date])).toEqual([
       ['b.ts', 'deferred', BLOB, DATE],
       ['a.ts', 'rebutted', 'c'.repeat(40), 'later'],
@@ -188,14 +214,24 @@ describe('merge', () => {
   });
   test('resolve removes an entry and names ids it did not find', () => {
     const e = recorded(finding());
-    const m = merge([e], { add: [], resolve: [e.id, 'ffffffff'], keep: [] }, blobs(), DATE);
+    const m = merge(
+      [e],
+      { add: [], resolve: [e.id, 'ffffffff'], keep: [], move: [] },
+      blobs(),
+      DATE,
+    );
     expect(m.entries).toEqual([]);
     expect(m).toMatchObject({ resolved: 1, unknown: ['ffffffff'] });
   });
   test('resolving an entry and recording it again in one batch keeps the new one', () => {
     const e = recorded(finding());
     const again = finding({ reason: 'still deferred' });
-    const m = merge([e], { add: [again], resolve: [e.id], keep: [] }, blobs('a.ts'), 'later');
+    const m = merge(
+      [e],
+      { add: [again], resolve: [e.id], keep: [], move: [] },
+      blobs('a.ts'),
+      'later',
+    );
     expect(m.entries).toEqual([{ ...recorded(again), date: 'later' }]);
     expect(m).toMatchObject({ resolved: 1, added: 1 });
   });
@@ -203,7 +239,7 @@ describe('merge', () => {
     const existing = Array.from({ length: 500 }, (_, i) =>
       recorded(finding({ finding: `f${i} ${'x'.repeat(200)}`, reason: 'y'.repeat(150) })),
     );
-    const m = merge(existing, { add: [], resolve: [], keep: [] }, blobs('a.ts'), DATE);
+    const m = merge(existing, { add: [], resolve: [], keep: [], move: [] }, blobs('a.ts'), DATE);
     expect(m.evicted).toBe(0);
   });
   test('evicts the oldest entries past the byte budget, counting UTF-8 bytes', () => {
@@ -211,7 +247,7 @@ describe('merge', () => {
     const big = (i: number) => finding({ finding: `f${i} ${'✓'.repeat(MAX_TEXT - 6)}` });
     const existing = Array.from({ length: 300 }, (_, i) => recorded(big(i)));
     const add = [finding({ finding: 'new' })];
-    const m = merge(existing, { add, resolve: [], keep: [] }, blobs('a.ts'), DATE);
+    const m = merge(existing, { add, resolve: [], keep: [], move: [] }, blobs('a.ts'), DATE);
     expect(m.evicted).toBeGreaterThan(0);
     expect(m.entries[0]?.finding.startsWith(`f${m.evicted} `)).toBe(true);
     expect(m.entries.at(-1)?.finding).toBe('new');
@@ -226,7 +262,7 @@ describe('merge', () => {
     const existing = Array.from({ length: Math.ceil(MAX_LEDGER_BYTES / size) + 5 }, (_, i) =>
       recorded(numbered(i)),
     );
-    const m = merge(existing, { add: [], resolve: [], keep: [] }, blobs('a.ts'), DATE);
+    const m = merge(existing, { add: [], resolve: [], keep: [], move: [] }, blobs('a.ts'), DATE);
     expect(m.entries).toHaveLength(Math.floor(MAX_LEDGER_BYTES / (size + 1)));
   });
   test('the store holds MAX_REPOS full ledgers, each several hundred typical entries', () => {
@@ -240,24 +276,104 @@ describe('merge', () => {
   });
 });
 
+const byPath = (x: string[], y: string[]) => (x[0] ?? '').localeCompare(y[0] ?? '');
+
+const to = (id: string, path = 'scripts/a.sh', line: number | null = 7) => ({
+  add: [],
+  resolve: [],
+  keep: [],
+  move: [{ id, path, line }],
+});
+
+describe('merge move', () => {
+  const NEW = 'c'.repeat(40);
+  test('re-paths an entry under the new path id, keeping its date and finding', () => {
+    const e = recorded(finding());
+    const other = recorded(finding({ path: 'b.ts' }));
+    const fresh = new Map([['scripts/a.sh', NEW]]);
+    const m = merge([e, other], to(e.id), fresh, 'later');
+    const id = entryId('scripts/a.sh', e.finding);
+    expect(id).not.toBe(e.id);
+    expect(m.entries).toEqual([other, { ...e, id, path: 'scripts/a.sh', line: 7, blob: NEW }]);
+    expect(m).toMatchObject({ moved: 1, unknown: [] });
+  });
+  test('replaces an entry already holding that finding at the new path, at the newest end', () => {
+    const e = recorded(finding());
+    const there = recorded(finding({ path: 'scripts/a.sh', reason: 'older reason' }));
+    const other = recorded(finding({ path: 'b.ts' }));
+    const m = merge([there, e, other], to(e.id), new Map([['scripts/a.sh', NEW]]), DATE);
+    expect(m.entries).toHaveLength(2);
+    expect(m.entries[0]).toEqual(other);
+    expect(m.entries[1]).toMatchObject({ path: 'scripts/a.sh', reason: e.reason, date: e.date });
+    expect(m).toMatchObject({ moved: 1, updated: 1 });
+  });
+  test.each([
+    ['a.ts → b.ts, then b.ts → c.ts', ['a', 'b']],
+    ['b.ts → c.ts, then a.ts → b.ts', ['b', 'a']],
+  ])('a chain of moves keeps every entry: %s', (_, order) => {
+    const a = recorded(finding({ path: 'a.ts', reason: 'from a' }));
+    const b = recorded(finding({ path: 'b.ts', reason: 'from b' }));
+    const step = {
+      a: { id: a.id, path: 'b.ts', line: null },
+      b: { id: b.id, path: 'c.ts', line: null },
+    };
+    const rec = { add: [], resolve: [], keep: [], move: order.map((k) => step[k as 'a' | 'b']) };
+    const m = merge([a, b], rec, blobs('b.ts', 'c.ts'), DATE);
+    expect(m.entries.map((e) => [e.path, e.reason]).toSorted(byPath)).toEqual([
+      ['b.ts', 'from a'],
+      ['c.ts', 'from b'],
+    ]);
+    expect(m).toMatchObject({ moved: 2, updated: 0, unknown: [] });
+  });
+  test('a second move of one id is unknown', () => {
+    const e = recorded(finding());
+    const rec = {
+      add: [],
+      resolve: [],
+      keep: [],
+      move: [
+        { id: e.id, path: 'b.ts', line: null },
+        { id: e.id, path: 'c.ts', line: null },
+      ],
+    };
+    const m = merge([e], rec, blobs('b.ts', 'c.ts'), DATE);
+    expect(m.entries.map((x) => x.path)).toEqual(['b.ts']);
+    expect(m).toMatchObject({ moved: 1, unknown: [e.id] });
+  });
+  test('names an unknown id and moves nothing', () => {
+    const e = recorded(finding());
+    const m = merge([e], to('ffffffff'), blobs('scripts/a.sh'), DATE);
+    expect(m).toMatchObject({ entries: [e], moved: 0, unknown: ['ffffffff'] });
+  });
+  test('refuses a move to a path it has no blob for', () => {
+    const e = recorded(finding());
+    expect(() => merge([e], to(e.id), blobs(), DATE)).toThrow('no blob for scripts/a.sh');
+  });
+});
+
 describe('merge keep', () => {
   test('restamps a kept entry, keeps its date, and moves it to the newest end', () => {
     const e = recorded(finding());
     const other = recorded(finding({ path: 'b.ts' }));
     const fresh = new Map([['a.ts', 'c'.repeat(40)]]);
-    const m = merge([e, other], { add: [], resolve: [], keep: [e.id] }, fresh, 'later');
+    const m = merge([e, other], { add: [], resolve: [], keep: [e.id], move: [] }, fresh, 'later');
     expect(m.entries).toEqual([other, { ...e, blob: 'c'.repeat(40) }]);
     expect(m).toMatchObject({ kept: 1, gone: 0, unknown: [] });
   });
   test('drops a kept entry whose path has no blob, and names unknown ids', () => {
     const e = recorded(finding());
-    const m = merge([e], { add: [], resolve: [], keep: [e.id, 'ffffffff'] }, blobs(), DATE);
+    const m = merge(
+      [e],
+      { add: [], resolve: [], keep: [e.id, 'ffffffff'], move: [] },
+      blobs(),
+      DATE,
+    );
     expect(m.entries).toEqual([]);
     expect(m).toMatchObject({ kept: 0, gone: 1, unknown: ['ffffffff'] });
   });
   test('resolving and keeping the same id resolves it', () => {
     const e = recorded(finding());
-    const m = merge([e], { add: [], resolve: [e.id], keep: [e.id] }, blobs('a.ts'), DATE);
+    const m = merge([e], { add: [], resolve: [e.id], keep: [e.id], move: [] }, blobs('a.ts'), DATE);
     expect(m).toMatchObject({ entries: [], resolved: 1, unknown: [e.id] });
   });
 });

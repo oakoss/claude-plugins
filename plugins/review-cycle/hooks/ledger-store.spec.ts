@@ -55,7 +55,7 @@ function tree(files: Record<string, string>): Blobs {
 const failing: Blobs = () => Promise.reject(new Error('git ls-tree failed: fatal: injected'));
 
 function rec(over: Partial<Recording> = {}): Recording {
-  return { add: [], resolve: [], keep: [], ...over };
+  return { add: [], resolve: [], keep: [], move: [], ...over };
 }
 
 async function record(store: Store, blobs: Blobs, r: Recording, now = NOW) {
@@ -74,6 +74,7 @@ describe('recordInto', () => {
       updated: 0,
       resolved: 0,
       kept: 0,
+      moved: 0,
       gone: 0,
       unknown: [],
       evicted: 0,
@@ -93,6 +94,32 @@ describe('recordInto', () => {
       'review-cycle ledger: nothing recorded: not a file in the working tree: nope.ts',
     );
     expect(map.size).toBe(0);
+  });
+  test('move re-paths an entry to a file in the working tree, and the next read finds it there', async () => {
+    const { store } = fakeStore();
+    await record(store, tree({ 'a.ts': A }), rec({ add: [DEFERRED] }), NOW);
+    const id = entryId('a.ts', DEFERRED.finding);
+    const later = NOW + 86_400_000;
+    const moved = await record(
+      store,
+      tree({ 'b.ts': B }),
+      rec({ move: [{ id, path: 'b.ts', line: null }] }),
+      later,
+    );
+    expect(moved).toMatchObject({ moved: 1, total: 1 });
+    const read = await readLedger(store, tree({ 'b.ts': B }), COMMON, { paths: ['b.ts'] }, later);
+    expect(read.entries).toEqual([
+      expect.objectContaining({ path: 'b.ts', date: '2026-09-26', changed: false }),
+    ]);
+  });
+  test('refuses a move to a path that is not a file in the working tree', async () => {
+    const { store } = fakeStore();
+    await record(store, tree({ 'a.ts': A }), rec({ add: [DEFERRED] }));
+    const id = entryId('a.ts', DEFERRED.finding);
+    const r = rec({ move: [{ id, path: 'nope.ts', line: null }] });
+    expect(await recordInto(store, tree({ 'a.ts': A }), COMMON, r, NOW)).toBe(
+      'review-cycle ledger: nothing recorded: not a file in the working tree: nope.ts',
+    );
   });
   test('keep restamps the blob, keeps the date, and drops an entry whose file is gone', async () => {
     const { store, map } = fakeStore();
