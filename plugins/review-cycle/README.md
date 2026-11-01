@@ -83,7 +83,7 @@ Lists the gate's refusals of a push, pull request, merge or release that your la
 
 ### `/review-cycle:de-slopify`
 
-Bundled de-slopify skill — methodology for removing AI writing artifacts from prose, maintained here as part of the plugin (originally imported from oakoss/agent-skills, which no longer carries the canonical copy). The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle. Aligned with the standalone `prose` plugin's rules, so cycle cleanup and the always-on style apply the same standard.
+Bundled de-slopify skill — methodology for removing AI writing artifacts from prose, maintained here as part of the plugin (originally imported from oakoss/agent-skills, which no longer carries the canonical copy). The cleanup subagent preloads this skill, so the cycle uses it automatically. Invokable directly for ad-hoc cleanup of prose outside the cycle.
 
 ## Subagents (bundled)
 

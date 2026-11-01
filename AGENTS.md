@@ -84,7 +84,7 @@ A rule here that a check enforces names the check; prose stays only where nothin
 | `core.hooksPath` stays unset | `tests/hooks-path.spec.ts` (`pnpm test`) |
 | No skill or agent names a `disable-model-invocation: true` skill | `tests/skill-references.spec.ts` (`pnpm test`) |
 | No `sync:` block staged in `.beads/config.yaml` | lefthook pre-commit `beads-sync` |
-| A bump file for every change under `plugins/<name>/`; unquoted plugin names; the oakum pin | `oakum check --strict` (CI `Bump files`) |
+| A bump file for every change under `plugins/<name>/`; unquoted plugin names; an exact oakum pin | `oakum check --strict` (CI `Bump files`) |
 | Plugin structure; `$` not passed into an imported function expression | `claude plugin validate --strict` (CI `Plugin manifests`) |
 | Conventional commit messages | commitlint (lefthook `commit-msg`) |
 | Types of the hooks modules (not `tests/` or prose anchors); lint and format everywhere | lefthook pre-commit, CI |
@@ -111,7 +111,7 @@ Hooks here are hooks modules: TypeScript that Claude Code runs itself, named in 
 
 ## Versioning and changelog
 
-Releases are driven by [oakum](https://github.com/oakoss/oakum) bump files. Each plugin has a private `package.json` as its version anchor; `oakum version` writes that version, the changelog entry, and the declared `extra-files` — `plugin.json` and this repo's `marketplace.json` entry — in one pass. `.changeset/_config.toml` pins the oakum version, and `oakum check` refuses when the pin and the installed version disagree — `unverified: install pin is X but tool-version is Y` at exit 2, which fails the step. Keep it failing: oakum's docs show a pattern for passing on exit 2, and adopting it here would drop pin-drift detection along with it.
+Releases are driven by [oakum](https://github.com/oakoss/oakum) bump files. Each plugin has a private `package.json` as its version anchor; `oakum version` writes that version, the changelog entry, and the declared `extra-files` — `plugin.json` and this repo's `marketplace.json` entry — in one pass. The exact `@oakoss/oakum` devDependency in `package.json` pins the oakum version. oakum reads its version from that pin rather than `tool-version` (ADR-0038), and its writing commands refuse when the running binary differs from it: measured on 0.8.3, `add` against a 0.8.2 pin exits 1 naming the pin to raise. `check --strict` catches a pin that is not an exact version (exit 2) but not a binary that differs from it, so CI's `pnpm exec`, which runs the pinned binary, is what keeps the two aligned. `check --strict` reports what it cannot verify at exit 2, which fails the step. Keep it failing: oakum's docs show a pattern for passing on exit 2, and adopting it here would drop those checks along with it.
 
 There is deliberately no cross-file drift check. The old `sync-plugin-versions.mjs --check` CI job existed because bumpy versioned only `package.json`, leaving the manifests to drift; oakum writes them itself through `extra-files`, so agreement is a property of how they are written rather than something to verify afterwards. Nothing now catches drift introduced by hand or by a bad merge — `oakum check --strict` validates bump files, not manifest agreement.
 
@@ -154,7 +154,7 @@ To have every session in this repository run the working tree's plugins, set `CL
 
 ```toml
 [env]
-CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/prose:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
+CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
 ```
 
 The working tree's copies load beside the released installs, not instead of them: `claude plugin list` shows each plugin twice, once installed as `<name>@oakoss` and once as a session-only `<name>@inline`, so two review-cycle commit gates run and the released one can refuse what the working tree's allows. Switch the released copies off for this checkout in the gitignored `.claude/settings.local.json`:
@@ -164,7 +164,6 @@ The working tree's copies load beside the released installs, not instead of them
   "enabledPlugins": {
     "pr-kit@oakoss": false,
     "pr-watch@oakoss": false,
-    "prose@oakoss": false,
     "review-cycle@oakoss": false,
     "session@oakoss": false
   }

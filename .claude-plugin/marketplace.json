@@ -59,27 +59,6 @@
       "keywords": ["pull-request", "github", "ci", "github-actions", "mod", "status"]
     },
     {
-      "name": "prose",
-      "description": "Plain technical prose for Claude: an output style, a CLAUDE.md snippet, and a cleanup skill that remove AI filler, distilled from the Google developer style guide.",
-      "version": "0.1.2",
-      "author": {
-        "name": "Oak OSS",
-        "email": "hello@oakoss.dev",
-        "url": "https://github.com/oakoss"
-      },
-      "category": "productivity",
-      "source": "./plugins/prose",
-      "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/prose",
-      "keywords": [
-        "writing",
-        "output-style",
-        "documentation",
-        "tech-writing",
-        "de-slop",
-        "style-guide"
-      ]
-    },
-    {
       "name": "session",
       "description": "Titles each Claude Code session after the git branch it works on, so its terminal tab and the /resume list name the work, and keeps a name you gave it.",
       "version": "0.0.0",
