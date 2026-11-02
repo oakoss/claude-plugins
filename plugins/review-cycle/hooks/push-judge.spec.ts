@@ -199,7 +199,9 @@ describe('a push the user asked for', () => {
       deny: expect.stringContaining('which the request did not name'),
       final: true,
     });
-    expect(r).toMatchObject({ deny: expect.stringContaining('"Push to `main`?"') });
+    expect(r).toMatchObject({
+      deny: expect.stringContaining('The question: Push to `main`? The command:'),
+    });
     const named = grant({ push: 'push', pushNamed: ['main'] });
     expect(await judge('git push origin main', world([TO_MAIN]), named)).toEqual({ ran: null });
   });

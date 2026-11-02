@@ -563,6 +563,11 @@ function ran(r: unknown): boolean {
   return typeof r === 'object' && r !== null && 'result' in r;
 }
 
+// consent.ts offeredTargets reads the offer only as an answer's whole last
+// paragraph, unquoted.
+const OWN_PARAGRAPH = (branch: string) =>
+  `alone in its last paragraph, without quotation marks, then end your turn; their answer decides. The question: Push to \`${branch}\`? The command:`;
+
 function denied(r: unknown, text: string): boolean {
   return (
     typeof r === 'object' &&
@@ -4356,10 +4361,23 @@ describe('the stop-before setting', () => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
     await say($, 'push it');
     const r = await bash($, 'git push origin main');
-    expect(denied(r, '"Push to `main`?"')).toBe(true);
-    await ($ as any).turn.complete({ answer: 'Push to `main`?', reason: 'answer' });
+    expect(denied(r, OWN_PARAGRAPH('main'))).toBe(true);
+    await ($ as any).turn.complete({ answer: 'Done.\n\nPush to `main`?', reason: 'answer' });
     await say($, 'yes');
     expect(ran(await bash($, 'git push origin main'))).toBe(true);
+  });
+  test('a yes to the offer sharing a line with other words names no branch', async ($, on) => {
+    const git = remoteSide({
+      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+    });
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
+    await say($, 'push it');
+    await bash($, 'git push origin main');
+    await ($ as any).turn.complete({ answer: 'Done. Push to `main`?', reason: 'answer' });
+    await say($, 'yes');
+    expect(denied(await bash($, 'git push origin main'), 'which the request did not name')).toBe(
+      true,
+    );
   });
   test('a push the user asked for that git partly rejects is judged by the refs it lands', async ($, on) => {
     const lines = [
@@ -5013,9 +5031,9 @@ describe('the stop-before setting', () => {
   test('gh stack link pushes its branches: the default one needs naming', async ($, on) => {
     fakeWorld(on, { git: github('fix/x') });
     await say($, 'ship it');
-    expect(denied(await bash($, 'gh stack link main feat/a'), '`main`, the default branch')).toBe(
-      true,
-    );
+    const link = await bash($, 'gh stack link main feat/a');
+    expect(denied(link, '`main`, the default branch')).toBe(true);
+    expect(denied(link, OWN_PARAGRAPH('main'))).toBe(true);
     expect(ran(await bash($, 'gh stack link feat/a feat/b'))).toBe(true);
     expect(denied(await bash($, 'cd .. && gh stack link feat/a'), 'Run it on its own')).toBe(true);
   });
@@ -6060,7 +6078,7 @@ describe('the stop-before setting', () => {
     expect(denied(r, "doesn't ask for a bare force")).toBe(true);
     expect(denied(r, '"Force-push `fix/x` to `origin` without a lease?"')).toBe(true);
     await say($, 'force push it without a lease');
-    expect(denied(await bash($, force), '"Push to `main`?"')).toBe(true);
+    expect(denied(await bash($, force), OWN_PARAGRAPH('main'))).toBe(true);
     await say($, 'force push to main without a lease');
     expect(ran(await bash($, force))).toBe(true);
   });

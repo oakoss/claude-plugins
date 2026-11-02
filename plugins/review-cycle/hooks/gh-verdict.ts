@@ -110,6 +110,13 @@ export function askThem(naming: string, example: string, shown: string): string 
   return `stop and ask them in your reply, naming ${naming} with branch and version names in backticks (for example ${example}), and end your turn; their answer decides. The command: ${shown}`;
 }
 
+// consent.ts offeredTargets reads an offer only as the answer's whole last
+// paragraph, so a yes to it names nothing when it shares a line.
+export function offerThem(offer: string, shown: string): string {
+  const question = offer.replace(/^"(.*)"$/, '$1');
+  return `stop and end your reply with this question alone in its last paragraph, without quotation marks, then end your turn; their answer decides. The question: ${question} The command: ${shown}`;
+}
+
 const STEP_NAME: Record<HoldStep, string> = {
   push: 'a push',
   pr: 'a pull request',
@@ -565,7 +572,7 @@ export async function judgeGh(
           const then =
             c.unnamed.offer === null
               ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
-              : `To push there, ${askThem('where it pushes', c.unnamed.offer, shown)}`;
+              : `To push there, ${offerThem(c.unnamed.offer, shown)}`;
           return { deny: `${asked} ${c.unnamed.why}, so nothing ran. ${then}`, final: true };
         }
         const outcome = await pushOutcome(needed, may.push, () => pushAsks(lookups, ref));
@@ -846,7 +853,7 @@ export async function judgeGh(
               const then =
                 u.offer === null
                   ? `Give the user the command to run themselves. The command: ${shown}`
-                  : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
+                  : `To push there, ${offerThem(u.offer, shown)}`;
               return {
                 deny: `\`gh stack link\` pushes the branches it names, and ${u.why}, so nothing ran. ${then}`,
               };

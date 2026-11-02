@@ -5,6 +5,7 @@
 import { covers, type Grant, type UnreadOffer } from './consent';
 import {
   askThem,
+  offerThem,
   couldNotJudge,
   notAsked,
   permitted,
@@ -276,7 +277,7 @@ function unnamedRefusal(shown: string, commits: boolean, u: Unnamed): string {
   const then =
     u.offer === null
       ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
-      : `To push there, ${askThem('where it pushes', u.offer, shown)}`;
+      : `To push there, ${offerThem(u.offer, shown)}`;
   return `the user's latest message asks for a push, but ${u.why}, so nothing ran.${alone} ${then}`;
 }
 

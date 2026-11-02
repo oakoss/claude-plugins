@@ -379,7 +379,7 @@ describe('a push through GitHub', () => {
   test('a requested tag write asks unless the request named the tag', async () => {
     const tag = push({ asks: 'it pushes a tag', force: false, tag: 'v1.2.0' });
     expect(await judge([tag], world('commit'), grant({ push: 'push' }))).toMatchObject({
-      deny: expect.stringContaining('"Push the `v1.2.0` tag?"'),
+      deny: expect.stringContaining('The question: Push the `v1.2.0` tag? The command:'),
       final: true,
     });
     const named = grant({ push: 'push', pushNamed: ['tag:v1.2.0'] });
@@ -393,7 +393,7 @@ describe('a push through GitHub', () => {
       branch: { name: 'main', repo: 'o/r', deletes: false },
     });
     expect(await judge([forced], world('commit'), grant({ push: 'bare' }))).toMatchObject({
-      deny: expect.stringContaining('"Push to `main`?"'),
+      deny: expect.stringContaining('The question: Push to `main`? The command:'),
     });
     const named = grant({ push: 'bare', pushNamed: ['main'] });
     expect(await judge([forced], world('commit'), named)).toEqual({ ran: [] });
@@ -1435,7 +1435,9 @@ describe('gh stack', () => {
     const asked = grant({ push: 'push', pr: true });
     const r = await judge([link({ remote: null }, 'main', 'feat/a')], world('push'), asked);
     expect(r).toMatchObject({ deny: expect.stringContaining('`main`, the default branch') });
-    expect(r).toMatchObject({ deny: expect.stringContaining('"Push to `main`?"') });
+    expect(r).toMatchObject({
+      deny: expect.stringContaining('The question: Push to `main`? The command:'),
+    });
     const ladder = await judge([link({ remote: null }, 'main')], world('never stop'));
     expect(ladder).toMatchObject({ deny: expect.stringContaining('the default branch') });
     const named = grant({ push: 'push', pr: true, pushNamed: ['main'] });
