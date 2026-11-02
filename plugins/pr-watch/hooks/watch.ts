@@ -1,6 +1,6 @@
 // What the band says about a pull request, and when to look again. Pure.
 import type { Activity, Commit, Held, Job, Pull, Runs, Stack, Watch, Workflow } from '../types';
-import type { Quota } from './github';
+import { PASSED, type Quota } from './github';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -122,6 +122,7 @@ export function pushedPull(branch: string, pushedAt: number, runs: Runs | null):
     workflows: [],
     isGated: false,
     isRequiredPending: false,
+    isRequiredFailed: false,
     isTruncated: false,
     base: branch,
     mergedAt: new Date(pushedAt).toISOString(),
@@ -137,7 +138,6 @@ export function movesPulls(command: string): boolean {
   return MOVES_PR.test(command);
 }
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
-const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
 
 export type Target = Pick<Watch, 'host' | 'repo' | 'number' | 'url'>;
@@ -780,13 +780,34 @@ type Condition = { key: string; text: string; isPassed?: true };
 type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
 
 // A watch's own conditions carry it, so watches on the host can share what
-// they told; a push's carries the push, its number being 0.
-const keyOf = (watch: Who, what: string) =>
+// they told; a push's carries the push, its number being 0. `at` ties one to a
+// commit, so the next commit's is news again.
+const keyOf = (watch: Who, what: string, at?: string) =>
   JSON.stringify([
     watch.repo,
     watch.push ? [watch.push.branch, watch.push.pushedAt] : watch.number,
     what,
+    ...(at === undefined ? [] : [at]),
   ]);
+
+// A draft never turns ready, so its checks all passing is its news, told once
+// per head commit. Past the suites one read returns, one may still be running.
+export const isDraftPassed = (pull: Pull, verdict: Verdict) =>
+  verdict.kind === 'waiting' &&
+  verdict.reason === 'draft' &&
+  pull.headOid !== undefined &&
+  pull.workflows.length > 0 &&
+  !pull.isRequiredPending &&
+  !pull.isRequiredFailed &&
+  !pull.isTruncated &&
+  pull.workflows.every(
+    (w) =>
+      w.status === 'done' &&
+      PASSED.has(w.conclusion ?? '') &&
+      !w.jobs.some((j) => failed(j.conclusion)),
+  );
+
+const draftKey = (watch: Who, pull: Pull) => keyOf(watch, 'draft passed', pull.headOid);
 
 export const isToldReady = (watch: Who & Pick<Watch, 'told'>) =>
   (watch.told ?? []).includes(keyOf(watch, 'ready'));
@@ -821,6 +842,7 @@ export function savedOf(
     const quiet = new Set([
       ...(pending.ready.has(id) ? [keyOf(w, 'ready')] : []),
       ...(pending.passed.has(id) ? [keyOf(w, 'passed')] : []),
+      ...(pending.passed.has(id) && w.pull ? [draftKey(w, w.pull)] : []),
     ]);
     const told = (w.told ?? []).filter((k) => !quiet.has(k));
     const { host, repo, number, url, heard } = w;
@@ -882,7 +904,7 @@ export function prunedOf(entries: readonly (readonly [string, unknown])[]): stri
     .map(([key]) => key);
 }
 
-// A ready or passed state, conflicts and requested changes whatever the checks
+// A ready or passed state, a draft's passed checks, conflicts and requested changes whatever the checks
 // say, and every failing run the line follows, gating or not, as soon as a job
 // in it fails. A run is told once, by its first failed jobs: later ones, a
 // summary job among them, are news Claude finds in the run it was sent to.
@@ -911,6 +933,10 @@ function conditionsOf(
       ? `The checks on ${name} passed.`
       : `${name} merged into ${pull.base}, and ${passedOn(pull)}.`;
     found.push({ key: keyOf(watch, 'passed'), text, isPassed: true });
+  }
+  if (isDraftPassed(pull, verdict)) {
+    const text = `The checks on ${name}, a draft, passed.`;
+    found.push({ key: draftKey(watch, pull), text, isPassed: true });
   }
   if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
     const text = `${name} has merge conflicts with ${pull.base}.`;
@@ -1052,7 +1078,7 @@ export function wakeOf(
   const kept: string[] = [];
   let ready: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
-    const isQuiet = isOwnMerge && c.isPassed;
+    const isQuiet = isOwnMerge && c.isPassed && verdict.kind === 'merged-passed';
     const isNew = !told.includes(c.key) && !isQuiet;
     if (isNew && c.key === keyOf(watch, 'ready')) ready = c.text;
     else if (isNew && c.isPassed) passed.push(c.text);
@@ -1066,6 +1092,17 @@ export function wakeOf(
       const key = keyOf(watch, what);
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }
+  }
+  // A re-run on the same commit is no news of a draft's passing, unless it failed.
+  const isRerun = pull.state === 'OPEN' && pull.isDraft && pull.headOid !== undefined;
+  const isFailing =
+    pull.isRequiredFailed ||
+    pull.workflows.some(
+      (w) => isFailedRun(w) || w.jobs.some((j) => j.status === 'done' && failed(j.conclusion)),
+    );
+  if (isRerun && !isFailing) {
+    const key = draftKey(watch, pull);
+    if (told.includes(key) && !kept.includes(key)) kept.push(key);
   }
   const { heard: next, lines } = hearOf(pull, last.heard, name, tells);
   // So a chatty bot or thread cannot keep waking Claude, comments and reviews

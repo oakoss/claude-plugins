@@ -68,6 +68,7 @@ import {
   pauseOf,
   untilText,
   isSettled,
+  isDraftPassed,
   labelOf,
   settingsOf,
   tellsOf,
@@ -100,8 +101,8 @@ const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, { isTurning: fal
 const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
 // Watches whose ready line and passed checks wake Claude, as it asked.
 const wakeAsked = atom({ plugin: 'pr-watch', key: 'wakeAsked' } as const, []);
-// A ready pull request Claude would need asking to merge, and a merge's passed
-// checks, wait for the person's next prompt rather than waking Claude.
+// A ready pull request Claude would need asking to merge, and passed checks,
+// wait for the person's next prompt rather than waking Claude.
 const quiet = atom({ plugin: 'pr-watch', key: 'quiet' } as const, []);
 // The session id whose saved watches were restored; a resume starts it over.
 const restored = atom({ plugin: 'pr-watch', key: 'restored' } as const, null);
@@ -1014,13 +1015,15 @@ async function onWatchTool($: $, e: unknown): Promise<{ result: string }> {
     const verdict = after.pull ? verdictOf(after.pull, known, after.host, now) : null;
     const isPassed =
       verdict?.kind === 'merged-passed' && after.pull && isSettled(verdict, after.pull, now);
+    const isDraftDone =
+      verdict !== null && after.pull !== undefined && isDraftPassed(after.pull, verdict);
     // With waking off nothing tells the agent later, so the line is the answer.
     const closing = !config.isAwake
       ? `Waking Claude is off in /config: it shows ${textOf(after, now, known)}, and the watches tool reads it again.`
       : !input.wake
         ? 'It tells you when that changes, at once or with the next message, so there is no need to poll gh.'
-        : verdict?.kind === 'ready' || isPassed
-          ? `${isPassed ? "Its merge's checks have passed" : 'It is ready to merge'} now. pr-watch wakes you if that happens again after new checks, and tells you the rest when it changes.`
+        : verdict?.kind === 'ready' || isPassed || isDraftDone
+          ? `${isPassed ? "Its merge's checks have passed" : isDraftDone ? 'Its checks have passed' : 'It is ready to merge'} now. pr-watch wakes you if that happens again after new checks, and tells you the rest when it changes.`
           : 'It wakes you when it turns ready to merge or its checks pass, and tells you the rest when it changes, so there is no need to poll gh.';
     return { result: [`${head}${waits} ${closing}`, kept.news].filter(Boolean).join('\n') };
   } catch (error) {
@@ -1094,7 +1097,7 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, its checks passed as a draft, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
     inputSchema: {
       ...PULL_INPUT,
       properties: {

@@ -56,6 +56,8 @@ export type Pull = {
   isGated: boolean;
   // A required check from a GitHub App has not finished.
   isRequiredPending: boolean;
+  // A required check from a GitHub App finished without passing.
+  isRequiredFailed: boolean;
   // The head commit has more check suites than one read returns.
   isTruncated: boolean;
   // The branch merged into, and once merged, when and the merge commit's runs.
@@ -65,6 +67,8 @@ export type Pull = {
   mergedAt: string | null;
   mergeRuns: Runs | null;
   mergeOid?: string;
+  // The head commit an open pull request's `workflows` ran on.
+  headOid?: string;
   // Set when `mergeRuns` holds later trunk commits' runs: one later commit's
   // in place of none (`isLater`), newer passing runs of `since`, or both.
   followed?: { isLater: boolean; since: string[] };
