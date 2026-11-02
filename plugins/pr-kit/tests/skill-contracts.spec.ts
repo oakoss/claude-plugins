@@ -640,6 +640,31 @@ describe('ship: the pull request body reference', () => {
   });
 });
 
+describe('release-check: reads, never releases', () => {
+  const text = skillText('pr-kit', 'release-check');
+  const lines = fenceLines(shellFences(text, 'release-check')).map((line) => line.trim());
+
+  test('runs no command that merges, edits, pushes or checks out', () => {
+    const writes =
+      /\bgh pr (merge|edit|ready|close|comment|review)\b|\bgh stack merge\b|\bgit (push|checkout|switch|commit)\b/;
+    expect(atLeast(lines, 5, 'release-check shell lines').filter((l) => writes.test(l))).toEqual(
+      [],
+    );
+  });
+
+  test('says merging is the release and the user’s ask, and where a note is fixed', () => {
+    expectAnchors(text, 'release-check', [
+      ['It never merges, edits the pull request, pushes, or changes a bump file.', 'report-only'],
+      ["Merging is the user's ask: name it, and stop.", 'no merge offer'],
+      [
+        'A finding is fixed by editing the bump file on the base branch, in its own pull request',
+        'fix goes to the bump file',
+      ],
+      ["Never edit the release pull request's branch", 'rebuilt branch'],
+    ]);
+  });
+});
+
 describe('merge: only what was asked, and a stack as one', () => {
   const text = skillText('pr-kit', 'merge');
   const stack = section(text, 'Stack', 'merge');
@@ -814,7 +839,7 @@ describe('every skill', () => {
   });
 
   test("the README's gh claim matches the skills that call gh", () => {
-    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
     const skills = prKitSkills();
     const withGh = skills.filter((skill) =>
       shellFences(skillText('pr-kit', skill), skill).some((f) => /^\s*gh /m.test(f)),
