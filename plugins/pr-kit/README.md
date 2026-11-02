@@ -45,13 +45,17 @@ Merges the pull request you asked to merge ("merge 47", "lets merge it") with th
 
 On a [github/gh-stack](https://github.com/github/gh-stack) layer it merges with `gh stack merge`, which takes every unmerged layer below too, so it names them all and asks when your message did not, and checks each of them is ready. "Merge the stack" merges every open layer, wherever you are checked out. A stack merges now: it has no auto-merge and no `--admin`. It checks the number names no stack, since `gh stack merge` reads a stack's number first. It offers `gh stack sync` for the layers left open, and reports a sync that printed `Sync aborted`, since that exits 0. It leaves `gh stack modify` and `switch` to your terminal.
 
+### `/pr-kit:release-check`
+
+Reads the open release pull request (an oakum or Changesets version PR) before you merge it: each package's old and new version, its new changelog section rendered as it will read, and the pull request's checks, merge state and title. It flags what reads wrong once separate bump-file notes are joined into one release: two notes about the same change, a note leaning on a neighbour ("also", "this") that is now elsewhere, a later note that undoes an earlier one, and a claim the release itself makes stale. It also flags a manifest left on an old version and a bump file that landed after the pull request was built. Each finding is fixed in its bump file on the base branch, since the release workflow rebuilds the pull request. Report-only: it never merges, edits or pushes.
+
 ### `/pr-kit:do-epic`
 
 Runs a beads (`bd`) epic from one message to open pull requests: type "do epic cpl-x" (or `/pr-kit:do-epic cpl-x`), adding "as drafts" for draft pull requests. It plans the epic's beads into branches, one per unit that ships and reverts together, records the plan in the epic's notes, then builds each branch in turn: implement, `/review-cycle:review`, commit. Independent branches become their own pull requests off the default branch; branches that depend on each other become a [github/gh-stack](https://github.com/github/gh-stack) stack, one layer each. It ships them with `ship`, drives CI with `fix-ci`, and ends with one report: each pull request with its beads, CI state and review rounds, the beads it shelved and why, deferred findings, questions, and the gate's refusals. It never stops to ask: a bead it cannot finish is stashed (`do-epic <id>`) and left open, and a refused command stops only its branch. It needs review-cycle, whose gate reads "do epic <id>" as a job; it never merges, and the job ends at your next message that holds or calls things off. Branches build one after another in your checkout.
 
 ## Requirements
 
-- **GitHub CLI (`gh`)**, authenticated — six of the seven skills resolve the active PR and read checks/comments through `gh`, and `merge` and `do-epic` need github/gh-stack only for a stack. `do-epic` also needs `bd` and review-cycle. `fix-merge-conflicts` is purely local and needs no `gh`.
+- **GitHub CLI (`gh`)**, authenticated — seven of the eight skills resolve a PR and read checks/comments through `gh`, and `merge` and `do-epic` need github/gh-stack only for a stack. `do-epic` also needs `bd` and review-cycle. `fix-merge-conflicts` is purely local and needs no `gh`.
 - **`review-cycle`** is recommended but not required. When present, `fix-ci` routes fixes through `/review-cycle:review`; without it, `fix-ci` shows you each diff and waits for your OK before pushing.
 
 ## Relationship to other tools
