@@ -7,7 +7,7 @@ import type { Activity, Commit, Job, Pull, Runs, RunStatus, Stack, Workflow } fr
 const suites = (required: string, first = 100) => `checkSuites(first: ${first}) {
       pageInfo { hasNextPage }
       nodes {
-        status conclusion
+        status conclusion app { databaseId }
         workflowRun { databaseId runAttempt createdAt url workflow { databaseId name } }
         checkRuns(first: 100) { nodes { name status conclusion detailsUrl ${required} } }
       }
@@ -250,7 +250,7 @@ function workflowOf(s: any): Workflow | null {
 
 export type Checks = Pick<
   Pull,
-  'workflows' | 'isGated' | 'isRequiredPending' | 'isRequiredFailed' | 'isTruncated'
+  'workflows' | 'isGated' | 'isRequiredPending' | 'failedApps' | 'isTruncated'
 >;
 
 export const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
@@ -264,7 +264,9 @@ function checksOf(suites: any): Checks {
   const newest = new Map<number, Workflow>();
   let isGated = false;
   let isRequiredPending = false;
-  let isRequiredFailed = false;
+  // An App check run again keeps its earlier runs; the last one read stands for
+  // it. Two Apps may name a check alike, so each App's stand apart.
+  const apps = new Map<string, { app: number | null; name: string; run: any }>();
   for (const s of list(suites?.nodes)) {
     const required = list(s?.checkRuns?.nodes).filter((j) => j?.isRequired === true);
     // A required check from a GitHub App gates the merge too.
@@ -272,19 +274,26 @@ function checksOf(suites: any): Checks {
     const w = workflowOf(s);
     if (!w) {
       if (required.some((j) => j.status !== 'COMPLETED')) isRequiredPending = true;
-      if (required.some((j) => j.status === 'COMPLETED' && !PASSED.has(str(j.conclusion) ?? ''))) {
-        isRequiredFailed = true;
+      for (const j of required) {
+        const name = str(j.name);
+        const app = id(s?.app?.databaseId);
+        if (name !== null) apps.set(JSON.stringify([app, name]), { app, name, run: j });
       }
       continue;
     }
     const seen = newest.get(w.id);
     if (!seen || Date.parse(w.startedAt) >= Date.parse(seen.startedAt)) newest.set(w.id, w);
   }
+  const failedApps = [...apps.values()].flatMap(({ app, name, run }) =>
+    run.status === 'COMPLETED' && !PASSED.has(str(run.conclusion) ?? '')
+      ? [{ app, name, url: str(run.detailsUrl) ?? '' }]
+      : [],
+  );
   return {
     workflows: [...newest.values()],
     isGated,
     isRequiredPending,
-    isRequiredFailed,
+    failedApps,
     isTruncated: suites?.pageInfo?.hasNextPage === true,
   };
 }

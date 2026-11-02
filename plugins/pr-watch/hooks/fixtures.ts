@@ -39,7 +39,7 @@ export function pull(workflows: Workflow[], over: Partial<Pull> = {}): Pull {
     workflows,
     isGated: workflows.some((w) => w.jobs.some((j) => j.isRequired)),
     isRequiredPending: false,
-    isRequiredFailed: false,
+    failedApps: [],
     isTruncated: false,
     base: 'main',
     mergedAt: null,
