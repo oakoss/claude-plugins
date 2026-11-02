@@ -504,10 +504,77 @@ describe('parseTrunk', () => {
     expect(parsePull(prOutput([]))).not.toHaveProperty('mergeOid');
   });
   test('marks a required App check that finished without passing', () => {
-    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE')])).isRequiredFailed).toBe(true);
-    expect(parsePull(prOutput([app('COMPLETED', 'SUCCESS')])).isRequiredFailed).toBe(false);
-    expect(parsePull(prOutput([app('IN_PROGRESS', null)])).isRequiredFailed).toBe(false);
-    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE', false)])).isRequiredFailed).toBe(false);
+    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE')])).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: '' },
+    ]);
+    expect(parsePull(prOutput([app('COMPLETED', 'SUCCESS')])).failedApps).toEqual([]);
+    expect(parsePull(prOutput([app('IN_PROGRESS', null)])).failedApps).toEqual([]);
+    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE', false)])).failedApps).toEqual([]);
+    const linked = (status: string, conclusion: string | null, name: string | null = 'Vercel') => ({
+      ...app(status, conclusion),
+      checkRuns: {
+        nodes: [
+          { name, status, conclusion, isRequired: true, detailsUrl: `https://v/${conclusion}` },
+        ],
+      },
+    });
+    expect(parsePull(prOutput([linked('COMPLETED', 'FAILURE')])).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: 'https://v/FAILURE' },
+    ]);
+    expect(parsePull(prOutput([linked('COMPLETED', 'FAILURE', null)])).failedApps).toEqual([]);
+    // Run again, the newest run of a check stands for it.
+    const again = [linked('COMPLETED', 'FAILURE'), linked('COMPLETED', 'SUCCESS')];
+    expect(parsePull(prOutput(again)).failedApps).toEqual([]);
+    const byApp = (run: ReturnType<typeof linked>, id: number) => ({
+      ...run,
+      app: { databaseId: id },
+    });
+    const twoApps = [
+      byApp(linked('COMPLETED', 'FAILURE'), 1),
+      byApp(linked('COMPLETED', 'SUCCESS'), 2),
+    ];
+    expect(parsePull(prOutput(twoApps)).failedApps).toEqual([
+      { app: 1, name: 'Vercel', url: 'https://v/FAILURE' },
+    ]);
+    const twice = [linked('COMPLETED', 'FAILURE'), linked('COMPLETED', 'TIMED_OUT')];
+    expect(parsePull(prOutput(twice)).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: 'https://v/TIMED_OUT' },
+    ]);
+    // By when each run started, whatever order GitHub lists them in.
+    const at = (run: ReturnType<typeof linked>, startedAt: string | null) => ({
+      ...run,
+      checkRuns: { nodes: run.checkRuns.nodes.map((n) => ({ ...n, startedAt })) },
+    });
+    const newestFirst = [
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:05:00Z'),
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(newestFirst)).failedApps).toEqual([]);
+    const failedLast = [
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:05:00Z'),
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(failedLast)).failedApps).toHaveLength(1);
+    const queued = [
+      at(linked('QUEUED', null), null),
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(queued)).failedApps).toEqual([]);
+    // An older run left queued waits on nothing once a newer one finished.
+    const stuck = [
+      at(linked('QUEUED', null), '2026-11-02T10:00:00Z'),
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:05:00Z'),
+    ];
+    expect(parsePull(prOutput(stuck)).isRequiredPending).toBe(false);
+    expect(parsePull(prOutput(queued)).isRequiredPending).toBe(true);
+  });
+  test('asks each check run when it started', () => {
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('detailsUrl startedAt');
+  });
+  test('asks each check suite for its App', () => {
+    for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
+      expect(queryOf(args)).toContain('status conclusion app { databaseId }');
+    }
   });
   test('reads the head commit’s oid', () => {
     const head = { commits: { nodes: [{ commit: { oid: 'def', checkSuites: suites([]) } }] } };

@@ -71,6 +71,7 @@ function verdictAt(p: Pull, estimates: Record<string, number> = {}, host = 'gith
 const ci = (jobs: Job[]) => flow(1, 'CI', jobs);
 const codeql = (conclusion: string | null) => flow(2, 'CodeQL', [job('Analyze', conclusion)]);
 const green = () => ci([job('CI Summary', 'SUCCESS', true)]);
+const VERCEL = { app: 1, name: 'Vercel', url: 'https://x/vercel' };
 const draftOn = (workflows: Workflow[], over: Partial<Pull> = {}) =>
   pull(workflows, { isDraft: true, headOid: 'a1', ...over });
 
@@ -981,11 +982,48 @@ describe('wakeOf', () => {
 
   test('says nothing of a draft with no checks, a failed App or job, a stale run, or no head', () => {
     expect(after(draftOn([])).text).toBeNull();
-    expect(after(draftOn([green()], { isRequiredFailed: true })).text).toBeNull();
+    expect(after(draftOn([green()], { failedApps: [VERCEL] })).passed).toEqual([]);
     const masked = { ...ci([job('Test', 'FAILURE', true)]), conclusion: 'SUCCESS' };
     expect(after(draftOn([masked])).passed).toEqual([]);
     expect(after(draftOn([{ ...green(), conclusion: 'STALE' }])).text).toBeNull();
     expect(after(draftOn([green()], { headOid: undefined })).text).toBeNull();
+  });
+
+  test('tells a failed required App check once per head, and a run that failed with no failed job', () => {
+    const app = after(draftOn([green()], { failedApps: [VERCEL] }));
+    expect(app.news).toEqual(['Vercel, a required check, failed for o/r#128: https://x/vercel']);
+    expect(after(draftOn([green()], { failedApps: [VERCEL] }), app).text).toBeNull();
+    expect(
+      after(draftOn([green()], { failedApps: [VERCEL], headOid: 'b2' }), app).news,
+    ).toHaveLength(1);
+    expect(after(pull([green()], { failedApps: [VERCEL], merge: 'BLOCKED' })).news).toHaveLength(1);
+    for (const state of ['MERGED', 'CLOSED'] as const) {
+      expect(after(pull([green()], { failedApps: [VERCEL], state })).news).toEqual([]);
+    }
+    // A second App failing a check of the same name is news of its own.
+    const other = { ...VERCEL, app: 2, url: 'https://x/other' };
+    expect(after(draftOn([green()], { failedApps: [other] }), app).news).toEqual([
+      'Vercel, a required check, failed for o/r#128: https://x/other',
+    ]);
+    const netlify = { app: 3, name: 'Netlify', url: '' };
+    expect(after(draftOn([green()], { failedApps: [VERCEL, netlify] })).news).toEqual([
+      'Vercel, a required check, failed for o/r#128: https://x/vercel',
+      'Netlify, a required check, failed for o/r#128',
+    ]);
+    const startup = { ...ci([]), conclusion: 'STARTUP_FAILURE' };
+    const run = after(draftOn([startup]));
+    expect(run.news).toEqual(['CI failed (startup_failure) for o/r#128: https://x/run/1']);
+    expect(after(draftOn([startup]), run).text).toBeNull();
+  });
+
+  test('a merge or push whose run failed with no failed job is told failed, not passed', () => {
+    const startup = { ...ci([]), conclusion: 'STARTUP_FAILURE' };
+    const onMerge = merged([startup]);
+    expect(after(onMerge).news).toEqual([
+      'CI failed (startup_failure) on the merge commit for o/r#128: https://x/run/1',
+    ]);
+    expect(after(onMerge).passed).toEqual([]);
+    expect(after(onMerge, {}, push).passed).toEqual([]);
   });
 
   test('a re-run on the same commit tells a draft’s passing again only after a failure', () => {
@@ -999,7 +1037,7 @@ describe('wakeOf', () => {
       first,
     );
     expect(after(draftOn([green()]), job1).passed).toHaveLength(1);
-    const app = after(draftOn([green()], { isRequiredFailed: true }), first);
+    const app = after(draftOn([green()], { failedApps: [VERCEL] }), first);
     expect(after(draftOn([green()]), app).passed).toHaveLength(1);
     const run = after(draftOn([{ ...ci([]), conclusion: 'STARTUP_FAILURE' }]), first);
     expect(after(draftOn([green()]), run).passed).toHaveLength(1);
@@ -1404,6 +1442,8 @@ function textOf(w: Watch, estimates = {}, columns = 80): string {
 }
 
 const runningCi = () => ci([job('CI Summary', null, true)]);
+// The link on the segment naming what failed.
+const urlOf = (w: Watch) => lineOf(w, at, {}, 80).find((s) => s.text.endsWith('failed'))?.url;
 // The line of a pull request whose CI holds these jobs.
 const left = (...jobs: Job[]) => textOf(watched(pull([ci(jobs)])));
 const queued = (name: string): Job => ({ ...job(name, null), status: 'queued' });
@@ -2182,9 +2222,40 @@ describe('lineOf', () => {
       '#128 draft · ✗ CI: Lint failed',
     );
     expect(textOf(draft([green(), codeql('FAILURE')]))).toBe(
-      '#128 draft · ✓ checks passed · CodeQL ✗',
+      '#128 draft · ✗ CodeQL: Analyze failed',
     );
     expect(textOf(draft([]))).toBe('#128 ○ draft');
+  });
+
+  test('a draft says checks passed only once they all have, and names what failed', () => {
+    expect(textOf(draftWith([green()], { failedApps: [VERCEL] }))).toBe(
+      '#128 draft · ✗ Vercel failed',
+    );
+    expect(textOf(draftWith([green()], { failedApps: [VERCEL], merge: 'DIRTY' }))).toBe(
+      '#128 draft · ✗ Vercel failed · ⚠ conflicts',
+    );
+    expect(textOf(draft([{ ...green(), conclusion: 'STALE' }]))).toBe('#128 draft · ✗ CI stale');
+    expect(textOf(draft([green(), { ...codeql('SUCCESS'), conclusion: 'STARTUP_FAILURE' }]))).toBe(
+      '#128 draft · ✗ CodeQL failed',
+    );
+    expect(textOf(draft([green(), codeql(null)]))).toBe(
+      '#128 draft · ○ waiting on checks · CodeQL ●',
+    );
+    expect(textOf(draftWith([green()], { isTruncated: true }))).toBe(
+      '#128 draft · ○ waiting on checks · more checks not shown',
+    );
+    const analyze = codeql('FAILURE');
+    expect(textOf(draftWith([green(), analyze], { failedApps: [VERCEL] }))).toBe(
+      '#128 draft · ✗ Vercel failed · CodeQL ✗',
+    );
+    const docs = { ...flow(3, 'Docs', []), conclusion: 'STARTUP_FAILURE' };
+    expect(textOf(draft([green(), docs, analyze]))).toBe(
+      '#128 draft · ✗ CodeQL: Analyze failed · Docs ✗',
+    );
+    expect(textOf(draft([{ ...green(), conclusion: null }]))).toBe('#128 draft · ✗ CI failed');
+    expect(urlOf(draftWith([green()], { failedApps: [VERCEL] }))).toBe('https://x/vercel');
+    expect(urlOf(draft([green(), analyze]))).toBe('https://x/Analyze');
+    expect(urlOf(draft([green(), docs]))).toBe('https://x/run/3');
   });
 
   test('a draft waits on a pending required check, and says what would block it', () => {

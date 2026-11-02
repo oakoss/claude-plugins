@@ -122,7 +122,7 @@ export function pushedPull(branch: string, pushedAt: number, runs: Runs | null):
     workflows: [],
     isGated: false,
     isRequiredPending: false,
-    isRequiredFailed: false,
+    failedApps: [],
     isTruncated: false,
     base: branch,
     mergedAt: new Date(pushedAt).toISOString(),
@@ -574,7 +574,8 @@ const isFailedRun = (w: Workflow) => w.status === 'done' && failed(w.conclusion)
 // Anything on the head commit failed: a required App check, a finished run, or
 // a job of a run still going.
 const isFailing = (pull: Pull) =>
-  pull.isRequiredFailed || pull.workflows.some((w) => isFailedRun(w) || failedJobs(w).length > 0);
+  pull.failedApps.length > 0 ||
+  pull.workflows.some((w) => isFailedRun(w) || failedJobs(w).length > 0);
 
 // A push to the trunk runs CI on its newest commit only, so a merge commit
 // landed beneath another, as a stack's lower layer is, never gets runs.
@@ -795,17 +796,22 @@ const keyOf = (watch: Who, what: string, at?: string) =>
     ...(at === undefined ? [] : [at]),
   ]);
 
-// A draft never turns ready, so its checks all passing is its news, told once
-// per head commit. Past the suites one read returns, one may still be running.
-export const isDraftPassed = (pull: Pull, verdict: Verdict) =>
-  verdict.kind === 'waiting' &&
-  verdict.reason === 'draft' &&
-  pull.headOid !== undefined &&
+// Every check on the head commit finished and passed. Past the suites one read
+// returns, one may still be running.
+const checksPassed = (pull: Pull) =>
   pull.workflows.length > 0 &&
   !pull.isRequiredPending &&
   !pull.isTruncated &&
   !isFailing(pull) &&
   pull.workflows.every((w) => w.status === 'done' && PASSED.has(w.conclusion ?? ''));
+
+// A draft never turns ready, so its checks all passing is its news, told once
+// per head commit.
+export const isDraftPassed = (pull: Pull, verdict: Verdict) =>
+  verdict.kind === 'waiting' &&
+  verdict.reason === 'draft' &&
+  pull.headOid !== undefined &&
+  checksPassed(pull);
 
 const draftKey = (watch: Who, pull: Pull) => keyOf(watch, 'draft passed', pull.headOid);
 
@@ -905,8 +911,9 @@ export function prunedOf(entries: readonly (readonly [string, unknown])[]): stri
 }
 
 // A ready or passed state, a draft's passed checks, conflicts and requested changes whatever the checks
-// say, and every failing run the line follows, gating or not, as soon as a job
-// in it fails. A run is told once, by its first failed jobs: later ones, a
+// say, a required App check that failed, and every failing run the line follows,
+// gating or not, as soon as a job in it fails, or once it fails with none
+// failed. A run is told once, by its first failed jobs: later ones, a
 // summary job among them, are news Claude finds in the run it was sent to.
 function conditionsOf(
   watch: Who,
@@ -928,7 +935,10 @@ function conditionsOf(
       : `GitHub reports ${name} ready to merge.${note}`;
     found.push({ key: keyOf(watch, 'ready'), text });
   }
-  if (verdict.kind === 'merged-passed' && !isEarly) {
+  // A run that failed with no failed job leaves the verdict passed; it is told
+  // below instead.
+  const isJoblessFailure = (pull.mergeRuns?.workflows ?? []).some((w) => isFailedRun(w));
+  if (verdict.kind === 'merged-passed' && !isEarly && !isJoblessFailure) {
     const text = watch.push
       ? `The checks on ${name} passed.`
       : `${name} merged into ${pull.base}, and ${passedOn(pull)}.`;
@@ -946,17 +956,31 @@ function conditionsOf(
     const text = `A reviewer requested changes on ${name}.`;
     found.push({ key: keyOf(watch, 'changes requested'), text });
   }
+  if (pull.state === 'OPEN') {
+    for (const app of pull.failedApps) {
+      const link = app.url ? `: ${app.url}` : '';
+      const text = `${app.name}, a required check, failed for ${name}${link}`;
+      const what = JSON.stringify([app.app, app.name, 'failed']);
+      found.push({ key: keyOf(watch, what, pull.headOid), text });
+    }
+  }
   const isMerged = verdict.kind.startsWith('merged-');
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
   const where = isMerged && !watch.push ? ` on ${commitOf(pull.followed)}` : '';
   for (const w of workflows) {
     const bad = failedJobs(w);
-    if (bad.length === 0) continue;
+    const key = JSON.stringify([w.id, w.url, w.attempt]);
+    if (bad.length === 0) {
+      if (!isFailedRun(w)) continue;
+      const how = (w.conclusion ?? '').toLowerCase();
+      found.push({ key, text: `${w.name} failed (${how})${where} for ${name}: ${w.url}` });
+      continue;
+    }
     const jobs = bad.map((j) => j.name).join(', ');
     const log = bad[0]!.url || w.url;
     const run = w.url && w.url !== log ? `; the run: ${w.url}` : '';
     const text = `${w.name}: ${jobs} failed${where} for ${name}: ${log}${run}`;
-    found.push({ key: JSON.stringify([w.id, w.url, w.attempt]), text });
+    found.push({ key, text });
   }
   return found;
 }
@@ -1181,6 +1205,10 @@ const BAR_MIN = 8;
 
 const MARK_COLOR: Record<string, string> = { '✓': 'green', '✗': 'red', '●': 'blue' };
 
+// How a finished run that did not pass ended: `failed`, or its own word, as `stale`.
+const endOf = (w: Workflow) =>
+  failed(w.conclusion) || !w.conclusion ? 'failed' : w.conclusion.toLowerCase();
+
 function markSegments(w: Workflow): Segment[] {
   const mark = markOf(w);
   return [{ text: ` · ${w.name} ` }, icon(mark, MARK_COLOR[mark])];
@@ -1281,10 +1309,33 @@ function bodyOf(
   if (v.kind === 'waiting' && v.reason === 'draft') {
     // Not ready to merge while a draft, whatever its checks say.
     if (runs.workflows.length === 0) return [label, { text: ' ○ draft', isDim: true }, ...tail];
-    // A required GitHub App check outside the workflows may still be running.
-    const checks: Segment[] = pull.isRequiredPending
-      ? [{ text: ' ○ waiting on checks', isDim: true }]
-      : [icon(' ✓', 'green'), { text: ' checks passed' }];
+    // What fails a check the merge does not wait on; one it does is `failing`.
+    const app = pull.failedApps[0];
+    const jobbed = runs.workflows.find((w) => failedJobs(w).length > 0);
+    const run = runs.workflows.find((w) => w.status === 'done' && !PASSED.has(w.conclusion ?? ''));
+    const failure = app
+      ? { text: ` ${app.name} failed`, url: app.url || undefined, skip: null }
+      : jobbed
+        ? {
+            text: ` ${jobbed.name}: ${failedJobs(jobbed)[0]!.name} failed`,
+            url: failedJobs(jobbed)[0]!.url || jobbed.url || undefined,
+            skip: jobbed.id,
+          }
+        : run
+          ? { text: ` ${run.name} ${endOf(run)}`, url: run.url || undefined, skip: run.id }
+          : null;
+    if (failure) {
+      const { skip, ...reason } = failure;
+      const blocker = blockerOf(pull);
+      const blocked =
+        blocker === null ? [] : [{ text: ' ·' }, icon(' ⚠', 'yellow'), { text: ` ${blocker}` }];
+      return [...lead, icon(' ✗', 'red'), reason, ...blocked, ...others(skip), ...tail];
+    }
+    // The test isDraftPassed tells Claude by; short of it a check still runs,
+    // or one is past what a read returns.
+    const checks: Segment[] = checksPassed(pull)
+      ? [icon(' ✓', 'green'), { text: ' checks passed' }]
+      : [{ text: ' ○ waiting on checks', isDim: true }];
     const blocker = blockerOf(pull);
     const blocked =
       blocker === null ? [] : [{ text: ' ·' }, icon(' ⚠', 'yellow'), { text: ` ${blocker}` }];

@@ -7,9 +7,9 @@ import type { Activity, Commit, Job, Pull, Runs, RunStatus, Stack, Workflow } fr
 const suites = (required: string, first = 100) => `checkSuites(first: ${first}) {
       pageInfo { hasNextPage }
       nodes {
-        status conclusion
+        status conclusion app { databaseId }
         workflowRun { databaseId runAttempt createdAt url workflow { databaseId name } }
-        checkRuns(first: 100) { nodes { name status conclusion detailsUrl ${required} } }
+        checkRuns(first: 100) { nodes { name status conclusion detailsUrl startedAt ${required} } }
       }
     }`;
 
@@ -250,12 +250,17 @@ function workflowOf(s: any): Workflow | null {
 
 export type Checks = Pick<
   Pull,
-  'workflows' | 'isGated' | 'isRequiredPending' | 'isRequiredFailed' | 'isTruncated'
+  'workflows' | 'isGated' | 'isRequiredPending' | 'failedApps' | 'isTruncated'
 >;
 
 export const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
 export const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
+
+// A check run that started before another; one not yet started is the newest.
+const isOlder = (a: any, b: any) =>
+  isTime(a.startedAt) &&
+  (!isTime(b.startedAt) || Date.parse(a.startedAt) < Date.parse(b.startedAt));
 
 // A commit's check suites. Those with no workflow run come from GitHub Apps,
 // not Actions, and can sit queued forever; they count only as required checks.
@@ -264,27 +269,42 @@ function checksOf(suites: any): Checks {
   const newest = new Map<number, Workflow>();
   let isGated = false;
   let isRequiredPending = false;
-  let isRequiredFailed = false;
+  // An App check run again keeps its earlier runs; the newest stands for it.
+  // Two Apps may name a check alike, so each App's stand apart.
+  const apps = new Map<string, { app: number | null; name: string; run: any }>();
   for (const s of list(suites?.nodes)) {
     const required = list(s?.checkRuns?.nodes).filter((j) => j?.isRequired === true);
     // A required check from a GitHub App gates the merge too.
     if (required.length > 0) isGated = true;
     const w = workflowOf(s);
     if (!w) {
-      if (required.some((j) => j.status !== 'COMPLETED')) isRequiredPending = true;
-      if (required.some((j) => j.status === 'COMPLETED' && !PASSED.has(str(j.conclusion) ?? ''))) {
-        isRequiredFailed = true;
+      for (const j of required) {
+        const name = str(j.name);
+        const app = id(s?.app?.databaseId);
+        if (name === null) {
+          if (j.status !== 'COMPLETED') isRequiredPending = true;
+          continue;
+        }
+        const key = JSON.stringify([app, name]);
+        const seen = apps.get(key);
+        if (!seen || !isOlder(j, seen.run)) apps.set(key, { app, name, run: j });
       }
       continue;
     }
     const seen = newest.get(w.id);
     if (!seen || Date.parse(w.startedAt) >= Date.parse(seen.startedAt)) newest.set(w.id, w);
   }
+  if ([...apps.values()].some(({ run }) => run.status !== 'COMPLETED')) isRequiredPending = true;
+  const failedApps = [...apps.values()].flatMap(({ app, name, run }) =>
+    run.status === 'COMPLETED' && !PASSED.has(str(run.conclusion) ?? '')
+      ? [{ app, name, url: str(run.detailsUrl) ?? '' }]
+      : [],
+  );
   return {
     workflows: [...newest.values()],
     isGated,
     isRequiredPending,
-    isRequiredFailed,
+    failedApps,
     isTruncated: suites?.pageInfo?.hasNextPage === true,
   };
 }

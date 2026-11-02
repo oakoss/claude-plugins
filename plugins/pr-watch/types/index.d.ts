@@ -56,8 +56,9 @@ export type Pull = {
   isGated: boolean;
   // A required check from a GitHub App has not finished.
   isRequiredPending: boolean;
-  // A required check from a GitHub App finished without passing.
-  isRequiredFailed: boolean;
+  // The required checks from GitHub Apps that finished without passing.
+  // `app` is the App's id, which tells apart two Apps naming a check alike.
+  failedApps: { app: number | null; name: string; url: string }[];
   // The head commit has more check suites than one read returns.
   isTruncated: boolean;
   // The branch merged into, and once merged, when and the merge commit's runs.
