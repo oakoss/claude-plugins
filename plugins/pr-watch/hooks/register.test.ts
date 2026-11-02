@@ -184,6 +184,17 @@ function runOf(n: number, summary: Record<string, unknown>) {
 }
 
 const RUNNING_CI = ciSuite({ status: 'IN_PROGRESS', conclusion: null });
+const PASSED_CI = ciSuite({ status: 'COMPLETED', conclusion: 'SUCCESS' });
+
+// A draft whose head commit `oid` ran these suites.
+function draftJson(oid: string, suites: unknown[]): string {
+  const checkSuites = { pageInfo: { hasNextPage: false }, nodes: suites };
+  return prJson({
+    isDraft: true,
+    mergeStateStatus: 'DRAFT',
+    commits: { nodes: [{ commit: { oid, checkSuites } }] },
+  });
+}
 
 // Docs, a workflow nothing requires, on its second attempt.
 function docsRerun(status: string) {
@@ -1588,6 +1599,35 @@ describe('ready to merge, while merges need asking', () => {
   const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
   const MERGED = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-10-03T22:01:00Z' });
   const ASKED = {};
+
+  test("a draft's passed checks wake nothing and reach the next prompt once per commit", async ($, on) => {
+    const gh: Gh = { pr: draftJson('a1', [RUNNING_CI]) };
+    const { clock, seen } = await readyIn($, on, gh);
+    gh.pr = draftJson('a1', [PASSED_CI]);
+    await clock.advance(10_000);
+    expect(seen.wakes).toEqual([]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toEqual([
+      'pr-watch, since your last turn: The checks on o/r#128, a draft, passed.',
+    ]);
+    await clock.advance(60_000);
+    await $.prompt.submit(person());
+    expect(seen.contexts[1]).toBeUndefined();
+    // A new commit whose checks passed between two reads is news again.
+    gh.pr = draftJson('b2', [PASSED_CI]);
+    await clock.advance(60_000);
+    await $.prompt.submit(person());
+    expect(seen.contexts[2]?.[0]).toContain('a draft, passed.');
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test("a draft's failing check wakes Claude at once, and its passing is never told", async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: draftJson('a1', [FAILING_CI]) });
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('CI: Typecheck failed for o/r#128');
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toBeUndefined();
+  });
 
   test('wakes nothing, suggests the merge, and tells the next prompt once', async ($, on) => {
     const { seen } = await readyIn($, on, { pr: prJson(), view: OPEN, stopBefore: ASKED });
@@ -4595,6 +4635,17 @@ describe('the tools', () => {
     expect(seen.wakes).toEqual([]);
     const answer = await tool($, 'watch', { pull: '128', wake: true });
     expect(answer).toContain('It is ready to merge now.');
+    expect(answer).not.toContain('wakes you when it turns ready');
+  });
+
+  test('watch with wake on a draft whose checks passed says so now', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    world(on, { pr: draftJson('a1', [PASSED_CI]), view: OPEN_VIEW });
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    const answer = await tool($, 'watch', { pull: '128', wake: true });
+    expect(answer).toContain('Its checks have passed now.');
     expect(answer).not.toContain('wakes you when it turns ready');
   });
 
