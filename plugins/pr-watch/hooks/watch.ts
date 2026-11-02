@@ -1,6 +1,6 @@
 // What the band says about a pull request, and when to look again. Pure.
 import type { Activity, Commit, Held, Job, Pull, Runs, Stack, Watch, Workflow } from '../types';
-import { PASSED, type Quota } from './github';
+import { failed, PASSED, type Quota } from './github';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
 const PR_URL = new RegExp(
@@ -137,7 +137,6 @@ export function pushedPull(branch: string, pushedAt: number, runs: Runs | null):
 export function movesPulls(command: string): boolean {
   return MOVES_PR.test(command);
 }
-const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
 const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
 
 export type Target = Pick<Watch, 'host' | 'repo' | 'number' | 'url'>;
@@ -474,7 +473,8 @@ export function isMergeFresh(pull: Pick<Pull, 'mergedAt'>, now: number): boolean
 }
 
 const gates = (w: Workflow) => w.jobs.some((j) => j.isRequired);
-const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
+const failedJobs = (w: Workflow) =>
+  w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
 
 type Gated = Pick<Pull, 'workflows' | 'isGated'>;
 
@@ -489,7 +489,7 @@ function failure(runs: Gated): Verdict | null {
   const isCounted = counts(runs);
   for (const w of runs.workflows) {
     if (!isCounted(w)) continue;
-    const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
+    const bad = failedJobs(w);
     const job = bad.find((j) => !j.isRequired) ?? bad[0];
     if (job) {
       const url = job.url || w.url;
@@ -570,6 +570,11 @@ function mergedVerdict(
 }
 
 const isFailedRun = (w: Workflow) => w.status === 'done' && failed(w.conclusion);
+
+// Anything on the head commit failed: a required App check, a finished run, or
+// a job of a run still going.
+const isFailing = (pull: Pull) =>
+  pull.isRequiredFailed || pull.workflows.some((w) => isFailedRun(w) || failedJobs(w).length > 0);
 
 // A push to the trunk runs CI on its newest commit only, so a merge commit
 // landed beneath another, as a stack's lower layer is, never gets runs.
@@ -798,14 +803,9 @@ export const isDraftPassed = (pull: Pull, verdict: Verdict) =>
   pull.headOid !== undefined &&
   pull.workflows.length > 0 &&
   !pull.isRequiredPending &&
-  !pull.isRequiredFailed &&
   !pull.isTruncated &&
-  pull.workflows.every(
-    (w) =>
-      w.status === 'done' &&
-      PASSED.has(w.conclusion ?? '') &&
-      !w.jobs.some((j) => failed(j.conclusion)),
-  );
+  !isFailing(pull) &&
+  pull.workflows.every((w) => w.status === 'done' && PASSED.has(w.conclusion ?? ''));
 
 const draftKey = (watch: Who, pull: Pull) => keyOf(watch, 'draft passed', pull.headOid);
 
@@ -950,7 +950,7 @@ function conditionsOf(
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
   const where = isMerged && !watch.push ? ` on ${commitOf(pull.followed)}` : '';
   for (const w of workflows) {
-    const bad = w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
+    const bad = failedJobs(w);
     if (bad.length === 0) continue;
     const jobs = bad.map((j) => j.name).join(', ');
     const log = bad[0]!.url || w.url;
@@ -1078,7 +1078,7 @@ export function wakeOf(
   const kept: string[] = [];
   let ready: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
-    const isQuiet = isOwnMerge && c.isPassed && verdict.kind === 'merged-passed';
+    const isQuiet = isOwnMerge && c.key === keyOf(watch, 'passed');
     const isNew = !told.includes(c.key) && !isQuiet;
     if (isNew && c.key === keyOf(watch, 'ready')) ready = c.text;
     else if (isNew && c.isPassed) passed.push(c.text);
@@ -1095,12 +1095,7 @@ export function wakeOf(
   }
   // A re-run on the same commit is no news of a draft's passing, unless it failed.
   const isRerun = pull.state === 'OPEN' && pull.isDraft && pull.headOid !== undefined;
-  const isFailing =
-    pull.isRequiredFailed ||
-    pull.workflows.some(
-      (w) => isFailedRun(w) || w.jobs.some((j) => j.status === 'done' && failed(j.conclusion)),
-    );
-  if (isRerun && !isFailing) {
+  if (isRerun && !isFailing(pull)) {
     const key = draftKey(watch, pull);
     if (told.includes(key) && !kept.includes(key)) kept.push(key);
   }

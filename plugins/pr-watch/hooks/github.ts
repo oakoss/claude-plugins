@@ -254,6 +254,8 @@ export type Checks = Pick<
 >;
 
 export const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
+export const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
 
 // A commit's check suites. Those with no workflow run come from GitHub Apps,
 // not Actions, and can sit queued forever; they count only as required checks.
@@ -270,8 +272,9 @@ function checksOf(suites: any): Checks {
     const w = workflowOf(s);
     if (!w) {
       if (required.some((j) => j.status !== 'COMPLETED')) isRequiredPending = true;
-      const failed = required.filter((j) => !PASSED.has(str(j.conclusion) ?? ''));
-      if (failed.some((j) => j.status === 'COMPLETED')) isRequiredFailed = true;
+      if (required.some((j) => j.status === 'COMPLETED' && !PASSED.has(str(j.conclusion) ?? ''))) {
+        isRequiredFailed = true;
+      }
       continue;
     }
     const seen = newest.get(w.id);

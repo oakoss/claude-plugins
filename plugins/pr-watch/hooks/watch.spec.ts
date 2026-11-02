@@ -1001,6 +1001,8 @@ describe('wakeOf', () => {
     expect(after(draftOn([green()]), job1).passed).toHaveLength(1);
     const app = after(draftOn([green()], { isRequiredFailed: true }), first);
     expect(after(draftOn([green()]), app).passed).toHaveLength(1);
+    const run = after(draftOn([{ ...ci([]), conclusion: 'STARTUP_FAILURE' }]), first);
+    expect(after(draftOn([green()]), run).passed).toHaveLength(1);
   });
 
   test('keeps the ready line apart, leads with it, and holds each line once', () => {
