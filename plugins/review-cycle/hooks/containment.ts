@@ -102,7 +102,7 @@ export function containmentReport(r: {
   const records: string[] = [];
   if (changed.length > 0) {
     const what = changed.join(', ');
-    records.push(`${r.type}: ${what} changed while \`${shown}\` ran`);
+    records.push(`${r.type}: ${what} changed while \`${shown}\` ran, by it or by another agent`);
     notes.push(
       `review-cycle: ${what} of the repository under review changed while this command ran, by it or by another agent. If this command made the change, put it back; either way, say so in your report, and keep scratch work in a private directory from mktemp -d.`,
     );

@@ -1704,6 +1704,7 @@ describe('the findings ledger', () => {
       updated: 0,
       resolved: 0,
       kept: 0,
+      moved: 0,
       gone: 0,
       unknown: [],
       evicted: 0,
@@ -1753,6 +1754,19 @@ describe('the findings ledger', () => {
       'review-cycle ledger: `offset` must be a whole number, 0 or more.',
     );
     expect(JSON.parse(await ledger($, { offset: 0 })).total).toBe(1);
+  });
+  test('an entry moved to the file its code moved to is read back there, with its date', async ($, on) => {
+    const w = fakeWorld(on);
+    fakeStore(on);
+    await record($, { entries: [DEFERRED] });
+    const { id } = JSON.parse(await ledger($, { paths: ['a.ts'] })).entries[0];
+    w.work['b.ts'] = 'moved';
+    const moved = JSON.parse(await record($, { move: [{ id, path: 'b.ts', line: 4 }] }));
+    expect(moved).toMatchObject({ moved: 1, unknown: [], total: 1 });
+    expect(JSON.parse(await ledger($, { paths: ['a.ts'] })).entries).toEqual([]);
+    expect(JSON.parse(await ledger($, { paths: ['b.ts'] })).entries).toEqual([
+      expect.objectContaining({ path: 'b.ts', line: 4, date: '2026-09-26', changed: false }),
+    ]);
   });
   test('a long ledger is read a page at a time, as one line of JSON', async ($, on) => {
     fakeWorld(on);
@@ -6695,12 +6709,12 @@ describe('reviewer containment', () => {
     }
     await bash($, 'git reset --soft HEAD~1', { agentId: leg });
     expect(await reviewerChanges($)).toEqual([
-      "review-cycle:code-reviewer: the working tree changed while `sed -i '' s/one/two/ a.ts` ran",
-      'review-cycle:code-reviewer: the local git config changed while `git config user.email x@y` ran',
-      'review-cycle:code-reviewer: the local git config changed while `git config x.demo one` ran',
-      'review-cycle:code-reviewer: the staged content changed while `git add a.ts` ran',
-      'review-cycle:code-reviewer: HEAD changed while `git switch -c scratch` ran',
-      'review-cycle:code-reviewer: HEAD changed while `git reset --soft HEAD~1` ran',
+      "review-cycle:code-reviewer: the working tree changed while `sed -i '' s/one/two/ a.ts` ran, by it or by another agent",
+      'review-cycle:code-reviewer: the local git config changed while `git config user.email x@y` ran, by it or by another agent',
+      'review-cycle:code-reviewer: the local git config changed while `git config x.demo one` ran, by it or by another agent',
+      'review-cycle:code-reviewer: the staged content changed while `git add a.ts` ran, by it or by another agent',
+      'review-cycle:code-reviewer: HEAD changed while `git switch -c scratch` ran, by it or by another agent',
+      'review-cycle:code-reviewer: HEAD changed while `git reset --soft HEAD~1` ran, by it or by another agent',
     ]);
   });
   test("the main session's commands are not compared", async ($, on) => {
@@ -6723,7 +6737,7 @@ describe('reviewer containment', () => {
     };
     await bash($, 'git config user.email x@y', { agentId: leg });
     expect(await reviewerChanges($)).toEqual([
-      'review-cycle:code-reviewer: the local git config changed while `git config user.email x@y` ran',
+      'review-cycle:code-reviewer: the local git config changed while `git config user.email x@y` ran, by it or by another agent',
       'review-cycle:code-reviewer: could not check the working tree (git add -A failed: fatal: injected) while `git config user.email x@y` ran',
     ]);
   });
@@ -6739,7 +6753,7 @@ describe('reviewer containment', () => {
     const r = await bash($, 'ls', { agentId: leg });
     expect(has(r.context ?? [], 'could not check whether this command changed HEAD')).toBe(true);
     expect(await reviewerChanges($)).toEqual([
-      'review-cycle:code-reviewer: the working tree changed while `ls` ran',
+      'review-cycle:code-reviewer: the working tree changed while `ls` ran, by it or by another agent',
       'review-cycle:code-reviewer: could not check HEAD while `ls` ran',
     ]);
   });

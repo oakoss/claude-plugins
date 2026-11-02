@@ -65,10 +65,10 @@ describe('containmentReport', () => {
   test('nothing moved: nothing to say', () => {
     expect(report(STATE)).toEqual({ notes: [], records: [] });
   });
-  test('a change is put to the reviewer without blaming it, and recorded', () => {
+  test('a change is put to the reviewer and recorded without blaming it', () => {
     const r = report({ ...STATE, work: 'x' });
     expect(r.records).toEqual([
-      'review-cycle:code-reviewer: the working tree changed while `sed -i x a.ts` ran',
+      'review-cycle:code-reviewer: the working tree changed while `sed -i x a.ts` ran, by it or by another agent',
     ]);
     expect(r.notes[0]).toContain('by it or by another agent');
   });
@@ -88,7 +88,7 @@ describe('containmentReport', () => {
   test('a capped leg still records what it changed, unmarked', () => {
     const r = report({ ...STATE, work: 'x' }, { capped: true });
     expect(r.records).toEqual([
-      'review-cycle:code-reviewer: the working tree changed while `sed -i x a.ts` ran',
+      'review-cycle:code-reviewer: the working tree changed while `sed -i x a.ts` ran, by it or by another agent',
     ]);
   });
   test('a background command is said to be checked only until it returns', () => {
