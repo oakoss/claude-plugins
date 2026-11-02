@@ -21,7 +21,7 @@ test('review-pr briefs ask for the same three things', () => {
   const text = skillText('review-cycle', 'review-pr');
   expect(text).toContain("Every brief, Codex's included, also asks for three things:");
   expect(text).toContain('tag a finding `pre-existing` when it reproduces on the base');
-  expect(text).toContain('report within 10 minutes, settling the question first');
+  expect(text).toContain('report within 10 minutes, the most severe findings first');
   expect(text).toContain(
     "A `pre-existing` tag survives too: such a finding is reported, and posted, apart from the pull request's own findings",
   );

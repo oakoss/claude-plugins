@@ -958,10 +958,15 @@ async function onReviewSkill(
   if (e.pluginName === 'review-cycle' && subagentSkills === 0) {
     // The text the model reads, which is what the engine re-attaches and cuts.
     state.reviewing = r.text;
+    reviewingPr = e.skill === 'review-cycle:review-pr';
     void keep($);
   }
   return r;
 }
+
+// review-pr never commits, so its Phase 7 sweep ends the hand-back. Not kept
+// across a reload, after which a commit or the session's end ends it.
+let reviewingPr = false;
 
 async function onCompact(
   _$: $,
@@ -2554,9 +2559,13 @@ async function onScratch(
 
 async function onSweep(
   $: $,
-  _e: Input<SweepHook>,
+  e: Input<SweepHook>,
   _next: NextOf<SweepHook>,
 ): Promise<Output<SweepHook>> {
+  if (reviewingPr && e.agentId === undefined) {
+    state.reviewing = null;
+    reviewingPr = false;
+  }
   if (state.scratch.length === 0) return { result: 'No scratch directory to sweep.' };
   const swept = [];
   for (const dir of state.scratch) {
@@ -2922,6 +2931,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__review-cycle__codex_log' }, onCodexLog);
   on('tool.call', { tool: 'Skill' }, onSubagentSkill);
   on('skill.prompt', { skill: 'review-cycle:review' }, onReviewSkill);
+  on('skill.prompt', { skill: 'review-cycle:review-pr' }, onReviewSkill);
   on('session.compact', onCompact);
   if (options.enabled === false) {
     // The status tool stays registered from before the switch; say why it is idle.

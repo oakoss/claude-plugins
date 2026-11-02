@@ -73,7 +73,10 @@ test.each([
   ['/review-cycle:review', true],
   [' review-cycle:review ', true],
   ['review', true],
-  ['review-cycle:review-pr', false],
+  ['review-cycle:review-pr', true],
+  ['/review-pr', true],
+  ['review-cycle:review-prx', false],
+  ['other:review', false],
   ['other:thing', false],
   [undefined, false],
 ])('isReviewSkill(%j) is %j', (name, is) => {

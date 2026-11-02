@@ -7410,8 +7410,32 @@ describe('a compaction during a review', () => {
     world(on);
     compactsTo(on);
     await loadSkill($, { pluginName: 'other', source: 'projectSettings' });
-    await loadSkill($, { skill: 'review-cycle:review-pr' });
     expect(handedBack(await compact($))).toEqual([]);
+  });
+  test("hands back review-pr's later phases until its main-session sweep", async ($, on) => {
+    world(on);
+    compactsTo(on);
+    await loadSkill($, { skill: 'review-cycle:review-pr' });
+    const [back] = handedBack(await compact($));
+    expect(back?.text).toContain('the later phase');
+    await $.tool.call({ tool: 'mcp__review-cycle__sweep', agentId: 'leg-1' });
+    expect(handedBack(await compact($))).toHaveLength(1);
+    await $.tool.call({ tool: 'mcp__review-cycle__sweep' });
+    expect(handedBack(await compact($))).toEqual([]);
+  });
+  test("a subagent's review-pr hands the main conversation nothing", async ($, on) => {
+    world(on, { skillRun: () => loadSkill($, { skill: 'review-cycle:review-pr' }) });
+    compactsTo(on);
+    await skill($, 'review-cycle:review-pr', 'sub');
+    expect(handedBack(await compact($))).toEqual([]);
+  });
+  test("a review's sweep keeps its later phases, which run to the commit", async ($, on) => {
+    world(on);
+    compactsTo(on);
+    await loadSkill($, { skill: 'review-cycle:review-pr' });
+    await loadSkill($, { skill: 'review-cycle:review' });
+    await $.tool.call({ tool: 'mcp__review-cycle__sweep' });
+    expect(handedBack(await compact($))).toHaveLength(1);
   });
   test("a subagent's review hands the main conversation nothing", async ($, on) => {
     world(on, { skillRun: () => loadSkill($) });
