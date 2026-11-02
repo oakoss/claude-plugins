@@ -37,8 +37,11 @@ export function resumeText(text: string): string | null {
 // A bare `review` may be another plugin's; counting it only withholds that call.
 export function isReviewSkill(name: unknown): boolean {
   if (typeof name !== 'string') return false;
-  const bare = name.trim().replace(/^\//, '');
-  return bare === 'review-cycle:review' || bare === 'review';
+  const bare = name
+    .trim()
+    .replace(/^\//, '')
+    .replace(/^review-cycle:/, '');
+  return bare === 'review' || bare === 'review-pr';
 }
 
 // A compacted conversation with any carried copy replaced by one of `skill`,
