@@ -71,6 +71,8 @@ function verdictAt(p: Pull, estimates: Record<string, number> = {}, host = 'gith
 const ci = (jobs: Job[]) => flow(1, 'CI', jobs);
 const codeql = (conclusion: string | null) => flow(2, 'CodeQL', [job('Analyze', conclusion)]);
 const green = () => ci([job('CI Summary', 'SUCCESS', true)]);
+const draftOn = (workflows: Workflow[], over: Partial<Pull> = {}) =>
+  pull(workflows, { isDraft: true, headOid: 'a1', ...over });
 
 describe('createdPull', () => {
   test('reads the URL gh pr create prints on its last line', () => {
@@ -956,6 +958,53 @@ describe('wakeOf', () => {
     expect(wakeOf(pr, failed, verdictAt(failed), {}, own).text).toContain('CodeQL: Analyze failed');
   });
 
+  test('says a draft’s checks passed once per head commit, and only once all finish clean', () => {
+    const first = after(draftOn([green()]));
+    expect(first.passed).toEqual(['The checks on o/r#128, a draft, passed.']);
+    expect(first.news).toEqual([]);
+    expect(first.ready).toBeNull();
+    expect(after(draftOn([green()]), first).text).toBeNull();
+    // A new commit read only once its checks passed again is still news.
+    expect(after(draftOn([green()], { headOid: 'b2' }), first).passed).toHaveLength(1);
+    const running = after(draftOn([ci([job('CI Summary', null, true)])], { headOid: 'b2' }), first);
+    expect(running.text).toBeNull();
+    expect(after(draftOn([green()], { headOid: 'b2' }), running).passed).toHaveLength(1);
+    expect(after(draftOn([green(), codeql(null)])).text).toBeNull();
+    expect(after(draftOn([green()], { isRequiredPending: true })).text).toBeNull();
+    expect(after(draftOn([green()], { isTruncated: true })).text).toBeNull();
+    const failed = after(draftOn([green(), codeql('FAILURE')]));
+    expect(failed.passed).toEqual([]);
+    expect(failed.news).toEqual([expect.stringContaining('CodeQL: Analyze failed')]);
+    const own = draftOn([green()]);
+    expect(wakeOf(pr, own, verdictAt(own), {}, { isOwnMerge: true }).passed).toHaveLength(1);
+  });
+
+  test('says nothing of a draft with no checks, a failed App or job, a stale run, or no head', () => {
+    expect(after(draftOn([])).text).toBeNull();
+    expect(after(draftOn([green()], { isRequiredFailed: true })).text).toBeNull();
+    const masked = { ...ci([job('Test', 'FAILURE', true)]), conclusion: 'SUCCESS' };
+    expect(after(draftOn([masked])).passed).toEqual([]);
+    expect(after(draftOn([{ ...green(), conclusion: 'STALE' }])).text).toBeNull();
+    expect(after(draftOn([green()], { headOid: undefined })).text).toBeNull();
+  });
+
+  test('a re-run on the same commit tells a draft’s passing again only after a failure', () => {
+    const first = after(draftOn([green()]));
+    const rerun = after(draftOn([ci([job('CI Summary', null, true)])]), first);
+    expect(after(draftOn([green()]), rerun).text).toBeNull();
+    const failed = after(draftOn([ci([job('CI Summary', 'FAILURE', true)])]), first);
+    expect(after(draftOn([green()]), failed).passed).toHaveLength(1);
+    const job1 = after(
+      draftOn([ci([job('Lint', 'FAILURE', true), job('CI Summary', null, true)])]),
+      first,
+    );
+    expect(after(draftOn([green()]), job1).passed).toHaveLength(1);
+    const app = after(draftOn([green()], { isRequiredFailed: true }), first);
+    expect(after(draftOn([green()]), app).passed).toHaveLength(1);
+    const run = after(draftOn([{ ...ci([]), conclusion: 'STARTUP_FAILURE' }]), first);
+    expect(after(draftOn([green()]), run).passed).toHaveLength(1);
+  });
+
   test('keeps the ready line apart, leads with it, and holds each line once', () => {
     const ready = pull([ci([job('Test', 'SUCCESS')])]);
     const woke = wakeOf(pr, ready, verdictAt(ready), {});
@@ -1187,6 +1236,18 @@ describe('savedOf, savedFrom, entryOf and prunedOf', () => {
       CONFLICTS,
       'run',
     ]);
+  });
+
+  test('counts a draft’s passed checks still waiting to be delivered as untold', () => {
+    const DRAFT = JSON.stringify(['o/r', 7, 'draft passed', 'a1']);
+    const draft: Watch = {
+      ...watched,
+      pull: draftOn([]),
+      told: [DRAFT, CONFLICTS],
+    };
+    const passed = { ready: new Set<string>(), passed: new Set(['o/r#7']) };
+    expect(savedOf([draft], passed, id)[0]?.told).toEqual([CONFLICTS]);
+    expect(savedOf([draft], none, id)[0]?.told).toEqual([DRAFT, CONFLICTS]);
   });
 
   test('rebuilds a saved pull request from the store, field by field', () => {

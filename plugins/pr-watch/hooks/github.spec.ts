@@ -57,13 +57,13 @@ function suite(run: Record<string, unknown> = {}, jobs: unknown[] = []) {
   };
 }
 
-// A GitHub App's suite holding one required check.
-function app(status: string) {
+// A GitHub App's suite holding one check, required unless said otherwise.
+function app(status: string, conclusion: string | null = null, isRequired = true) {
   return {
     status,
-    conclusion: null,
+    conclusion,
     workflowRun: null,
-    checkRuns: { nodes: [{ name: 'Vercel', status, isRequired: true }] },
+    checkRuns: { nodes: [{ name: 'Vercel', status, conclusion, isRequired }] },
   };
 }
 
@@ -502,6 +502,18 @@ describe('parseTrunk', () => {
     const merged = { state: 'MERGED', mergeCommit: { oid: 'abc', checkSuites: suites([]) } };
     expect(parsePull(prOutput([], merged)).mergeOid).toBe('abc');
     expect(parsePull(prOutput([]))).not.toHaveProperty('mergeOid');
+  });
+  test('marks a required App check that finished without passing', () => {
+    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE')])).isRequiredFailed).toBe(true);
+    expect(parsePull(prOutput([app('COMPLETED', 'SUCCESS')])).isRequiredFailed).toBe(false);
+    expect(parsePull(prOutput([app('IN_PROGRESS', null)])).isRequiredFailed).toBe(false);
+    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE', false)])).isRequiredFailed).toBe(false);
+  });
+  test('reads the head commit’s oid', () => {
+    const head = { commits: { nodes: [{ commit: { oid: 'def', checkSuites: suites([]) } }] } };
+    expect(parsePull(prOutput([], head)).headOid).toBe('def');
+    expect(parsePull(prOutput([]))).not.toHaveProperty('headOid');
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('commit { oid checkSuites');
   });
 });
 

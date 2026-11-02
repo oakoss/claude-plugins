@@ -28,7 +28,7 @@ const pullQuery = (isMerged: boolean) => `query($o: String!, $r: String!, $n: In
     ${
       isMerged
         ? `mergeCommit { oid ${suites('')} }`
-        : `commits(last: 1) { nodes { commit { ${suites('isRequired(pullRequestNumber: $n)')} } } }`
+        : `commits(last: 1) { nodes { commit { oid ${suites('isRequired(pullRequestNumber: $n)')} } } }`
     }
     comments(last: 10) { nodes { author { login __typename } createdAt url } }
     reviews(last: 10) { nodes { author { login __typename } submittedAt state url } }
@@ -248,7 +248,14 @@ function workflowOf(s: any): Workflow | null {
   };
 }
 
-export type Checks = Pick<Pull, 'workflows' | 'isGated' | 'isRequiredPending' | 'isTruncated'>;
+export type Checks = Pick<
+  Pull,
+  'workflows' | 'isGated' | 'isRequiredPending' | 'isRequiredFailed' | 'isTruncated'
+>;
+
+export const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
+export const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
 
 // A commit's check suites. Those with no workflow run come from GitHub Apps,
 // not Actions, and can sit queued forever; they count only as required checks.
@@ -257,6 +264,7 @@ function checksOf(suites: any): Checks {
   const newest = new Map<number, Workflow>();
   let isGated = false;
   let isRequiredPending = false;
+  let isRequiredFailed = false;
   for (const s of list(suites?.nodes)) {
     const required = list(s?.checkRuns?.nodes).filter((j) => j?.isRequired === true);
     // A required check from a GitHub App gates the merge too.
@@ -264,6 +272,9 @@ function checksOf(suites: any): Checks {
     const w = workflowOf(s);
     if (!w) {
       if (required.some((j) => j.status !== 'COMPLETED')) isRequiredPending = true;
+      if (required.some((j) => j.status === 'COMPLETED' && !PASSED.has(str(j.conclusion) ?? ''))) {
+        isRequiredFailed = true;
+      }
       continue;
     }
     const seen = newest.get(w.id);
@@ -273,6 +284,7 @@ function checksOf(suites: any): Checks {
     workflows: [...newest.values()],
     isGated,
     isRequiredPending,
+    isRequiredFailed,
     isTruncated: suites?.pageInfo?.hasNextPage === true,
   };
 }
@@ -341,6 +353,7 @@ export function parsePull(stdout: string): Pull {
   const headBranch = str(pr.headRefName);
   const headRepo = str(pr.headRepository?.nameWithOwner);
   const mergeOid = str(pr.mergeCommit?.oid);
+  const headOid = str(pr.commits?.nodes?.[0]?.commit?.oid);
   return {
     number,
     ...(headBranch === null || headRepo === null
@@ -357,6 +370,7 @@ export function parsePull(stdout: string): Pull {
     ...checksOf(pr.commits?.nodes?.[0]?.commit?.checkSuites),
     mergeRuns: pr.mergeCommit ? runsOf(checksOf(pr.mergeCommit.checkSuites)) : null,
     ...(mergeOid === null ? {} : { mergeOid }),
+    ...(headOid === null ? {} : { headOid }),
     activity: activityOf(pr, str(body?.data?.viewer?.login)),
     activityAt: windowNewest(pr),
   };
