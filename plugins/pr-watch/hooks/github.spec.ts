@@ -510,7 +510,7 @@ describe('parseTrunk', () => {
     expect(parsePull(prOutput([app('COMPLETED', 'SUCCESS')])).failedApps).toEqual([]);
     expect(parsePull(prOutput([app('IN_PROGRESS', null)])).failedApps).toEqual([]);
     expect(parsePull(prOutput([app('COMPLETED', 'FAILURE', false)])).failedApps).toEqual([]);
-    const linked = (status: string, conclusion: string, name: string | null = 'Vercel') => ({
+    const linked = (status: string, conclusion: string | null, name: string | null = 'Vercel') => ({
       ...app(status, conclusion),
       checkRuns: {
         nodes: [
@@ -540,6 +540,36 @@ describe('parseTrunk', () => {
     expect(parsePull(prOutput(twice)).failedApps).toEqual([
       { app: null, name: 'Vercel', url: 'https://v/TIMED_OUT' },
     ]);
+    // By when each run started, whatever order GitHub lists them in.
+    const at = (run: ReturnType<typeof linked>, startedAt: string | null) => ({
+      ...run,
+      checkRuns: { nodes: run.checkRuns.nodes.map((n) => ({ ...n, startedAt })) },
+    });
+    const newestFirst = [
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:05:00Z'),
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(newestFirst)).failedApps).toEqual([]);
+    const failedLast = [
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:05:00Z'),
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(failedLast)).failedApps).toHaveLength(1);
+    const queued = [
+      at(linked('QUEUED', null), null),
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(queued)).failedApps).toEqual([]);
+    // An older run left queued waits on nothing once a newer one finished.
+    const stuck = [
+      at(linked('QUEUED', null), '2026-11-02T10:00:00Z'),
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:05:00Z'),
+    ];
+    expect(parsePull(prOutput(stuck)).isRequiredPending).toBe(false);
+    expect(parsePull(prOutput(queued)).isRequiredPending).toBe(true);
+  });
+  test('asks each check run when it started', () => {
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('detailsUrl startedAt');
   });
   test('asks each check suite for its App', () => {
     for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
