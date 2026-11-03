@@ -770,7 +770,7 @@ async function storeFailed($: $, what: string, error: unknown): Promise<void> {
 // the session until its own saved watches are restored, so a failed restore
 // does not overwrite them, and the list is saved from the next tick, which
 // holds what the restore added; a session that never watched one saves
-// nothing. A store that refuses is tried again after STORE_RETRY_MS.
+// nothing.
 async function remember($: $, list: readonly Watch[]): Promise<void> {
   try {
     const now = await $.clock.now();
@@ -909,7 +909,6 @@ async function forgetWake($: $, id: string): Promise<void> {
 
 const TOOL_COLUMNS = 80;
 
-// A watch's line as text, for a tool's answer.
 function textOf(w: Watch, now: number, known: Record<string, number>): string {
   return lineOf(w, now, known, TOOL_COLUMNS)
     .map((s) => s.text)

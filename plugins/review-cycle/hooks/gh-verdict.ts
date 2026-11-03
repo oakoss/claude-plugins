@@ -309,8 +309,6 @@ async function pointedAt(
 
 const MERGED = 'the pull request it merges';
 
-// Why the default branch is not done yet ("when main is done"), or null when
-// every check on its head commit finished without failing.
 // Whether `t` is the version pull request a standing release covers: the one
 // open when the user asked, or the first opened after the newest then. A read
 // that fails covers nothing.
@@ -332,6 +330,8 @@ async function releaseMatches(
   return after.length > 0 && t.number === String(Math.min(...after));
 }
 
+// Why the default branch is not done yet ("when main is done") and whether a
+// retry may clear it, or null when every check on its head commit succeeded.
 async function mainNotDone(lookups: GhLookups): Promise<{ asks: string; retry: boolean } | null> {
   const r = read(await lookups.mainChecks(), "the default branch's checks");
   if (r.asks !== undefined) return { asks: r.asks, retry: false };
@@ -995,8 +995,6 @@ export type Escalated<Y extends ModelYesOf> = {
 export const couldNotJudge = (why: string) =>
   ` The model check could not judge the message (${why}).`;
 
-// A GitHub call judged by the grammar, then, when it refuses short of final,
-// with the merge's target read by the model, then with the model's yes.
 export async function escalateGh<Y extends ModelYesOf>(
   shown: string,
   actions: readonly GhAction[],

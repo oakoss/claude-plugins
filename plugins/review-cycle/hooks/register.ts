@@ -267,7 +267,6 @@ type GateState = {
   nudge: boolean;
   // The user's /config value for showing a step the setting ran unasked.
   unaskedNotice: boolean;
-  // "don't push yet" holds the push and later steps until a message asks.
   hold: HoldState;
   // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
   mandate: Kept['mandate'];
@@ -570,7 +569,6 @@ async function run(
   return $.process.run(argv, { timeoutMs: 60_000, ...opts, env });
 }
 
-// The runner git.ts's reads take, bound to this hook's `$`.
 function gitOf($: $): Git {
   return (argv, opts) => run($, argv, opts);
 }
@@ -1346,7 +1344,6 @@ function spend(used: Used | undefined): void {
   };
 }
 
-// The line telling the agent a message ended its standing asks, or null.
 function endedNote(s: Standing): string | null {
   if (!standsFor(s)) return null;
   const which = [
@@ -1536,7 +1533,6 @@ function modelRead($: $): ModelAsk | null {
   return state.model;
 }
 
-// One model check call: its reply, or why it got none.
 async function complete(
   $: $,
   system: string,
@@ -1571,7 +1567,6 @@ async function askModel($: $, text: string, before: string): Promise<ModelRead> 
   return 'why' in r ? { kind: 'unanswered', why: r.why } : judge(r.text, text);
 }
 
-// Kept with the misses, replacing an earlier one of the same message and refusal.
 function recordMiss(miss: Miss): void {
   const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
   state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
@@ -1684,12 +1679,10 @@ function ghConsent(grant: Grant): () => GhConsent {
   });
 }
 
-// The consent a push is judged against, as it stands at each use.
 function pushConsent(command: string): PushConsent {
   return () => ({ held: held(), unread: state.message.unread, shown: quote(command) });
 }
 
-// The model reads for escalateGh.
 function ghModel($: $): GhModel<ModelYes> {
   return { second: () => secondRead($), target: (granted) => offeredUnnamed($, granted) };
 }
@@ -2098,7 +2091,6 @@ function ghLookups($: $): GhLookups {
 // How long the remote may take to list its branches before the push asks.
 const LS_REMOTE_MS = 15_000;
 
-// gh-stack's lease boundary, read from this clone, its remote and GitHub.
 async function stackLeaseOf(
   $: $,
   step: 'push' | 'sync' | 'submit',

@@ -56,8 +56,7 @@ const UNREAD = {
   remedy: 'Give the user the command to run themselves.',
 };
 
-// gh-stack reads a bare number as a stack first, then as a pull request: a
-// stack merges every unmerged layer, a pull request itself and every
+// A stack merges every unmerged layer; a pull request merges itself and every
 // unmerged one below it.
 export function mergeSet(n: number, read: StackRead): MergeSet {
   let doc: unknown;

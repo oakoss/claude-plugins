@@ -159,8 +159,8 @@ function touchesGateAs(
   return written && namesSettings(command);
 }
 
-// So do `sudo -s` and `sudo -i` (clustered too, as `-iu`), `env -S`, and a
-// prompt `claude -p` acts on.
+// `sudo -s` and `sudo -i` (clustered too, as `-iu`), `env -S`, and a prompt
+// `claude -p` acts on also run a shell.
 function runsShell(st: Statement): boolean {
   const n = names(st);
   if (n.some((name) => SHELLS.has(name))) return true;

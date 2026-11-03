@@ -448,7 +448,6 @@ describe('sessionDays', () => {
   });
 });
 
-// The parent ids a session search's `-e` patterns name.
 const searches = (argv: readonly string[]) =>
   argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [/"parent_thread_id":"(.+)"/.exec(a)?.[1]] : []));
 
@@ -510,7 +509,6 @@ describe('codexTokens', () => {
     // The count search keeps both turn markers, as grep -E reads the pattern.
     const pattern = new RegExp(calls.find((c) => c[1] === '-oE')?.[2] ?? '$^');
     for (const line of [STARTED, DONE, count(30)]) expect(line).toMatch(pattern);
-    // Only the session's existing day folders are searched.
     expect(calls[0]).toEqual([
       'grep',
       '-rlF',

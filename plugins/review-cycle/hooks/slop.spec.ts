@@ -2,13 +2,11 @@ import { describe, expect, test } from 'vitest';
 
 import { skipsPath, slopDirective, slopFindings } from './slop';
 
-// A Write of `lines` to `path`: the file is exactly what was written.
 function write(path: string, ...lines: string[]): string[] {
   const text = `${lines.join('\n')}\n`;
   return slopFindings({ path, file: text, text, replaced: null });
 }
 
-// An Edit that replaced `old` with `text` in a file holding `const a = 1;`.
 function edit(text: string, old = 'const a = 1;'): string[] {
   return slopFindings({ path: '/r/f.ts', file: 'const a = 1;\n', text, replaced: old });
 }

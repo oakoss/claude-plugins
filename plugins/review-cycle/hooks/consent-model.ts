@@ -62,8 +62,6 @@ export function vetoed(message: string): boolean {
   return VETOES.some((v) => v.test(message));
 }
 
-// What a model may grant: a plain push, a pull request, an approval and a
-// release, never a force, a commit, a merge, a finish or a comment.
 export type ModelGrant = Readonly<{
   push: 'none' | 'push';
   pr: boolean;

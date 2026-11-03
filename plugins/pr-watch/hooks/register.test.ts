@@ -21,14 +21,14 @@ const PROPS = {
   view: {},
 };
 
-// How gh answers: the PR query, the estimate query, every call failing, or
-// that many estimate calls failing first. Tests change it as time passes.
+// How gh answers; tests change it as time passes.
 // `partial` answers the PR query with its data and a failing exit, as gh does
 // when GraphQL reports an error beside the data.
 type Gh = {
   pr: string;
   // The pushed-branch query's answer.
   push?: string;
+  // The estimate query's answer.
   estimate?: string;
   // GitHub's stacks API answer for the pull request; `[]` (no stack) when unset.
   // That many stacks calls fail first, with this stderr when set.
@@ -52,6 +52,7 @@ type Gh = {
   registerFails?: string;
   // That many merged-variant reads fail first.
   mergedFails?: number;
+  // Every gh call fails.
   fails?: boolean;
   // Every GraphQL read is refused for GitHub's rate limit, or only the merged variant.
   limited?: boolean;
@@ -62,6 +63,7 @@ type Gh = {
   offline?: boolean;
   // Every pushed-branch read fails with this stderr.
   pushError?: string;
+  // That many estimate calls fail first.
   estimateFails?: number;
   // A re-run attempt's REST answer; the call fails when unset, and with this
   // stderr when it is set.
@@ -2309,8 +2311,7 @@ function reads(runs: string[]): number {
   return runs.filter((r) => r.includes('graphql')).length;
 }
 
-// Merged at 22:01:00, 10 s before T0, with Release running or done on main.
-// gh pr view's answer for #128, merged ten seconds before T0.
+// gh pr view's answer for #128, merged 10 s before T0.
 const VIEW = JSON.stringify({ url: URL, state: 'MERGED', mergedAt: '2026-10-03T22:01:00Z' });
 
 function mergedJson(status: string, conclusion: string | null): string {
@@ -3747,7 +3748,7 @@ describe('reads that fail', () => {
     expect(await lineIn(ui)).not.toMatch('rate limited');
   });
 
-  // Over an hour of 1 s ticks, slower than the default 5 s on CI's runners.
+  // Over an hour of 1 s ticks, longer than TIMEOUT_MS allows on CI's runners.
   test(
     'another limit waits a minute, longer each time, and never ends the watch',
     { timeoutMs: 20_000 },
@@ -4151,7 +4152,6 @@ const GIVE_UP = 8;
 
 const OPEN_VIEW = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
 
-// A promise and the function that settles it.
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let settle: (() => void) | undefined;
   const promise = new Promise<void>((r) => {

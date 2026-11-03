@@ -649,7 +649,6 @@ describe('grants on a request', () => {
     // What a pull request is "for" can be a time ("for tonight"), so the grammar
     // leaves it to the agent to ask.
     ['open a PR for the docs', NONE],
-    // A stack's pull requests.
     ['open the PRs', PR],
     ['open their pull requests', PR],
     ['open a PR for each layer', PR],
@@ -866,8 +865,6 @@ describe('an affirmative grants what the previous answer asked', () => {
     // A leading condition waits on every merge after it, the stack's included.
     expect(grantOf('once CI passes, merge the stack, then merge #3').mergeStack).toEqual([]);
   });
-  // Seen in another session: an offer to delete a branch by name granted
-  // nothing, whatever the reply.
   test.each([
     'Should I delete feat/reference-components from origin?',
     'Should I delete `feat/reference-components` from `origin`?',
@@ -1157,7 +1154,6 @@ describe('an affirmative grants what the previous answer asked', () => {
     expect(grantOf('delete it from the branch')).toEqual(NONE);
     expect(grantOf('delete the branch comments')).toEqual(NONE);
   });
-  // Seen in another session: "Ok, lets do that" granted nothing.
   const offer = 'Should I update the PR body, then merge #16 and delete the branch?';
   test.each([
     'Ok, lets do that',
@@ -1268,7 +1264,6 @@ describe('an affirmative grants what the previous answer asked', () => {
       expect(grantOf('yes', offer)).toEqual(merging('3'));
     // Only a merge question offers a choice, and only between pull requests it names.
     expect(grantOf('yes', 'Merge it? Is this #131 or #130?')).toEqual(merging(NAMED_ELSEWHERE));
-    // A pick still names its pull request.
     expect(grantOf('merge 4', 'Merge #3, or #4?')).toEqual(merging('4'));
   });
   test('a yes to a choice between pull requests is told the menu to ask with', () => {
@@ -1768,7 +1763,6 @@ describe('a force push has to be named', () => {
     ['May I run git push --force-with-lease origin --tags?', NONE],
     ['Should I run git push --force-with-lease and open a PR?', { ...LEASE, pr: true }],
     ['Should I run git push --force-with-lease origin and open a PR?', { ...LEASE, pr: true }],
-    // A command mentioned before the question offers nothing itself.
     ['I ran git push --force-with-lease earlier. Should I push?', PUSH],
     ['I ran git push --force-with-lease. Anything else?', NONE],
   ])('yes to %j, an offer writing out the push, grants it', (offer, grant) => {
@@ -1884,7 +1878,6 @@ describe('a message typed into the running turn', () => {
     'sorry, never mind',
     'merge it, nvm',
     'actually, don’t',
-    // A hold after "but", and one merge taken back with no offer to keep the rest of.
     'yes, but not yet',
     'ok but not now',
     'both but not yet',

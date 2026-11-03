@@ -54,19 +54,15 @@ export type Kept = {
   capped: string[];
   scratch: string[];
   reviewerChanges: string[];
-  // The hold in force, and whether a message declined a step since it began,
-  // which the floor's own reason loses when an earlier, lower hold outranks it.
+  // `HoldState` in hooks/hold.ts.
   hold: Readonly<{
     floor: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }>;
     declined: boolean;
   }> | null;
   // The epic a "do epic <id>" message started a job on, until a hold ends it.
   mandate: Readonly<{ epic: string }> | null;
-  // Where in `reviews` the next commit's rounds start counting.
   roundsFrom: number;
-  // `<git common dir>\t<remote>/<branch>` and the commit this agent last pushed there.
   pushed: [string, string][];
-  // The review skill's text while a review runs.
   reviewing: string | null;
 };
 

@@ -6,7 +6,6 @@ export default defineConfig({
   // Markdown here is hand-wrapped; reflowing it would churn every doc.
   proseWrap: 'preserve',
   singleQuote: true,
-  // These two replace prettier-plugin-packagejson and simple-import-sort.
   sortImports: true,
   sortPackageJson: true,
 });

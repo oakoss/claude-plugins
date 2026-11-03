@@ -29,8 +29,6 @@ jobs:
       shell: ${{ steps.filter.outputs.shell }}
       modules: ${{ steps.modules.outputs.plugins }}
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -87,8 +85,6 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -123,12 +119,9 @@ jobs:
           repositories: claude-plugins
           permission-pull-requests: write
 
-      # The only bump-file gate there is. A local PreToolUse hook used to run
-      # a looser version of this check and was retired: it offered a hand bump
-      # as an alternative to a bump file and waived docs and tests, and
-      # --strict refuses both. Nothing checks before the push, so an uncovered
-      # change is caught here. The version PR carries real bumps instead of
-      # bump files.
+      # The only bump-file gate: nothing checks before the push, so an
+      # uncovered change is caught here. The version PR carries real bumps
+      # instead of bump files.
       #
       # Identity, not a branch name: a fork, a person, and a push to the bot's
       # branch each fail one of these terms and get checked. Without the sender
@@ -162,8 +155,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -190,8 +181,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -235,8 +224,6 @@ jobs:
       matrix:
         plugin: ${{ fromJSON(needs.changes.outputs.modules) }}
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -273,8 +260,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -298,8 +283,6 @@ jobs:
       - name: Type-check hooks modules
         run: pnpm typecheck
 
-      # The modules' pure logic and the prose anchors; register.ts runs under
-      # `claude plugin test` in Hook tests.
       - name: Unit tests
         run: pnpm test
 
@@ -316,8 +299,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -346,8 +327,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
@@ -411,8 +390,6 @@ jobs:
     if: always()
     needs: [changes, bump-files, lint, validate, hook-tests, typescript, shellcheck, jactionlint]
     steps:
-      # In audit mode: logs unauthorized egress without blocking; promote to
-      # `egress-policy: block` once a stable allowlist emerges from runs.
       - name: Harden Runner
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:

@@ -1286,7 +1286,6 @@ function asksBeyond(g: Grant, step: (typeof STEPS)[number]): boolean {
   return asksAny({ ...g, [step]: false });
 }
 
-// Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
   return (
     g.pr ||
@@ -1644,7 +1643,6 @@ const APPROVE_WORD = /\b(approve|approves|approving|approved)\b/i;
 const RELEASE_WORD =
   /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
-// Deleting a remote branch is a push.
 const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
   ['push', PUSH_WORD],
   ['push', /\b(delete|deletes|deleting|deleted)\b/i],
@@ -1704,8 +1702,8 @@ export function mandateAfter(
 
 const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
 
-// A step mentioned without being asked for holds it and the steps above it,
-// read by mention rather than grammar since a hold only makes the agent ask.
+// A step mentioned without being asked for holds, read by mention rather than
+// grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   return readHold(prompt, previousAnswer).hold;
 }
@@ -1720,7 +1718,6 @@ function readHold(
   const text = prPhrase(unquote(forcePhrase(prompt)));
   const said = mentionOf(text, grant);
   const offered = declines(text, grant) ? offeredSteps(previousAnswer) : [];
-  // The nearest step offered, since a hold holds the steps after it too.
   const step = offered[0];
   const declined = step === undefined ? null : ({ step, how: 'declined' } as const);
   // The lower of the two, the decline on a tie, so a later step named beside a
@@ -1752,8 +1749,7 @@ function declines(text: string, grant: Grant): boolean {
 }
 
 // The steps an offer names, lowest first: those the grammar reads as asked,
-// and any its offer sentences name by verb ("push the feature branch"), a
-// branch deletion counted as a push.
+// and any its offer sentences name by verb ("push the feature branch").
 function offeredSteps(previousAnswer: string): HoldStep[] {
   const offered = asked(previousAnswer);
   const sentences = offerSentences(closingOf(previousAnswer));
@@ -1783,7 +1779,6 @@ export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
   const typed = spoken(unquote(prompt));
   return sentences(typed).some((raw) => {
     const s = raw.replace(FILLER, '');
-    // "yes, but not yet", "both but wait": a hold after "but" holds too.
     const after = s.split(/\bbut\b/i).slice(1);
     return (
       RETRACT.test(raw) ||
@@ -1906,7 +1901,6 @@ function offeredMerges(previousAnswer: string): string[] {
   return (closing.match(/\d+/g) ?? []).every((n) => offered.includes(n)) ? offered : [];
 }
 
-// "#03" is #3.
 const pr = (n: string) => n.replace(/^0+(?=\d)/, '');
 
 // The pull requests a reply picks from a merge offer naming them: all
@@ -1916,7 +1910,6 @@ function pickedMerges(reply: string, previousAnswer: string): string[] | null {
   const text = reply.trim().replaceAll('’', "'");
   const skip = PICK_SKIP.exec(text);
   const skipped = skip?.[1] ?? skip?.[2];
-  // Taking one back keeps what a yes would have granted, less that one.
   if (skipped !== undefined) {
     const granted = [...new Set(accepted(previousAnswer).mergeNamed.map(pr))];
     return granted.length >= 2 && granted.includes(skipped)
