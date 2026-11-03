@@ -7551,3 +7551,56 @@ describe('a compaction during a review', () => {
     expect(handedBack(await compact($))).toHaveLength(1);
   });
 });
+
+// A tool call's row as the transcript draws it.
+const row = (tool: string, input: unknown) => ({
+  tool_use_id: tool,
+  tool,
+  input,
+  isRunning: false,
+  isErrored: false,
+  isInterrupted: false,
+});
+
+describe('the summary tool', () => {
+  const BLOCK = 'Review cycle complete.\n\nTier: light\nFinal state: clean';
+  test('is registered at session start, and answers with the summary it was given', async ($, on) => {
+    const w = fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    expect(w.registered).toContain('summary');
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__summary', text: BLOCK } as any)) as {
+      result: string;
+    };
+    expect(r.result).toBe(BLOCK);
+  });
+  test('draws its own call as a line count, and every other call as it was', async ($, on) => {
+    fakeWorld(on);
+    const drawn: any[] = [];
+    on('ui.render', { component: 'ToolUse' }, (($$: any, e: any) => {
+      drawn.push(e.props);
+      const { Text } = $$.ui.resolve(e);
+      return h(Text, {}, 'row');
+    }) as any);
+    for (const props of [
+      row('mcp__review-cycle__summary', { text: BLOCK }),
+      row('Bash', { command: 'ls' }),
+      row('mcp__review-cycle__summaryx', { text: BLOCK }),
+    ]) {
+      await ($ as any).ui.mount({
+        plugin: 'review-cycle',
+        surface: 'terminal',
+        component: 'ToolUse',
+        props,
+      });
+    }
+    expect(drawn.map((p) => p.input)).toEqual([{ lines: 4 }, { command: 'ls' }, { text: BLOCK }]);
+  });
+  test('says so when it is given no summary', async ($, on) => {
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__summary' } as any)) as {
+      result: string;
+    };
+    expect(r.result).toBe('review-cycle summary: `text` is empty.');
+  });
+});
