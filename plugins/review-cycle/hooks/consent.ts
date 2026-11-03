@@ -1704,8 +1704,8 @@ export function mandateAfter(
 
 const mentioned = (step: HoldStep) => ({ step, how: 'mentioned' }) as const;
 
-// A step mentioned without being asked for holds it and the steps above it,
-// read by mention rather than grammar since a hold only makes the agent ask.
+// A step mentioned without being asked for holds, read by mention rather than
+// grammar since a hold only makes the agent ask.
 export function holdOf(prompt: string, previousAnswer = ''): HoldReason | null {
   return readHold(prompt, previousAnswer).hold;
 }
@@ -1720,7 +1720,6 @@ function readHold(
   const text = prPhrase(unquote(forcePhrase(prompt)));
   const said = mentionOf(text, grant);
   const offered = declines(text, grant) ? offeredSteps(previousAnswer) : [];
-  // The nearest step offered, since a hold holds the steps after it too.
   const step = offered[0];
   const declined = step === undefined ? null : ({ step, how: 'declined' } as const);
   // The lower of the two, the decline on a tie, so a later step named beside a
