@@ -1,9 +1,9 @@
 // Guard for the execution receipt: every reviewer leg the cycle can dispatch
 // must ask for it, and both skills must define the grades they weight legs by.
 //
-// The contract lives in eight prose files with nothing linking them, so it
-// breaks silently: a seventh reviewer added later, or the paragraph lost in a
-// rewrite, leaves the cycle grading that leg `unknown` with nothing saying why.
+// The contract lives in prose files with nothing linking them, so it breaks
+// silently: a reviewer added later, or the paragraph lost in a rewrite, leaves
+// the cycle grading that leg `unknown` with nothing saying why.
 //
 // This checks that the instruction is present, not that an agent emits the line
 // at runtime — it catches a partial revert and an agent that never joined.
@@ -41,8 +41,8 @@ const GRADING = readFileSync(
   'utf8',
 );
 
-// Six reviewers today. A floor, not a count: the per-file loop is what catches
-// one dropping out, and this only catches the enumeration collapsing.
+// A floor, not a count: the per-file loop is what catches one dropping out, and
+// this only catches the enumeration collapsing.
 const AGENT_FLOOR = 6;
 
 function listReviewerAgents(dir = AGENTS_DIR): string[] {

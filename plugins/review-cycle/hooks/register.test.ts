@@ -471,9 +471,9 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   return w;
 }
 
-// The model check's answers: nothing asked, and a push asked for now.
+// The model check's answer when nothing is asked.
 const NOTHING_ASKED = '{"steps": {}, "quote": ""}';
-// Its answers on a merge's pull request: offered by the answer, or only mentioned.
+// Its answer when a merge's pull request is offered.
 const OFFERED = '{"offers": true, "sure": true}';
 
 // consent.ts's NO_GRANT, as a kept record holds it.
@@ -1663,7 +1663,6 @@ function fakeStore(
 
 const NOW = Date.UTC(2026, 8, 26, 12);
 
-// A promise that never settles.
 function pending(): Promise<never> {
   return new Promise<never>((resolve) => {
     void resolve;
@@ -2552,7 +2551,7 @@ describe('a reload of the module', () => {
       trees: [tree, tree],
       reviewedPaths: ['a.ts'],
     };
-    // What an off-load leaves, as the test above pins it.
+    // What an off-load leaves.
     reloadInto(
       on,
       keptRecord({
@@ -2965,7 +2964,6 @@ function reminders(w: World): string[] {
   return (w.contexts ?? []).filter((c) => c.startsWith('review-cycle: your last turn left'));
 }
 
-// Sends the next message and returns the reminders it carried.
 async function nudges($: any, w: World): Promise<string[]> {
   const before = reminders(w).length;
   await say($, 'thanks');

@@ -1338,7 +1338,6 @@ describe('glob and brace patterns', () => {
     ['echo $(ls x($(git push)))', ''],
     ['git status x($(git push))', ''],
     ['git commit -m x($(git push))', ''],
-    // zsh's code-running glob qualifiers.
     ["git add *(e:'git push':) && git commit -m x", 'a zsh glob qualifier that runs code'],
     ["ls *(e:'git push':)", 'a zsh glob qualifier that runs code'],
     [String.raw`git add *(eXgit\ pushX) && git commit -m x`, 'a zsh glob qualifier that runs code'],

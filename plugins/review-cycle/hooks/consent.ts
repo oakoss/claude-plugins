@@ -1286,7 +1286,6 @@ function asksBeyond(g: Grant, step: (typeof STEPS)[number]): boolean {
   return asksAny({ ...g, [step]: false });
 }
 
-// Any step beyond the push the grant names.
 function asksBeyondPush(g: Grant): boolean {
   return (
     g.pr ||
@@ -1644,7 +1643,6 @@ const APPROVE_WORD = /\b(approve|approves|approving|approved)\b/i;
 const RELEASE_WORD =
   /\b(release|releases|releasing|released|cutrelease|cuttingrelease|publish|publishes|publishing|published)\b/i;
 
-// Deleting a remote branch is a push.
 const STEP_WORDS: readonly (readonly [HoldStep, RegExp])[] = [
   ['push', PUSH_WORD],
   ['push', /\b(delete|deletes|deleting|deleted)\b/i],
@@ -1751,8 +1749,7 @@ function declines(text: string, grant: Grant): boolean {
 }
 
 // The steps an offer names, lowest first: those the grammar reads as asked,
-// and any its offer sentences name by verb ("push the feature branch"), a
-// branch deletion counted as a push.
+// and any its offer sentences name by verb ("push the feature branch").
 function offeredSteps(previousAnswer: string): HoldStep[] {
   const offered = asked(previousAnswer);
   const sentences = offerSentences(closingOf(previousAnswer));

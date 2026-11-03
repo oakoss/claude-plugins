@@ -86,7 +86,6 @@ export function insideRepo(path: string, top: string): boolean {
   return path === top || path.startsWith(`${top}/`);
 }
 
-// The notes for the reviewer and the records for the status tool.
 export function containmentReport(r: {
   type: string;
   command: string;

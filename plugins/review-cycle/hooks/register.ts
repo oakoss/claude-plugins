@@ -569,7 +569,6 @@ async function run(
   return $.process.run(argv, { timeoutMs: 60_000, ...opts, env });
 }
 
-// The runner git.ts's reads take, bound to this hook's `$`.
 function gitOf($: $): Git {
   return (argv, opts) => run($, argv, opts);
 }
@@ -1345,7 +1344,6 @@ function spend(used: Used | undefined): void {
   };
 }
 
-// The line telling the agent a message ended its standing asks, or null.
 function endedNote(s: Standing): string | null {
   if (!standsFor(s)) return null;
   const which = [
@@ -1535,7 +1533,6 @@ function modelRead($: $): ModelAsk | null {
   return state.model;
 }
 
-// One model check call: its reply, or why it got none.
 async function complete(
   $: $,
   system: string,
@@ -1570,7 +1567,6 @@ async function askModel($: $, text: string, before: string): Promise<ModelRead> 
   return 'why' in r ? { kind: 'unanswered', why: r.why } : judge(r.text, text);
 }
 
-// Kept with the misses, replacing an earlier one of the same message and refusal.
 function recordMiss(miss: Miss): void {
   const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
   state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
@@ -2095,7 +2091,6 @@ function ghLookups($: $): GhLookups {
 // How long the remote may take to list its branches before the push asks.
 const LS_REMOTE_MS = 15_000;
 
-// gh-stack's lease boundary, read from this clone, its remote and GitHub.
 async function stackLeaseOf(
   $: $,
   step: 'push' | 'sync' | 'submit',

@@ -465,7 +465,6 @@ export type Verdict =
 // How long a merged pull request waits for its merge commit's runs to start.
 const MERGE_GRACE_MS = 90_000;
 
-// Merged inside the grace in which its runs may not have started.
 export function isMergeFresh(pull: Pick<Pull, 'mergedAt'>, now: number): boolean {
   return pull.mergedAt !== null && now - Date.parse(pull.mergedAt) < MERGE_GRACE_MS;
 }
@@ -731,7 +730,6 @@ export function shownOf(verdict: Verdict): string {
   return verdict.kind;
 }
 
-// The commit a merged line's runs came from.
 const commitOf = (followed: Pull['followed']) =>
   followed?.isLater ? 'a later commit' : 'the merge commit';
 
@@ -1016,7 +1014,6 @@ export function toldAfter(now: string[], before: string[] | undefined, isAwake: 
   return isAwake ? now : now.filter((key) => (before ?? []).includes(key));
 }
 
-// GitHub reports UNKNOWN while it recomputes the merge state.
 export const isChecking = (verdict: Verdict) =>
   verdict.kind === 'waiting' && verdict.reason === 'checking';
 
@@ -1107,8 +1104,8 @@ export function wakeOf(
     else if (isNew) news.push(c.text);
     kept.push(c.key);
   }
-  // GitHub reports UNKNOWN while it recomputes the merge state; ready stands only
-  // through a read that is otherwise ready, since a new run ends it.
+  // GitHub reports UNKNOWN while it recomputes the merge state, so told conflicts
+  // stand, and ready too while the read is otherwise ready, since a new run ends it.
   if (pull.state === 'OPEN' && pull.merge === 'UNKNOWN') {
     for (const what of isChecking(verdict) ? ['ready', 'conflicts'] : ['conflicts']) {
       const key = keyOf(watch, what);
@@ -1259,7 +1256,6 @@ function bodyOf(
   // The state is the last good read's; `now` only times the running clock.
   const v = verdictOf(pull, estimates, watch.host, watch.checkedAt);
   if (v.kind === 'closed') return [label, { text: ` ${pull.state.toLowerCase()}`, isDim: true }];
-  // After a merge the line follows the merge commit's runs on the base branch.
   const isMerged = v.kind.startsWith('merged-');
   const none = { workflows: [], isTruncated: false };
   const runs = isMerged ? (pull.mergeRuns ?? none) : pull;

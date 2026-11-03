@@ -1,11 +1,9 @@
-// Prose anchors for the review cycle's contracts. The containment contract is
-// the largest: every measuring reviewer works in a private mktemp -d — never a
-// shared session scratchpad — names that directory in its report, and no agent
-// the cycle spawns may reshape a command to slip past a guard. Later tests
-// anchor the effort argument, the settled-findings brief, and release-note
-// verification the same way.
+// Prose anchors for the review cycle's contracts. Every measuring reviewer
+// works in a private mktemp -d — never a shared session scratchpad — names that
+// directory in its report, and no agent the cycle spawns may reshape a command
+// to slip past a guard.
 //
-// Two measured incidents motivate the anchors: a reviewer's copy mutated
+// Two measured incidents motivate the containment anchors: a reviewer's copy mutated
 // mid-run by a sibling agent sharing the session scratchpad, and a reviewer
 // that ran another agent's script by accident and received a results matrix it
 // had not authored. Like execution-receipt.spec.ts, this checks the instruction
@@ -78,16 +76,14 @@ const SPELL_PATH_ANCHOR =
 const BEYOND_FS_ANCHOR =
   "Outside the filesystem, read-only remote calls such as `gh pr view`, `gh api` sent as a GET (a `-f` or `-F` field makes it a POST unless you pass `-X GET`) or `git ls-remote` are allowed, and your report lists each one; the project's own checks (test, lint, typecheck) run in your copy, never in the target; and you never create anything remote (a repository, pull request, release, or push) or cause any other side effect. A finding that needs one is reported as a question naming what it would test, for the user to decide.";
 
-// Seven agents today, cleanup included. A floor, not a count: the per-file
-// loop catches one dropping out; this only catches the enumeration collapsing.
+// A floor, not a count: the per-file loop catches one dropping out; this only
+// catches the enumeration collapsing.
 const AGENT_FLOOR = 7;
 
 function listAllAgents(dir = AGENTS_DIR): string[] {
   return listAgents({ dir, min: AGENT_FLOOR });
 }
 
-// The one line in `lines` containing `marker`, or undefined after a soft
-// failure naming how many there were.
 function markedLine(lines: string[], marker: string, what: string): string | undefined {
   const marked = lines.filter((line) => line.includes(marker));
   expect.soft(marked.length, `${what}, found ${marked.length}`).toBe(1);

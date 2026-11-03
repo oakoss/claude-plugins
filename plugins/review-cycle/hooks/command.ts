@@ -1068,7 +1068,7 @@ function repoAt(words: Word[], i: number): Word | null {
   return words[i + 1] ?? null;
 }
 
-// Skips options from `i`, noting the repository one names.
+// Skips options from `from`, noting the repository one names.
 function pastOptions(words: Word[], from: number, into: { repo: Word | null }): number {
   let i = from;
   while (words[i]?.text.startsWith('-')) {

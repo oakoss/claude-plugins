@@ -61,11 +61,8 @@ export type Kept = {
   }> | null;
   // The epic a "do epic <id>" message started a job on, until a hold ends it.
   mandate: Readonly<{ epic: string }> | null;
-  // Where in `reviews` the next commit's rounds start counting.
   roundsFrom: number;
-  // `<git common dir>\t<remote>/<branch>` and the commit this agent last pushed there.
   pushed: [string, string][];
-  // The review skill's text while a review runs.
   reviewing: string | null;
 };
 
