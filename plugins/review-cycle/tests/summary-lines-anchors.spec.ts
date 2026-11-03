@@ -51,13 +51,21 @@ test("the review skill records each round's cost as its legs report", () => {
   );
 });
 
-test('the final message carries the summary block, not a prose retelling', () => {
+test('the summary block goes to the summary tool, and the reply ends with the decision', () => {
   const nine = section(9);
   expect(nine).toContain(
-    'print this summary in your final message, after any Phase 10 commit, as a `text` block',
+    'after any Phase 10 commit, pass this summary as `text` to `mcp__review-cycle__summary`',
   );
   expect(nine).toContain('every field by its name below and in this order');
-  expect(nine).toContain('Prose before or after it may explain it, but never replaces it');
+  expect(nine).toContain('the transcript folds its result, so your reply stays on screen');
+  expect(nine).toContain(
+    'When that tool does not exist, print it in your final message as a `text` block instead',
+  );
+  expect(nine).toContain('Prose may explain it, but never replaces it');
+  expect(nine).toContain(
+    'your reply ends with the final state and what the user must read or answer',
+  );
+  expect(nine).toContain('follow the summary in your reply, before any question Phase 10 asks');
 });
 
 test('the summary is followed by a paste-ready block, never filed in a tracker', () => {

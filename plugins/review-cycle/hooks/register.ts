@@ -129,6 +129,7 @@ import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from '
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import { type LeaseIo, readStack, stackLease } from './stack';
+import { SUMMARY_TOOL, summaryHeader, summaryText } from './summary';
 import { sweep } from './sweep';
 import {
   EMPTY_TREE,
@@ -725,6 +726,7 @@ async function onSessionStart(
   await registerLedger($);
   await registerScratch($);
   await registerCodexLog($);
+  await registerSummary($);
   // A new session owes no reminder for an old one's turns.
   state.owed = null;
   if (!state.gateOn) {
@@ -2608,6 +2610,23 @@ async function registerCodexLog($: $): Promise<void> {
   }
 }
 
+async function registerSummary($: $): Promise<void> {
+  try {
+    await $.tool.register({
+      name: 'summary',
+      description:
+        "Shows a review cycle's summary block in the transcript, folded to its first lines, and answers with it. Pass the whole block as `text`.",
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string', description: 'The summary block, as written.' } },
+        required: ['text'],
+      },
+    });
+  } catch {
+    // Without it, the skill prints the block in its reply.
+  }
+}
+
 async function onCodexLog(
   $: $,
   e: Input<CodexLogHook>,
@@ -2929,6 +2948,15 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
   on('tool.call', { tool: 'mcp__review-cycle__sweep' }, keptSweep);
   on('tool.call', { tool: 'mcp__review-cycle__codex_log' }, onCodexLog);
+  on('tool.call', { tool: SUMMARY_TOOL }, (_$, e) => {
+    const text = summaryText(e);
+    return { result: text === '' ? 'review-cycle summary: `text` is empty.' : text };
+  });
+  on('ui.render', { component: 'ToolUse' }, (_$, e, next) =>
+    e.props.tool === SUMMARY_TOOL
+      ? next({ ...e, props: { ...e.props, input: summaryHeader(e.props.input) } })
+      : next(e),
+  );
   on('tool.call', { tool: 'Skill' }, onSubagentSkill);
   on('skill.prompt', { skill: 'review-cycle:review' }, onReviewSkill);
   on('skill.prompt', { skill: 'review-cycle:review-pr' }, onReviewSkill);
