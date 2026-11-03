@@ -1,6 +1,3 @@
-// A reviewer leg runs the project's checks in this copy, so the copy has to
-// match the working tree and nothing done in it may reach the repository.
-
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -81,7 +78,6 @@ function repo(): { root: string; repo: string } {
   return { root, repo: r };
 }
 
-// Every path under dir whose link points outside it.
 function linksOut(dir: string): string[] {
   const out: string[] = [];
   for (const e of readdirSync(dir, { recursive: true, encoding: 'utf8' })) {
@@ -107,7 +103,6 @@ test('the copy holds the working tree as git reports it, with no remote', () => 
   expect(readFileSync(path.join(dest, '.probe'), 'utf8')).toBe('a project file\n');
   expect(readFileSync(path.join(dest, '-dash.txt'), 'utf8')).toBe('dash\n');
   expect(git(dest, 'remote')).toBe('');
-  // A base a check diffs against still resolves.
   expect(git(dest, 'rev-parse', 'main', 'origin/main')).toBe(git(r, 'rev-parse', 'main', 'main'));
 });
 

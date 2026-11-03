@@ -413,7 +413,6 @@ export async function codexTokens(
   if (dirs.length === 0) return no(`no rollouts under ${sessions} for the session's day`);
   const files: string[] = [];
   const seen = new Set([sessionId]);
-  // One search per generation: the review's child, then sessions it started.
   let parents = [sessionId];
   while (parents.length > 0) {
     const found = await run([

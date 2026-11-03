@@ -145,8 +145,6 @@ describe('GitHub writes on the ladder', () => {
     });
   });
 
-  // The misses list keeps a refusal of a push, pull request, merge or release
-  // the message named; approvals and comments are not consent the grammar misses.
   test.each<[string, GhAction, () => ReturnType<typeof world>, Grant, MissStep | undefined]>([
     ['a pull request', { kind: 'pr' }, () => world('open PR'), grant(), 'pr'],
     ['a release', { kind: 'release' }, () => world('release'), grant(), 'release'],
@@ -1693,7 +1691,6 @@ const consent = (g: Grant) => () => ({
 
 describe('the escalation from grammar to model', () => {
   type Yes = { steps: ModelSteps; quote: string };
-  // Model reads that count how often each was asked.
   function model(
     second: SecondRead<Yes>,
     target?: TargetGrant,

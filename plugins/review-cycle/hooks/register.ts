@@ -267,7 +267,6 @@ type GateState = {
   nudge: boolean;
   // The user's /config value for showing a step the setting ran unasked.
   unaskedNotice: boolean;
-  // "don't push yet" holds the push and later steps until a message asks.
   hold: HoldState;
   // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
   mandate: Kept['mandate'];
@@ -1684,12 +1683,10 @@ function ghConsent(grant: Grant): () => GhConsent {
   });
 }
 
-// The consent a push is judged against, as it stands at each use.
 function pushConsent(command: string): PushConsent {
   return () => ({ held: held(), unread: state.message.unread, shown: quote(command) });
 }
 
-// The model reads for escalateGh.
 function ghModel($: $): GhModel<ModelYes> {
   return { second: () => secondRead($), target: (granted) => offeredUnnamed($, granted) };
 }

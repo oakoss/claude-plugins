@@ -1268,7 +1268,6 @@ describe('an affirmative grants what the previous answer asked', () => {
       expect(grantOf('yes', offer)).toEqual(merging('3'));
     // Only a merge question offers a choice, and only between pull requests it names.
     expect(grantOf('yes', 'Merge it? Is this #131 or #130?')).toEqual(merging(NAMED_ELSEWHERE));
-    // A pick still names its pull request.
     expect(grantOf('merge 4', 'Merge #3, or #4?')).toEqual(merging('4'));
   });
   test('a yes to a choice between pull requests is told the menu to ask with', () => {
@@ -1768,7 +1767,6 @@ describe('a force push has to be named', () => {
     ['May I run git push --force-with-lease origin --tags?', NONE],
     ['Should I run git push --force-with-lease and open a PR?', { ...LEASE, pr: true }],
     ['Should I run git push --force-with-lease origin and open a PR?', { ...LEASE, pr: true }],
-    // A command mentioned before the question offers nothing itself.
     ['I ran git push --force-with-lease earlier. Should I push?', PUSH],
     ['I ran git push --force-with-lease. Anything else?', NONE],
   ])('yes to %j, an offer writing out the push, grants it', (offer, grant) => {
@@ -1884,7 +1882,6 @@ describe('a message typed into the running turn', () => {
     'sorry, never mind',
     'merge it, nvm',
     'actually, don’t',
-    // A hold after "but", and one merge taken back with no offer to keep the rest of.
     'yes, but not yet',
     'ok but not now',
     'both but not yet',

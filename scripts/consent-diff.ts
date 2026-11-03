@@ -357,7 +357,6 @@ const REPLIES = [
   "don't merge the stack",
   'merge the stack, not 131',
   'merge up to 131',
-  // A yes naming the offer's own step, or narrowing it.
   'ok, push',
   'yes, push it',
   'ok, lets push',
@@ -368,7 +367,6 @@ const REPLIES = [
   'yes, push it, but not to main',
   'ok, push to main',
   'yes, push to origin/main',
-  // Taking back one of the merges a yes granted, or holding them all.
   'skip 130',
   'skip #130',
   '130 can wait',
@@ -399,7 +397,6 @@ const OFFERS = [
   'Push `fix/x` to `origin`?',
   'Push to `main`?',
   'Push to `develop`?',
-  // Unquoted targets, and pushes written out as the command.
   'Push to main?',
   'Push it to master?',
   'Nothing has been pushed yet.\n\nPush to main?',

@@ -63,8 +63,6 @@ export function pushedBranches(command: string, stdout: string): PushTarget[] {
   return found;
 }
 
-// How the band, toasts and errors name a watch: "release #259" tells a
-// release tool's version pull request from the others.
 export function labelOf(w: Pick<Watch, 'number' | 'push' | 'pull'>): string {
   if (w.push) return `push ${w.push.branch}`;
   return w.pull !== undefined && isReleasePull(w.pull) ? `release #${w.number}` : `#${w.number}`;

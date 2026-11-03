@@ -1783,7 +1783,6 @@ export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
   const typed = spoken(unquote(prompt));
   return sentences(typed).some((raw) => {
     const s = raw.replace(FILLER, '');
-    // "yes, but not yet", "both but wait": a hold after "but" holds too.
     const after = s.split(/\bbut\b/i).slice(1);
     return (
       RETRACT.test(raw) ||
@@ -1906,7 +1905,6 @@ function offeredMerges(previousAnswer: string): string[] {
   return (closing.match(/\d+/g) ?? []).every((n) => offered.includes(n)) ? offered : [];
 }
 
-// "#03" is #3.
 const pr = (n: string) => n.replace(/^0+(?=\d)/, '');
 
 // The pull requests a reply picks from a merge offer naming them: all
@@ -1916,7 +1914,6 @@ function pickedMerges(reply: string, previousAnswer: string): string[] | null {
   const text = reply.trim().replaceAll('’', "'");
   const skip = PICK_SKIP.exec(text);
   const skipped = skip?.[1] ?? skip?.[2];
-  // Taking one back keeps what a yes would have granted, less that one.
   if (skipped !== undefined) {
     const granted = [...new Set(accepted(previousAnswer).mergeNamed.map(pr))];
     return granted.length >= 2 && granted.includes(skipped)

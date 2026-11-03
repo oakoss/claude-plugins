@@ -995,8 +995,6 @@ export type Escalated<Y extends ModelYesOf> = {
 export const couldNotJudge = (why: string) =>
   ` The model check could not judge the message (${why}).`;
 
-// A GitHub call judged by the grammar, then, when it refuses short of final,
-// with the merge's target read by the model, then with the model's yes.
 export async function escalateGh<Y extends ModelYesOf>(
   shown: string,
   actions: readonly GhAction[],

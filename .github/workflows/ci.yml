@@ -298,8 +298,6 @@ jobs:
       - name: Type-check hooks modules
         run: pnpm typecheck
 
-      # The modules' pure logic and the prose anchors; register.ts runs under
-      # `claude plugin test` in Hook tests.
       - name: Unit tests
         run: pnpm test
 

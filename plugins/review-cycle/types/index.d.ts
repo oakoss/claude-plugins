@@ -54,8 +54,7 @@ export type Kept = {
   capped: string[];
   scratch: string[];
   reviewerChanges: string[];
-  // The hold in force, and whether a message declined a step since it began,
-  // which the floor's own reason loses when an earlier, lower hold outranks it.
+  // `HoldState` in hooks/hold.ts.
   hold: Readonly<{
     floor: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }>;
     declined: boolean;
