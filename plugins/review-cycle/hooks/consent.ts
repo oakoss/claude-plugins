@@ -28,7 +28,8 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // a pull request, asked for by addressing its review. `autoMerge` is a merge
 // asked for once the pull request is ready ("merge it when CI passes"), which
 // only `gh pr merge --auto` leaves to GitHub. `mergeNamed` holds the pull
-// request numbers a merge request named ("merge 131"), empty for "merge it";
+// requests a merge request named, by number ("merge 131") or as `<repo>#<n>`
+// ("merge linesmith#53"), empty for "merge it";
 // `readyNamed` those a merge asked for once ready named, kept apart so they
 // never cover a merge now. `mergeStack` holds the gh-stack merges a request
 // named, which cover `gh stack merge` alone: `stack` for the whole stack,
@@ -1929,7 +1930,63 @@ function pickedMerges(reply: string, previousAnswer: string): string[] | null {
   return null;
 }
 
+// A pull request named with its repository: `linesmith#53`, `oakoss/linesmith#53`,
+// or its GitHub URL.
+const QUALIFIED = new RegExp(
+  String.raw`(?<![\w./-])(?:https?://)?(?:www\.)?github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)\b(?:/[\w/-]*)?|(?<![\w./#-])((?:[a-z\d][\w.-]*/)?[a-z\d][\w.-]*)#(\d+)\b`,
+  'gi',
+);
+// Words before `#<n>` that name no repository: "pr#53" is this repository's #53.
+const NOT_A_REPO = /^(?:\d+|prs?|pulls?|issues?|request|no|number|it|this|that)$/i;
+
+// A named pull request reads as a number neither text holds, then as `<repo>#<n>`;
+// a bare number beside one could be in either repository, so `?#<n>` matches no
+// merge. Only the merge fields take this reading: other steps bind no repository.
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
+  const refs = new Map<string, string>();
+  const tokens = new Map<string, string>();
+  const both = `${prompt}\n${previousAnswer}`;
+  let next = 1_000_000_000;
+  const tokenOf = (ref: string) => {
+    let token = tokens.get(ref);
+    if (token === undefined) {
+      while (both.includes(String(next))) next += 1;
+      token = String(next++);
+      refs.set(token, ref);
+      tokens.set(ref, token);
+    }
+    return `#${token}`;
+  };
+  const lift = (text: string) =>
+    text.replaceAll(
+      QUALIFIED,
+      (all, urlRepo?: string, urlN?: string, repo?: string, n?: string) => {
+        if (urlRepo === undefined && NOT_A_REPO.test(repo ?? '')) return all;
+        const name = (urlRepo ?? repo ?? '').toLowerCase();
+        return tokenOf(`${name}#${Number(urlN ?? n)}`);
+      },
+    );
+  const g = grantIn(lift(prompt), lift(previousAnswer));
+  if (refs.size === 0) return g;
+  const named = (xs: readonly string[]) => [
+    ...new Set(xs.map((x) => refs.get(x) ?? (/^\d+$/.test(x) ? `?#${x}` : x))),
+  ];
+  const upto = (x: string) => {
+    const n = /^upto:(\d+)$/.exec(x)?.[1];
+    return n === undefined ? x : `upto:${refs.get(n) ?? `?#${n}`}`;
+  };
+  return {
+    ...grantIn(prompt, previousAnswer),
+    merge: g.merge,
+    mergeNamed: named(g.mergeNamed),
+    autoMerge: g.autoMerge,
+    readyNamed: named(g.readyNamed),
+    readyMain: g.readyMain,
+    mergeStack: g.mergeStack.map((x) => upto(x)),
+  };
+}
+
+function grantIn(prompt: string, previousAnswer: string): Grant {
   prompt = landPhrase(prompt);
   const text = spoken(prompt.trim());
   const picked = pickedMerges(text, previousAnswer);

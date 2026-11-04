@@ -67,6 +67,7 @@ import {
   type Used,
   NO_STANDING,
   RELEASE_ASK,
+  shownNamed,
   VERSION_BRANCH,
 } from './gh-verdict';
 import {
@@ -1347,7 +1348,7 @@ function spend(used: Used | undefined): void {
 function endedNote(s: Standing): string | null {
   if (!standsFor(s)) return null;
   const which = [
-    ...s.ready.map((n) => `#${n}`),
+    ...s.ready.map((n) => shownNamed(n)),
     ...(s.release === null ? [] : ["oakum's version pull request"]),
   ].join(' and ');
   return `review-cycle: this message ended the user's standing ask to merge ${which} once ready. Ask them before merging it.`;

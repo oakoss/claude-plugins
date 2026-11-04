@@ -4246,6 +4246,13 @@ function github(
   };
 }
 
+// GitHub answering a merge lookup with `--repo` from that repository.
+function elsewhere(a: string): Partial<Run> | null {
+  const m = /^gh pr view (\d+) --repo (\S+) .*mergeStateStatus/.exec(a);
+  if (m === null) return github('fix/x')(a);
+  return { stdout: `https://github.com/${m[2]}/pull/${m[1]} OPEN CLEAN\n` };
+}
+
 // On main, merging pull requests headed by fix/x.
 function onMain(a: string): Partial<Run> | null {
   return a === 'git symbolic-ref --quiet --short HEAD' ? { stdout: 'main\n' } : github('fix/x')(a);
@@ -4669,6 +4676,16 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh pr merge 116 --squash'), "doesn't ask for a merge")).toBe(true);
     await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 116 --squash --delete-branch'))).toBe(true);
+  });
+  test('a merge in another repository runs once the user names it there', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: elsewhere });
+    await say($, 'merge 53');
+    const linesmith = 'gh pr merge 53 -R oakoss/linesmith --squash';
+    expect(denied(await bash($, linesmith), 'not this repository')).toBe(true);
+    await say($, 'Ok, lets merge oakoss/linesmith#53');
+    const other = 'gh pr merge 53 -R oakoss/other --squash';
+    expect(denied(await bash($, other), 'not this repository')).toBe(true);
+    expect(ran(await bash($, linesmith))).toBe(true);
   });
   test('a merge asked for once it is ready runs only with --auto', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });

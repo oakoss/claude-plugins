@@ -523,6 +523,146 @@ describe('merges, approvals, releases and review replies', () => {
   });
 });
 
+describe('a pull request named with its repository', () => {
+  test.each<[string, object]>([
+    ['merge linesmith#53', merging('linesmith#53')],
+    ['Ok, lets merge oakoss/linesmith#53', merging('oakoss/linesmith#53')],
+    ['merge https://github.com/oakoss/linesmith/pull/53', merging('oakoss/linesmith#53')],
+    ['merge https://github.com/oakoss/linesmith/pull/53/files', merging('oakoss/linesmith#53')],
+    ['merge github.com/oakoss/linesmith/pull/53', merging('oakoss/linesmith#53')],
+    ['merge oakoss/issues#53', merging('oakoss/issues#53')],
+    ['merge Linesmith#053', merging('linesmith#53')],
+    ['merge https://www.github.com/oakoss/linesmith/pull/53', merging('oakoss/linesmith#53')],
+    ['merge linesmith#53 and linesmith#54', merging('linesmith#53', 'linesmith#54')],
+    ['merge linesmith#53 once CI passes', autoNamed('linesmith#53')],
+    ['merge 53', merging('53')],
+    ['merge PR #53', merging('53')],
+    ['merge pr#53', merging('53')],
+    ['merge it#53', merging('53')],
+  ])('%j names it', (prompt, grant) => {
+    expect(grantOf(prompt)).toEqual(grant);
+  });
+
+  test.each([
+    "don't merge linesmith#53",
+    'did linesmith#53 merge?',
+    'merge `oakoss/linesmith#53`',
+    'merge 53 on oakoss/linesmith',
+    'merge issue#53',
+  ])('%j grants no merge', (prompt) => {
+    expect(grantOf(prompt).merge).toBe(false);
+  });
+
+  test.each([
+    ['Merge oakoss/linesmith#53?', merging('oakoss/linesmith#53')],
+    ['Merge `oakoss/linesmith#53`?', merging('oakoss/linesmith#53')],
+    ['Merge https://github.com/oakoss/linesmith/pull/53?', merging('oakoss/linesmith#53')],
+    ['oakoss/issues#53 is ready. Merge it?', merging('oakoss/issues#53')],
+    ['Merge this#53?', merging('53')],
+  ])('a yes to %j names it', (offer, grant) => {
+    expect(grantOf('yes', offer)).toEqual(grant);
+  });
+
+  test.each(['issue', 'pulls', 'request', 'number'])(
+    'a yes to "Merge %s#53?" grants no merge, as on main',
+    (word) => {
+      expect(grantOf('yes', `Merge ${word}#53?`).merge).toBe(false);
+    },
+  );
+
+  test.each([
+    ['merge it', 'Merge oakoss/linesmith#53?', merging('oakoss/linesmith#53')],
+    ['merge it', 'Merge `linesmith#53`? #130 is the version PR.', merging('linesmith#53')],
+    ['merge it when its ready', 'Merge oakoss/linesmith#53?', autoNamed('oakoss/linesmith#53')],
+  ])('%j after %j names it, never #53 here', (prompt, offer, grant) => {
+    expect(grantOf(prompt, offer)).toEqual(grant);
+  });
+
+  test.each([
+    ['merge only linesmith#53', merging('linesmith#53')],
+    ['merge both', merging('linesmith#53', 'linesmith#54')],
+    ['skip linesmith#53', merging('linesmith#54')],
+  ])('%j picks from "Merge linesmith#53 and linesmith#54?"', (prompt, grant) => {
+    expect(grantOf(prompt, 'Merge linesmith#53 and linesmith#54?')).toEqual(grant);
+  });
+
+  test('skipping one named by its link and its name skips both', () => {
+    const offer =
+      'Merge [oakoss/linesmith#53](https://github.com/oakoss/linesmith/pull/53) and oakoss/linesmith#54?';
+    expect(grantOf('skip oakoss/linesmith#53', offer)).toEqual(merging('oakoss/linesmith#54'));
+  });
+
+  test.each([
+    ['merge linesmith#53 and 54', ''],
+    ['merge linesmith#53/54', ''],
+    ['merge linesmith#53, then merge 54', ''],
+    ['yes', 'Merge `linesmith#53` and 54?'],
+    ['yes', 'Merge linesmith#53 and #54?'],
+    ['merge both', 'Merge #54 and linesmith#53?'],
+  ])('%j after %j names no bare number beside one in another repository', (prompt, offer) => {
+    const g = grantOf(prompt, offer);
+    expect(g.merge).toBe(true);
+    expect(new Set(g.mergeNamed)).toEqual(new Set(['linesmith#53', '?#54']));
+  });
+
+  test('a bare number beside one names no merge once ready here either', () => {
+    expect(grantOf('merge linesmith#53, and merge 54 once CI passes')).toMatchObject({
+      mergeNamed: ['linesmith#53'],
+      readyNamed: ['?#54'],
+    });
+  });
+
+  test('a stack merge up to a bare number beside one names no layer', () => {
+    expect(grantOf('merge linesmith#53, then merge up to 3').mergeStack).toEqual(['upto:?#3']);
+  });
+
+  test.each(['release linesmith#53', 'approve linesmith#53', 'comment on linesmith#53'])(
+    '%j grants what it does on main, since only a merge binds a repository',
+    (prompt) => {
+      expect(grantOf(prompt)).toEqual(grantOf(prompt.replace('linesmith#53', 'the-thing')));
+    },
+  );
+
+  test.each(['[#53]', '[PR 53]', '[53]'])(
+    'a yes to a %s link to linesmith#53 never names #53 here',
+    (label) => {
+      const g = grantOf('yes', `Merge ${label}(https://github.com/oakoss/linesmith/pull/53)?`);
+      expect(g.mergeNamed).toContain('oakoss/linesmith#53');
+      expect(g.mergeNamed).not.toContain('53');
+    },
+  );
+
+  test.each(['https://notgithub.com', 'https://example.com/github.com'])(
+    'a link on %s names no github.com repository',
+    (site) => {
+      const g = grantOf('merge it', `Merge ${site}/oakoss/linesmith/pull/53?`);
+      expect(g.mergeNamed).not.toContain('oakoss/linesmith#53');
+    },
+  );
+
+  test("a hold on one ends a standing ask for it, as one on this repository's does", () => {
+    expect(endsReady("don't merge linesmith#53")).toBe(true);
+  });
+
+  test.each(['Merge #53/#54?', 'Merge #53-#54?', 'Merge _x#53 and #54?'])(
+    '"merge it" after %j names neither, as on main',
+    (offer) => {
+      expect(grantOf('merge it', offer)).toEqual(merging(NAMED_ELSEWHERE));
+    },
+  );
+
+  test('a link label holding more than its number keeps it', () => {
+    const link = '[#53 only when I say so](https://github.com/oakoss/claude-plugins/pull/53)';
+    expect(grantOf(`merge ${link}`).merge).toBe(false);
+  });
+
+  test('the number it reads as is one the message does not hold', () => {
+    expect(grantOf('merge linesmith#53 and linesmith#1000000000')).toEqual(
+      merging('linesmith#53', 'linesmith#1000000000'),
+    );
+  });
+});
+
 describe('a merge or release once the pull request and main are ready', () => {
   const READY_RELEASE = { ...NONE, readyRelease: true };
   const cases: [string, object][] = [
