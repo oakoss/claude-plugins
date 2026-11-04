@@ -102,6 +102,12 @@ const pull = (n: number, mergeState: string, repo = 'o/r', state = 'OPEN') => ({
 const asked = (prompt: string, answer = '') => grantOf(prompt, answer);
 const push = (ref: Extract<GhAction, { kind: 'push' }>['ref']): GhAction => ({ kind: 'push', ref });
 const merge = (auto: boolean): GhAction => ({ kind: 'merge', admin: false, auto, lookup: ['1'] });
+const there = (n: number, repo: string): GhAction => ({
+  kind: 'merge',
+  admin: false,
+  auto: false,
+  lookup: [String(n), '--repo', repo],
+});
 
 async function judge(
   actions: GhAction[],
@@ -1171,17 +1177,184 @@ describe('a merge', () => {
       const w = world('never stop', { mergeTarget: pull(46, 'CLEAN', 'evil/other') });
       const r = await judge([merge(false)], w, asked('Ok, lets merge 46 when its ready'));
       expect(r).toMatchObject({
-        deny: expect.stringContaining('in https://github.com/evil/other'),
+        deny: expect.stringContaining('#46 in evil/other, not this repository'),
       });
-      expect(r).toMatchObject({
-        deny: expect.stringContaining('give them the command to run themselves'),
+      expect(r).toMatchObject({ deny: expect.stringContaining('"Merge evil/other#46?"') });
+    });
+
+    describe('in a repository the user named', () => {
+      const HOME = { repoUrl: { out: 'https://github.com/oakoss/claude-plugins' } };
+      const linesmith = (mergeState = 'CLEAN') =>
+        world('never stop', { ...HOME, mergeTarget: pull(53, mergeState, 'oakoss/linesmith') });
+
+      test.each([
+        ['merge linesmith#53', ''],
+        ['merge oakoss/linesmith#53', ''],
+        ['merge https://github.com/oakoss/linesmith/pull/53', ''],
+        ['yes', 'Merge `oakoss/linesmith#53`?'],
+        ['yes', 'Merge [#53](https://github.com/oakoss/linesmith/pull/53)?'],
+      ])('%j merges it', async (prompt, offer) => {
+        const r = await judge([there(53, 'oakoss/linesmith')], linesmith(), asked(prompt, offer));
+        expect(r).toEqual({ ran: [] });
+      });
+
+      test("a name without its owner names only this repository's owner's", async () => {
+        const w = world('never stop', {
+          repoUrl: { out: 'https://github.com/me/linesmith' },
+          mergeTarget: pull(53, 'CLEAN', 'upstream/linesmith'),
+        });
+        const r = await judge([there(53, 'upstream/linesmith')], w, asked('merge linesmith#53'));
+        expect(r).toMatchObject({ deny: expect.stringContaining('nothing ran') });
+      });
+
+      test('a standing ask for one covers it once ready, and ends', async () => {
+        const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
+        const ask = standing({ ready: ['linesmith#53'] });
+        const r = await judgeGh(
+          'the call',
+          [auto],
+          NO_GRANT,
+          null,
+          linesmith().lookups,
+          {},
+          null,
+          [],
+          ask,
+        );
+        expect(r).toMatchObject({ ran: [], used: { ready: ['linesmith#53'] } });
+      });
+
+      test('a standing ask for one never covers a merge of it now', async () => {
+        const ask = standing({ ready: ['linesmith#53'] });
+        const w = linesmith('BLOCKED');
+        const r = await judgeGh(
+          'the call',
+          [there(53, 'oakoss/linesmith')],
+          asked('merge it'),
+          null,
+          w.lookups,
+          {},
+          null,
+          ['53'],
+          ask,
+        );
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('only once the pull request is ready'),
+        });
+      });
+
+      test("a wait on main for linesmith#53 holds its merge while main's checks fail", async () => {
+        const w = world('never stop', {
+          ...HOME,
+          mergeTarget: pull(53, 'CLEAN', 'oakoss/linesmith'),
+          mainChecks: { out: 'main FAILURE' },
+        });
+        const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
+        const ask = standing({ ready: ['linesmith#53'], main: ['linesmith#53'] });
+        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, {}, null, [], ask);
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('once the default branch is done'),
+        });
+      });
+
+      test("a wait on main for this repository's #53 is not linesmith's", async () => {
+        const w = world('never stop', {
+          ...HOME,
+          mergeTarget: pull(53, 'CLEAN', 'oakoss/linesmith'),
+          mainChecks: { out: 'main FAILURE' },
+        });
+        const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
+        const ask = standing({ ready: ['linesmith#53'], main: ['53'] });
+        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, {}, null, [], ask);
+        expect(r).toMatchObject({ ran: [] });
+      });
+
+      test("a bare number beside one never covers this branch's pull request", async () => {
+        const r = await judge(
+          [merge(false)],
+          world('never stop'),
+          asked('merge 54', 'Merge o/linesmith#53?'),
+        );
+        expect(r).toMatchObject({ deny: expect.stringContaining('nothing ran') });
+      });
+
+      test('a bare number names only this repository', async () => {
+        const w = world('never stop', { mergeTarget: pull(53, 'CLEAN', 'oakoss/linesmith') });
+        const r = await judge([there(53, 'oakoss/linesmith')], w, asked('merge 53'));
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('"Merge oakoss/linesmith#53?"'),
+        });
+      });
+
+      test.each([
+        ['another repository', pull(53, 'CLEAN', 'oakoss/other')],
+        ['another owner', pull(53, 'CLEAN', 'evil/linesmith')],
+        ['another number', pull(54, 'CLEAN', 'oakoss/linesmith')],
+      ])('refuses %s', async (_, target) => {
+        const w = world('never stop', { mergeTarget: target });
+        const r = await judge(
+          [there(53, 'oakoss/linesmith')],
+          w,
+          asked('merge oakoss/linesmith#53'),
+        );
+        expect(r).toMatchObject({ deny: expect.stringContaining('nothing ran') });
+      });
+
+      test("never covers this repository's pull request of the same number", async () => {
+        const w = world('never stop', { mergeTarget: pull(53, 'CLEAN') });
+        const r = await judge([merge(false)], w, asked('merge linesmith#53'));
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('the user asked to merge linesmith#53'),
+        });
+      });
+
+      test('covers this repository named with its owner', async () => {
+        const w = world('never stop', { mergeTarget: pull(1, 'CLEAN') });
+        expect(await judge([merge(false)], w, asked('merge o/r#1'))).toEqual({ ran: [] });
+      });
+
+      test('is never looked up as the version pull request', async () => {
+        const w = linesmith();
+        const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
+        const asks = grant({ autoMerge: true, readyNamed: ['linesmith#53'], readyRelease: true });
+        expect(await judge([auto], w, asks)).toMatchObject({ ran: [] });
+        expect(w.calls.filter((c) => c.startsWith('pullRequest'))).toEqual([]);
+      });
+
+      test('merges it once ready', async () => {
+        const action = { ...there(53, 'oakoss/linesmith'), auto: true };
+        const r = await judge(
+          [action],
+          linesmith('BLOCKED'),
+          asked('merge linesmith#53 once CI passes'),
+        );
+        expect(r).toMatchObject({ ran: [], used: { ready: ['linesmith#53'] } });
+      });
+
+      test('merges one its URL selects', async () => {
+        const w = linesmith();
+        const action: GhAction = {
+          kind: 'merge',
+          admin: false,
+          auto: false,
+          lookup: ['https://github.com/oakoss/linesmith/pull/53'],
+        };
+        expect(await judge([action], w, asked('merge linesmith#53'))).toEqual({ ran: [] });
+      });
+
+      test('refuses one on another host', async () => {
+        const w = world('never stop', {
+          mergeTarget: { out: 'https://ghe.example/oakoss/linesmith/pull/53 OPEN CLEAN\n' },
+        });
+        const r = await judge([there(53, 'oakoss/linesmith')], w, asked('merge linesmith#53'));
+        expect(r).toMatchObject({ deny: expect.stringContaining('on another host') });
       });
     });
 
     test.each([
       ['unnamed', 'Name it by number.'],
       ['beside', 'Run the merge as its own command.'],
-      ['elsewhere', 'on another host or repository, give them the command'],
+      ['elsewhere', 'write it out as `--repo <owner>/<name>`'],
     ] as const)(
       'refuses a merge now whose pull request the gate cannot tell (%s), naming the fix',
       async (cannot, remedy) => {
@@ -1532,6 +1705,25 @@ describe('gh stack merge', () => {
       ran: [],
     });
     expect(w.calls).toContain('mergeTarget 2');
+  });
+
+  test.each(['merge o/r#2 and o/r#3', 'merge up to o/r#3'])(
+    '%j names layers in this repository',
+    async (prompt) => {
+      const w = world('push', {}, undefined, STACKS);
+      expect(await judge([m(3)], w, asked(prompt))).toEqual({ ran: [] });
+    },
+  );
+
+  test.each([
+    'merge x/y#2 and x/y#3',
+    'merge up to x/y#3',
+    'merge linesmith#53, then merge up to 3',
+  ])("%j names no layer of this repository's stack", async (prompt) => {
+    const w = world('push', {}, undefined, STACKS);
+    expect(await judge([m(3)], w, asked(prompt))).toMatchObject({
+      deny: expect.stringContaining('nothing ran'),
+    });
   });
 
   test('a merge of several layers needs every one named', async () => {

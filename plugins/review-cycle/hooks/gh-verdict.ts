@@ -192,7 +192,34 @@ const CANNOT: Record<'elsewhere' | 'unnamed', string> = {
 // required checks passed and nothing blocks (pr-watch reads ready the same).
 const READY = new Set(['CLEAN', 'HAS_HOOKS', 'UNSTABLE']);
 
-type Target = { number: string; state: string; mergeState: string };
+// `repo` is `<owner>/<name>`, on this repository's host; `home` whether it is
+// this repository, whose owner is `homeOwner`.
+type Target = {
+  number: string;
+  state: string;
+  mergeState: string;
+  repo: string;
+  home: boolean;
+  homeOwner: string;
+};
+
+// Whether a pull request the user named is the target: a number names one in
+// this repository, `<name>#<n>` one of this repository's owner, and
+// `<owner>/<name>#<n>` that one.
+function namesTarget(named: string, t: Omit<Target, 'state' | 'mergeState'>): boolean {
+  if (/^\d+$/.test(named)) return t.home && named === t.number;
+  const m = /^(?:([^/#]+)\/)?([^/#]+)#(\d+)$/.exec(named);
+  if (m === null || m[3] !== t.number) return false;
+  return `${m[1] ?? t.homeOwner}/${m[2]}` === t.repo;
+}
+
+const namedIn = (list: readonly string[], t: Target) => list.find((n) => namesTarget(n, t));
+export const shownNamed = (named: string) =>
+  /^\d+$/.test(named)
+    ? `#${named}`
+    : named.startsWith('?#')
+      ? `${named.slice(1)} in a repository they did not name`
+      : named;
 
 // Why the gate cannot tell which pull request a merge reaches, and the fix.
 const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy: string }> = {
@@ -203,7 +230,7 @@ const UNTOLD: Record<'elsewhere' | 'unnamed' | 'beside', { asks: string; remedy:
   elsewhere: {
     asks: 'something outside its words picks where it merges (`GH_REPO=`, `GH_HOST=`, `GIT_DIR=`, `env -C`, `--hostname`, a `--repo` built at run time, a URL on another host)',
     remedy:
-      'If the user meant a pull request on another host or repository, give them the command to run themselves; otherwise run it from this repository without those.',
+      'For another repository on this host, write it out as `--repo <owner>/<name>`; for another host, give the user the command to run themselves; otherwise run it from this repository without those.',
   },
   unnamed: { asks: 'it does not name the pull request', remedy: 'Name it by number.' },
 };
@@ -238,6 +265,20 @@ const knownOf = (named: readonly string[]) => named.filter((n) => n !== NAMED_EL
 const SLOW =
   'GitHub did not answer in time. Run the same command again, and the gate checks it once GitHub answers; ask the user only if it fails the same way again.';
 
+const hostOf = (url: string) => /^https?:\/\/([^/]+)\//.exec(url)?.[1];
+const pathOf = (url: string) => url.replace(/^https?:\/\/[^/]+\//, '');
+
+async function homeOf(
+  lookups: GhLookups,
+): Promise<Omit<Target, 'number' | 'state' | 'mergeState'> | null> {
+  const home = read(await lookups.repoUrl(), 'the current repository');
+  if (home.asks !== undefined) return null;
+  const here = home.out.trim().toLowerCase();
+  const m = /^([^/]+)\/[^/]+$/.exec(pathOf(here));
+  if (hostOf(here) === undefined || m === null) return null;
+  return { repo: m[0], home: true, homeOwner: m[1] ?? '' };
+}
+
 // The pull request a merge reaches in this repository, as GitHub resolves its
 // selector (a number, branch or URL), or why the gate cannot tell and the fix
 // (null: retry, or ask the user).
@@ -255,17 +296,21 @@ async function targetOf(
       remedy: null,
     };
   }
-  const [, repo = '', number = '', state = '', mergeState = ''] = m;
+  const [, url = '', number = '', state = '', mergeState = ''] = m;
   const home = read(await lookups.repoUrl(), 'the current repository');
   if (home.asks !== undefined) return { asks: home.asks, remedy: home.slow ? SLOW : null };
-  if (home.out.toLowerCase() !== repo.toLowerCase()) {
-    // The grammar names no repository, so asking again grants the same.
+  const here = home.out.trim().toLowerCase();
+  const there = url.toLowerCase();
+  // A named repository is read on this repository's host only.
+  if (hostOf(there) !== hostOf(here)) {
     return {
-      asks: `it merges a pull request in ${repo}, not in this repository`,
+      asks: `it merges a pull request in ${url}, on another host than this repository`,
       remedy: 'If the user meant that one, give them the command to run themselves.',
     };
   }
-  return { number, state, mergeState };
+  const repo = pathOf(there);
+  const homeOwner = pathOf(here).split('/')[0] ?? '';
+  return { number, state, mergeState, repo, home: there === here, homeOwner };
 }
 
 // Whether a merge asked for once the pull request is ready may run now: why
@@ -592,8 +637,9 @@ export async function judgeGh(
             deny: `--admin merges past branch protection, which the gate never lets an agent do, so nothing ran. Give the user the command to run themselves, and say why it needs --admin. The command: ${shown}`,
           };
         }
-        // Named pull requests bind by the number GitHub resolves, whatever the
-        // setting. One the gate cannot tell (`?`) binds `--auto` to none.
+        // Named pull requests bind by the repository and number GitHub
+        // resolves (namesTarget), whatever the setting. One the gate cannot
+        // tell (`?`) binds `--auto` to none.
         const { now: nowNamed, ready: readyNamed } = namedOf(granted);
         // An unnamed merge now never covers one named for once ready ("merge
         // it, and merge 62 once CI passes").
@@ -635,7 +681,7 @@ export async function judgeGh(
         if ((granted.merge || granted.autoMerge || granted.readyRelease || standingAsks) && !free) {
           const t = await targetOf(lookups, action.lookup);
           if ('asks' in t) {
-            const named = [...nowNamed, ...readyNamed].map((n) => `#${n}`).join(', ');
+            const named = [...nowNamed, ...readyNamed].map((n) => shownNamed(n)).join(', ');
             const remedy =
               t.remedy === null
                 ? `To go ahead, ${askThem('the pull request', '"Merge #116?"', shown)}`
@@ -646,12 +692,21 @@ export async function judgeGh(
             unasked = settingMay && named === '' && (nowAny || (readyAny && action.auto));
             if (!unasked) return { deny: lost };
             covers = { now: false, ready: false };
+          } else if (
+            !t.home &&
+            [nowNamed, readyNamed, standing.ready].every((l) => namedIn(l, t) === undefined)
+          ) {
+            return {
+              deny: `it merges #${t.number} in ${t.repo}, not this repository, and the user has not named it with its repository, so nothing ran. To go ahead, ${askThem('the pull request with its repository', `"Merge ${t.repo}#${t.number}?"`, shown)}`,
+            };
           } else {
-            const unnamedHere = !nowNamed.includes(t.number) && !readyNamed.includes(t.number);
+            const nowHere = namedIn(nowNamed, t);
+            const readyHere = namedIn(readyNamed, t);
+            const unnamedHere = nowHere === undefined && readyHere === undefined;
             unasked = settingMay && unnamedHere;
             // A merge naming no pull request covers one the conversation pointed at.
             const pointing =
-              unnamedMay && unnamedHere && !('cannot' in action.lookup)
+              t.home && unnamedMay && unnamedHere && !('cannot' in action.lookup)
                 ? await pointedAt(lookups, action.lookup, t, pointed)
                 : false;
             if (typeof pointing === 'object') {
@@ -667,12 +722,10 @@ export async function judgeGh(
             covers = {
               now:
                 granted.merge &&
-                (nowAny
-                  ? isPointed && !readyNamed.includes(t.number)
-                  : nowNamed.includes(t.number)),
-              ready: granted.autoMerge && (readyAny ? isPointed : readyNamed.includes(t.number)),
+                (nowAny ? isPointed && readyHere === undefined : nowHere !== undefined),
+              ready: granted.autoMerge && (readyAny ? isPointed : readyHere !== undefined),
             };
-            const lookable = !('cannot' in action.lookup) ? action.lookup : null;
+            const lookable = !('cannot' in action.lookup) && t.home ? action.lookup : null;
             if (granted.readyRelease && !covers.now && lookable !== null) {
               const which = await mergeStep(lookups, lookable);
               readyRelease = 'step' in which && which.step === 'release';
@@ -684,15 +737,16 @@ export async function judgeGh(
               standing.release !== null &&
               lookable !== null &&
               (await releaseMatches(lookups, lookable, t, standing.release));
-            const standingHere = standing.ready.includes(t.number) || standingRelease;
+            const standingNamed = namedIn(standing.ready, t);
+            const standingHere = standingNamed !== undefined || standingRelease;
             if (standingHere && !covers.now && !covers.ready) {
               covers = { ...covers, ready: true };
-              byStanding = standingRelease ? RELEASE_ASK : t.number;
+              byStanding = standingRelease ? RELEASE_ASK : (standingNamed ?? t.number);
               readyRelease ||= standingRelease;
             }
-            if (standing.ready.includes(t.number)) used.ready.push(t.number);
-            else if (covers.ready && !covers.now && readyNamed.includes(t.number)) {
-              used.ready.push(t.number);
+            if (standingNamed !== undefined) used.ready.push(standingNamed);
+            else if (covers.ready && !covers.now && readyHere !== undefined) {
+              used.ready.push(readyHere);
             }
             if (standingRelease || (readyRelease && !covers.now)) used.release = true;
           }
@@ -701,7 +755,8 @@ export async function judgeGh(
         const mainAsked =
           byStanding === null
             ? granted.readyMain
-            : standing.main.includes(byStanding) || standing.main.includes(target?.number ?? '');
+            : standing.main.includes(byStanding) ||
+              (target !== null && namedIn(standing.main, target) !== undefined);
         if (mainAsked && covers.ready && !covers.now) {
           const main = await mainNotDone(lookups);
           if (main !== null) {
@@ -742,7 +797,7 @@ export async function judgeGh(
         // "merge 46 and release it" still covers oakum's version pull request.
         let known: Awaited<ReturnType<typeof mergeStep>> | null = null;
         if (target !== null && !covers.now && !covers.ready && !unasked) {
-          const named = [...nowNamed, ...readyNamed].map((n) => `#${n}`).join(', ');
+          const named = [...nowNamed, ...readyNamed].map((n) => shownNamed(n)).join(', ');
           const wanted = named
             ? `the user asked to merge ${named}`
             : unnamedMay
@@ -772,7 +827,8 @@ export async function judgeGh(
         // unless the same message held off a release ("merge 131. don't release yet")
         // or named other pull requests ("merge 131" never merges #130).
         const covered =
-          granted.mergeNamed.length === 0 || (target !== null && nowNamed.includes(target.number));
+          granted.mergeNamed.length === 0 ||
+          (target !== null && namedIn(nowNamed, target) !== undefined);
         if (covers.now && !holds(held, 'release') && covered) break;
         // Allowed either way, a merge needs no lookup to run, except one run
         // now on readiness alone: a release there is noted. One that runs
@@ -910,11 +966,21 @@ export async function judgeGh(
         // "merge the stack", "merge stack 4" or "merge up to #3" names every
         // layer it merges, each still judged as its own merge.
         const top = set.prs.at(-1);
+        const { now, ready } = namedOf(granted);
+        // A layer named with this repository ("merge o/r#2") needs this repository read.
+        const here = [...now, ...ready, ...granted.mergeStack].some((n) => n.includes('#'))
+          ? await homeOf(lookups)
+          : null;
+        const isLayer = (named: string, n: number | undefined) =>
+          n !== undefined &&
+          (here === null
+            ? named === String(n)
+            : namesTarget(named, { ...here, number: String(n) }));
         const stacked = granted.mergeStack.some(
           (t) =>
             t === 'stack' ||
             (set.stack && typeof action.target === 'number' && t === `stack:${action.target}`) ||
-            t === `upto:${top}`,
+            (t.startsWith('upto:') && isLayer(t.slice('upto:'.length), top)),
         );
         const layerGrant = stacked
           ? { ...granted, merge: true, mergeNamed: set.prs.map(String) }
@@ -922,14 +988,13 @@ export async function judgeGh(
         // One "merge it" names one pull request; a stack merge of several
         // needs each named, now or once ready, unless the setting merges
         // without asking.
-        const { now, ready } = namedOf(granted);
-        const named = new Set([...now, ...ready]);
+        const named = [...now, ...ready];
         const ladderMerges = permitted({ ...granted, merge: false }, ladder, held).merge;
         if (
           !stacked &&
           set.prs.length > 1 &&
           !ladderMerges &&
-          !set.prs.every((n) => named.has(String(n)))
+          !set.prs.every((n) => named.some((e) => isLayer(e, n)))
         ) {
           return {
             deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askThem('every pull request it merges', `"Merge ${listed}?"`, shown)}`,
