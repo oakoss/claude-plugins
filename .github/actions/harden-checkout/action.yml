@@ -1,0 +1,25 @@
+name: Harden and checkout
+description: >
+  Harden the runner, then check out the repository without persisting
+  credentials. Jobs that need a token before checkout (release.yml) or no
+  checkout at all keep their own Harden Runner step.
+
+inputs:
+  fetch-depth:
+    description: Checkout history depth; 0 fetches every commit
+    required: false
+    default: '1'
+
+runs:
+  using: composite
+  steps:
+    - name: Harden Runner
+      uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      with:
+        egress-policy: audit
+
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: ${{ inputs.fetch-depth }}
+        persist-credentials: false
