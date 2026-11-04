@@ -1941,7 +1941,7 @@ const NOT_A_REPO = /^(?:\d+|prs?|pulls?|issues?|request|no|number|it|this|that)$
 
 // A named pull request reads as a number neither text holds, then as `<repo>#<n>`;
 // a bare number beside one could be in either repository, so `?#<n>` matches no
-// merge. Only the merge fields take this reading: other steps bind no repository.
+// merge. LIFTED says which fields take this reading.
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
   const refs = new Map<string, string>();
   const tokens = new Map<string, string>();
@@ -1975,16 +1975,38 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     const n = /^upto:(\d+)$/.exec(x)?.[1];
     return n === undefined ? x : `upto:${refs.get(n) ?? `?#${n}`}`;
   };
-  return {
-    ...grantIn(prompt, previousAnswer),
-    merge: g.merge,
+  const lifted: Grant = {
+    ...g,
     mergeNamed: named(g.mergeNamed),
-    autoMerge: g.autoMerge,
     readyNamed: named(g.readyNamed),
-    readyMain: g.readyMain,
     mergeStack: g.mergeStack.map((x) => upto(x)),
   };
+  const written = grantIn(prompt, previousAnswer);
+  const keys = Object.keys(LIFTED) as (keyof Grant)[];
+  return Object.fromEntries(
+    keys.map((k) => [k, LIFTED[k] ? lifted[k] : written[k]]),
+  ) as unknown as Grant;
 }
+
+// Which grant fields take the reading with named pull requests lifted: only a
+// merge binds a repository. Typed, so a field added to Grant needs a choice.
+const LIFTED: { readonly [K in keyof Grant]-?: boolean } = {
+  commit: false,
+  finish: false,
+  push: false,
+  pushNamed: false,
+  pr: false,
+  merge: true,
+  mergeNamed: true,
+  autoMerge: true,
+  readyNamed: true,
+  readyRelease: false,
+  readyMain: true,
+  mergeStack: true,
+  approve: false,
+  release: false,
+  comment: false,
+};
 
 function grantIn(prompt: string, previousAnswer: string): Grant {
   prompt = landPhrase(prompt);

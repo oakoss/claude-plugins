@@ -1313,6 +1313,14 @@ describe('a merge', () => {
         expect(await judge([merge(false)], w, asked('merge o/r#1'))).toEqual({ ran: [] });
       });
 
+      test('is never looked up as the version pull request', async () => {
+        const w = linesmith();
+        const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
+        const asks = grant({ autoMerge: true, readyNamed: ['linesmith#53'], readyRelease: true });
+        expect(await judge([auto], w, asks)).toMatchObject({ ran: [] });
+        expect(w.calls.filter((c) => c.startsWith('pullRequest'))).toEqual([]);
+      });
+
       test('merges it once ready', async () => {
         const action = { ...there(53, 'oakoss/linesmith'), auto: true };
         const r = await judge(

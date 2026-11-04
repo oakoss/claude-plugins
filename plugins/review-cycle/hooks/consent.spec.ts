@@ -605,6 +605,14 @@ describe('a pull request named with its repository', () => {
     expect(new Set(g.mergeNamed)).toEqual(new Set(['linesmith#53', '?#54']));
   });
 
+  test('a wait on main beside one is kept', () => {
+    expect(grantOf('merge linesmith#53 when main is done')).toMatchObject({
+      autoMerge: true,
+      readyMain: true,
+      readyNamed: ['linesmith#53'],
+    });
+  });
+
   test('a bare number beside one names no merge once ready here either', () => {
     expect(grantOf('merge linesmith#53, and merge 54 once CI passes')).toMatchObject({
       mergeNamed: ['linesmith#53'],
