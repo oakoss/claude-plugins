@@ -29,16 +29,10 @@ jobs:
       shell: ${{ steps.filter.outputs.shell }}
       modules: ${{ steps.modules.outputs.plugins }}
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       # Push builds run everything; PR builds skip ShellCheck when the diff
       # touches no shell script, and the summary job counts that skip as satisfied.
@@ -85,16 +79,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # dependencies in one step; `require-lockfile` is `--frozen-lockfile`.
@@ -155,15 +143,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # dependencies in one step; `require-lockfile` is `--frozen-lockfile`.
@@ -181,15 +162,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
 
       # validate is a static manifest check and needs no Anthropic credentials
       # (verified against an empty HOME and config dir). Installed unpinned:
@@ -224,15 +198,8 @@ jobs:
       matrix:
         plugin: ${{ fromJSON(needs.changes.outputs.modules) }}
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
 
       # Unpinned and on the runner's Node, as in Plugin manifests.
       # jactionlint ignore=adhoc-packages
@@ -260,15 +227,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
 
       # Installs pnpm (version from `packageManager`), Node, and the
       # workspace's dependencies, TypeScript among them.
@@ -299,15 +259,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
 
       # The eval scaffolds are the repository's only shell; nothing else
       # exercises them outside an eval run.
@@ -327,15 +280,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Harden and checkout
+        uses: $/.github/actions/harden-checkout
 
       # A pinned release binary checked against its published checksum rather
       # than a third-party action. Renovate does not watch it: its `github-actions`
