@@ -149,6 +149,9 @@ export function isKept(k: unknown): k is Kept {
         typeof x.message === 'string' &&
         typeof x.offer === 'string' &&
         typeof x.refusal === 'string' &&
+        (x.kind === 'refused' || x.kind === 'model') &&
+        typeof x.saved === 'boolean' &&
+        (x.key === null || typeof x.key === 'string') &&
         Array.isArray(x.steps) &&
         x.steps.every(isStep),
     ) &&

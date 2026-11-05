@@ -49,7 +49,16 @@ export type Kept = {
   };
   messages: number;
   lastAnswer: string;
-  misses: { message: string; offer: string; steps: KeptStep[]; refusal: string }[];
+  // `Miss` in hooks/register.ts.
+  misses: {
+    message: string;
+    offer: string;
+    steps: KeptStep[];
+    refusal: string;
+    kind: 'refused' | 'model';
+    saved: boolean;
+    key: string | null;
+  }[];
   dropped: { agentId: string; text: string; old: boolean }[];
   capped: string[];
   scratch: string[];

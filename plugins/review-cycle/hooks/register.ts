@@ -95,6 +95,7 @@ import {
 import type { Finishes } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
 import { declinedSince, holdAfter, type Hold, type HoldState, type HoldStep } from './hold';
+import { entryName } from './journal';
 import { isKept, keptOf, offKept, restoredOf, type Restored } from './kept';
 import {
   configured,
@@ -115,6 +116,14 @@ import {
   type Recording,
 } from './ledger';
 import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
+import {
+  countsOf,
+  type MissKind,
+  pruneMisses,
+  readMisses,
+  type RecordedMiss,
+  saveMiss,
+} from './misses';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
 import {
   escalatePush,
@@ -161,6 +170,7 @@ type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_re
 type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch' }>;
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type CodexLogHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__codex_log' }>;
+type MissesHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__misses' }>;
 type ConfigHook = MatchedHook<
   'config.set',
   {
@@ -212,7 +222,16 @@ type Message = Consent & {
   prWindow: boolean;
 };
 
-type Miss = { message: string; offer: string; steps: HoldStep[]; refusal: string };
+// `key` is its name in the store, once one is chosen.
+type Miss = {
+  message: string;
+  offer: string;
+  steps: HoldStep[];
+  refusal: string;
+  kind: MissKind;
+  saved: boolean;
+  key: string | null;
+};
 
 type ModelRead = Judged | { kind: 'unanswered'; why: string };
 type ModelAsk = { message: number; text: string; before: string; read: Promise<ModelRead> };
@@ -334,7 +353,7 @@ const held = (): Hold => state.hold?.floor ?? null;
 // remembers is copied here after each change and read back at the start, the
 // latest message's grant included, so a reload mid-step does not ask twice.
 // Bump the shape whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-8' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-9' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -356,6 +375,7 @@ let ticker: Timer | undefined;
 // wait on it.
 function keep($: $): Promise<void> {
   saving = saving.then(() => write($));
+  void flushMisses($);
   return saving;
 }
 
@@ -714,7 +734,13 @@ function noteMiss(refusal: string, step: MissStep): void {
   const named = steps.includes(step) || (step === 'release' && steps.includes('merge'));
   // A message queued while the gate judged may grant what an older one did not.
   if (!named || grants(grantOf(text, before), step)) return;
-  recordMiss({ message: clip(text), offer: clip(offer), steps, refusal: clip(refusal) });
+  recordMiss({
+    message: clip(text),
+    offer: clip(offer),
+    steps,
+    refusal: clip(refusal),
+    kind: 'refused',
+  });
 }
 
 async function onSessionStart(
@@ -770,7 +796,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'misses',
       description:
-        "The gate's refusals of a push, pull request, merge or release that the user's latest message, or the offer it answered, named: candidate rows for the consent grammar's spec. Each has the message, the offer (the answer's last lines, when the message replied to it), the steps named and the refusal. Read-only; kept in memory until Claude Code restarts.",
+        "The gate's refusals of a push, pull request, merge or release that the user's latest message, or the offer it answered, named: candidate rows for the consent grammar's spec. Each has the message, the offer (the answer's last lines, when the message replied to it), the steps named and the refusal. `misses` is this session's; `recorded` the newest 20 from every session and repository, each with its date and repository, and `counts` covers the 200 kept. Read-only; nothing leaves the machine.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -1568,9 +1594,63 @@ async function askModel($: $, text: string, before: string): Promise<ModelRead> 
   return 'why' in r ? { kind: 'unanswered', why: r.why } : judge(r.text, text);
 }
 
-function recordMiss(miss: Miss): void {
-  const same = (m: Miss) => m.message === miss.message && m.refusal === miss.refusal;
-  state.misses = [...state.misses.filter((m) => !same(m)), miss].slice(-MAX_MISSES);
+function recordMiss(miss: Omit<Miss, 'saved' | 'key'>): void {
+  const known = state.misses.find((m) => sameMiss(m, miss));
+  const entry = { ...miss, saved: known?.saved ?? false, key: known?.key ?? null };
+  state.misses = [...state.misses.filter((m) => !sameMiss(m, miss)), entry].slice(-MAX_MISSES);
+}
+
+const sameMiss = (a: Pick<Miss, 'message' | 'refusal'>, b: Pick<Miss, 'message' | 'refusal'>) =>
+  a.message === b.message && a.refusal === b.refusal;
+
+let missesAt = 0;
+// The last write the store refused, while a miss it was for is still unsaved.
+let missesError: string | null = null;
+let missesSaving: Promise<void> = Promise.resolve();
+
+function flushMisses($: $): Promise<void> {
+  missesSaving = missesSaving.then(() => saveMisses($));
+  return missesSaving;
+}
+
+// Never throws: a miss the store does not take stays unsaved for the next
+// flush, and a reload keeps it with the gate. Its key is kept before the first
+// write, so a late or repeated write replaces the entry rather than adding one.
+async function saveMisses($: $): Promise<void> {
+  let wrote = false;
+  for (const miss of state.misses.filter((m) => !m.saved)) {
+    try {
+      const now = await $.clock.now();
+      let { key } = miss;
+      if (key === null) {
+        missesAt = Math.max(now, missesAt + 1);
+        const named = entryName(missesAt, STORE_TAG);
+        key = named;
+        state.misses = state.misses.map((m) => (sameMiss(m, miss) ? { ...m, key: named } : m));
+        await keep($);
+      }
+      const recorded: RecordedMiss = {
+        message: miss.message,
+        offer: miss.offer,
+        steps: miss.steps,
+        refusal: miss.refusal,
+        kind: miss.kind,
+        date: new Date(now).toISOString().slice(0, 10),
+        repo: state.root?.top ?? null,
+      };
+      await within($, saveMiss(storeOf($), key, recorded), 'recording a consent miss');
+      state.misses = state.misses.map((m) => (sameMiss(m, miss) ? { ...m, saved: true } : m));
+      wrote = true;
+    } catch (error) {
+      missesError = messageOf(error);
+    }
+  }
+  if (!state.misses.some((m) => !m.saved)) missesError = null;
+  if (wrote) {
+    void keep($);
+    // Untimed and apart from the writes: a prune that fails or stalls loses no miss.
+    pruneMisses(storeOf($)).catch(() => null);
+  }
 }
 
 // The model's yes, with the message it read.
@@ -1629,7 +1709,10 @@ function modelRan($: $, yes: ModelYes): string {
     offer: clip(offerOf(yes.before)),
     steps: [...steps],
     refusal: clip(`granted by the model check: "${yes.quote}"`),
+    kind: 'model',
   });
+  // The step may run after its hook has kept the gate.
+  void keep($);
   return line;
 }
 
@@ -1710,7 +1793,9 @@ function targetRan($: $, n: string): string {
     offer: clip(offerOf(before)),
     steps: ['merge'],
     refusal: clip(`#${n} read by the model check as mentioned, not offered`),
+    kind: 'model',
   });
+  void keep($);
   return line;
 }
 
@@ -2341,7 +2426,7 @@ async function recordCommitRounds(
   try {
     await within(
       $,
-      recordRounds(storeOf($), root.common, entry, roundsAt, ROUNDS_TAG),
+      recordRounds(storeOf($), root.common, entry, roundsAt, STORE_TAG),
       'recording review rounds',
     );
   } catch (error) {
@@ -2358,7 +2443,7 @@ async function recordCommitRounds(
 // Orders this session's entries even when the clock does not move between
 // them; the tag keeps another session's entry at the same moment apart.
 let roundsAt = 0;
-const ROUNDS_TAG = Math.random().toString(36).slice(2, 10);
+const STORE_TAG = Math.random().toString(36).slice(2, 10);
 
 function judgedCommit(checked: Checked): boolean {
   return checked === 'commit' || typeof checked === 'object';
@@ -2463,6 +2548,9 @@ async function onStatus(
   status.commentRequested = state.message.grant.comment;
   const g = state.message.grant;
   status.autoMergeRequested = g.autoMerge || g.readyRelease || standsFor(state.standing);
+  const kept = await keptMisses($);
+  status.misses = kept.recorded && { ...countsOf(kept.recorded), unsaved: kept.unsaved };
+  if (kept.error !== null) status.missesError = kept.error;
   try {
     const root = await ensureRoot($);
     if (!root) return { result: 'Not in a git repository; review-cycle gates nothing here.' };
@@ -2617,6 +2705,49 @@ async function registerSummary($: $): Promise<void> {
     });
   } catch {
     // Without it, the skill prints the block in its reply.
+  }
+}
+
+// The recorded misses a draft can read whole; the counts cover every one kept.
+const RECORDED_SHOWN = MAX_MISSES;
+
+async function onMisses(
+  $: $,
+  _e: Input<MissesHook>,
+  _next: NextOf<MissesHook>,
+): Promise<Output<MissesHook>> {
+  const { recorded, unsaved, error } = await keptMisses($);
+  return {
+    result: JSON.stringify({
+      misses: state.misses,
+      recorded: recorded?.slice(-RECORDED_SHOWN) ?? null,
+      counts: recorded && countsOf(recorded),
+      unsaved,
+      ...(error === null ? {} : { recordedError: error }),
+    }),
+  };
+}
+
+// What the store holds once this session's unsaved misses are tried, waiting
+// at most one STATE_WAIT_MS on them; `unsaved` counts those it still lacks.
+async function keptMisses($: $): Promise<{
+  recorded: RecordedMiss[] | null;
+  unsaved: number;
+  error: string | null;
+}> {
+  let flushError: string | null = null;
+  try {
+    await within($, flushMisses($), 'saving consent misses');
+  } catch (error) {
+    flushError = messageOf(error);
+  }
+  const unsaved = state.misses.filter((m) => !m.saved).length;
+  const error = unsaved > 0 ? (missesError ?? flushError) : null;
+  try {
+    const recorded = await within($, readMisses(storeOf($)), 'reading consent misses');
+    return { recorded, unsaved, error };
+  } catch (readError) {
+    return { recorded: null, unsaved, error: messageOf(readError) };
   }
 }
 
@@ -2973,7 +3104,5 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'NotebookEdit' }, onNotebookEdit);
   on('tool.call', { tool: 'Monitor' }, onMonitor).catch(onMonitorError);
   on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatus);
-  on('tool.call', { tool: 'mcp__review-cycle__misses' }, () => ({
-    result: JSON.stringify({ misses: state.misses }),
-  }));
+  on('tool.call', { tool: 'mcp__review-cycle__misses' }, onMisses);
 };
