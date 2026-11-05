@@ -2747,7 +2747,11 @@ async function keptMisses($: $): Promise<{
 }> {
   let flushError: string | null = null;
   try {
-    await within($, flushMisses($), 'saving consent misses');
+    await within(
+      $,
+      flushMisses($),
+      "saving consent misses (the gate's save comes first, then the store's)",
+    );
   } catch (error) {
     flushError = messageOf(error);
   }
