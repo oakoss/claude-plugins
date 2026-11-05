@@ -605,6 +605,46 @@ describe('a pull request named with its repository', () => {
     expect(new Set(g.mergeNamed)).toEqual(new Set(['linesmith#53', '?#54']));
   });
 
+  test.each([
+    ['Ok, lets merge 313', 'Opened https://github.com/oakoss/claude-plugins/pull/313.'],
+    ['merge 313', 'Done.\nPR: https://github.com/oakoss/claude-plugins/pull/313'],
+    [
+      'merge 313',
+      'Opened https://github.com/oakoss/claude-plugins/pull/313.\n\n- Tests passed.\n- Lint passed.\n\npr-watch is watching it.',
+    ],
+  ])('%j after %j names the pull request the answer linked', (prompt, answer) => {
+    expect(grantOf(prompt, answer)).toEqual(merging('oakoss/claude-plugins#313'));
+  });
+
+  test('a typed number the offer names in another repository is that one, never #313 here', () => {
+    expect(grantOf('merge 313', 'Merge oakoss/linesmith#313?')).toEqual(
+      merging('oakoss/linesmith#313'),
+    );
+  });
+
+  test.each([
+    ['merge 313', 'Ready: oakoss/linesmith#53.'],
+    ['Ok, lets merge 313', 'Merged oakoss/linesmith#53.\n\nCI is green on #313.\nAll set.'],
+  ])('%j after %j names #313 here: the answer names another number', (prompt, answer) => {
+    expect(grantOf(prompt, answer)).toEqual(merging('313'));
+  });
+
+  test('a typed number beside a declined pull request the prompt names is unplaced', () => {
+    const g = grantOf("Don't merge oakoss/linesmith#53. Merge 53.");
+    expect(g.mergeNamed).not.toContain('oakoss/linesmith#53');
+    expect(g.mergeNamed).toContain('?#53');
+  });
+
+  test('a typed number two answered repositories share is unplaced', () => {
+    const answer = 'Opened oakoss/linesmith#313 and oakoss/other#313.';
+    expect(grantOf('merge 313', answer).mergeNamed).toEqual(['?#313']);
+  });
+
+  test('a link in a note in the offer still makes a number from the offer unplaced', () => {
+    const offer = 'Merge #130 (https://github.com/oakoss/linesmith/pull/53)?';
+    expect(grantOf('yes', offer).mergeNamed).toContain('?#130');
+  });
+
   test('a wait on main beside one is kept', () => {
     expect(grantOf('merge linesmith#53 when main is done')).toMatchObject({
       autoMerge: true,

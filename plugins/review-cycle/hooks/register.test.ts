@@ -4700,6 +4700,13 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, other), 'not this repository')).toBe(true);
     expect(ran(await bash($, linesmith))).toBe(true);
   });
+  test("a bare merge after an answer ending with the pull request's link runs here", async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    const report = 'Shipped; checks passed.\nPR: https://github.com/o/r/pull/116';
+    await endTurn($, 'answer', report);
+    await say($, 'Ok, lets merge 116');
+    expect(ran(await bash($, 'gh pr merge 116 --squash --delete-branch'))).toBe(true);
+  });
   test('a merge asked for once it is ready runs only with --auto', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await say($, 'Lets merge it when its ready');
