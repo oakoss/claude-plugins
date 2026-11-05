@@ -695,6 +695,22 @@ const AGREE_WORD = new Set([
 // A clause with no verb that holds off: "not yet, commit later".
 const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const STOP = /^\s*(stop|cancel|abort|halt)\b/i;
+const LATER_ALONE = /^\s*(?:maybe\s+)?later(?:\s+(?:though|then|on))?[\s.!…]*$/i;
+
+// A sentence that only holds ("Not yet though, fix the test first.", "Later.")
+// takes back the requests before it, as a retraction does; one naming a step or
+// a pull request ("Hold off on merging.", "Not yet for 63.") holds only that.
+function holdsAll(sentence: string): boolean {
+  const s = sentence.replace(FILLER, '');
+  if (LATER_ALONE.test(s)) return true;
+  const hold = HOLD.exec(s);
+  if (hold === null) return false;
+  const rest = s.slice(hold[0].length);
+  return ![PUSH_WORD, PR_WORD, MERGE_WORD, APPROVE_WORD, RELEASE_WORD, NAMES_TARGET].some((w) =>
+    w.test(rest),
+  );
+}
+const NAMES_TARGET = /\b(?:for|on)\s+(?:the\s+)?(?:prs?\b|commit\w*|#?\d+\b(?!\s+[a-z]))|#\d/i;
 // Words that open a sentence ahead of what it says: "ok, wait", "please stop".
 const FILLER = /^(\s*(ok|okay|oh|hmm|actually|please|um|uh)\b[\s,.!]*)+/i;
 // "oh wait", "sorry, never mind": a filler word may open the retraction.
@@ -2074,15 +2090,17 @@ function grantIn(prompt: string, previousAnswer: string): Grant {
       continue;
     }
     if (flipped !== null && (RETRACT.test(sentence) || isQuestion(sentence))) return NO_GRANT;
-    if (RETRACT.test(sentence)) {
+    const holds = !RETRACT.test(sentence) && !isQuestion(sentence) && holdsAll(sentence);
+    if (RETRACT.test(sentence) || holds) {
       // A semicolon ties requests the retraction cannot tell apart.
       retractions.push({
         at,
-        keeps: BARE_RETRACT.test(sentence) && !semicolonBefore ? before : null,
+        keeps: !holds && BARE_RETRACT.test(sentence) && !semicolonBefore ? before : null,
       });
       before = fresh();
       g = fresh();
-      prev = 'none';
+      // "Not yet; then push it" waits too, as a hold within a sentence does.
+      prev = holds && sentence.trim().endsWith(';') ? 'mood' : 'none';
       continue;
     }
     if (isQuestion(sentence)) {

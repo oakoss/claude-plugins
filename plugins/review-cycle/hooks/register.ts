@@ -132,7 +132,7 @@ import {
   type PushConsent,
   type Unasked,
 } from './push-judge';
-import { consentJoined, consentOf, readMessage, type Consent } from './reading';
+import { consentJoined, consentOf, ownWords, readMessage, type Consent } from './reading';
 import { isReviewSkill, resumed } from './resume';
 import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './settings';
@@ -817,11 +817,12 @@ async function onPromptSubmit(
   await recallOnce($);
   if (HUMAN.has(e.origin.kind)) {
     state.messages++;
-    const reading = readMessage(e.text, state.lastAnswer);
-    state.said = { text: e.text, before: state.lastAnswer, origin: e.origin.kind };
+    const typed = ownWords(e.text);
+    const reading = readMessage(typed, state.lastAnswer);
+    state.said = { text: typed, before: state.lastAnswer, origin: e.origin.kind };
     // What a held message asks for still runs: "push it; don't open a PR yet".
     state.hold = holdAfter(state.hold, liftsHold(reading.grant), reading.hold);
-    state.mandate = mandateAfter(state.mandate, e.text, state.lastAnswer);
+    state.mandate = mandateAfter(state.mandate, typed, state.lastAnswer);
     const ended = reading.ends ? endedNote(state.standing) : null;
     state.standing = await standingAfter(
       $,

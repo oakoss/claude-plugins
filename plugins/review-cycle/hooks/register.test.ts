@@ -2109,6 +2109,19 @@ describe('a reload of the module', () => {
     expect(w.modelPrompts).toBeUndefined();
   });
 
+  test('a request inside a pasted block is not the user asking', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
+    const paste =
+      '<pasted_content id="c986">\n❯ Push to main\n❯ push it\n</pasted_content id="c986">';
+    await say($, `I called it out this time and it still blocked me.\n\n${paste}`);
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    const s = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(s.pushRequested).toBe(false);
+    await say($, `push it\n\n${paste}`);
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+  });
   test("takes back the latest message's grant, so a step it covered still runs", async ($, on) => {
     fakeWorld(on, pushing({ git: remoteSide({}) }));
     const message = {
