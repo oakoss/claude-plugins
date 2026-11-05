@@ -18,3 +18,15 @@ test('no agent description carries <example> blocks', () => {
     expect.soft(frontmatter, name).not.toMatch(/<example\b/i);
   }
 });
+
+// An agent with no `tools:` line inherits every tool, MCP servers included:
+// measured on 2.1.318, a do-nothing code-reviewer spawn cost 50,215 tokens
+// without one and 24,714 with it.
+// A misspelled entry passes `claude plugin validate --strict`.
+test('every reviewer names the same tools', () => {
+  for (const file of listAgents({ min: 6, exclude: ['cleanup.md'] })) {
+    const [, frontmatter] = readFileSync(file, 'utf8').split(/^---$/m);
+    const tools = /^tools:(.*)$/m.exec(frontmatter ?? '')?.[1]?.trim();
+    expect.soft(tools, path.basename(file)).toBe('Bash, Read, Edit, Write, Glob, Grep, WebFetch');
+  }
+});

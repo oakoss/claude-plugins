@@ -2,6 +2,7 @@
 name: maintainability-auditor
 description: Use this agent for an ambitious, structural code-quality audit that looks beyond the diff for ways to make the implementation dramatically simpler. It hunts for "code judo" moves (restructurings that preserve behavior while deleting whole categories of complexity), file-size sprawl, spaghetti-branch growth, and weak seams that make the code hard to test or change. It reports findings only — it does not apply fixes. It runs inside /review-cycle:review as a report-only reviewer: its structural suggestions are surfaced in the summary for the user to act on, never auto-applied. Use it when you want the most demanding read on maintainability, not just compliance.
 model: opus
+tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch
 color: red
 ---
 
