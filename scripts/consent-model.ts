@@ -11,6 +11,10 @@
 //                                              refuses (or the first n), and
 //                                              score those replies
 //   node scripts/consent-model.ts adopt <file> record a live run's replies
+//   node scripts/consent-model.ts add <file>   add labeled rows ([{ prompt,
+//                                              offer?, may }]) to the corpus,
+//                                              asking the model only about
+//                                              those the grammar refuses
 //
 // A live run needs Claude Code signed in and costs about $0.001 a message
 // (inferred from the 2026-10-13 run: about $0.30 for 299).
@@ -18,7 +22,15 @@
 /* oxlint-disable eslint/no-console -- a command-line report: printing is its output */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -32,6 +44,8 @@ type Recorded = {
   recorded: string;
   // What the run measured, so a claim about latency or tokens can be checked.
   measured?: { p50Ms: number; p95Ms: number; tokens: number };
+  // The prompts judge grants from these replies, which the spec holds judge to.
+  granted: string[];
   replies: Reply[];
 };
 type Live = Reply & { ms: number; usage: Record<string, number> | null; error?: string };
@@ -87,13 +101,14 @@ const corpus = JSON.parse(read('consent.corpus.json')) as Case[];
 const recorded = JSON.parse(readFileSync(REPLIES, 'utf8')) as Recorded;
 const keyOf = (c: { prompt: string; offer?: string }) => `${c.prompt}\u0000${c.offer ?? ''}`;
 
+// As consent.corpus.spec.ts and consent-model.spec.ts count them, so a row add writes passes both.
 const grammarSteps = (g: Grant): string[] =>
   [
     g.push === 'none' ? '' : 'push',
     g.pr ? 'pr' : '',
-    g.merge || g.autoMerge || g.readyRelease ? 'merge' : '',
+    g.merge || g.autoMerge ? 'merge' : '',
     g.approve ? 'approve' : '',
-    g.release || g.readyRelease ? 'release' : '',
+    g.release ? 'release' : '',
     g.comment ? 'comment' : '',
     g.finish.length > 0 ? 'finish' : '',
   ].filter(Boolean);
@@ -232,12 +247,11 @@ function measuredOf(answered: readonly Live[]): NonNullable<Recorded['measured']
   return { p50Ms: pct(ms, 50), p95Ms: pct(ms, 95), tokens: Math.round(mean) };
 }
 
-const [mode, arg] = process.argv.slice(2);
-if (mode === 'live') {
-  const n = arg === undefined ? refused.length : Number(arg);
-  if (!Number.isInteger(n) || n < 1)
-    throw new Error(`live [n]: n must be a whole number above 0, not ${arg}`);
-  const requests = refused.slice(0, n);
+// Asks the model about each request through the probe, and where it wrote the replies.
+function ask(requests: readonly { prompt: string; offer?: string }[]): {
+  live: Live[];
+  out: string;
+} {
   const out = join(mkdtempSync(join(tmpdir(), 'consent-live-')), 'replies.json');
   console.log(
     `asking ${CALL.model} (effort ${CALL.effort}) about ${requests.length} messages, about $${(requests.length * 0.001).toFixed(2)}`,
@@ -265,6 +279,53 @@ if (mode === 'live') {
     rules: string;
     results: Live[];
   };
+  return { live, out };
+}
+
+const STEPS = new Set(['push', 'pr', 'merge', 'approve', 'release', 'comment', 'finish']);
+
+const grantedBy = (replies: readonly Reply[]): string[] =>
+  [
+    ...new Set(
+      replies.filter((r) => model.judge(r.reply, r.prompt).kind === 'granted').map((r) => r.prompt),
+    ),
+  ].toSorted();
+
+// Labeled rows to add, each checked as the corpus spec checks it.
+function rowsOf(file: string): Case[] {
+  let rows: unknown;
+  try {
+    rows = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${file}: not readable JSON`, { cause: error });
+  }
+  if (!Array.isArray(rows)) throw new Error(`${file}: expected an array of labeled rows`);
+  return rows.map((row, i) => {
+    const r = row as Partial<Case> & Record<string, unknown>;
+    const extra = Object.keys(r).filter((k) => !['prompt', 'offer', 'may'].includes(k));
+    if (
+      typeof r.prompt !== 'string' ||
+      r.prompt.trim() === '' ||
+      (r.offer !== undefined && typeof r.offer !== 'string') ||
+      !Array.isArray(r.may) ||
+      !r.may.every((s) => STEPS.has(s)) ||
+      extra.length > 0
+    ) {
+      throw new Error(
+        `${file} row ${i}: needs a prompt, an optional offer and may (steps from ${[...STEPS].join(', ')}), nothing else`,
+      );
+    }
+    return { prompt: r.prompt, ...(r.offer === undefined ? {} : { offer: r.offer }), may: r.may };
+  });
+}
+
+const [mode, arg] = process.argv.slice(2);
+if (mode === 'live') {
+  const n = arg === undefined ? refused.length : Number(arg);
+  if (!Number.isInteger(n) || n < 1)
+    throw new Error(`live [n]: n must be a whole number above 0, not ${arg}`);
+  const requests = refused.slice(0, n);
+  const { live, out } = ask(requests);
   const answered = live.filter((r) => r.error === undefined);
   const m = measuredOf(answered);
   console.log(
@@ -300,12 +361,98 @@ if (mode === 'live') {
     effort: CALL.effort,
     recorded: new Date().toISOString().slice(0, 10),
     measured: measuredOf(run.results),
+    granted: grantedBy(run.results),
     replies: run.results.map(({ prompt, offer, reply }) =>
       offer === undefined ? { prompt, reply } : { prompt, offer, reply },
     ),
   };
   writeFileSync(REPLIES, `${JSON.stringify(next, null, 2)}\n`);
   console.log(`recorded ${next.replies.length} replies to ${REPLIES}`);
+} else if (mode === 'add') {
+  if (arg === undefined) {
+    throw new Error(
+      'add needs a JSON file of labeled rows: [{ "prompt", "offer"?, "may": [...] }]',
+    );
+  }
+  // A reply to other RULES would leave the spec failing on the whole recording.
+  if (recorded.rules !== rulesHash(model.RULES)) {
+    throw new Error('RULES changed since the replies were recorded: run live, then adopt, first');
+  }
+  const known = new Set(corpus.map((c) => keyOf(c)));
+  const added: Case[] = [];
+  for (const row of rowsOf(arg)) {
+    if (known.has(keyOf(row))) continue;
+    known.add(keyOf(row));
+    const got = grammarSteps(grantOf(row.prompt, row.offer));
+    // A step outside the label is the grammar's wrong yes: a fix, not a row.
+    const beyond = got.filter((s) => !row.may.includes(s));
+    if (beyond.length > 0) {
+      throw new Error(
+        `the grammar grants ${beyond.join(', ')} for ${JSON.stringify(row.prompt)}, which the label does not allow: fix the grammar or the label first`,
+      );
+    }
+    const missed = row.may.length > 0 && !got.some((s) => row.may.includes(s));
+    added.push(missed ? { ...row, missed: true } : row);
+  }
+  const asking = added.filter((c) => grammarSteps(grantOf(c.prompt, c.offer)).length === 0);
+  const { live, out } = asking.length === 0 ? { live: [], out: '' } : ask(asking);
+  // Matched by message, since a probe cut off partway leaves a valid prefix.
+  const answered = new Map(
+    live.filter((r) => r.error === undefined).map((r) => [keyOf(r), r] as const),
+  );
+  const unanswered = asking.filter((c) => !answered.has(keyOf(c)));
+  if (unanswered.length > 0) {
+    throw new Error(
+      `${unanswered.length} of ${asking.length} got no reply: nothing added (the replies it got are in ${out})`,
+    );
+  }
+  const replies = asking.map((c): Reply => {
+    const reply = answered.get(keyOf(c))?.reply ?? '';
+    return c.offer === undefined
+      ? { prompt: c.prompt, reply }
+      : { prompt: c.prompt, offer: c.offer, reply };
+  });
+  // A model grant outside the label is a RULES change to make, not a row.
+  for (const r of replies) {
+    const may = added.find((c) => keyOf(c) === keyOf(r))?.may ?? [];
+    const beyond = modelSteps(model.judge(r.reply, r.prompt)).filter((s) => !may.includes(s));
+    if (beyond.length > 0) {
+      throw new Error(
+        `the model grants ${beyond.join(', ')} for ${JSON.stringify(r.prompt)}, which the label does not allow: nothing added (its reply is in ${out})`,
+      );
+    }
+  }
+  if (added.length === 0) {
+    console.log('added nothing: every row is in the corpus already');
+  } else {
+    // Formatted beside the corpus first, so a formatting failure leaves both files as they were.
+    const corpusFile = join(HOOKS, 'consent.corpus.json');
+    const staged = join(HOOKS, '.consent.corpus.adding.json');
+    try {
+      try {
+        writeFileSync(staged, `${JSON.stringify([...corpus, ...added], null, 2)}\n`);
+        execFileSync(join('node_modules', '.bin', 'oxfmt'), [staged]);
+      } catch (error) {
+        throw new Error(
+          `could not format the corpus: nothing added (replies in ${out || 'none'})`,
+          { cause: error },
+        );
+      }
+      if (replies.length > 0) {
+        // A reply left by a run that failed before its rename is replaced, not doubled.
+        const adding = new Set(replies.map((r) => keyOf(r)));
+        const all = [...recorded.replies.filter((r) => !adding.has(keyOf(r))), ...replies];
+        const next: Recorded = { ...recorded, granted: grantedBy(all), replies: all };
+        writeFileSync(REPLIES, `${JSON.stringify(next, null, 2)}\n`);
+      }
+      renameSync(staged, corpusFile);
+    } finally {
+      rmSync(staged, { force: true });
+    }
+    console.log(
+      `added ${added.length} rows (${added.filter((c) => c.missed === true).length} the grammar misses) and ${replies.length} replies`,
+    );
+  }
 } else {
   const stale = recorded.rules !== rulesHash(model.RULES);
   if (stale)

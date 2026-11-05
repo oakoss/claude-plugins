@@ -8,6 +8,17 @@
     "p95Ms": 3175,
     "tokens": 844
   },
+  "granted": [
+    "Ok, lets do that",
+    "Ok, lets ship the react aria update",
+    "Push the branch delete",
+    "commit it as soon as you can, then push it",
+    "open a PR for the docs",
+    "sure, send it up",
+    "yep, cut it",
+    "yes",
+    "yes, push on"
+  ],
   "replies": [
     {
       "prompt": "merge the first PR",
