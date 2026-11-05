@@ -991,7 +991,7 @@ function onlyAutoMerge(g: MutableGrant): boolean {
 // clause around it can reject, qualify or redirect the name.
 const TICK = '`';
 const NAME = `${TICK}?([^${TICK}\\s]+?)${TICK}?`;
-const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|sure|great|please|let'?s|go ahead and)[\s,]+)*`;
+const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|sure|great|please|let'?s|go ahead and|you can|feel free to)[\s,]+)*`;
 const TAIL_WORDS = String.raw`(?:\s+(?:now|please|without a lease))*`;
 // "push to main", "push it to origin main", "push to origin/main", "push the
 // main branch", "push main to origin", "force push main".
@@ -1941,7 +1941,10 @@ const NOT_A_REPO = /^(?:\d+|prs?|pulls?|issues?|request|no|number|it|this|that)$
 
 // A named pull request reads as a number neither text holds, then as `<repo>#<n>`;
 // a bare number beside one could be in either repository, so `?#<n>` matches no
-// merge. LIFTED says which fields take this reading.
+// merge. A number the prompt holds is unplaced when the prompt names one, and
+// otherwise is the one pull request the answer names with it ("merge 313" after
+// a ship report's link to #313); a number taken from the offer is unplaced when
+// its closing lines name one. LIFTED says which fields take this reading.
 export function grantOf(prompt: string, previousAnswer = ''): Grant {
   const refs = new Map<string, string>();
   const tokens = new Map<string, string>();
@@ -1966,14 +1969,29 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
         return tokenOf(`${name}#${Number(urlN ?? n)}`);
       },
     );
-  const g = grantIn(lift(prompt), lift(previousAnswer));
+  const asked = lift(prompt);
+  const namedInPrompt = refs.size > 0;
+  const answer = lift(previousAnswer);
+  const offer = closingOf(answer);
+  const namedInOffer = [...refs.keys()].some((t) => offer.includes(t));
+  const typed = new Set(asked.match(/\d+/g));
+  const bare = (n: string) => {
+    if (!typed.has(n)) return namedInOffer ? `?#${n}` : n;
+    // A prompt naming a repository may be declining it ("don't merge
+    // linesmith#53"), so a number it holds stays unplaced.
+    if (namedInPrompt) return `?#${n}`;
+    const same = [...new Set(refs.values())].filter((r) => r.endsWith(`#${Number(n)}`));
+    if (same.length === 1) return same[0] ?? n;
+    return same.length > 1 ? `?#${n}` : n;
+  };
+  const g = grantIn(asked, answer);
   if (refs.size === 0) return g;
   const named = (xs: readonly string[]) => [
-    ...new Set(xs.map((x) => refs.get(x) ?? (/^\d+$/.test(x) ? `?#${x}` : x))),
+    ...new Set(xs.map((x) => refs.get(x) ?? (/^\d+$/.test(x) ? bare(x) : x))),
   ];
   const upto = (x: string) => {
     const n = /^upto:(\d+)$/.exec(x)?.[1];
-    return n === undefined ? x : `upto:${refs.get(n) ?? `?#${n}`}`;
+    return n === undefined ? x : `upto:${refs.get(n) ?? bare(n)}`;
   };
   const lifted: Grant = {
     ...g,
