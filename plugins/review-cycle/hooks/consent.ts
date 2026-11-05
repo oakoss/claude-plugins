@@ -697,20 +697,83 @@ const HOLD = /^\s*(not yet|not now|hold off|hold on|wait|don'?t yet)\b/i;
 const STOP = /^\s*(stop|cancel|abort|halt)\b/i;
 const LATER_ALONE = /^\s*(?:maybe\s+)?later(?:\s+(?:though|then|on))?[\s.!…]*$/i;
 
+// The words after a sentence's hold, or null when it opens with no hold.
+function afterHold(sentence: string): string | null {
+  const s = sentence.replace(FILLER, '');
+  const hold = HOLD.exec(s);
+  return hold === null ? null : s.slice(hold[0].length);
+}
+// What a hold waits on ("until I approve") is not what it holds.
+const WAITS_ON = /\b(?:until|till|before|once|after|wait(?:ing)?\s+for)\b/i;
+const namesTarget = (words: string) =>
+  [PUSH_WORD, PR_WORD, MERGE_WORD, APPROVE_WORD, RELEASE_WORD, NAMES_TARGET].some((w) =>
+    w.test(words),
+  );
+
 // A sentence that only holds ("Not yet though, fix the test first.", "Later.")
 // takes back the requests before it, as a retraction does; one naming a step or
 // a pull request ("Hold off on merging.", "Not yet for 63.") holds only that.
+// Either reading holding all holds all, since a wait can hide a target
+// ("for 62 until CI passes") or name a step of its own ("until I approve").
+// A target past the hold's own clause is its reason ("Not yet, CI is failing
+// on 63"), and a request there ("Not now, I meant merge 62") is asked again
+// in a message of its own.
 function holdsAll(sentence: string): boolean {
-  const s = sentence.replace(FILLER, '');
-  if (LATER_ALONE.test(s)) return true;
-  const hold = HOLD.exec(s);
-  if (hold === null) return false;
-  const rest = s.slice(hold[0].length);
-  return ![PUSH_WORD, PR_WORD, MERGE_WORD, APPROVE_WORD, RELEASE_WORD, NAMES_TARGET].some((w) =>
-    w.test(rest),
-  );
+  if (LATER_ALONE.test(sentence.replace(FILLER, ''))) return true;
+  const rest = afterHold(sentence);
+  if (rest === null) return false;
+  const waited = rest.split(WAITS_ON)[0] ?? '';
+  return !namesTarget(rest) || !namesTarget(waited.split(OWN_CLAUSE)[0] ?? '');
 }
 const NAMES_TARGET = /\b(?:for|on)\s+(?:the\s+)?(?:prs?\b|commit\w*|#?\d+\b(?!\s+[a-z]))|#\d/i;
+const OWN_CLAUSE = /,(?!\s*(?:and\s+|or\s+)?#?\d)/;
+
+// Takes from the grant what a scoped hold names in its own clause ("Not now, I
+// mean push it" takes nothing, "Not yet merged" states, not holds): the pull
+// requests its numbers name, with any merge naming none, and each other step.
+// `refOf` reads back a pull request its repository named ("linesmith#63").
+function withdrawn(
+  g: MutableGrant,
+  sentence: string,
+  refOf?: (token: string) => string | undefined,
+): void {
+  const scope = afterHold(sentence)?.split(WAITS_ON)[0]?.split(OWN_CLAUSE)[0];
+  if (scope === undefined || /^\s*\w+ed\b/i.test(scope)) return;
+  const numbers = NAMES_TARGET.test(scope) ? (scope.match(/\d+/g) ?? []) : [];
+  if (numbers.length > 0) {
+    const held = (t: string) => {
+      const x = t.replace(/^upto:/, '');
+      const ref = refOf?.(x) ?? x;
+      return numbers.some((n) => x === n || ref === n || ref.endsWith(`#${Number(n)}`));
+    };
+    const merges = g.mergeNamed.filter((t) => !held(t));
+    const ready = g.readyNamed.filter((t) => !held(t));
+    if (merges.length === 0) g.merge = false;
+    if (ready.length === 0) {
+      g.readyMain &&= g.readyRelease || !g.autoMerge;
+      g.autoMerge = false;
+    }
+    const stack = g.mergeStack.filter((t) => t.startsWith('upto:') && !held(t));
+    Object.assign(g, { mergeNamed: merges, readyNamed: ready, mergeStack: stack });
+  }
+  if (/\bcommit\w*/i.test(scope)) g.commit = false;
+  // A pull request opens from a pushed branch.
+  if (PUSH_WORD.test(scope)) Object.assign(g, { push: 'none', pushNamed: [], pr: false });
+  if (PR_WORD.test(scope) || /\bprs?\b/i.test(scope)) g.pr = false;
+  if (numbers.length === 0 && MERGE_WORD.test(scope)) {
+    Object.assign(g, {
+      merge: false,
+      mergeNamed: [],
+      autoMerge: false,
+      readyNamed: [],
+      readyRelease: false,
+      readyMain: false,
+      mergeStack: [],
+    });
+  }
+  if (APPROVE_WORD.test(scope)) g.approve = false;
+  if (RELEASE_WORD.test(scope)) Object.assign(g, { release: false, readyRelease: false });
+}
 // Words that open a sentence ahead of what it says: "ok, wait", "please stop".
 const FILLER = /^(\s*(ok|okay|oh|hmm|actually|please|um|uh)\b[\s,.!]*)+/i;
 // "oh wait", "sorry, never mind": a filler word may open the retraction.
@@ -1824,7 +1887,10 @@ export function endsReady(prompt: string, previousAnswer = ''): boolean {
   if (MERGE_WORD.test(text) || RELEASE_WORD.test(text)) return true;
   return sentences(spoken(unquote(prompt))).some((raw) => {
     const s = raw.replace(FILLER, '');
-    return RETRACT.test(raw) || RETRACT.test(s) || STOP.test(s);
+    // A hold whose reason names a step ("Not yet, CI is failing on 63") is no push-only hold.
+    const reasoned =
+      !isQuestion(raw) && holdsAll(raw) && namesTarget(prPhrase(afterHold(raw) ?? ''));
+    return RETRACT.test(raw) || RETRACT.test(s) || STOP.test(s) || reasoned;
   });
 }
 
@@ -2000,7 +2066,7 @@ export function grantOf(prompt: string, previousAnswer = ''): Grant {
     if (same.length === 1) return same[0] ?? n;
     return same.length > 1 ? `?#${n}` : n;
   };
-  const g = grantIn(asked, answer);
+  const g = grantIn(asked, answer, (t) => refs.get(t));
   if (refs.size === 0) return g;
   const named = (xs: readonly string[]) => [
     ...new Set(xs.map((x) => refs.get(x) ?? (/^\d+$/.test(x) ? bare(x) : x))),
@@ -2042,7 +2108,11 @@ const LIFTED: { readonly [K in keyof Grant]-?: boolean } = {
   comment: false,
 };
 
-function grantIn(prompt: string, previousAnswer: string): Grant {
+function grantIn(
+  prompt: string,
+  previousAnswer: string,
+  refOf?: (token: string) => string | undefined,
+): Grant {
   prompt = landPhrase(prompt);
   const text = spoken(prompt.trim());
   const picked = pickedMerges(text, previousAnswer);
@@ -2107,6 +2177,9 @@ function grantIn(prompt: string, previousAnswer: string): Grant {
       prev = 'none';
       continue;
     }
+    // Also from what a retraction may keep, or the hold comes back with it.
+    for (const kept of [g, before, ...retractions.map((r) => r.keeps)])
+      if (kept !== null) withdrawn(kept, sentence, refOf);
     if (prev !== 'none' && continues(sentence)) {
       if (!sentence.trim().endsWith(';')) prev = 'none';
       continue;
@@ -2138,7 +2211,7 @@ function grantIn(prompt: string, previousAnswer: string): Grant {
     for (const [i, part] of parts.entries()) {
       const c = part.replace(CONTRAST, '');
       if (CLAUSE_CONDITION.test(c) || (i === 0 && SENTENCE_CONDITION.test(c))) return NO_GRANT;
-      if (HOLD.test(c)) withheld = true;
+      if (HOLD.test(c.replace(FILLER, ''))) withheld = true;
       if (withheld) break;
       const more = merging ? namesOnly(c) : null;
       if (more !== null) {
