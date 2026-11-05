@@ -248,20 +248,11 @@ describe('recorded replies', () => {
     expect(refused.filter((c) => !replied.has(`${c.prompt}\u0000${c.offer ?? ''}`))).toEqual([]);
   });
 
-  test('the cases the model grants', () => {
+  // Recorded beside the replies, so a change to judge shows and an added row does not.
+  test('the cases the model grants are the ones recorded', () => {
     const granted = new Set(
       replies.filter((r) => judge(r.reply, r.prompt).kind === 'granted').map((r) => r.prompt),
     );
-    expect([...granted].toSorted()).toEqual([
-      'Ok, lets do that',
-      'Ok, lets ship the react aria update',
-      'Push the branch delete',
-      'commit it as soon as you can, then push it',
-      'open a PR for the docs',
-      'sure, send it up',
-      'yep, cut it',
-      'yes',
-      'yes, push on',
-    ]);
+    expect([...granted].toSorted()).toEqual(recorded.granted);
   });
 });
