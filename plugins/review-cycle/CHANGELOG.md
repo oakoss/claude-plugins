@@ -4,6 +4,66 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.36.0 (2026-11-05)
+
+### Added
+
+The findings ledger can follow code that moved. `mcp__review-cycle__ledger_record` takes a `move` list: each item names a carried entry by id and the file its code moved to, with an optional line. The entry keeps its finding, reason and date, takes the new file's path, id and blob, and comes back on reviews of that file instead of the old one. Before, an entry about code moved verbatim to another file stayed on the old path, returned as changed on every review of that file, and could only be resolved or kept there. A move onto an entry already holding that finding at the new path replaces it and counts as updated, and moves in one batch read their entries as they stood before any of them, so their order does not matter. A move to a path that is not a file in the working tree is refused, as an added entry's is. To use it, ask the agent to move an entry by id to its new path.
+
+You can now let the agent merge a pull request in another repository by naming it with its repository: "merge linesmith#53" (a repository of this one's owner), "merge oakoss/linesmith#53", or its GitHub link, or a yes to an offer naming it that way ("Merge oakoss/linesmith#53?"). That covers `gh pr merge 53 -R oakoss/linesmith`; before, the gate refused every merge outside the session's repository however you asked. A bare number still names only this repository, so "merge 53" never merges linesmith's #53. Beside a pull request named with its repository, a bare number names neither ("merge linesmith#53 and 54" covers only linesmith#53), so name each one with its repository. A yes to an offer like "Merge oakoss/linesmith#53?", or one linking `[#53](…/oakoss/linesmith/pull/53)`, used to grant a merge of this repository's #53; it now names linesmith's.
+
+The gate's consent misses now outlast the session. Each refusal of a push, pull request, merge or release your message named, and each step the model check read for the grammar, is kept in the plugin's store, the newest 200 from every session and repository, with its date and repository. The status tool counts them as `misses` (`{ kept, refused, byModel, since, unsaved }`), so a rising count shows whether the grammar or the model check needs work, and `/review-cycle:misses` drafts spec rows from earlier sessions' misses when this one has none. A miss the store refuses is tried again, a reload included, and named in `missesError` until it is saved. Nothing leaves your machine.
+
+### Fixed
+
+A bare "merge 313" right after a ship runs again. The ship report carries the pull request's link, and a link anywhere in the agent's last answer made every bare number in your reply ambiguous, so the gate refused the merge as "#313 in a repository they did not name". A number you type now means the one pull request either message names with that number, the ship report's link included, and is ambiguous only when your own message names another repository or two named pull requests share it; a number taken from the agent's offer stays ambiguous when the offer's closing lines name another repository.
+
+`/clear` and a resume now drop everything a grant came from, not only the grant:
+
+- A push or pull request the model check allowed for a message before the clear is refused after it, as one the grammar granted already was.
+- The first message after the clear is read against no offer, so a yes there no longer grants the last step the agent offered before it. After a resume this includes the resumed conversation's last offer, which the gate does not carry across the resume: ask again, or name the step.
+- A refused commit, push, pull request, merge or release no longer quotes why a yes from before the clear granted nothing.
+- An epic job started with "do epic <id>" ends, so the fresh conversation can start something else; say "do epic <id>" again to carry on.
+
+The commit check no longer refuses a `for` or `select` loop whose word list names git (`for x in git push; do …`) or a `[[ … ]]` test that does, matching how the GitHub check already reads them: neither runs those words. A loop body, a substitution in the list or the test, and zsh's `for x (a b) git push`, which runs what follows, are still judged as before. zsh's multi-name `for x y in …` is still read as running its words.
+
+A yes no longer grants a step the agent's offer put off or left to a choice:
+
+- An offer that puts a step off ("Should I push later, then merge #3?", "Merge #3 and #4 later?") grants nothing from that question, where a yes used to grant the merge of #3.
+- An offer that sets a force push against a plain one ("Force-push `fix/x` with a lease, or push?") grants neither, where a yes used to grant the lease.
+
+When such a yes grants nothing, the refusal says why, so the agent asks again for what to do now, or offers one push.
+
+The note that a Bash command changed files no longer fires for a package install. `pnpm install`, `npm install` and the like went into the note because the word `install` was read as the `install` copier wherever it appeared, so every install named the lockfile it rewrote. `install` now counts only as the command itself, so an install is not measured, as a package script already was not. `bun install` is still measured, since `bun` also runs scripts.
+
+A yes to an offer that sets a force push against a plain push grants neither, now including when the offer names a ref with a dot in it (`fix/x.y`), writes the plain side as a backticked `git push` with no flag but `-u` ("or run `git push -u origin fix/x`?"), asks the plain push as a follow-up question ("Force-push now? Or a normal push?"), or puts it after a semicolon ("Force-push with a lease; or push?"). The refusal now quotes the question that offered the choice, where a dotted ref could make it quote a later sentence.
+
+A hold that names a step or pull request now takes it back. After "merge 62 and 63. Not yet for 63." the gate merges only 62, and "Not yet for linesmith#63" withdraws that pull request too. "Hold off on the commit", "Not yet on the PR", "Hold off on approving" and "Hold off on merging" each withdraw that step from the same message. What a hold waits on no longer counts as what it holds: "push it. Not yet, until I approve." and "Hold off until 3 reviews land." now hold the push instead of granting it, and "merge 62 and 63. Not yet, CI is failing on 63." holds both merges, since a reason after the hold is not what it holds. A request after a hold in the same sentence ("Not now, I meant merge 62") is held too: ask for it in a message of its own. A sentence that only states something, such as "Not yet merged anywhere", takes nothing back.
+
+A "not yet" in its own sentence now holds the step before it. "push it. Not yet though." and "push it", then "later" on the next line, granted the push, so a push to a branch the gate does not otherwise guard would have run; only "wait" and "never mind" took a request back. A sentence that is only a hold ("not yet", "not now", "hold off", "later") now takes back the requests before it, as they do; one after it, as in "Not yet. Push it.", still counts.
+
+Text you paste no longer counts as your request. Pasting another session's transcript to ask about it ("I called it out this time and it still blocked me", then the transcript) let a "Push to main" inside the paste allow a push in this session. The gate now reads consent, holds and an epic job's start only from the words you typed around a pasted block.
+
+A push to the default branch or of a tag that the request did not name is refused with a question to ask, such as "Push to `develop`?". The refusal now gives the question unquoted and tells the agent to end its reply with it alone in the last paragraph, without quotation marks. A yes names the branch only when the question is the answer's whole last paragraph, so an agent that wrote "Done. Push to `develop`?" on one line got a yes that named nothing, and a default branch other than `main` or `master` stayed refused.
+
+The README and de-slopify's prose-patterns reference no longer point at the retired `prose` plugin, whose output style and cleanup skill de-slopify used to share rules with.
+
+A compaction during `/review-cycle:review-pr` no longer drops its later phases. Claude Code re-attaches an invoked skill cut to its first 20,000 characters, and review-pr runs to about 26,000, so a run compacted partway lost the end of Phase 4 and Phases 5 to 7: the report, posting to the pull request, and removing the disposable worktree. The hooks module now hands those phases back after the compaction, as it already did for the review skill, until review-pr's Phase 7 sweep. Its brief also stops asking reviewers to settle a question it never posed: they report the most severe findings first.
+
+The review skill loads about 3,100 characters less into every review. It had grown to 61,989 of the 62,000 characters its size check allows, so every change needed a cut made under pressure; one pass now states each rule once, where it is enforced, and leaves room under the cap. How a review runs does not change, except for a clarification the budget had kept out: a carried ledger entry whose code moved to another file is recorded with `move`. Phase 7's cleanup also no longer calls itself tier-dependent: it is chosen by the diff's size, as the step beneath it says.
+
+`/review-cycle:review` no longer ends its reply with the 35-line summary block, which pushed whatever it explained or asked above it off the screen. The block goes to a new `summary` tool instead: the transcript shows it folded to its first lines, ctrl+o to expand, and the call reads `review-cycle - summary (MCP)(lines: N)` rather than the block with its newlines escaped. The reply then ends with what you need to read or answer, such as findings held at the round limit. The tool is there with the gate off too; where mods do not load at all, the block is printed in the reply as before.
+
+A `reviewerChanges` entry in the status tool now says the repository changed "by it or by another agent", as the note sent to the reviewer already did. The gate compares the repository around a reviewer's command, so an edit the main session or another leg made while that command ran lands on the reviewer too; the entry read as the reviewer's own change, and a review summary could blame the wrong leg.
+
+Asking `gh stack rebase` or `gh stack sync` for help (`--help`, `-h`) no longer counts as rewriting the stack, so Monitor runs it and the commit gate does not watch it as a rebase. Only a bare help request counts as one: with any other argument, or fed by `xargs`, it still counts as a rewrite, since an argument such as `-h=false` turns help off. `gh stack rebase` is now found wherever `gh` appears in a command, such as after `sudo -u gh`, not only at the first `gh` word.
+
+A `git -c alias.x=…` that commits is refused even when a later call in the same command redefines `x` inline: each call is read with its own definition.
+
+When the commit gate fails while checking `gh stack rebase` or `gh stack sync`, it refuses the command rather than letting it run with a note.
+
+"You can push it to main" names `main` again. A push to the default branch or a tag runs only when your message names it, and the gate read that name only after "ok", "please", "let's" or "go ahead and", so leave given as "you can" or "feel free to" granted the push but refused it as going to a branch you had not named. Those two now lead a named push too; "you can push to main if CI passes" and "you can't push to main" still name nothing.
+
 ## 0.35.0 (2026-10-27)
 
 ### Added
@@ -1277,4 +1337,4 @@ Security and robustness fixes for issues found by running `/review-cycle:review`
 - Per-project opt-out via `.claude/.no-review-gate` and global kill-switch via `~/.claude/.disable-review-gate`.
 - Embedded comment and fix-vs-defer policies inside the skills, with standalone copies in `reference/policies.md` for optional CLAUDE.md installation.
 
-Generated by oakum 0.5.0.
+Generated by oakum 0.8.3.
