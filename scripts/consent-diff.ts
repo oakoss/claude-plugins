@@ -194,6 +194,9 @@ const VERBS = [
   'stack the PRs',
   'push the stack of PRs',
   // A pull request named with its repository, and the near misses.
+  'You can push it to main',
+  'feel free to push to main',
+  'you can push the v1 tag',
   'merge linesmith#53',
   'merge oakoss/linesmith#53',
   'merge https://github.com/oakoss/linesmith/pull/53',

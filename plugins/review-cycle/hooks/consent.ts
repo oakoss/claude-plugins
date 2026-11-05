@@ -991,7 +991,7 @@ function onlyAutoMerge(g: MutableGrant): boolean {
 // clause around it can reject, qualify or redirect the name.
 const TICK = '`';
 const NAME = `${TICK}?([^${TICK}\\s]+?)${TICK}?`;
-const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|sure|great|please|let'?s|go ahead and)[\s,]+)*`;
+const LEAD = String.raw`(?:(?:ok(?:ay)?|yes|yeah|sure|great|please|let'?s|go ahead and|you can|feel free to)[\s,]+)*`;
 const TAIL_WORDS = String.raw`(?:\s+(?:now|please|without a lease))*`;
 // "push to main", "push it to origin main", "push to origin/main", "push the
 // main branch", "push main to origin", "force push main".

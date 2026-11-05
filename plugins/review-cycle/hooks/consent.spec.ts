@@ -1858,6 +1858,13 @@ describe('where a push says it goes', () => {
     ['Push the v1.2.0 tag. Actually, never mind that. Push it.', '', []],
     ['push the tags. no wait, never mind. push it', '', []],
     ['push to main. thanks', '', ['main']],
+    // Leave given as a request: "you can", "feel free to".
+    ['You can push it to main', 'Should I push it, and do you want to go ahead?', ['main']],
+    ['you can push to main', '', ['main']],
+    ['ok, you can push it to main now', '', ['main']],
+    ['feel free to push it to main', '', ['main']],
+    ['you can push to main if CI passes', '', []],
+    ["you can't push to main", '', []],
     ['yes', 'Do not\nPush to `main`?', []],
     ['yes', 'Done.\n\nPush to `main`?', ['main']],
     ['yes', 'Changes:\n- fixed foo\n- added bar\n\nPush to `main`?', ['main']],
