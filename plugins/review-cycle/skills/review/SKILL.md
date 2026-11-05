@@ -449,7 +449,7 @@ Push only when the user's latest message asked for one ("push it", "ship it"), o
 
 ## Things to NOT do
 
-- Do NOT push or open a pull request that the user did not ask for and their stop-before setting does not allow. The gate refuses it; ask them in your reply, naming what it pushes and where, and end your turn.
+- Do NOT push or open a pull request that the user did not ask for and their stop-before setting does not allow. The gate refuses it; ask them in your reply, naming what it pushes and where, and end your turn. Get the question from `mcp__review-cycle__offer` (`push`, `pr` or `push-pr`), and end the reply with it, on a line of its own.
 - Do NOT let the Codex leg's status go unreported, absent or failed (Phases 1 and 3).
 - Do NOT pass `name:` when spawning any review subagent, in either the Phase 3 loop fan-out or the Phase 7 post-loop pass. A named background agent parks as `idle` awaiting messages instead of completing and returning its report, so its findings never arrive — and Phase 7 has no watchdog to notice.
 - Do NOT auto-create beads or trekker tickets for deferred findings.

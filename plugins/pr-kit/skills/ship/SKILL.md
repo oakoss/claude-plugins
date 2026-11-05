@@ -7,7 +7,7 @@ description: Publish the current branch as a pull request, or update its open pu
 
 Take the current branch to a pull request in one pass. The user's request is the consent: "ship it" publishes, "push it" updates an open pull request. Nothing here merges, arms auto-merge, or marks a draft ready unless the user asked for that in so many words.
 
-Run every command that writes, pushes, or closes as its own Bash call. A commit gate such as review-cycle's refuses a push or commit joined to other commands, and a refusal is never retried in another shape: report it and stop. When the gate refuses a push the user asked for in other words, ask them to say "ship it" or "push it".
+Run every command that writes, pushes, or closes as its own Bash call. A commit gate such as review-cycle's refuses a push or commit joined to other commands, and a refusal is never retried in another shape: report it and stop. When the gate refuses a push the user asked for in other words, ask them to say "ship it" or "push it". When review-cycle's `mcp__review-cycle__offer` tool exists and you ask whether to publish, get the question from it (`push-pr`), and end your reply with that question, word for word, on a line of its own.
 
 ## 1. Orient
 

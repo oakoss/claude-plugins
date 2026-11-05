@@ -7830,3 +7830,46 @@ describe('the summary tool', () => {
     expect(r.result).toBe('review-cycle summary: `text` is empty.');
   });
 });
+
+// The question the offer tool returns, as the agent's answer ends on it.
+async function offered($: any, input: Record<string, unknown>): Promise<string> {
+  const r = (await $.tool.call({ tool: 'mcp__review-cycle__offer', ...input })) as {
+    result: string;
+  };
+  return r.result.replace(/^.*word for word: /, '');
+}
+
+describe('the offer tool', () => {
+  test('a yes to its merge question merges that pull request alone', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    const question = await offered($, { step: 'merge', pulls: ['3'] });
+    expect(question).toBe('Merge #3?');
+    await endTurn($, 'answer', `CI is green.\n\n${question}`);
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 4'))).toBe(false);
+    expect(ran(await bash($, 'gh pr merge 3'))).toBe(true);
+  });
+  test('a yes to its release question lets the version pull request merge', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await endTurn($, 'answer', await offered($, { step: 'release', pulls: ['130'] }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
+  });
+  test('a yes to its push and pull request question lets both run', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    const question = await offered($, { step: 'push-pr', branch: 'fix/x' });
+    await endTurn($, 'answer', `Ready.\n\n${question}`);
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+  });
+  test('an offer it cannot phrase says why', async ($, on) => {
+    fakeWorld(on);
+    const r = (await $.tool.call({
+      tool: 'mcp__review-cycle__offer',
+      step: 'merge',
+      pulls: ['#3'],
+    })) as { result: string };
+    expect(r.result).toContain('no question: pulls must be');
+  });
+});

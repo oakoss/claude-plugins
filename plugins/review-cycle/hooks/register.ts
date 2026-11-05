@@ -125,6 +125,7 @@ import {
   saveMiss,
 } from './misses';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
+import { OFFER_STEPS, offerQuestion } from './offers';
 import {
   escalatePush,
   judgePush,
@@ -171,6 +172,7 @@ type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch'
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type CodexLogHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__codex_log' }>;
 type MissesHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__misses' }>;
+type OfferHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__offer' }>;
 type ConfigHook = MatchedHook<
   'config.set',
   {
@@ -806,7 +808,38 @@ async function onSessionStart(
   } catch {
     // The misses skill says when the tool is missing.
   }
+  try {
+    await $.tool.register({
+      name: 'offer',
+      description:
+        "Returns the one question to ask for a held step you are about to offer the user (a merge, stack merge, release, push, force-push, pull request or approval). End your answer with it, word for word, on a line of its own, with nothing after it: review-cycle's consent grammar reads a yes to that question exactly. Reword it and a yes may be held.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          step: { type: 'string', enum: [...OFFER_STEPS] },
+          pulls: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Pull requests: "316", or "owner/name#53" in another repository. merge takes one or more; release, approve and stack (up to) one.',
+          },
+          method: { type: 'string', enum: ['merge', 'squash', 'rebase'] },
+          branch: { type: 'string', description: 'For push, force-push and push-pr.' },
+          remote: { type: 'string', description: 'For a push; origin when left out.' },
+        },
+        required: ['step'],
+      },
+    });
+  } catch {
+    // Without the tool, offers are read from the answer's prose.
+  }
   return next(e);
+}
+
+function onOffer(_$: $, e: Input<OfferHook>, _next: NextOf<OfferHook>): Output<OfferHook> {
+  const offer = offerQuestion(e);
+  if ('error' in offer) return { result: `review-cycle: no question: ${offer.error}` };
+  return { result: `End your answer with this line, word for word: ${offer.question}` };
 }
 
 async function onPromptSubmit(
@@ -3120,4 +3153,5 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Monitor' }, onMonitor).catch(onMonitorError);
   on('tool.call', { tool: 'mcp__review-cycle__status' }, onStatus);
   on('tool.call', { tool: 'mcp__review-cycle__misses' }, onMisses);
+  on('tool.call', { tool: 'mcp__review-cycle__offer' }, onOffer);
 };
