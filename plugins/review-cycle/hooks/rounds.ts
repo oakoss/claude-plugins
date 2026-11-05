@@ -2,6 +2,7 @@
 // the review loop can be measured by rounds to converge. Pure; register.ts
 // binds the store.
 
+import { entryName, prune, readJournal, writeEntry } from './journal';
 import { hashOf } from './ledger';
 import type { Store } from './ledger-store';
 
@@ -23,29 +24,12 @@ const isRounds = (x: unknown): x is Rounds =>
   Number.isInteger((x as Rounds).rounds) &&
   typeof (x as Rounds).date === 'string';
 
-// Each entry under its own key, ordered by when it was recorded, so no write
-// reads and rewrites another's: one that stalls or lands late loses nothing.
 const baseOf = (common: string) => `rounds:${hashOf(common)}@`;
-const atOf = (key: string, base: string) => Number(key.slice(base.length).split('-')[0]);
 
-async function keysOf(store: Store, common: string): Promise<string[]> {
-  const base = baseOf(common);
-  const keys = await store.keys();
-  return keys
-    .filter((k) => k.startsWith(base) && Number.isSafeInteger(atOf(k, base)))
-    .toSorted((a, b) => atOf(a, base) - atOf(b, base));
+export function readRounds(store: Store, common: string): Promise<Rounds[]> {
+  return readJournal(store, baseOf(common), isRounds, KEPT);
 }
 
-// The newest KEPT, oldest first; an entry it cannot read is left out.
-export async function readRounds(store: Store, common: string): Promise<Rounds[]> {
-  const keys = await keysOf(store, common);
-  const values = await Promise.all(keys.slice(-KEPT).map((k) => store.get(k)));
-  return values.filter((v) => isRounds(v));
-}
-
-// `at` orders the entry among the others, and `tag` keeps two sessions that
-// record at the same `at` apart; once more than KEPT are kept, the oldest are
-// deleted.
 export async function recordRounds(
   store: Store,
   common: string,
@@ -53,7 +37,6 @@ export async function recordRounds(
   at: number,
   tag: string,
 ): Promise<void> {
-  await store.set(`${baseOf(common)}${at}-${tag}`, entry);
-  const keys = await keysOf(store, common);
-  await Promise.all(keys.slice(0, -KEPT).map((k) => store.delete(k)));
+  await writeEntry(store, baseOf(common), entryName(at, tag), entry);
+  await prune(store, baseOf(common), KEPT);
 }

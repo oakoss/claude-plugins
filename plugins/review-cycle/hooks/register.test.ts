@@ -182,7 +182,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     w.keptRead = true;
     if (w.kept === 'unreadable') return { deny: 'store unreadable' };
     if (w.kept === undefined) return { value: { version: 0 } };
-    return { value: { value: { shape: 'gate-8', value: w.kept.record }, version: 1 } };
+    return { value: { value: { shape: 'gate-9', value: w.kept.record }, version: 1 } };
   });
   const filesOf = (ref: string) => w.trees.get(ref) ?? w.commits[ref] ?? {};
   on(
@@ -1637,18 +1637,23 @@ function fakeStore(
   on: any,
   opts: {
     refuse?: string;
+    refuseFirst?: number;
+    refuseWhere?: (key: string, value: any) => boolean;
     readFails?: string;
     hangFirstGet?: boolean;
   } = {},
 ): Map<string, unknown> {
   const store = new Map<string, unknown>();
   let gets = 0;
+  let sets = 0;
   on('store.get', ($: unknown, e: { key: string }) => {
     if (opts.hangFirstGet && gets++ === 0) return pending();
     return opts.readFails ? { deny: opts.readFails } : { value: structuredClone(store.get(e.key)) };
   });
   on('store.set', ($: unknown, e: { key: string; value: unknown }) => {
     if (opts.refuse) return { deny: opts.refuse };
+    if (sets++ < (opts.refuseFirst ?? 0)) return { deny: 'disk full' };
+    if (opts.refuseWhere?.(e.key, e.value)) return { deny: 'disk full' };
     store.set(e.key, structuredClone(e.value));
     return { value: undefined };
   });
@@ -2007,7 +2012,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-8');
+    expect(kept?.shape).toBe('gate-9');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     expect(kept?.value.message).toMatchObject({
@@ -2472,7 +2477,15 @@ describe('a reload of the module', () => {
       };
       const done = { ...runningLeg(w, NOW), done: true, counted: true };
       const capped = { ...runningLeg(w, NOW), capped: true };
-      const miss = { message: 'ship it', offer: '', steps: ['push'], refusal: 'r' };
+      const miss = {
+        message: 'ship it',
+        offer: '',
+        steps: ['push'],
+        refusal: 'r',
+        kind: 'refused',
+        saved: true,
+        key: '1-a',
+      };
       reloadInto(
         on,
         keptRecord({
@@ -4803,6 +4816,178 @@ describe('the stop-before setting', () => {
     expect(latest.offer).toBe(closing);
     expect(latest.steps).toEqual(['merge']);
   });
+  test('a miss is recorded once in the store, with its date and repository, and counted', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    // Written with no reader asking.
+    await settle();
+    const keys = () => [...store.keys()].filter((k) => k.startsWith('misses@'));
+    expect(keys()).toHaveLength(1);
+    expect(store.get(keys()[0] ?? '')).toEqual({
+      message: 'can we merge the version PRs whenever',
+      offer: '',
+      steps: ['merge'],
+      refusal: expect.stringContaining('stop and ask them in your reply'),
+      kind: 'refused',
+      date: '2026-09-26',
+      repo: '/repo',
+    });
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    const { counts, unsaved } = JSON.parse((r as { result: string }).result);
+    expect([counts, unsaved]).toEqual([
+      { kept: 1, refused: 1, byModel: 0, since: '2026-09-26' },
+      0,
+    ]);
+    const s = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(s.misses).toEqual({ ...counts, unsaved: 0 });
+  });
+  test('a miss the store refuses is named, kept unsaved, and saved once it takes it', async ($, on) => {
+    const store = fakeStore(on, { refuseFirst: 1 });
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await settle();
+    const status = async () =>
+      JSON.parse(((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result);
+    // The status's own flush is the second write, which the store takes.
+    const s = await status();
+    expect(s.misses).toMatchObject({ kept: 1, unsaved: 0 });
+    expect(s.missesError).toBeUndefined();
+    expect([...store.keys()].filter((k) => k.startsWith('misses@'))).toHaveLength(1);
+  });
+  test('a miss the store never got before a reload is saved after it', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { git: github('fix/x') });
+    const unsaved = {
+      message: 'ship it',
+      offer: '',
+      steps: ['push'],
+      refusal: 'r',
+      kind: 'refused',
+      saved: false,
+      key: null,
+    };
+    reloadInto(on, keptRecord({ misses: [unsaved] }));
+    await say($, 'fix the parser');
+    await settle();
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    const { misses, counts } = JSON.parse((r as { result: string }).result);
+    expect(misses).toEqual([{ ...unsaved, saved: true, key: expect.any(String) }]);
+    expect(counts).toMatchObject({ kept: 1 });
+    expect([...store.keys()].filter((k) => k.startsWith('misses@'))).toHaveLength(1);
+  });
+  test('a miss written before a reload, but kept unsaved, is written again in its place', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { git: github('fix/x') });
+    const written = {
+      message: 'ship it',
+      offer: '',
+      steps: ['push'],
+      refusal: 'r',
+      kind: 'refused',
+    };
+    store.set('misses@5-a', { ...written, date: '2026-09-26', repo: '/repo' });
+    reloadInto(on, keptRecord({ misses: [{ ...written, saved: false, key: '5-a' }] }));
+    await say($, 'fix the parser');
+    await settle();
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    expect(JSON.parse((r as { result: string }).result).counts).toMatchObject({ kept: 1 });
+    expect([...store.keys()].filter((k) => k.startsWith('misses@'))).toEqual(['misses@5-a']);
+  });
+  test('a miss waits to be written until the gate keeps its key', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    let gateSaves = false;
+    on('state.set', ($$: unknown, e: { key: string }, next: any) =>
+      e.key !== 'gate' || gateSaves ? next(e) : { deny: 'state full' },
+    );
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await settle();
+    const keys = () => [...store.keys()].filter((k) => k.startsWith('misses@'));
+    const status = async () =>
+      JSON.parse(((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result);
+    const before = await status();
+    expect(keys()).toEqual([]);
+    expect(before.misses).toMatchObject({ kept: 0, unsaved: 1 });
+    expect(before.missesError).toContain('the gate could not keep its record');
+    gateSaves = true;
+    const after = await status();
+    expect(keys()).toHaveLength(1);
+    expect(after.misses).toMatchObject({ kept: 1, unsaved: 0 });
+    expect(after.missesError).toBeUndefined();
+  });
+  test('the error stays while one of two misses is unsaved', async ($, on) => {
+    fakeStore(on, {
+      refuseWhere: (key, value) =>
+        key.startsWith('misses@') && value?.message === 'can we merge the version PRs whenever',
+    });
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await say($, 'should we merge the version PR?');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await settle();
+    const s = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(s.misses).toMatchObject({ kept: 1, unsaved: 1 });
+    expect(s.missesError).toContain('disk full');
+  });
+  test('a store that keeps refusing names the misses it lacks', async ($, on) => {
+    fakeStore(on, { refuse: 'disk full' });
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    const s = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(s.misses).toEqual({ kept: 0, refused: 0, byModel: 0, since: null, unsaved: 1 });
+    expect(s.missesError).toContain('disk full');
+  });
+  test("an earlier session's misses are read back, the newest 20 listed", async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { git: github('fix/x') });
+    for (let i = 0; i < 21; i++) {
+      store.set(`misses@${i + 1}-old`, {
+        message: `m${i}`,
+        offer: '',
+        steps: ['push'],
+        refusal: 'r',
+        kind: i === 0 ? 'model' : 'refused',
+        date: '2026-09-01',
+        repo: '/other',
+      });
+    }
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    const { misses, recorded, counts } = JSON.parse((r as { result: string }).result);
+    expect(misses).toEqual([]);
+    expect(recorded.map((m: { message: string }) => m.message)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `m${i + 1}`),
+    );
+    expect(counts).toEqual({ kept: 21, refused: 20, byModel: 1, since: '2026-09-01' });
+  });
+  test('a store it cannot read is named, with no counts', async ($, on) => {
+    const store = fakeStore(on, { readFails: 'EIO' });
+    fakeWorld(on, { git: github('fix/x') });
+    store.set('misses@1-old', {});
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    expect(JSON.parse((r as { result: string }).result)).toMatchObject({
+      recorded: null,
+      counts: null,
+      recordedError: expect.stringContaining('EIO'),
+    });
+    const s = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(s.misses).toBeNull();
+    expect(s.missesError).toContain('EIO');
+  });
   test('a refused gh stack push the message named is kept as a miss', async ($, on) => {
     fakeWorld(on, { git: github('fix/x') });
     await say($, 'should we push the stack?');
@@ -7021,6 +7206,7 @@ describe('the model check', () => {
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
   });
   test('a push the grammar refuses runs on its yes, shown and kept with the misses', async ($, on) => {
+    fakeStore(on);
     const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
     await say($, SHIP);
     const r = await bash($, 'git push origin fix/x');
@@ -7036,14 +7222,19 @@ describe('the model check', () => {
       },
     ]);
     const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
-    expect(JSON.parse((misses as { result: string }).result).misses).toEqual([
+    const listed = JSON.parse((misses as { result: string }).result);
+    expect(listed.misses).toEqual([
       {
         message: SHIP,
         offer: '',
         steps: ['push'],
         refusal: 'granted by the model check: "ship the react aria update"',
+        kind: 'model',
+        saved: true,
+        key: expect.any(String),
       },
     ]);
+    expect(listed.counts).toMatchObject({ kept: 1, refused: 0, byModel: 1 });
   });
   test('is not asked about a push the user asked for that goes somewhere they did not name', async ($, on) => {
     let calls = 0;
