@@ -715,13 +715,18 @@ const namesTarget = (words: string) =>
 // a pull request ("Hold off on merging.", "Not yet for 63.") holds only that.
 // Either reading holding all holds all, since a wait can hide a target
 // ("for 62 until CI passes") or name a step of its own ("until I approve").
+// A target past the hold's own clause is its reason ("Not yet, CI is failing
+// on 63"), and a request there ("Not now, I meant merge 62") is asked again
+// in a message of its own.
 function holdsAll(sentence: string): boolean {
   if (LATER_ALONE.test(sentence.replace(FILLER, ''))) return true;
   const rest = afterHold(sentence);
   if (rest === null) return false;
-  return !namesTarget(rest) || !namesTarget(rest.split(WAITS_ON)[0] ?? '');
+  const waited = rest.split(WAITS_ON)[0] ?? '';
+  return !namesTarget(rest) || !namesTarget(waited.split(OWN_CLAUSE)[0] ?? '');
 }
 const NAMES_TARGET = /\b(?:for|on)\s+(?:the\s+)?(?:prs?\b|commit\w*|#?\d+\b(?!\s+[a-z]))|#\d/i;
+const OWN_CLAUSE = /,(?!\s*(?:and\s+|or\s+)?#?\d)/;
 
 // Takes from the grant what a scoped hold names in its own clause ("Not now, I
 // mean push it" takes nothing, "Not yet merged" states, not holds): the pull
@@ -732,9 +737,7 @@ function withdrawn(
   sentence: string,
   refOf?: (token: string) => string | undefined,
 ): void {
-  const scope = afterHold(sentence)
-    ?.split(WAITS_ON)[0]
-    ?.split(/,(?!\s*(?:and\s+|or\s+)?#?\d)/)[0];
+  const scope = afterHold(sentence)?.split(WAITS_ON)[0]?.split(OWN_CLAUSE)[0];
   if (scope === undefined || /^\s*\w+ed\b/i.test(scope)) return;
   const numbers = NAMES_TARGET.test(scope) ? (scope.match(/\d+/g) ?? []) : [];
   if (numbers.length > 0) {
@@ -1884,7 +1887,10 @@ export function endsReady(prompt: string, previousAnswer = ''): boolean {
   if (MERGE_WORD.test(text) || RELEASE_WORD.test(text)) return true;
   return sentences(spoken(unquote(prompt))).some((raw) => {
     const s = raw.replace(FILLER, '');
-    return RETRACT.test(raw) || RETRACT.test(s) || STOP.test(s);
+    // A hold whose reason names a step ("Not yet, CI is failing on 63") is no push-only hold.
+    const reasoned =
+      !isQuestion(raw) && holdsAll(raw) && namesTarget(prPhrase(afterHold(raw) ?? ''));
+    return RETRACT.test(raw) || RETRACT.test(s) || STOP.test(s) || reasoned;
   });
 }
 

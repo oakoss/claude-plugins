@@ -768,6 +768,10 @@ describe('a message ends the asks for once ready that outlast it', () => {
     ['dont push the other branch yet', false],
     ['While we wait on that lets plan out our next bit of work', false],
     ['thanks', false],
+    ['push it. Not yet, CI is failing on 63.', true],
+    ['push it and open a PR. Not yet, open a PR for it later.', true],
+    ['push it. Not yet.', false],
+    ['not yet, did the push go through?', false],
   ] as const)('%s → %s', (prompt, ends) => {
     expect(endsReady(prompt)).toBe(ends);
   });
@@ -2216,13 +2220,22 @@ describe('a retraction cancels the sentence it retracts', () => {
     ['push it. Not yet, once the PR merges.', NONE],
     ['push it. Not yet, after the merge.', NONE],
     ['push it. Not yet, waiting for the merge.', NONE],
+    // A target past the hold's own clause is its reason, and a request there is asked again.
+    ['merge 62 and 63. Not yet, CI is failing on 63.', NONE],
+    ['merge 62 and 63. Not yet, see comments on #63.', NONE],
+    ['push it and merge 5. Not yet, the merge.', NONE],
+    ['push it and merge 5. Not yet, merging can wait.', NONE],
+    ['merge 62. Not now, I mean merge 62 right away.', NONE],
+    ['push it. Not now, push it instead.', NONE],
+    ['merge 62 and 63. Not now, I meant merge 62.', NONE],
+    ['push it. Not now, I meant merge 62.', NONE],
     // A state, not a hold.
     ['push it. Not yet pushed by anyone.', PUSH],
     ['merge 62. Not yet merged anywhere, it is new.', { ...NONE, merge: true, mergeNamed: ['62'] }],
     ['push it; hold off on merging.', PUSH],
     ['push it. Not yet for the release.', PUSH],
     ['merge 62. Not yet for 63.', { ...NONE, merge: true, mergeNamed: ['62'] }],
-    ['push it. Not now, I mean push it right away.', PUSH],
+    ['push it. Not now, I mean push it right away.', NONE],
     ['push it. Not yet, commit first.', NONE],
     ['push it. Not yet, wait for 2 reviewers.', NONE],
     ['push it. Hold off on the commit.', PUSH],
