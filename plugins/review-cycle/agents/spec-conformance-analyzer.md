@@ -2,6 +2,7 @@
 name: spec-conformance-analyzer
 description: Use this agent to check a diff against the spec it was supposed to implement — the originating issue, task, or PRD — rather than against code-quality standards. It answers a different question than the other reviewers: not "is this code good?" but "is this the thing we were asked to build?" It reports missing or partial requirements, behavior that was not asked for (scope creep), and requirements that look implemented but wrong. Its findings are reported in their own section and never merged with quality findings, because a change can follow every standard while implementing the wrong thing.
 model: inherit
+tools: Bash, Read, Edit, Write, Glob, Grep, WebFetch
 color: blue
 ---
 
@@ -16,7 +17,7 @@ Locate the originating spec in this priority order, and **label what you find** 
 3. **A PRD or spec file** under `docs/`, `specs/`, `.scratch/`, or similar whose name matches the branch or feature. *Unverified* unless its content plainly describes this diff.
 4. **A tracker ID found only in older branch history** — e.g. from `git log --oneline -n 20` on a reused branch where the changes are not yet committed. This is the weakest signal and frequently stale: on a reused branch the recent commits may be prior, already-merged work. *Unverified.* Do not let it preempt a matching spec file (step 3); use it only as a last resort.
 
-Fetch a tracker body via: trekker `trekker show <id>` (or the `trekker_task_show` MCP tool), beads `bd show <id>`, GitHub `gh issue view <n>`.
+Fetch a tracker body via: trekker `trekker show <id>`, tm `tm show <key>`, beads `bd show <id>`, GitHub `gh issue view <n>`.
 
 If you find nothing, do not guess and do not invent acceptance criteria from the code. Report exactly: **"No spec source found — spec axis skipped."** That is a complete, valid result.
 
