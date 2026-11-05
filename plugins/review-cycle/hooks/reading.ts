@@ -30,7 +30,7 @@ export type MessageReading = Readonly<{
 // A paste is what the user shows, not their request. Claude Code puts each tag on
 // its own line, so tags typed mid-line stay the user's words.
 const PASTED =
-  /(?<=^|\n)<pasted_content id="([^"]*)">\n[\s\S]*?\n<\/pasted_content id="\1">(?=\n|$)/g;
+  /(?<=^|\n)<pasted_content id="([0-9a-f]{4})">\n[\s\S]*?\n<\/pasted_content id="\1">(?=\n|$)/g;
 export const ownWords = (text: string): string => text.replaceAll(PASTED, '');
 
 export function readMessage(text: string, before: string): MessageReading {
