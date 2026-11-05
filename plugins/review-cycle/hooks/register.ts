@@ -374,8 +374,12 @@ let ticker: Timer | undefined;
 // copy never lands after a newer one. Never throws: the gate's decisions do not
 // wait on it.
 function keep($: $): Promise<void> {
-  saving = saving.then(() => write($));
   void flushMisses($);
+  return keepGate($);
+}
+
+function keepGate($: $): Promise<void> {
+  saving = saving.then(() => write($));
   return saving;
 }
 
@@ -1614,8 +1618,9 @@ function flushMisses($: $): Promise<void> {
 }
 
 // Never throws: a miss the store does not take stays unsaved for the next
-// flush, and a reload keeps it with the gate. Its key is kept before the first
-// write, so a late or repeated write replaces the entry rather than adding one.
+// flush, and a reload keeps it with the gate. It is written only once the gate
+// has kept its key, so a late or repeated write, or one a reload repeats,
+// replaces the entry rather than adding one.
 async function saveMisses($: $): Promise<void> {
   let wrote = false;
   for (const miss of state.misses.filter((m) => !m.saved)) {
@@ -1627,7 +1632,12 @@ async function saveMisses($: $): Promise<void> {
         const named = entryName(missesAt, STORE_TAG);
         key = named;
         state.misses = state.misses.map((m) => (sameMiss(m, miss) ? { ...m, key: named } : m));
-        await keep($);
+      }
+      if (!keptText.includes(JSON.stringify(key))) {
+        await within($, keepGate($), 'saving the gate');
+        if (!keptText.includes(JSON.stringify(key))) {
+          throw new Error('the gate could not keep its record, so the miss waits to be written');
+        }
       }
       const recorded: RecordedMiss = {
         message: miss.message,

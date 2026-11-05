@@ -1638,6 +1638,7 @@ function fakeStore(
   opts: {
     refuse?: string;
     refuseFirst?: number;
+    refuseWhere?: (key: string, value: any) => boolean;
     readFails?: string;
     hangFirstGet?: boolean;
   } = {},
@@ -1652,6 +1653,7 @@ function fakeStore(
   on('store.set', ($: unknown, e: { key: string; value: unknown }) => {
     if (opts.refuse) return { deny: opts.refuse };
     if (sets++ < (opts.refuseFirst ?? 0)) return { deny: 'disk full' };
+    if (opts.refuseWhere?.(e.key, e.value)) return { deny: 'disk full' };
     store.set(e.key, structuredClone(e.value));
     return { value: undefined };
   });
@@ -4896,6 +4898,46 @@ describe('the stop-before setting', () => {
     const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
     expect(JSON.parse((r as { result: string }).result).counts).toMatchObject({ kept: 1 });
     expect([...store.keys()].filter((k) => k.startsWith('misses@'))).toEqual(['misses@5-a']);
+  });
+  test('a miss waits to be written until the gate keeps its key', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    let gateSaves = false;
+    on('state.set', ($$: unknown, e: { key: string }, next: any) =>
+      e.key !== 'gate' || gateSaves ? next(e) : { deny: 'state full' },
+    );
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await settle();
+    const keys = () => [...store.keys()].filter((k) => k.startsWith('misses@'));
+    const status = async () =>
+      JSON.parse(((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result);
+    const before = await status();
+    expect(keys()).toEqual([]);
+    expect(before.misses).toMatchObject({ kept: 0, unsaved: 1 });
+    expect(before.missesError).toContain('the gate could not keep its record');
+    gateSaves = true;
+    const after = await status();
+    expect(keys()).toHaveLength(1);
+    expect(after.misses).toMatchObject({ kept: 1, unsaved: 0 });
+    expect(after.missesError).toBeUndefined();
+  });
+  test('the error stays while one of two misses is unsaved', async ($, on) => {
+    fakeStore(on, {
+      refuseWhere: (key, value) =>
+        key.startsWith('misses@') && value?.message === 'can we merge the version PRs whenever',
+    });
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    await say($, 'can we merge the version PRs whenever');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await say($, 'should we merge the version PR?');
+    expect(denied(await bash($, 'gh pr merge 62'), 'release')).toBe(true);
+    await settle();
+    const s = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(s.misses).toMatchObject({ kept: 1, unsaved: 1 });
+    expect(s.missesError).toContain('disk full');
   });
   test('a store that keeps refusing names the misses it lacks', async ($, on) => {
     fakeStore(on, { refuse: 'disk full' });
