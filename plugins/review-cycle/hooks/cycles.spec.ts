@@ -134,6 +134,7 @@ describe('cycleOf', () => {
     ["iteration 2: 1 of 2 from this cycle's fixes and 7 more elsewhere", [null, null]],
     ['', [null, null]],
     ["see iteration 2: 1 of 2 from this cycle's fixes", [null, null]],
+    ['see iteration 1 only', [null, null]],
     ["iteration 1 only, iteration 2: 0 of 1 from this cycle's fixes", [null, null]],
   ])('reads the Convergence line %j as later and self-caused %j', (line, expected) => {
     const c = cycleOf(`Convergence: ${line}`, 'd', null);
