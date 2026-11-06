@@ -46,6 +46,7 @@ import {
   type ModelGrant,
 } from './consent-model';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
+import { cycleOf, isSummary, readCycles, recordCycle, rollupOf } from './cycles';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
@@ -792,7 +793,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'status',
       description:
-        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. Read-only.",
+        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, and how many later findings the cycles' own fixes caused. Read-only.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -2616,6 +2617,13 @@ async function onStatus(
       status.rounds = null;
       status.roundsError = messageOf(error);
     }
+    try {
+      const cycles = await within($, readCycles(storeOf($), root.common), 'reading review cycles');
+      status.cycles = rollupOf(cycles);
+    } catch (error) {
+      status.cycles = null;
+      status.cyclesError = messageOf(error);
+    }
     if (c === null) status.error = 'could not diff the working tree';
   } catch (error) {
     status.error = error instanceof Error ? error.message : String(error);
@@ -2750,6 +2758,43 @@ async function registerSummary($: $): Promise<void> {
   } catch {
     // Without it, the skill prints the block in its reply.
   }
+}
+
+// Answers with the block, and keeps what it says for the status tool's rollup;
+// when it kept nothing, the reason follows the block. What it could not read
+// shows in the rollup's `incomplete`.
+async function onSummary($: $, e: unknown): Promise<{ result: string }> {
+  const text = summaryText(e);
+  if (text === '') return { result: 'review-cycle summary: `text` is empty.' };
+  let note: string | null;
+  try {
+    note = await within($, recordSummary($, text), 'recording the review cycle');
+  } catch (error) {
+    note = `review-cycle may not have kept this cycle for its rollup (${messageOf(error)}).`;
+  }
+  return { result: note === null ? text : `${text}\n\n${note}` };
+}
+
+// Orders this session's cycles as `roundsAt` orders its rounds.
+let cyclesAt = 0;
+
+async function recordSummary($: $, text: string): Promise<string | null> {
+  if (!isSummary(text)) {
+    return 'review-cycle did not keep this cycle for its rollup: the block has no `Iterations:` line.';
+  }
+  const root = await ensureRoot($);
+  if (!root) return 'review-cycle did not keep this cycle for its rollup: not in a git repository.';
+  const now = await $.clock.now();
+  const at = (cyclesAt = Math.max(now, cyclesAt + 1));
+  // HEAD names the commit Phase 10 made, or the one before when it made none;
+  // unread, the cycle is kept without one.
+  const head = await headOf(gitOf($), root.top).then(
+    (h) => (h === EMPTY_TREE ? null : h.slice(0, 12)),
+    () => null,
+  );
+  const cycle = cycleOf(text, new Date(now).toISOString().slice(0, 10), head);
+  await recordCycle(storeOf($), root.common, cycle, at, STORE_TAG);
+  return null;
 }
 
 // The recorded misses a draft can read whole; the counts cover every one kept.
@@ -3120,10 +3165,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
   on('tool.call', { tool: 'mcp__review-cycle__sweep' }, keptSweep);
   on('tool.call', { tool: 'mcp__review-cycle__codex_log' }, onCodexLog);
-  on('tool.call', { tool: SUMMARY_TOOL }, (_$, e) => {
-    const text = summaryText(e);
-    return { result: text === '' ? 'review-cycle summary: `text` is empty.' : text };
-  });
+  on('tool.call', { tool: SUMMARY_TOOL }, onSummary);
   on('ui.render', { component: 'ToolUse' }, (_$, e, next) =>
     e.props.tool === SUMMARY_TOOL
       ? next({ ...e, props: { ...e.props, input: summaryHeader(e.props.input) } })

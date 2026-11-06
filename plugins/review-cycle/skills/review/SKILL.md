@@ -390,7 +390,7 @@ Skip the confirmation pass when Phase 4 found the target contaminated: report wh
 
 **Record the cycle in the ledger first**, with the `mcp__review-cycle__ledger_record` tool. Pass as `entries` every finding this cycle deferred, rebutted, or examined and left alone on purpose, and every question, each with its path, line when it has one, kind (`deferred`, `rebutted`, `left-alone`, `question`), the finding, the reason (the deferral criterion, the measurement or documentation that rebutted it, or why it was left alone), and the leg that raised it. Pass as `resolve` the ids of carried entries this cycle fixed, or found no longer apply. Pass as `keep` the ids of every other carried entry that was not reopened: the tool stamps each with its file as this cycle reviewed it, keeps its date, and drops one whose file is gone. One whose code moved to another file goes in `move` instead, with that file's path. A reopened entry the legs settled again goes in `entries` as this cycle now sees it, which dates it today, with its old id in `resolve` when the wording changed. A fixed finding is never recorded: the code changed, so raising it again means it came back. When there is nothing to record, keep or resolve, skip the call. The tool refuses a malformed batch whole and names the first fault; correct it and call again. When the tool does not exist or cannot record, the summary says `not recorded (<its answer, or tool missing>)`. Skip this step when the cycle was aborted.
 
-Call `mcp__review-cycle__sweep` first, so the summary can report what it ended and removed. Then, after any Phase 10 commit, pass this summary as `text` to `mcp__review-cycle__summary`, every field by its name below and in this order: the transcript folds its result, so your reply stays on screen. When that tool does not exist, print it in your final message as a `text` block instead. Prose may explain it, but never replaces it, and your reply ends with the final state and what the user must read or answer:
+Call `mcp__review-cycle__sweep` first, so the summary can report what it ended and removed. Then, after any Phase 10 commit, pass this summary as `text` to `mcp__review-cycle__summary`, every field by its name below and in this order: the transcript folds its result, so your reply stays on screen. When that tool does not exist, print it in your final message as a `text` block instead. Prose may explain it, but never replaces it, and your reply ends with the final state and what the user must read or answer. List each fixed and deferred finding as its own bullet, ending with its leg, the side of Phase 6's bar it falls on (`above` or `below`, whatever the iteration) and the iteration that raised it, since the tool keeps them to measure the loop:
 
 ```text
 Review cycle complete.
@@ -418,11 +418,11 @@ Convergence: iteration 1 only | <iteration N: X of Y from this cycle's fixes[ (c
 Cost: <iteration N: W min wall-clock, L legs, T subagent tokens, C Codex tokens[, not reported: <legs>]>, ... | not recorded (<reason>)
 Scratch swept: <N processes ended, directory removed> | <errors> | not swept (<reason>)
 Findings fixed inline: X
-  - file:line — issue (source)
+  - file:line — issue (source, above | below, iteration N)
   - ...
 
 Findings deferred: Y
-  - file:line — issue (source)
+  - file:line — issue (source, above | below, iteration N)
     reason: <criterion from fix-vs-defer policy | held at the ceiling | pre-existing>
   - ...
 

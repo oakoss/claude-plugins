@@ -7788,16 +7788,19 @@ const row = (tool: string, input: unknown) => ({
   isInterrupted: false,
 });
 
+const summarize = async ($: any, text: string) =>
+  ((await $.tool.call({ tool: 'mcp__review-cycle__summary', text })) as { result: string }).result;
+const cycleKeys = (store: Map<string, unknown>) =>
+  [...store.keys()].filter((k) => k.startsWith('cycles:'));
+
 describe('the summary tool', () => {
   const BLOCK = 'Review cycle complete.\n\nTier: light\nFinal state: clean';
   test('is registered at session start, and answers with the summary it was given', async ($, on) => {
+    fakeStore(on);
     const w = fakeWorld(on);
     await ($ as any).session.start({ source: 'startup' });
     expect(w.registered).toContain('summary');
-    const r = (await $.tool.call({ tool: 'mcp__review-cycle__summary', text: BLOCK } as any)) as {
-      result: string;
-    };
-    expect(r.result).toBe(BLOCK);
+    expect(await summarize($, FULL)).toBe(FULL);
   });
   test('draws its own call as a line count, and every other call as it was', async ($, on) => {
     fakeWorld(on);
@@ -7820,6 +7823,106 @@ describe('the summary tool', () => {
       });
     }
     expect(drawn.map((p) => p.input)).toEqual([{ lines: 4 }, { command: 'ls' }, { text: BLOCK }]);
+  });
+  test("keeps what the block says, and the status tool totals the repository's cycles", async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    const block = [
+      'Review cycle complete.',
+      '',
+      'Tier: full',
+      'Iterations: 2 (converged)',
+      "Convergence: iteration 2: 1 of 2 from this cycle's fixes",
+      'Findings fixed inline: 2',
+      '  - a.ts:1 — misses the empty case (code-reviewer, above)',
+      '  - a.spec.ts — no test for it (pr-test-analyzer, below)',
+      '',
+      'Findings deferred: 0',
+    ].join('\n');
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__summary', text: block } as any)) as {
+      result: string;
+    };
+    expect(r.result).toBe(block);
+    expect([...store.keys()].some((k) => k.startsWith('cycles:'))).toBe(true);
+    const status = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(status.cycles).toMatchObject({
+      cycles: 1,
+      meanIterations: 2,
+      fixedCount: 2,
+      fixed: { above: 1, below: 1, unknown: 0 },
+      later: 2,
+      selfCaused: 1,
+    });
+    expect(status.cycles.byLeg['pr-test-analyzer'].fixed.below).toBe(1);
+  });
+  const FULL = `${BLOCK}\nIterations: 1 (converged)\nConvergence: iteration 1 only\nFindings fixed inline: 0\nFindings deferred: 0`;
+  test('keeps two cycles summarized at once as two', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    await Promise.all([summarize($, FULL), summarize($, FULL)]);
+    expect(cycleKeys(store)).toHaveLength(2);
+  });
+  test('keeps no block without an Iterations line, and counts a partly read one as incomplete', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    expect(await summarize($, BLOCK)).toBe(
+      `${BLOCK}\n\nreview-cycle did not keep this cycle for its rollup: the block has no \`Iterations:\` line.`,
+    );
+    expect(cycleKeys(store)).toHaveLength(0);
+    const partial = `${BLOCK}\nIterations: 2 (converged)\nFindings fixed inline: 0\nFindings deferred: 0`;
+    expect(await summarize($, partial)).toBe(partial);
+    expect(cycleKeys(store)).toHaveLength(1);
+    const status = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect([status.cycles.cycles, status.cycles.incomplete]).toEqual([1, 1]);
+  });
+  test('says it kept nothing outside a repository', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, {
+      git: (a) =>
+        a.includes('--show-toplevel')
+          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    expect(await summarize($, FULL)).toBe(
+      `${FULL}\n\nreview-cycle did not keep this cycle for its rollup: not in a git repository.`,
+    );
+    expect(cycleKeys(store)).toHaveLength(0);
+  });
+  test('keeps a cycle whose commit it could not read, without one', async ($, on) => {
+    const store = fakeStore(on);
+    fakeWorld(on, { fail: (a) => a.includes('HEAD^{commit}') });
+    await ($ as any).session.start({ source: 'startup' });
+    expect(await summarize($, FULL)).toBe(FULL);
+    const [key] = cycleKeys(store);
+    expect((store.get(key ?? '') as { head: unknown }).head).toBeNull();
+  });
+  test('the status tool says why it could not read the cycles', async ($, on) => {
+    fakeStore(on, { readFails: 'EIO' });
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    expect(await summarize($, FULL)).toBe(FULL);
+    const status = JSON.parse(
+      ((await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any).result,
+    );
+    expect(status.cycles).toBeNull();
+    expect(status.cyclesError).toContain('EIO');
+    expect(status.worktreeTree).toEqual(expect.any(String));
+  });
+  test('still answers with the block when the store refuses it, saying why', async ($, on) => {
+    fakeStore(on, { refuse: 'disk full' });
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    const r = await summarize($, FULL);
+    expect(r.startsWith(`${FULL}\n\nreview-cycle may not have kept this cycle`)).toBe(true);
+    expect(r).toContain('disk full');
   });
   test('says so when it is given no summary', async ($, on) => {
     fakeWorld(on);
