@@ -703,6 +703,9 @@ function afterHold(sentence: string): string | null {
   const hold = HOLD.exec(s);
   return hold === null ? null : s.slice(hold[0].length);
 }
+// "do not merge it", after a request, holds the step it names: the verb onward.
+const DECLINES =
+  /^\s*(?:(?:but|and|also|so|then|just|still|though|however|ps:?),?\s+)*(?:do\s+not|don['’]?t|never)\s+(?:(?:ever|actually|even)\s+)?(?=(?:(?:auto|squash)-?)?(?:merge|push|release|approve)\b)/i;
 // What a hold waits on ("until I approve") is not what it holds.
 const WAITS_ON = /\b(?:until|till|before|once|after|wait(?:ing)?\s+for)\b/i;
 const namesTarget = (words: string) =>
@@ -737,24 +740,41 @@ function withdrawn(
   sentence: string,
   refOf?: (token: string) => string | undefined,
 ): void {
-  const scope = afterHold(sentence)?.split(WAITS_ON)[0]?.split(OWN_CLAUSE)[0];
+  const s = sentence.replace(FILLER, '');
+  const decline = DECLINES.exec(s);
+  const scope = (decline ? s.slice(decline[0].length) : afterHold(sentence))
+    ?.split(WAITS_ON)[0]
+    ?.split(OWN_CLAUSE)[0];
   if (scope === undefined || /^\s*\w+ed\b/i.test(scope)) return;
-  const numbers = NAMES_TARGET.test(scope) ? (scope.match(/\d+/g) ?? []) : [];
+  // A decline names pull requests only after "merge": "do not approve #130" keeps its merge.
+  const numbers = decline
+    ? /^(?:(?:auto|squash)-?)?merge\b/i.test(scope)
+      ? (scope.match(/\d+/g) ?? [])
+      : []
+    : NAMES_TARGET.test(scope)
+      ? (scope.match(/\d+/g) ?? [])
+      : [];
   if (numbers.length > 0) {
     const held = (t: string) => {
       const x = t.replace(/^upto:/, '');
       const ref = refOf?.(x) ?? x;
       return numbers.some((n) => x === n || ref === n || ref.endsWith(`#${Number(n)}`));
     };
-    const merges = g.mergeNamed.filter((t) => !held(t));
-    const ready = g.readyNamed.filter((t) => !held(t));
-    if (merges.length === 0) g.merge = false;
-    if (ready.length === 0) {
-      g.readyMain &&= g.readyRelease || !g.autoMerge;
-      g.autoMerge = false;
+    // "merge it; do not merge 130" leaves a merge naming no number to `namedFrom`.
+    if (!(decline && g.mergeNamed.length === 0)) {
+      const merges = g.mergeNamed.filter((t) => !held(t));
+      if (merges.length === 0) g.merge = false;
+      const stack = g.mergeStack.filter((t) => t.startsWith('upto:') && !held(t));
+      Object.assign(g, { mergeNamed: merges, mergeStack: stack });
     }
-    const stack = g.mergeStack.filter((t) => t.startsWith('upto:') && !held(t));
-    Object.assign(g, { mergeNamed: merges, readyNamed: ready, mergeStack: stack });
+    if (!(decline && g.readyNamed.length === 0)) {
+      const ready = g.readyNamed.filter((t) => !held(t));
+      if (ready.length === 0) {
+        g.readyMain &&= g.readyRelease || !g.autoMerge;
+        g.autoMerge = false;
+      }
+      g.readyNamed = ready;
+    }
   }
   if (/\bcommit\w*/i.test(scope)) g.commit = false;
   // A pull request opens from a pushed branch.
@@ -2171,7 +2191,13 @@ function grantIn(
     const semicolonBefore = semicolon;
     if (raw.trim().endsWith(';')) semicolon = true;
     const flipped = leadingReady(raw);
-    const sentence = flipped ?? raw;
+    // "do not merge it" opens with "do", as "do you…?" does, so it reads as the
+    // "don't merge it" the rest of this loop already handles.
+    const declining =
+      !raw.trim().endsWith('?') && DECLINES.test((flipped ?? raw).replace(FILLER, ''));
+    const sentence = declining
+      ? (flipped ?? raw).replaceAll(/\bdo\s+not\b/gi, "don't")
+      : (flipped ?? raw);
     // "once it's ready, do not merge it" declines the merge, so the message
     // merges nothing while the sentences beside it still count.
     if (flipped !== null && DECLINED.test(sentence) && !sentence.trim().endsWith('?')) {
