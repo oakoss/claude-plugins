@@ -299,6 +299,12 @@ describe('movesPulls', () => {
       'gh stack push',
       'gh stack sync',
       'gh stack merge 236 --yes --squash',
+      'gh pr review 95 --approve',
+      `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "T"}) { thread { isResolved } } }'`,
+      `for t in A B; do gh api graphql -F id="$t" -f query='\nmutation($id: ID!) {\n  resolveReviewThread(input: {threadId: $id}) { thread { id } }\n}'; done`,
+      `gh api graphql -f query='mutation { unresolveReviewThread(input: {threadId: "T"}) { thread { id } } }'`,
+      `Q='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id } } }'\nfor id in A B; do gh api graphql -F id="$id" -f query="$Q"; done`,
+      `gh api --hostname ghe.example.com graphql -f query='mutation { resolveReviewThread(input: {threadId: "T"}) { thread { id } } }'`,
     ]) {
       expect(movesPulls(command)).toBe(true);
     }
@@ -313,6 +319,10 @@ describe('movesPulls', () => {
       'gh run view 37238665430',
       'gh workflow list',
       'gh stack view --json',
+      'gh pr reviews 95',
+      `gh api graphql -f query='{ repository(owner: "o", name: "r") { pullRequest(number: 95) { reviewThreads(first: 50) { nodes { id isResolved } } } } }'`,
+      `gh api graphql -f query='mutation { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: "T", body: "done"}) { comment { id } } }'`,
+      'echo resolveReviewThread',
     ]) {
       expect(movesPulls(command)).toBe(false);
     }
