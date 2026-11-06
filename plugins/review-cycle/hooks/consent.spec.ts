@@ -354,6 +354,53 @@ describe('merges, approvals, releases and review replies', () => {
     ['reply', NONE],
     ['ok, reply to them', NONE],
     ['push the threads', NONE],
+    ['Comment @pullfrog --codex review this PR on #99', REPLY],
+    ['comment on 99', REPLY],
+    ['comment on PR #99', REPLY],
+    ['post a comment on #99', REPLY],
+    ['post `@coderabbitai review` on #99', REPLY],
+    ['comment on #99 please', REPLY],
+    ['ok, comment on PR 99, thanks!', REPLY],
+    // Only as the whole message; anything beside it reads as if "comment" were no verb.
+    ['push it and comment on #99', PUSH],
+    ['comment on #99, then merge it', { ...NONE, merge: true, mergeNamed: ['?'] }],
+    ['fix the comment and post `@pullfrog review` on #99', NONE],
+    ['comment on #99 that we will release it, and release it', NONE],
+    ['push it. comment on #99 saying I will push it, then merge #100', PUSH],
+    ['post the results on this PR', NONE],
+    ['post a comment on issue 12', NONE],
+    ['comment on 99 saying the fix landed', NONE],
+    ['comment on #99 saying I will push it and merge it', NONE],
+    ['post the results on #99 whenever we can, then release it', NONE],
+    ['push it and comment on #99 whenever we can, then release it', PUSH],
+    ['push it, comment on #99, and only if CI passes', NONE],
+    ['merge it, comment on #99, but not yet', NONE],
+    ['comment `if it fails, retry` on #99', REPLY],
+    ['post the summary and release on 99', RELEASE],
+    ['comment, ship it, on #99', SHIP],
+    ['Comment was posted on #99', NONE],
+    ['post in an hour on #99', NONE],
+    ['comment provided CI passes on #99', NONE],
+    ['no need to comment on 99', NONE],
+    ['comment @pullfrog review, but wait, on #99', NONE],
+    ['comment not on 99', NONE],
+    ['post the notes here not on 99', NONE],
+    ['comment on #99 not yet', NONE],
+    ['post the comment on #99 not now', NONE],
+    ['comment on #99 in an hour', NONE],
+    ['post the fix on 99 lines', NONE],
+    ['comment on 3 places', NONE],
+    ['post this on Slack instead of on 99', NONE],
+    ['comment out the debug line', NONE],
+    ['comment on line 99', NONE],
+    ['fix the comment in foo.ts', NONE],
+    ['post the numbers in the PR description', NONE],
+    ['post it', NONE],
+    ['comment it', NONE],
+    ['comment on 99 later', NONE],
+    ['do not comment on #99', NONE],
+    ['comment on #99 once CI passes', NONE],
+    ['should I comment on #99?', NONE],
     // Shipping stops at the pull request.
     ['ship it', SHIP],
     ['Ok, lets ship as is', SHIP],
@@ -398,8 +445,26 @@ describe('merges, approvals, releases and review replies', () => {
     const offer = 'Replies are drafted for the six threads.\n\nReply to the review on #95?';
     expect(grantOf(prompt, offer)).toEqual(grant);
   });
-  test('a bare reply answering an offer of another step replies to nothing', () => {
+  test.each([
+    ['yes', REPLY],
+    ['ok, post it', REPLY],
+    ['go ahead and post it', REPLY],
+    ['comment', REPLY],
+    ['post it to slack', NONE],
+    ['ok, post it tomorrow', NONE],
+    // Says more than the post: read as typed.
+    ['Ok, lets do the codex pass', NONE],
+  ])('%j, answering an offer to post on a pull request, reads as %j', (prompt, grant) => {
+    const offer = 'Pullfrog finished.\n\nShould I post `@pullfrog --codex review this PR` on #99?';
+    expect(grantOf(prompt, offer)).toEqual(grant);
+  });
+  test('a bare reply or post answering an offer of another step comments nowhere', () => {
     expect(grantOf('ok, lets reply', 'Push `fix/x` to `origin`?')).toEqual(NONE);
+    expect(grantOf('ok, post it', 'Merge #130?')).toEqual(NONE);
+  });
+  test('an offer to comment names a pull request it ends on', () => {
+    expect(grantOf('yes', 'Should I comment out the debug line?')).toEqual(NONE);
+    expect(grantOf('ok, post it', 'Should I post the numbers on 99 lines?')).toEqual(NONE);
   });
   test('a yes to an offered merge or release grants it', () => {
     expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));

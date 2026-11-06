@@ -1,12 +1,12 @@
 ---
 name: misses
-description: Lists the commit gate's refusals, this session's or the ones kept from earlier sessions, of a push, pull request, merge or release that the user's message, or the offer it answered, named, and drafts each as a candidate row for review-cycle's consent corpus. Use when the gate refused a step the user seemed to ask for, or to collect consent-grammar misses before fixing the grammar.
+description: Lists the commit gate's refusals, this session's or the ones kept from earlier sessions, of a push, pull request, merge, release or comment on GitHub that the user's message, or the offer it answered, named, and drafts each as a candidate row for review-cycle's consent corpus. Use when the gate refused a step the user seemed to ask for, or to collect consent-grammar misses before fixing the grammar.
 allowed-tools: Read, Write, Bash(pnpm consent:model add *)
 ---
 
 # Consent misses
 
-The commit gate reads each message the user types for consent to push, open a pull request, merge or release. When it refuses one of those steps and the user's latest message named that step by its verb, or replied to an offer of it, the refusal may be a miss: the user asked, and the grammar did not read it. The gate keeps this session's, up to 20, and the plugin's store the newest 200 from every session and repository; nothing leaves the machine.
+The commit gate reads each message the user types for consent to push, open a pull request, merge, release or comment on GitHub. When it refuses one of those steps and the user's latest message named that step by its verb, or replied to an offer of it, the refusal may be a miss: the user asked, and the grammar did not read it. The gate keeps this session's, up to 20, and the plugin's store the newest 200 from every session and repository; nothing leaves the machine.
 
 ## Steps
 

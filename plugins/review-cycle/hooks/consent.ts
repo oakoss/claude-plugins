@@ -151,6 +151,8 @@ type Family = Readonly<
       | { tail: 'pull-request'; numbered?: never; packaged?: never; from?: never; on?: never }
       // A publish names a version or a registry, never git work.
       | { tail: 'publish'; numbered: true; packaged: true; from?: never; on?: never }
+      // A comment says anything, then where it goes: "comment `@bot review` on #99".
+      | { tail: 'comment'; numbered?: never; packaged?: never; from?: never; on?: never }
       | {
           tail?: never;
           // A number or "on": "Release 0.25.0?", "Reply to the review on #116?".
@@ -243,13 +245,17 @@ const FAMILIES: readonly Family[] = [
   reply(['address', 'addressing']),
   reply(['reply', 'replying']),
   reply(['respond', 'responding']),
+  { forms: ['comment', 'commenting'], grants: ['comment'], tail: 'comment' },
+  { forms: ['post', 'posting'], grants: ['comment'], tail: 'comment' },
 ];
 
 // Every verb form, request and offer, as a copy the table never reads.
 export const VERB_FORMS: readonly string[] = FAMILIES.flatMap((f) => f.forms);
 
+// A typed comment is read only as the whole message (COMMENT_IT): its body is
+// free text the grammar cannot tell from requests beside it.
 const REQUESTED: Readonly<Record<string, Family>> = Object.fromEntries(
-  FAMILIES.map((f) => [f.forms[0], f]),
+  FAMILIES.filter((f) => f.tail !== 'comment').map((f) => [f.forms[0], f]),
 );
 const OFFERED: Readonly<Record<string, Family>> = Object.fromEntries(
   FAMILIES.flatMap((f) => f.forms.map((form) => [form, f])),
@@ -903,6 +909,18 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
     at !== -1 && words[at - 1] !== 'the' && words.slice(at + 1).every((x) => COURTESY.has(x));
   const tail = closing ? words.toSpliced(at, 1) : words;
   if (family.tail === 'pull-request') return namesPullRequest(tail);
+  // Ends on its pull request, "on 99" or "on PR 99": "comment on 99 lines",
+  // "comment on #99 not yet" and "comment on #99 in an hour" ask for nothing.
+  if (family.tail === 'comment') {
+    const t = tail.slice(0, tail.findLastIndex((x) => !COURTESY.has(x)) + 1);
+    const end = t.length - 1;
+    return (
+      !t.includes('instead') &&
+      !t.includes('not') &&
+      /^\d+$/.test(t[end] ?? '') &&
+      (t[end - 1] === 'on' || (t[end - 1] === 'pr' && t[end - 2] === 'on'))
+    );
+  }
   const publish = family.tail === 'publish';
   const tagged = tail.includes('tag') || tail.includes('tags');
   for (const [i, word] of tail.entries()) {
@@ -1735,9 +1753,25 @@ const DELETE_IT = new RegExp(
 // Only as the whole message, as DELETE_IT reads "delete it": any other word may
 // name another target ("reply and send it only to Sam") or defer it.
 const REPLY_IT = new RegExp(
-  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:(?:let['’]?s|let us|please|go ahead and)\s+)?(reply|respond)(?: to (?:it|that|them|those|these))?(?: and resolve(?: (?:it|them|those|these|the threads))?)?(?:\s+(?:now|please|too|first))?\b[\s.!,]*(?:please|thanks|thank you)?[\s.!]*$`,
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:(?:let['’]?s|let us|please|go ahead and)\s+)?(?:(?:reply|respond)(?: to (?:it|that|them|those|these))?|(?:post|comment)(?: (?:it|that|them))?)(?: and resolve(?: (?:it|them|those|these|the threads))?)?(?:\s+(?:now|please|too|first))?\b[\s.!,]*(?:please|thanks|thank you)?[\s.!]*$`,
   'i',
 );
+
+// The whole message, ending on its pull request: "comment on #99", "post a
+// comment on PR 99", "post `x` on #99", "Comment @bot review this PR on #99".
+// Any other words before the number may describe or defer it ("comment was
+// posted on #99", "post in an hour on #99"), so they ask for nothing.
+const COMMENT_IT = new RegExp(
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:(?:let['’]?s|let us|please|go ahead and)\s+)?(?:comment|post)(?:\s+(?:a\s+)?comment|\s+quoted|\s+@[\w-]+[^\n.?!;]*?)?\s+on\s+(?:pr\s+)?#?\d+[\s,.!]*(?:(?:now|please|thanks|thank you)[\s.!]*)*$`,
+  'i',
+);
+const COMMENT_HELD =
+  /\b(?:not|no|instead|never|don['’]?t|later|tomorrow|soon|hours?|minutes?|wait|hold|stop|until|if|unless|once|when|whenever|after|before|provided)\b/i;
+
+function commentsWhole(text: string): boolean {
+  const said = unquote(text.trim());
+  return COMMENT_IT.test(said) && !COMMENT_HELD.test(said);
+}
 
 function offersReply(answer: string): boolean {
   return accepted(answer).comment;
@@ -2162,10 +2196,14 @@ function grantIn(
   // "delete it", answering an offer to delete a branch, names that branch;
   // only as the whole reply, since "delete it, meaning the TODO" names another.
   const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
-  // "ok, lets reply", answering an offer to reply to a review, replies to it.
-  const replying =
-    REPLY_IT.test(text) && offersReply(previousAnswer)
-      ? text.replace(/\b(reply|respond)(?: to \w+)?/i, '$1 to the review')
+  // "ok, lets reply" or "post it", answering an offer to comment, comments there.
+  const replying = commentsWhole(text)
+    ? 'reply to the review'
+    : REPLY_IT.test(text) && offersReply(previousAnswer)
+      ? text.replace(
+          /\b(?:reply|respond|post|comment)(?: (?:to )?(?!and\b)\w+)?/i,
+          'reply to the review',
+        )
       : text;
   // Pasted shell sessions and quoted output are not requests.
   const typed = (
