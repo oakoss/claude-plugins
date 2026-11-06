@@ -4836,6 +4836,31 @@ describe('the stop-before setting', () => {
     expect(latest.offer).toBe(closing);
     expect(latest.steps).toEqual(['merge']);
   });
+  test('a refused comment the message or its offer named is kept as a miss, with the offer', async ($, on) => {
+    fakeWorld(on, { git: github('feat/x') });
+    const misses = async () => {
+      const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+      return JSON.parse((r as { result: string }).result).misses;
+    };
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'gh pr comment 99 --body ok'), 'a comment on GitHub')).toBe(true);
+    expect(await misses()).toEqual([]);
+    const closing =
+      'Pullfrog reviewed it.\nShould I post `@pullfrog --codex review this PR` on #99?';
+    await endTurn($, 'answer', closing);
+    await say($, 'Ok, lets do the codex pass');
+    expect(denied(await bash($, 'gh pr comment 99 --body ok'), 'a comment on GitHub')).toBe(true);
+    const [miss, ...rest] = await misses();
+    expect(rest).toEqual([]);
+    expect(miss.message).toBe('Ok, lets do the codex pass');
+    expect(miss.offer).toBe(closing);
+    expect(miss.steps).toEqual(['comment']);
+    // A pull request asked for is no comment.
+    await say($, 'open a PR and post the notes');
+    expect(denied(await bash($, 'gh pr comment 99 --body ok'), 'a comment on GitHub')).toBe(true);
+    const latest = await misses();
+    expect(latest.at(-1).message).toBe('open a PR and post the notes');
+  });
   test('a miss is recorded once in the store, with its date and repository, and counted', async ($, on) => {
     const store = fakeStore(on);
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });

@@ -185,7 +185,7 @@ describe('GitHub writes on the ladder', () => {
       'pr',
     ],
     ['an approval', { kind: 'approve' }, () => world('commit'), grant(), undefined],
-    ['a comment', { kind: 'comment' }, () => world('never stop'), grant(), undefined],
+    ['a comment', { kind: 'comment' }, () => world('never stop'), grant(), 'comment'],
   ])('a refused %s carries the step its miss is kept for', async (_name, action, w, g, step) => {
     const r = await judge([action], w(), g);
     expect(r).toHaveProperty('deny');

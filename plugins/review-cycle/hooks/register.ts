@@ -729,14 +729,28 @@ function grants(grant: Grant, step: MissStep): boolean {
   if (step === 'merge') return grant.merge || grant.autoMerge || grant.mergeStack.length > 0;
   // A merge the user asked for covers the version pull request too.
   if (step === 'release') return grant.release || grant.merge || grant.mergeStack.length > 0;
+  if (step === 'comment') return grant.comment;
   return grant.pr;
 }
+
+// Not a hold step's word: "fix the comment in foo.ts" holds nothing, but a
+// refused comment that message named is still worth keeping.
+const COMMENT_NAMED = /\b(?:comment|reply|replies|respond|post)(?:s|ed|ing)?\b/i;
 
 function noteMiss(refusal: string, step: MissStep): void {
   const { text, before } = state.said;
   // The whole closing is kept, so a spec row drafted from it reads as the gate did.
-  const offer = isReply(text) ? closingOf(before) : '';
-  const steps = [...new Set([...stepsNamed(text), ...stepsNamed(questionOf(offer))])];
+  // A comment is kept with its offer either way: "ok, do the codex pass"
+  // answers "Should I post `@bot review` on #99?" without naming it.
+  const offer = isReply(text) || step === 'comment' ? closingOf(before) : '';
+  const commented = step === 'comment' && COMMENT_NAMED.test(`${text}\n${questionOf(offer)}`);
+  const steps = [
+    ...new Set([
+      ...stepsNamed(text),
+      ...stepsNamed(questionOf(offer)),
+      ...(commented ? (['comment'] as const) : []),
+    ]),
+  ];
   // Merging the version pull request is a release, so naming the merge counts.
   const named = steps.includes(step) || (step === 'release' && steps.includes('merge'));
   // A message queued while the gate judged may grant what an older one did not.
