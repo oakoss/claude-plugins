@@ -509,8 +509,8 @@ function ghRefusal(
   return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
 }
 
-// Commits, approvals and comments are not consent the grammar misses.
-export type MissStep = 'push' | 'pr' | 'merge' | 'release';
+// Commits and approvals are not consent the grammar misses.
+export type MissStep = 'push' | 'pr' | 'merge' | 'release' | 'comment';
 
 // A refusal no model reading can lift is `final`; `notes` tell the agent what
 // ran unchecked.
@@ -558,7 +558,7 @@ export async function judgeGh(
   const ladder = await lookups.ladder();
   const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread),
-    ...(kind !== 'approve' && kind !== 'comment' && { step: kind }),
+    ...(kind !== 'approve' && { step: kind }),
   });
   // A stack merge is judged as the merges it expands to, in its place, each
   // under the grant that covered the stack.
