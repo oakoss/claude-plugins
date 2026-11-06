@@ -4,6 +4,30 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.37.0 (2026-11-06)
+
+### Added
+
+The review cycle fixes only findings that matter from its first round, not its second: a finding rated important or above, a spec defect, or one showing a fix the cycle made is wrong. A suggestion, a Codex `medium` or `low`, or a test gap rated under 7 is deferred with the reason "below the bar" and recorded in the ledger instead of fixed; a deferral does not hold up the commit. Over 46 earlier cycles that ran past round 1, 43% of first-round severity markers were below this bar, and the cycles with the higher share drew about three times as many findings from their own fixes, a correlation rather than a measured cause. Expect more deferred items in the summary's Known issues; whether it cuts rounds per commit is what this change is measuring.
+
+Review cycles are now measured. Each cycle's summary is kept per repository, and the status tool's new `cycles` field totals the newest 100: loop iterations, how each loop ended, the findings fixed and deferred by reviewer, by side of the fix bar and by iteration, and how many later findings the cycle's own fixes caused. The summary lists each fixed and deferred finding with its reviewer, `above` or `below` the bar, and the iteration that raised it, so a change to the loop, such as applying the bar from the first iteration, can be compared before and after.
+
+The new `mcp__review-cycle__offer` tool gives the agent the one question to ask for a held step it is about to offer ("Merge #316?", "Release #289?", "Push `fix/x` to `origin`?"), a question the consent grammar reads a yes to exactly. The agent ends its answer on that question, so a plain yes to its offer is not held by a rewording the grammar misreads. Your reply is still read against the whole answer, so a condition the answer states still holds it.
+
+Replying to a pull request's review asks less of you. The agent can get the question "Reply to the review on #95?" from the offer tool's new `comment` step, and an answer to it that is only the reply ("ok, lets reply", "reply to them", "reply and resolve them") now lets the replies and thread resolves run, where before only a plain yes did. "Reply to the review threads" also names the review. An answer that says anything more ("reply, but to the email", "reply and resolve them tomorrow"), or a reply with no such offer, is read as before.
+
+### Fixed
+
+A "do not" on its own now takes a request back. "Merge it. Actually, do not", "merge it. do not" and "merge it. don't" grant nothing, as "actually, don't" and "never mind" already did; before, each still let the merge run. A "don't" about something else ("don't worry about the docs") leaves the request standing.
+
+Asking for a comment on GitHub in your own words now lets it post. "Comment @pullfrog review this PR on #99", "comment on 99" and "post `@coderabbitai review` on #99" grant the comment, and "ok, post it" answers the agent's "Should I post … on #99?"; before, only "reply to the review" did, so the agent had to ask again. A comment or post counts only as the whole message, ending on its pull request, so "comment out the debug line", "comment on 99 later" and "push it and comment on #99" still ask for no comment; ask for it in a message of its own. A refused comment the message or its offer named now shows up in `/review-cycle:misses`, so the next one can be labeled into the consent corpus instead of disappearing.
+
+A later sentence declining a step now takes that step back. "Merge it. Do not merge it" grants nothing, "open a PR and merge it. But do not merge it yet." keeps only the pull request, "merge 130 and 131. Do not merge 130" merges only #131, and "release it. Do not release it" releases nothing; before, each still let the declined step run. Pushes and approvals are read the same way. A decline is read up to what it waits on, so "do not merge it until the push finishes" keeps the push, and a "do not" that asks a question ("do not merge it?") is read as before.
+
+`/review-cycle:misses` now adds the misses you label to the consent corpus in one step, through `pnpm consent:model add`, so the model check is scored against phrasing you actually typed. It marks the rows the grammar misses, asks the model only about the rows the grammar refuses, and adds nothing when one gets no reply, or when the grammar or the model grants a step your label does not allow. Outside the review-cycle repository it shows the rows for you to add.
+
+Each reviewer agent now names the tools it uses (Bash, Read, Edit, Write, Glob, Grep, WebFetch) instead of inheriting every tool in the session, MCP servers included. Every review leg costs about 25k fewer tokens before it starts work: a code-reviewer spawn that did nothing measured 50,215 tokens before and 24,714 after. The spec-conformance reviewer also reads a tm issue with `tm show <key>`.
+
 ## 0.36.0 (2026-11-05)
 
 ### Added

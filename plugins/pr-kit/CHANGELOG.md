@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.5.0 (2026-11-06)
+
+### Added
+
+The merge and ship skills take the question for the merge, release or push they ask about from review-cycle's `mcp__review-cycle__offer` tool when it is installed, and end on it, so your yes reads as asked. Without review-cycle they ask as before.
+
 ## 0.4.0 (2026-11-05)
 
 ### Added
