@@ -4,6 +4,7 @@
 
 import { expect, test } from 'vitest';
 
+import { cycleOf } from '../hooks/cycles';
 import { phase, skillText } from './agents';
 
 function section(n: number): string {
@@ -66,6 +67,31 @@ test('the summary block goes to the summary tool, and the reply ends with the de
     'your reply ends with the final state and what the user must read or answer',
   );
   expect(nine).toContain('follow the summary in your reply, before any question Phase 10 asks');
+});
+
+test('each fixed and deferred finding names its leg, side and iteration, for the rollup', () => {
+  const nine = section(9);
+  expect(nine).toContain('List each fixed and deferred finding as its own bullet');
+  expect(nine).toContain(
+    "the side of Phase 6's bar it falls on (`above` or `below`, whatever the iteration) and the iteration that raised it",
+  );
+});
+
+// The template's own lines, filled in, are what the summary tool's parser reads.
+test('the summary template, filled in, reads back through cycleOf', () => {
+  const block = /```text\n(Review cycle complete\.[\s\S]*?)```/.exec(section(9))?.[1];
+  if (block === undefined) throw new Error('Phase 9 template block not found');
+  const filled = block
+    .replace(/^Iterations: .*$/m, 'Iterations: 2 (converged)')
+    .replace(/^Convergence: .*$/m, "Convergence: iteration 2: 1 of 2 from this cycle's fixes")
+    .replaceAll(/^(Findings fixed inline|Findings deferred): \w$/gm, '$1: 1')
+    .replaceAll('(source, above | below, iteration N)', '(codex, below, iteration 2)')
+    .replaceAll('  - ...\n', '');
+  const c = cycleOf(filled, 'd', null);
+  expect(c).toMatchObject({ iterations: 2, exit: 'converged', later: 2, selfCaused: 1 });
+  expect([c.fixedCount, c.deferredCount]).toEqual([1, 1]);
+  expect(c.fixed).toEqual([{ legs: ['codex'], side: 'below', iteration: 2 }]);
+  expect(c.deferred).toEqual([{ legs: ['codex'], side: 'below', iteration: 2 }]);
 });
 
 test('the summary is followed by a paste-ready block, never filed in a tracker', () => {
