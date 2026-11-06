@@ -23,13 +23,17 @@ test('the ceiling is 2 light and 3 full, and the last iteration holds its findin
   expect(ten).toContain(
     'When the final state is clean, nothing is still held at the ceiling, and every path is covered, commit',
   );
-  expect(ten).toContain('or when findings other than held ones remain that need their decision.');
+  expect(ten).toContain(
+    'or when findings other than held ones remain that need their decision; a finding deferred with its reason in the ledger needs none.',
+  );
   expect(ten).toContain('so end your reply by asking in plain prose whether to commit');
   expect(ten).toContain(
     "When findings are held at the ceiling outside a job (Phase 1), skip the commit and end your reply by listing them and asking in plain prose, not a dialog, whether to apply them or commit with them deferred; the user may answer with something else entirely. When the held findings fall in a function or area an earlier iteration also fixed, offer first to reconsider the approach, naming the smaller design or the cut that would remove that area's findings rather than patch them. Applied, they get the re-review Phase 6 gives their class, outside Phase 5's ceiling rule, and that pass's own findings follow Phase 8's rule: one more pass, then stop and list. A clean re-review with every path covered commits as above. Deferred, they leave nothing held: record them as Phase 9 does, kind `deferred`, then commit as above.",
   );
   expect(text).toContain('ceiling of <max> reached, N findings held');
-  expect(text).toContain('<criterion from fix-vs-defer policy | held at the ceiling |');
+  expect(text).toContain(
+    '<criterion from fix-vs-defer policy | below the bar | held at the ceiling |',
+  );
   expect(text.split('\n').find((l) => l.startsWith('description:'))).toContain(
     "at the round limit it holds that round's findings unfixed, and asks whether to apply them or commit with them deferred.",
   );

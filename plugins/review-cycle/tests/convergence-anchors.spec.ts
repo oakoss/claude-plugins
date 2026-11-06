@@ -45,7 +45,7 @@ test('a pre-existing finding is deferred to the ledger, not fixed', () => {
     "A finding tagged `pre-existing`, once you confirm it on the base, is not this change's: defer it",
   );
   expect(text).toContain(
-    '<criterion from fix-vs-defer policy | held at the ceiling | pre-existing>',
+    '<criterion from fix-vs-defer policy | below the bar | held at the ceiling | pre-existing>',
   );
 });
 
