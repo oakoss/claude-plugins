@@ -348,6 +348,12 @@ describe('merges, approvals, releases and review replies', () => {
     ['reply to the reviewer', REPLY],
     ['address the PR feedback and push', { ...REPLY, push: 'push' }],
     ['address the TODO comments in the code', NONE],
+    ['reply to the review threads on #95', REPLY],
+    ['reply to the review thread', REPLY],
+    ['resolve the merge conflicts whenever we can, then release it', NONE],
+    ['reply', NONE],
+    ['ok, reply to them', NONE],
+    ['push the threads', NONE],
     // Shipping stops at the pull request.
     ['ship it', SHIP],
     ['Ok, lets ship as is', SHIP],
@@ -361,6 +367,39 @@ describe('merges, approvals, releases and review replies', () => {
   ];
   test.each(cases)('%s', (prompt, grant) => {
     expect(grantOf(prompt)).toEqual(grant);
+  });
+  test.each([
+    ['yes', REPLY],
+    ['ok, lets reply', REPLY],
+    ['sure, reply', REPLY],
+    ['Ok, lets reply and resolve them', REPLY],
+    ['ok, reply to them', REPLY],
+    ['reply to it', REPLY],
+    ['ok, respond', REPLY],
+    ['respond to those', REPLY],
+    ['reply first', REPLY],
+    ['yes, reply and resolve the threads', REPLY],
+    ["let's reply to them, thanks", REPLY],
+    ['reply now please', REPLY],
+    ['reply. push it', { ...NONE, push: 'push' }],
+    ['reply\nto the email instead', NONE],
+    ['reply and send it only to Sam', NONE],
+    ['reply and resolve them tomorrow', NONE],
+    ['reply\nwhen CI passes', NONE],
+    ['reply to the email', NONE],
+    ['reply to the email instead', NONE],
+    ['reply, but to the email', NONE],
+    ['reply to those code comments', NONE],
+    ['reply with the diff', NONE],
+    ['Sam and Priya asked about this. Reply to them', NONE],
+    ["don't reply yet", NONE],
+    ['once CI passes, reply', NONE],
+  ])('%j, answering an offer to reply to the review, reads as %j', (prompt, grant) => {
+    const offer = 'Replies are drafted for the six threads.\n\nReply to the review on #95?';
+    expect(grantOf(prompt, offer)).toEqual(grant);
+  });
+  test('a bare reply answering an offer of another step replies to nothing', () => {
+    expect(grantOf('ok, lets reply', 'Push `fix/x` to `origin`?')).toEqual(NONE);
   });
   test('a yes to an offered merge or release grants it', () => {
     expect(grantOf('yes', 'Merge #116 now?')).toEqual(merging('116'));

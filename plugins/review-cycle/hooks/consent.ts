@@ -898,6 +898,8 @@ function isTail(words: string[], family: Family, requested: boolean): boolean {
     if (publish && !PUBLISH_TAIL.has(word)) return false;
     // "ship it as is": unchanged, not a description.
     if (word === 'is' && tail[i - 1] === 'as') continue;
+    // "reply to the review threads".
+    if ((word === 'thread' || word === 'threads') && family.grants.includes('comment')) continue;
     if (!TAIL.has(word)) return false;
     // "push the stack", "ship the whole stack": no other verb's object.
     if (STACKED.has(word) && !family.grants.some((g) => g === 'push' || g === 'force')) {
@@ -1709,6 +1711,17 @@ const DELETE_IT = new RegExp(
   'i',
 );
 
+// Only as the whole message, as DELETE_IT reads "delete it": any other word may
+// name another target ("reply and send it only to Sam") or defer it.
+const REPLY_IT = new RegExp(
+  String.raw`^(?:${AGREEMENT}[\s,.!]+)*(?:(?:let['’]?s|let us|please|go ahead and)\s+)?(reply|respond)(?: to (?:it|that|them|those|these))?(?: and resolve(?: (?:it|them|those|these|the threads))?)?(?:\s+(?:now|please|too|first))?\b[\s.!,]*(?:please|thanks|thank you)?[\s.!]*$`,
+  'i',
+);
+
+function offersReply(answer: string): boolean {
+  return accepted(answer).comment;
+}
+
 function offersDelete(answer: string): boolean {
   const heard = new Set<Family>();
   accepted(answer, heard);
@@ -2128,8 +2141,15 @@ function grantIn(
   // "delete it", answering an offer to delete a branch, names that branch;
   // only as the whole reply, since "delete it, meaning the TODO" names another.
   const answering = DELETE_IT.test(text) && offersDelete(previousAnswer);
+  // "ok, lets reply", answering an offer to reply to a review, replies to it.
+  const replying =
+    REPLY_IT.test(text) && offersReply(previousAnswer)
+      ? text.replace(/\b(reply|respond)(?: to \w+)?/i, '$1 to the review')
+      : text;
   // Pasted shell sessions and quoted output are not requests.
-  const typed = (answering ? text.replace(/\b(delete\s+(?:it|that|them))\b/i, '$1 branch') : text)
+  const typed = (
+    answering ? replying.replace(/\b(delete\s+(?:it|that|them))\b/i, '$1 branch') : replying
+  )
     .split('\n')
     .filter((line) => !/^\s*([$>+#]|PS\s|\w+@[\w.-]+[:$])/.test(line))
     // A list item or an emphasised label names a step; it does not ask for it.

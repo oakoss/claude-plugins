@@ -813,7 +813,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'offer',
       description:
-        "Returns the one question to ask for a held step you are about to offer the user (a merge, stack merge, release, push, force-push, pull request or approval). End your answer with it, word for word, on a line of its own, with nothing after it: review-cycle's consent grammar reads a yes to that question exactly. Reword it and a yes may be held.",
+        "Returns the one question to ask for a held step you are about to offer the user (a merge, stack merge, release, push, force-push, pull request, approval, or a reply to a pull request's review, resolving its threads included). End your answer with it, word for word, on a line of its own, with nothing after it: review-cycle's consent grammar reads a yes to that question exactly. Reword it and a yes may be held.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -822,7 +822,7 @@ async function onSessionStart(
             type: 'array',
             items: { type: 'string' },
             description:
-              'Pull requests: "316", or "owner/name#53" in another repository. merge takes one or more; release, approve and stack (up to) one.',
+              'Pull requests: "316", or "owner/name#53" in another repository. merge takes one or more; release, approve, comment and stack (up to) one.',
           },
           method: { type: 'string', enum: ['merge', 'squash', 'rebase'] },
           branch: { type: 'string', description: 'For push, force-push and push-pr.' },
