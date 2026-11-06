@@ -28,7 +28,7 @@ When a workflow has run more than once on the same commit, only its newest run c
 
 Once nothing the merge waits on is running, a workflow it does not wait on still shows as a mark while it runs or after it fails.
 
-A toast says when a pull request turns ready to merge, a job fails in a workflow the merge waits on, or a merge's runs on the base branch pass or fail, once per change. A ready toast, and what Claude is told, name any workflow still running that the merge does not wait on. A line says why when `gh` fails, and `· more checks not shown` when a commit has more check suites than one read returns (100). Hover a line and press `×` to stop watching it. A pull request closed without merging leaves the band.
+A toast says when a pull request turns ready to merge, a job fails in a workflow the merge waits on, or a merge's runs on the base branch pass or fail, once per change. A ready toast, and what Claude is told, name any workflow or GitHub App check still running that the merge does not wait on, such as an AI reviewer's (`#84 ✓ ready to merge · pullfrog ●`); the line also marks one that failed (`✗`). A line says why when `gh` fails, and `· more checks not shown` when a commit has more check suites than one read returns (100). Hover a line and press `×` to stop watching it. A pull request closed without merging leaves the band.
 
 pr-watch draws above whatever other plugins draw in the same band, rather than replacing it.
 
@@ -38,6 +38,7 @@ pr-watch also tells Claude, so you do not have to prompt it. For news Claude can
 
 - a run fails, in any workflow, as soon as its first job does, naming the jobs failed by then with links to the first job's log and to the run, or once it fails with no job failed, as a startup failure does, naming how it ended with a link to the run, in place of a merge's or push's checks passed;
 - a required check from a GitHub App fails, once per head commit, with a link to it;
+- a GitHub App check the merge does not wait on, such as an AI reviewer's, finishes after running a minute or more, once per run on a head commit, saying how it ended with a link to it; a shorter one is a quick scan or a marker, and says nothing;
 - a pull request has merge conflicts or a reviewer requests changes, whatever its checks say;
 - someone other than you comments on or reviews it.
 

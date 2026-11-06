@@ -1,6 +1,16 @@
 // The gh calls pr-watch makes and what it reads from their output. Pure:
 // register.tsx runs the commands.
-import type { Activity, Commit, Job, Pull, Runs, RunStatus, Stack, Workflow } from '../types';
+import type {
+  Activity,
+  AppRun,
+  Commit,
+  Job,
+  Pull,
+  Runs,
+  RunStatus,
+  Stack,
+  Workflow,
+} from '../types';
 
 // Whether a check is required is asked only of the head commit: the base
 // branch's runs after a merge gate nothing.
@@ -9,7 +19,7 @@ const suites = (required: string, first = 100) => `checkSuites(first: ${first}) 
       nodes {
         status conclusion app { databaseId }
         workflowRun { databaseId runAttempt createdAt url workflow { databaseId name } }
-        checkRuns(first: 100) { nodes { name status conclusion detailsUrl startedAt ${required} } }
+        checkRuns(first: 100) { nodes { name status conclusion detailsUrl startedAt completedAt ${required} } }
       }
     }`;
 
@@ -251,7 +261,7 @@ function workflowOf(s: any): Workflow | null {
 export type Checks = Pick<
   Pull,
   'workflows' | 'isGated' | 'isRequiredPending' | 'failedApps' | 'isTruncated'
->;
+> & { appRuns: AppRun[] };
 
 export const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
@@ -272,12 +282,25 @@ function checksOf(suites: any): Checks {
   // An App check run again keeps its earlier runs; the newest stands for it.
   // Two Apps may name a check alike, so each App's stand apart.
   const apps = new Map<string, { app: number | null; name: string; run: any }>();
+  // Those not required, once started: a run with no start time may be queued
+  // forever and would hide every later one, so a queued re-run leaves the run
+  // it replaces showing until it starts.
+  const optional = new Map<string, { app: number | null; name: string; run: any }>();
   for (const s of list(suites?.nodes)) {
     const required = list(s?.checkRuns?.nodes).filter((j) => j?.isRequired === true);
     // A required check from a GitHub App gates the merge too.
     if (required.length > 0) isGated = true;
     const w = workflowOf(s);
     if (!w) {
+      for (const j of list(s?.checkRuns?.nodes)) {
+        const name = str(j?.name);
+        if (j?.isRequired === true || name === null) continue;
+        if (j.status !== 'IN_PROGRESS' && j.status !== 'COMPLETED') continue;
+        const app = id(s?.app?.databaseId);
+        const key = JSON.stringify([app, name]);
+        const seen = optional.get(key);
+        if (!seen || !isOlder(j, seen.run)) optional.set(key, { app, name, run: j });
+      }
       for (const j of required) {
         const name = str(j.name);
         const app = id(s?.app?.databaseId);
@@ -300,11 +323,32 @@ function checksOf(suites: any): Checks {
       ? [{ app, name, url: str(run.detailsUrl) ?? '' }]
       : [],
   );
+  const appRuns = [...optional.values()].flatMap(({ app, name, run }): AppRun[] => {
+    const url = str(run.detailsUrl) ?? '';
+    if (run.status === 'IN_PROGRESS') return [{ app, name, url, status: 'running' }];
+    if (run.status !== 'COMPLETED') return [];
+    const took =
+      isTime(run.startedAt) && isTime(run.completedAt)
+        ? Date.parse(run.completedAt) - Date.parse(run.startedAt)
+        : null;
+    const conclusion = str(run.conclusion);
+    return [
+      {
+        app,
+        name,
+        url,
+        status: 'done',
+        conclusion,
+        took: took !== null && took >= 0 ? took : null,
+      },
+    ];
+  });
   return {
     workflows: [...newest.values()],
     isGated,
     isRequiredPending,
     failedApps,
+    appRuns,
     isTruncated: suites?.pageInfo?.hasNextPage === true,
   };
 }

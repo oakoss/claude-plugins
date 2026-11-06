@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import type { Activity, Job, Pull, Watch, Workflow } from '../types';
+import type { Activity, AppRun, Job, Pull, Watch, Workflow } from '../types';
 import { flow, job, pull, watched } from './fixtures';
 import {
   barOf,
@@ -71,6 +71,14 @@ function verdictAt(p: Pull, estimates: Record<string, number> = {}, host = 'gith
 const ci = (jobs: Job[]) => flow(1, 'CI', jobs);
 const codeql = (conclusion: string | null) => flow(2, 'CodeQL', [job('Analyze', conclusion)]);
 const green = () => ci([job('CI Summary', 'SUCCESS', true)]);
+const reviewer = (
+  status: 'running' | 'done',
+  conclusion: string | null = null,
+  took: number | null = null,
+): AppRun => {
+  const at = { app: 7, name: 'pullfrog', url: 'https://pullfrog.com/run/1' };
+  return status === 'running' ? { ...at, status } : { ...at, status, conclusion, took };
+};
 const VERCEL = { app: 1, name: 'Vercel', url: 'https://x/vercel' };
 const draftOn = (workflows: Workflow[], over: Partial<Pull> = {}) =>
   pull(workflows, { isDraft: true, headOid: 'a1', ...over });
@@ -644,6 +652,8 @@ describe('toastOf', () => {
     expect(stillRunning(pull([green()]))).toEqual([]);
     const queued = flow(3, 'Docs', [job('Build', null)], 'queued');
     expect(stillRunning(pull([green(), queued]))).toEqual(['Docs']);
+    expect(stillRunning(pull([green()], { appRuns: [reviewer('running')] }))).toEqual(['pullfrog']);
+    expect(stillRunning(pull([green()], { appRuns: [reviewer('done', 'SUCCESS')] }))).toEqual([]);
   });
 
   test('says when a different job fails next', () => {
@@ -850,6 +860,28 @@ describe('wakeOf', () => {
     );
     // Told once by its key, whatever is still running on a later read.
     expect(after(pull([green()]), running).text).toBeNull();
+  });
+
+  test('says once per head commit how an App check that ran a minute or more ended', () => {
+    const running = pull([green()], { appRuns: [reviewer('running')], headOid: 'a1' });
+    expect(after(running).text).toContain('When pr-watch read it, pullfrog was still running');
+    const done = pull([green()], {
+      appRuns: [reviewer('done', 'SUCCESS', 269_000)],
+      headOid: 'a1',
+    });
+    const told = after(done, after(running));
+    expect(told.text).toContain(
+      'pullfrog, not required to merge, finished (success) for o/r#128: https://pullfrog.com/run/1',
+    );
+    expect(after(done, told).text).toBeNull();
+    // A check that ran seconds, as the CodeQL App's does, is no review.
+    const quick = pull([green()], { appRuns: [reviewer('done', 'SUCCESS', 3000)], headOid: 'a1' });
+    expect(after(quick).text).not.toContain('pullfrog');
+    const next = pull([green()], {
+      appRuns: [reviewer('done', 'FAILURE', 120_000)],
+      headOid: 'b2',
+    });
+    expect(after(next, told).text).toContain('pullfrog, not required to merge, finished (failure)');
   });
 
   test('says ready again once it stopped being ready, but not after GitHub recomputes', () => {
@@ -2062,6 +2094,24 @@ describe('lineOf', () => {
     expect(textOf(watched(p), KNOWN)).toMatch(
       /^#128 ● CI [█▏▎▍▌▋▊▉]+░+ 1m10s \/ ~2m20s · CodeQL ✓ · Deps ●$/,
     );
+  });
+
+  test('names an App check the merge does not wait on while it runs or once it fails', () => {
+    const running = pull([green()], { appRuns: [reviewer('running')] });
+    expect(textOf(watched(running))).toBe('#128 ✓ ready to merge · pullfrog ●');
+    const failed = pull([green()], { appRuns: [reviewer('done', 'FAILURE')] });
+    expect(textOf(watched(failed))).toBe('#128 ✓ ready to merge · pullfrog ✗');
+    expect(textOf(watched(pull([green()], { appRuns: [reviewer('done', 'SUCCESS')] })))).toBe(
+      '#128 ✓ ready to merge',
+    );
+    const draft = pull([], { isDraft: true, appRuns: [reviewer('running')] });
+    expect(textOf(watched(draft))).toBe('#128 ○ draft · pullfrog ●');
+    // A merge's line follows its own runs, never the head commit's reviewer.
+    const releasing = { ...merged([release(null)]), appRuns: [reviewer('running')] };
+    expect(textOf(watched(releasing))).toContain('Release');
+    expect(textOf(watched(releasing))).not.toContain('pullfrog');
+    const failing = { ...merged([release('FAILURE')]), appRuns: [reviewer('done', 'FAILURE')] };
+    expect(textOf(watched(failing))).not.toContain('pullfrog');
   });
 
   test('names a release pull request as one', () => {

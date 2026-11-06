@@ -755,9 +755,19 @@ export function isReleasePull(pull: Pick<Pull, 'head'>): boolean {
 
 // The workflows still running on a ready pull request, which the merge does
 // not wait on, since it is ready only once every one it waits on is done.
-export function stillRunning(pull: Pick<Pull, 'workflows'>): string[] {
-  return [...new Set(pull.workflows.filter((w) => w.status !== 'done').map((w) => w.name))];
+export function stillRunning(pull: Pick<Pull, 'workflows' | 'appRuns'>): string[] {
+  return [
+    ...new Set([
+      ...pull.workflows.filter((w) => w.status !== 'done').map((w) => w.name),
+      ...(pull.appRuns ?? []).filter((a) => a.status === 'running').map((a) => a.name),
+    ]),
+  ];
 }
+
+// An App check that finished this fast is a marker or a quick scan, not a
+// review worth telling: measured, Pullfrog took 4 to 11 minutes, the CodeQL
+// App 3 seconds, and CodeRabbit's check none.
+const APP_REVIEW_MS = 60_000;
 
 export function toastOf(
   label: string,
@@ -961,6 +971,14 @@ function conditionsOf(
       const link = app.url ? `: ${app.url}` : '';
       const text = `${app.name}, a required check, failed for ${name}${link}`;
       const what = JSON.stringify([app.app, app.name, 'failed']);
+      found.push({ key: keyOf(watch, what, pull.headOid), text });
+    }
+    for (const app of pull.appRuns ?? []) {
+      if (app.status !== 'done' || (app.took ?? 0) < APP_REVIEW_MS) continue;
+      const how = (app.conclusion ?? 'done').toLowerCase();
+      const link = app.url ? `: ${app.url}` : '';
+      const text = `${app.name}, not required to merge, finished (${how}) for ${name}${link}`;
+      const what = JSON.stringify([app.app, app.name, 'finished']);
       found.push({ key: keyOf(watch, what, pull.headOid), text });
     }
   }
@@ -1275,10 +1293,18 @@ function bodyOf(
   const isRunning = v.kind === 'running' || v.kind === 'merged-running';
   // Other workflows, while they run or once they failed; on a running line,
   // every other workflow.
-  const others = (skip: number | null) =>
-    runs.workflows
+  // An App check the merge does not wait on shows only while it runs or once it fails.
+  const apps = (pull.state === 'OPEN' ? (pull.appRuns ?? []) : []).flatMap((a): Segment[] => {
+    const mark = a.status === 'running' ? '●' : PASSED.has(a.conclusion ?? '') ? '✓' : '✗';
+    if (mark === '✓') return [];
+    return [{ text: ` · ${a.name} `, url: a.url || undefined }, icon(mark, MARK_COLOR[mark])];
+  });
+  const others = (skip: number | null) => [
+    ...runs.workflows
       .filter((w) => w.id !== skip && (isRunning || markOf(w) !== '✓'))
-      .flatMap((w) => markSegments(w));
+      .flatMap((w) => markSegments(w)),
+    ...apps,
+  ];
   if (v.kind === 'ready') {
     const ready = [icon(' ✓', 'green'), { text: ' ready to merge' }];
     return [...lead, ...ready, ...others(null), ...tail];
@@ -1306,7 +1332,9 @@ function bodyOf(
   }
   if (v.kind === 'waiting' && v.reason === 'draft') {
     // Not ready to merge while a draft, whatever its checks say.
-    if (runs.workflows.length === 0) return [label, { text: ' ○ draft', isDim: true }, ...tail];
+    if (runs.workflows.length === 0) {
+      return [label, { text: ' ○ draft', isDim: true }, ...others(null), ...tail];
+    }
     // What fails a check the merge does not wait on; one it does is `failing`.
     const app = pull.failedApps[0];
     const jobbed = runs.workflows.find((w) => failedJobs(w).length > 0);
