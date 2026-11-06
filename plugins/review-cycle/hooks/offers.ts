@@ -7,6 +7,7 @@ export const OFFER_STEPS = [
   'push-pr',
   'approve',
   'stack',
+  'comment',
 ] as const;
 type OfferStep = (typeof OFFER_STEPS)[number];
 
@@ -70,6 +71,7 @@ export function offerQuestion(input: unknown): { question: string } | { error: s
         : `${METHODS[method]} ${refs(pulls)}?`,
     release: () => one(`Release ${refs(pulls)}?`),
     approve: () => one(`Approve ${refs(pulls)}?`),
+    comment: () => one(`Reply to the review on ${refs(pulls)}?`),
     stack: () => (pulls.length === 0 ? 'Merge the stack?' : one(`Merge up to ${refs(pulls)}?`)),
     push: () => onBranch((b) => `Push \`${b}\` to \`${remote}\`?`),
     'force-push': () => onBranch((b) => `Force-push \`${b}\` to \`${remote}\` with a lease?`),

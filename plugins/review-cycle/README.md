@@ -256,7 +256,7 @@ The gate reads these gh commands wherever they run as a command, as it reads git
 
 ### Offer questions
 
-Before offering a held step, the agent can ask the `mcp__review-cycle__offer` tool for its question: given the step (`merge`, `release`, `push`, `force-push`, `pr`, `push-pr`, `approve` or `stack`) with its pull requests, merge method, branch and remote, it returns one question ("Merge #316?", "Release #289?", "Push `fix/x` to `origin`?") that the consent grammar reads a yes to exactly. The agent ends its answer on it, word for word, on a line of its own; your reply is read against the answer as always, so a condition the answer states still holds your yes. pr-kit's merge and ship skills and the review skill use it when the tool exists.
+Before offering a held step, the agent can ask the `mcp__review-cycle__offer` tool for its question: given the step (`merge`, `release`, `push`, `force-push`, `pr`, `push-pr`, `approve`, `stack` or `comment`) with its pull requests, merge method, branch and remote, it returns one question ("Merge #316?", "Release #289?", "Push `fix/x` to `origin`?", "Reply to the review on #95?") that the consent grammar reads a yes to exactly. The agent ends its answer on it, word for word, on a line of its own; your reply is read against the answer as always, so a condition the answer states still holds your yes. Answering an offer to reply to the review, a message that is only that reply ("ok, lets reply", "reply to them", "reply and resolve them") replies to it; one saying anything more is read as typed. pr-kit's merge and ship skills and the review skill use it when the tool exists.
 
 ### The model check
 
