@@ -20,8 +20,12 @@ const STACK_CHANGE = new RegExp(
 const SUBMIT_CREATED = /^(?:✓ )?Created PR #\d+ \((\S+)\) for \S+\s*$/gm;
 // git's own options may come before the subcommand: -C dir, -c key=value, --flag.
 const MOVES_PR = new RegExp(
-  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+merge\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b|gh\s+stack\s+(?:submit|push|sync|merge)\b)`,
+  String.raw`${START}(?:git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b|gh\s+pr\s+(?:merge|review)\b|gh\s+run\s+rerun\b|gh\s+workflow\s+run\b|gh\s+stack\s+(?:submit|push|sync|merge)\b)`,
 );
+// Unanchored and in either order, since the query is often set before a loop's
+// `do`; a stray match costs a burst.
+const GH_GRAPHQL = /\bgh\s+api\b[^\n;&|]*\sgraphql\b/;
+const RESOLVES_THREAD = /\b(?:un)?resolveReviewThread\b/;
 
 const GIT_PUSH = new RegExp(String.raw`${START}git(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+push\b`);
 // git's "To <remote>" line: scp, https:// or ssh:// form.
@@ -130,10 +134,10 @@ export function pushedPull(branch: string, pushedAt: number, runs: Runs | null):
   };
 }
 
-// Whether a command can start new runs or close a pull request, so the
-// band should look again soon rather than at its next slow poll.
+// Whether a command can start new runs or change a pull request's merge state,
+// so the band should look again soon rather than at its next slow poll.
 export function movesPulls(command: string): boolean {
-  return MOVES_PR.test(command);
+  return MOVES_PR.test(command) || (GH_GRAPHQL.test(command) && RESOLVES_THREAD.test(command));
 }
 const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
 
