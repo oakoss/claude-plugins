@@ -774,6 +774,17 @@ describe('a merge or release once the pull request and main are ready', () => {
     // A condition that goes on leads nothing, so the re-ask after it counts.
     ['when main is done and you say so, merge it', NONE],
     ['when main is done and you say so, merge it. never mind. merge it', MERGE],
+    // A later "do not" on its own takes the request back.
+    ['merge it. actually, do not', NONE],
+    ['merge it. actually do not', NONE],
+    ['merge it. do not', NONE],
+    ["merge it. don't", NONE],
+    ['merge it. Do not.', NONE],
+    ['open a PR. do not merge it yet.', PR],
+    ['merge it. do not forget the changelog', MERGE],
+    ['merge it. actually, do not forget the changelog', MERGE],
+    ['reply to the review. actually, do not', NONE],
+    ["merge it. don't worry about the docs", MERGE],
     ['release it when main is broken', NONE],
     // A release now stays a release now.
     ['release it', RELEASE],

@@ -777,10 +777,11 @@ function withdrawn(
 // Words that open a sentence ahead of what it says: "ok, wait", "please stop".
 const FILLER = /^(\s*(ok|okay|oh|hmm|actually|please|um|uh)\b[\s,.!]*)+/i;
 // "oh wait", "sorry, never mind": a filler word may open the retraction.
+// "do not" alone, in a sentence after a request, takes it back.
 const RETRACT =
-  /^\s*(?:(?:ok|okay|please|oh|sorry|hmm|um|uh|actually)\b[\s,]*)*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don['’]?t))\b/i;
+  /^\s*(?:(?:ok|okay|please|oh|sorry|hmm|um|uh|actually)\b[\s,]*)*(no|nope|wait|never ?mind|scratch that|hold on|actually,? (no|don['’]?t|do not(?=[\s.!…]*$))|(?:don['’]?t|do not)(?=[\s.!…]*$))\b/i;
 const BARE_RETRACT =
-  /^(?:\s*(?:ok|okay|please|oh|sorry|hmm|um|uh)\b[\s,]*)*(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t)\b[\s,.!;:…—-]*)+$/i;
+  /^(?:\s*(?:ok|okay|please|oh|sorry|hmm|um|uh)\b[\s,]*)*(?:\s*(?:no|nope|wait|never ?mind|scratch that|hold on|actually|don['’]?t|do not)\b[\s,.!;:…—-]*)+$/i;
 
 // "No problem" and "no worries" agree, and retract nothing; an "nvm" that stands
 // alone is "never mind", while "nvm use 20" runs the Node version manager.

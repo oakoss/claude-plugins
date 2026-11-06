@@ -98,6 +98,13 @@ const VERBS = [
   'continue the merge',
   'carry on with the rebase',
   'continue merging',
+  // A later sentence taking a request back, or only seeming to.
+  'merge it. actually, do not',
+  'merge it. do not',
+  "merge it. don't",
+  'open a PR. do not merge it yet.',
+  'merge it. do not forget the changelog',
+  "push it. don't worry about the docs",
   // A reply names the review, or is read against an offer of one.
   'reply',
   'reply to them',
