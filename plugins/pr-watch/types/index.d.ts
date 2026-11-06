@@ -1,5 +1,10 @@
 export type RunStatus = 'queued' | 'running' | 'done';
 
+export type AppRun = { app: number | null; name: string; url: string } & (
+  | { status: 'running' }
+  | { status: 'done'; conclusion: string | null; took: number | null }
+);
+
 export type Job = {
   name: string;
   status: RunStatus;
@@ -59,6 +64,10 @@ export type Pull = {
   // The required checks from GitHub Apps that finished without passing.
   // `app` is the App's id, which tells apart two Apps naming a check alike.
   failedApps: { app: number | null; name: string; url: string }[];
+  // The checks from GitHub Apps the merge does not wait on, such as an AI
+  // reviewer's, once started; `took` is how long a finished one ran, in ms.
+  // Unset in a pull saved before it was read.
+  appRuns?: AppRun[];
   // The head commit has more check suites than one read returns.
   isTruncated: boolean;
   // The branch merged into, and once merged, when and the merge commit's runs.

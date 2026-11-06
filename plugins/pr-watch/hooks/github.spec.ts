@@ -57,6 +57,35 @@ function suite(run: Record<string, unknown> = {}, jobs: unknown[] = []) {
   };
 }
 
+// An AI reviewer's App check, which the merge does not wait on.
+function reviewer(
+  status: string,
+  conclusion: string | null,
+  startedAt?: string,
+  completedAt?: string,
+  appId = 7,
+) {
+  return {
+    status,
+    conclusion,
+    app: { databaseId: appId },
+    workflowRun: null,
+    checkRuns: {
+      nodes: [
+        {
+          name: 'pullfrog',
+          status,
+          conclusion,
+          isRequired: false,
+          detailsUrl: 'https://pullfrog.com/run/1',
+          ...(startedAt ? { startedAt } : {}),
+          ...(completedAt ? { completedAt } : {}),
+        },
+      ],
+    },
+  };
+}
+
 // A GitHub App's suite holding one check, required unless said otherwise.
 function app(status: string, conclusion: string | null = null, isRequired = true) {
   return {
@@ -568,8 +597,61 @@ describe('parseTrunk', () => {
     expect(parsePull(prOutput(stuck)).isRequiredPending).toBe(false);
     expect(parsePull(prOutput(queued)).isRequiredPending).toBe(true);
   });
-  test('asks each check run when it started', () => {
-    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('detailsUrl startedAt');
+  test('keeps an App check the merge does not wait on once it starts, newest first', () => {
+    expect(
+      parsePull(prOutput([reviewer('IN_PROGRESS', null, '2026-11-06T20:03:55Z')])).appRuns,
+    ).toEqual([
+      {
+        app: 7,
+        name: 'pullfrog',
+        status: 'running',
+        url: 'https://pullfrog.com/run/1',
+      },
+    ]);
+    const done = reviewer('COMPLETED', 'SUCCESS', '2026-11-06T20:03:55Z', '2026-11-06T20:08:24Z');
+    expect(parsePull(prOutput([done])).appRuns?.[0]).toMatchObject({
+      status: 'done',
+      took: 269_000,
+    });
+    // A suite queued with no runs, as the Claude and Renovate Apps leave one, is nothing.
+    const queued = {
+      status: 'QUEUED',
+      conclusion: null,
+      app: { databaseId: 8 },
+      workflowRun: null,
+      checkRuns: { nodes: [] },
+    };
+    expect(parsePull(prOutput([queued, reviewer('QUEUED', null)])).appRuns).toEqual([]);
+    // A required one is the gate's, not a reviewer's.
+    expect(parsePull(prOutput([app('IN_PROGRESS')])).appRuns).toEqual([]);
+    const rerun = reviewer('IN_PROGRESS', null, '2026-11-06T20:30:00Z');
+    for (const order of [
+      [done, rerun],
+      [rerun, done],
+    ]) {
+      expect(parsePull(prOutput(order)).appRuns?.map((a) => a.status)).toEqual(['running']);
+    }
+    // A run queued forever must not hide a later one, so the failure a queued
+    // re-run replaces shows until the re-run starts.
+    const failed = reviewer('COMPLETED', 'FAILURE', '2026-11-06T20:03:55Z', '2026-11-06T20:08:24Z');
+    for (const order of [
+      [failed, reviewer('QUEUED', null)],
+      [reviewer('QUEUED', null), failed],
+    ]) {
+      expect(parsePull(prOutput(order)).appRuns).toMatchObject([{ conclusion: 'FAILURE' }]);
+    }
+    const twoApps = [done, reviewer('IN_PROGRESS', null, '2026-11-06T20:30:00Z', undefined, 8)];
+    expect(parsePull(prOutput(twoApps)).appRuns).toHaveLength(2);
+    const backwards = reviewer(
+      'COMPLETED',
+      'SUCCESS',
+      '2026-11-06T20:08:24Z',
+      '2026-11-06T20:03:55Z',
+    );
+    expect(parsePull(prOutput([backwards])).appRuns?.[0]).toMatchObject({ took: null });
+  });
+  test('asks each check run when it started and ended', () => {
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('detailsUrl startedAt completedAt');
   });
   test('asks each check suite for its App', () => {
     for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
