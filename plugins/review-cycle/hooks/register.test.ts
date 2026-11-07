@@ -6726,6 +6726,72 @@ describe('the scratch directory', () => {
     const again = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
     expect(again.result).toBe('No scratch directory to sweep.');
   });
+  test("sweep removes mbx's build output under the directory before the directory", async ($, on) => {
+    const w = fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    await $.tool.call({ tool: 'mcp__review-cycle__sweep' });
+    const argvs = w.calls.map((c) => c.argv.join(' '));
+    const clean = argvs.indexOf('mbx clean --under /tmp/review-cycle.abc123');
+    expect(clean).toBeGreaterThan(-1);
+    expect(clean).toBeLessThan(argvs.indexOf('rm -rf -- /tmp/review-cycle.abc123'));
+  });
+  test('without mbx, sweep still removes the directory', async ($, on) => {
+    fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : null,
+      reject: (a) => a.startsWith('mbx '),
+      rejectWith: 'spawn mbx ENOENT',
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      { dir: '/tmp/review-cycle.abc123', stopped: 0, removed: true, errors: [] },
+    ]);
+  });
+  test('an mbx clean that fails or times out is reported, and the directory still goes', async ($, on) => {
+    const w = fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : a.startsWith('realpath ')
+            ? { stdout: '/private/tmp/review-cycle.abc123\n' }
+            : a.startsWith('mbx clean')
+              ? { exitCode: 2, stderr: 'boom' }
+              : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      {
+        dir: '/tmp/review-cycle.abc123',
+        stopped: 0,
+        removed: true,
+        errors: ['mbx clean failed: boom'],
+      },
+    ]);
+    // mbx records copies under the real path.
+    expect(
+      w.calls.some(
+        (c) => c.argv.join(' ') === 'mbx clean --under /private/tmp/review-cycle.abc123',
+      ),
+    ).toBe(true);
+    w.reject = (a) => a.startsWith('mbx ');
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const slow = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(slow.result)[0].errors).toEqual([
+      'mbx clean did not finish: review-cycle: $.process.run: timed out',
+    ]);
+  });
   test('a TMPDIR with a trailing slash makes a path without a doubled one', async ($, on) => {
     const w = fakeWorld(on, { env: { TMPDIR: '/var/x/' } });
     await ($ as any).session.start({ source: 'startup' });
