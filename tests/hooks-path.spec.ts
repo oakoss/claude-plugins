@@ -1,5 +1,5 @@
-// `bd init` and `bd hooks install --beads` set core.hooksPath, and git then
-// skips lefthook without a word: no commitlint, no formatters, no beads hooks.
+// A tool that sets core.hooksPath makes git skip lefthook without a word: no
+// commitlint, no formatters.
 
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
