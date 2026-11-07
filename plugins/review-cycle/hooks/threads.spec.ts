@@ -97,6 +97,16 @@ describe('planReply', () => {
     expect(planReply(item, facts({ repo: 'OakOSS/OakTerm' }), ctx())).toMatchObject({ post: true });
   });
 
+  test('a commit missing from a full list of 250 is not said to be unpushed', () => {
+    const full = facts({
+      commits: Array.from({ length: 250 }, (_, i) => `${i}`.padStart(40, 'c')),
+    });
+    expect(planReply(item, full, ctx())).toEqual({
+      refuse: '`a5f6f70` is not among the last 250 commits of #109',
+      ask: false,
+    });
+  });
+
   test('a cited commit must be on the pull request', () => {
     const p = planReply({ ...item, commit: 'deadbee' }, facts(), ctx({ asked: true }));
     expect(p).toEqual({ refuse: '`deadbee` is not on #109 yet: push it first', ask: false });

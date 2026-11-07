@@ -8371,16 +8371,85 @@ describe('the reply tools', () => {
     expect(posts(w)).toBe(0);
   });
 
-  test('a failed post is not retried and resolves nothing', async ($, on) => {
-    const failing = fakeWorld(on, {
+  for (const [label, post] of [
+    [
+      'GitHub refused',
+      { exitCode: 1, stderr: 'gh: Resource not accessible by integration (HTTP 403)' },
+    ],
+    [
+      'gh is not logged in',
+      { exitCode: 4, stderr: 'To get started with GitHub CLI, please run:  gh auth login' },
+    ],
+    [
+      'a connection never made',
+      {
+        exitCode: 1,
+        stderr:
+          'Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host',
+      },
+    ],
+  ] as const) {
+    test(`a post ${label} failed, is not retried and resolves nothing`, async ($, on) => {
+      const w = fakeWorld(on, {
+        settings: { local: updating('push, reply and resolve') },
+        git: github109(threadAnswer(), { post }),
+      });
+      await say($, 'fix the review findings');
+      expect(await replied($, { replies: [FIXED] })).toContain('"outcome":"failed"');
+      expect([posts(w), resolves(w)]).toEqual([1, 0]);
+    });
+  }
+
+  for (const [label, post] of [
+    ['a gateway error', { exitCode: 1, stderr: 'gh: Bad Gateway (HTTP 502)' }],
+    ['a killed gh', { exitCode: 1, stderr: '' }],
+    [
+      'GitHub’s own timeout',
+      {
+        exitCode: 1,
+        stderr:
+          'gh: Something went wrong while executing your query. This may be the result of a timeout.',
+      },
+    ],
+    [
+      'a TLS fault after the request',
+      {
+        exitCode: 1,
+        stderr: 'Post "https://api.github.com/graphql": local error: tls: bad record MAC',
+      },
+    ],
+    [
+      'a dropped connection',
+      {
+        exitCode: 1,
+        stderr: 'Post "https://api.github.com/graphql": read: connection reset by peer',
+      },
+    ],
+  ] as const) {
+    test(`a post ended by ${label} may have landed, so it is unknown`, async ($, on) => {
+      const w = fakeWorld(on, {
+        settings: { local: updating('push, reply and resolve') },
+        git: github109(threadAnswer(), { post }),
+      });
+      await say($, 'fix the review findings');
+      const r = await replied($, { replies: [FIXED] });
+      expect(r).toContain('"outcome":"unknown"');
+      expect(r).toContain('read the thread before trying again');
+      expect([posts(w), resolves(w)]).toEqual([1, 0]);
+    });
+  }
+
+  test('a resolve ended by a gateway error is unknown', async ($, on) => {
+    fakeWorld(on, {
       settings: { local: updating('push, reply and resolve') },
-      git: github109(threadAnswer(), { post: { exitCode: 1, stderr: 'gh: Something broke' } }),
+      git: github109(threadAnswer(), {
+        resolve: { exitCode: 1, stderr: 'gh: Service Unavailable (HTTP 503)' },
+      }),
     });
     await say($, 'fix the review findings');
     expect(await replied($, { replies: [FIXED] })).toContain(
-      '"outcome":"failed","why":"gh: Something broke"',
+      '"outcome":"replied, resolve unknown"',
     );
-    expect([posts(failing), resolves(failing)]).toEqual([1, 0]);
   });
 
   test('a resolve that timed out is unknown', async ($, on) => {

@@ -51,6 +51,10 @@ const UNAPPROVED = new Set(['', 'REVIEW_REQUIRED', 'CHANGES_REQUESTED']);
 
 const SHA = /^[0-9a-f]{7,40}$/i;
 
+// THREAD_QUERY reads this many of a pull request's latest commits, so a full
+// list may leave out an older pushed one.
+const COMMITS_READ = 250;
+
 // A refusal only the agent can fix: a yes would not change it.
 const fix = (refuse: string) => ({ refuse, ask: false });
 
@@ -65,7 +69,11 @@ export function planReply(item: ReplyItem, f: ThreadFacts, c: ReplyContext): Rep
     if (!SHA.test(commit)) return fix(`\`${commit}\` is not a commit id`);
     const lower = commit.toLowerCase();
     if (!f.commits.some((oid) => oid.toLowerCase().startsWith(lower))) {
-      return fix(`\`${commit}\` is not on #${f.pull} yet: push it first`);
+      return fix(
+        f.commits.length >= COMMITS_READ
+          ? `\`${commit}\` is not among the last ${COMMITS_READ} commits of #${f.pull}`
+          : `\`${commit}\` is not on #${f.pull} yet: push it first`,
+      );
     }
   }
   if (item.resolve === true && commit === '')
@@ -172,8 +180,7 @@ export function threadFactsOf(thread: string, out: string): ThreadFacts | { why:
 
 // One read gives every fact planReply needs. GitHub lists at most 250 commits
 // on a pull request, and this connection accepts last:250 (measured).
-export const THREAD_QUERY =
-  'query($id:ID!){node(id:$id){... on PullRequestReviewThread{isResolved pullRequest{repository{nameWithOwner} number state isCrossRepository reviewDecision author{login} commits(last:250){nodes{commit{oid}}}} first:comments(first:1){nodes{author{__typename}}} last:comments(last:1){nodes{author{login} body}}}}}';
+export const THREAD_QUERY = `query($id:ID!){node(id:$id){... on PullRequestReviewThread{isResolved pullRequest{repository{nameWithOwner} number state isCrossRepository reviewDecision author{login} commits(last:${COMMITS_READ}){nodes{commit{oid}}}} first:comments(first:1){nodes{author{__typename}}} last:comments(last:1){nodes{author{login} body}}}}}`;
 
 export const REPLY_MUTATION =
   'mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{url}}}';

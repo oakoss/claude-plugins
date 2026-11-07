@@ -1077,7 +1077,7 @@ async function onReply(
           '.data.addPullRequestReviewThreadReply.comment.url',
         ]);
         // A timeout, or an answer with no comment, may still have posted.
-        if ('why' in posted && !TIMED_OUT.test(posted.why)) {
+        if ('why' in posted && !posted.unsure) {
           outcomes.push({ thread, outcome: 'failed', why: posted.why });
           return;
         }
@@ -1117,7 +1117,7 @@ async function onReply(
       ]);
       if ('why' in resolved || resolved.out !== 'true') {
         const why = 'why' in resolved ? resolved.why : `GitHub answered isResolved ${resolved.out}`;
-        const unknown = 'why' in resolved && TIMED_OUT.test(resolved.why);
+        const unknown = 'why' in resolved && resolved.unsure;
         outcomes.push({
           thread,
           outcome: `${said}, ${unknown ? 'resolve unknown' : 'not resolved'}`,
@@ -1193,18 +1193,31 @@ function replyItemsOf(value: unknown): ReplyItem[] | { why: string } {
 
 // A gh call that writes: run once, never retried, so a post that timed out
 // after landing is not posted twice.
-async function ghWrite($: $, args: string[]): Promise<{ out: string } | { why: string }> {
+async function ghWrite(
+  $: $,
+  args: string[],
+): Promise<{ out: string } | { why: string; unsure: boolean }> {
   try {
     const r = await $.process.run(['gh', ...args], {
       timeoutMs: 20_000,
       env: { GH_PROMPT_DISABLED: '1' },
     });
-    if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `gh exited ${r.exitCode}` };
-    return { out: r.stdout.trim() };
+    if (r.exitCode === 0) return { out: r.stdout.trim() };
+    const why = firstLine(r.stderr) || `gh exited ${r.exitCode}`;
+    // Only a write GitHub refused, or one never sent, surely did not land.
+    const sure = r.exitCode === 4 || REFUSED.test(why) || NEVER_SENT.test(why);
+    return { why, unsure: !sure };
   } catch (error) {
-    return { why: messageOf(error) };
+    const why = messageOf(error);
+    return { why, unsure: TIMED_OUT.test(why) };
   }
 }
+
+const REFUSED = /\bHTTP 4\d\d\b/;
+// Measured: a refused proxy prints `Post "…": proxyconnect tcp: dial tcp …: connection refused`.
+// TLS alerts after the handshake ("local error: tls: bad record MAC") may follow a sent request.
+const NEVER_SENT =
+  /dial tcp|no such host|connection refused|proxyconnect|x509: |tls: failed to verify|remote error: tls: handshake failure/;
 
 async function onPromptSubmit(
   $: $,
