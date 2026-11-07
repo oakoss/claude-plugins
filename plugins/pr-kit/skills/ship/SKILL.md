@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Publish the current branch as a pull request, or update its open pull request. Reviews and commits leftover work, runs the project's checks, pushes, closes the branch's finished tracker items, and writes the title and body from one template. Use when the user says "ship it", "let's ship", "ship", or "push it".
+description: Publish the current branch as a pull request, or update its open pull request. Reviews and commits leftover work, runs the project's checks, pushes, updates the branch's finished tracker items, and writes the title and body from one template. Use when the user says "ship it", "let's ship", "ship", or "push it".
 ---
 
 # Ship
@@ -65,7 +65,7 @@ On the update path, when `git rev-parse HEAD` prints the pull request's head, re
 
 A refused push ends the ship here, before any item is closed.
 
-## 5. Close finished tracker items
+## 5. Update finished tracker items
 
 List the work items the branch's commits name:
 
@@ -75,22 +75,25 @@ git log --format=%B origin/<default>..HEAD | grep -E '^(Closes|Fixes|Refs)\b' | 
 
 An item the branch finishes goes in the body's `Closes` lines: every `Closes` or `Fixes` item, and a `Refs` item only when this branch completes it, such as the bead the work was started for. Every other `Refs` item stays a `Refs` line, open. Beads ids (`abc-x1y2`), GitHub issues (`#42`), and other trackers' keys (`ENG-123`) all follow the same rule.
 
-Close only beads here, and on the update path only items the publish did not close:
+Each tracker the repository shows acts only on its own items, and on the update path only on items the publish did not:
 
-```bash
-bd close <id> --reason "<one line: what shipped>"
-```
+- **beads** (a `.beads/` directory), on beads ids: close each item, then push the task graph when a remote exists. When `bd dolt remote list` lists nothing, skip the push and say so in the report, since `bd dolt push` with no remote exits 0 having pushed nothing:
 
-Then push the task graph when a remote exists. When `bd dolt remote list` lists nothing, skip the push and say so in the report, since `bd dolt push` with no remote exits 0 having pushed nothing:
+  ```bash
+  bd close <id> --reason "<one line: what shipped>"
+  bd dolt remote list
+  bd dolt push
+  ```
 
-```bash
-bd dolt remote list
-bd dolt push
-```
+- **tm** (a `.config/tm.toml`), on keys of its Project (`OT-303`): move each item to review; tm closes it once its commit reaches the default branch, which the merge skill runs `tm git scan` for:
 
-GitHub issues close themselves when the pull request merges. Other trackers close through their own integration; leave them to it.
+  ```bash
+  tm move <id> in_review
+  ```
 
-On the stack path, list and close the items per layer, as **Stack path** says.
+- **any other item**, GitHub issues included: leave it to its tracker's own integration, and say so in the report. GitHub issues close themselves when the pull request merges.
+
+On the stack path, list and update the items per layer, as **Stack path** says.
 
 ## 6. Write the pull request
 
@@ -125,18 +128,19 @@ gh pr edit <number> --body-file <file>
 
 On the stack path, write each layer's pull request as **Stack path** says instead.
 
-**Session note:** when step 5 closed beads in this run and `echo "$CLAUDE_CODE_SESSION_ID"` prints an ID, note on each one the pull request and the session that shipped it, so the bead leads back to that session, then push the task graph again when step 5 pushed it:
+**Session note:** when step 5 updated items in this run and `echo "$CLAUDE_CODE_SESSION_ID"` prints an ID, note on each one the pull request and the session that shipped it, so the item leads back to that session, with its tracker's note command, then push the task graph again when step 5 pushed it:
 
 ```bash
 bd note <id> "shipped in #<number> from session $CLAUDE_CODE_SESSION_ID (claude -r $CLAUDE_CODE_SESSION_ID)"
 bd dolt push
+tm comment <id> "shipped in #<number> from session $CLAUDE_CODE_SESSION_ID (claude -r $CLAUDE_CODE_SESSION_ID)"
 ```
 
 The note is plain text. `claude -r` resumes the session until Claude Code's cleanup deletes it after `cleanupPeriodDays` without use.
 
 ## 7. Report
 
-The pull request URL, the items closed, and anything the checks or review left for the user. Merging is theirs to ask for.
+The pull request URL, the items step 5 updated and how, and anything the checks or review left for the user. Merging is theirs to ask for.
 
 ## Stack path
 
@@ -164,7 +168,7 @@ gh stack submit --auto --open
 
 **Tracker items and pull requests.** Open none: `submit` did. The layers to write are each one a `Created PR #<n>` line names, and on the update path the current layer too. For each, over that layer's range alone:
 
-- Run step 5's listing and closing (`git log --format=%B <range>`), so each layer's pull request closes only what that layer finishes, and step 6's session note with that layer's number.
+- Run step 5's listing and update (`git log --format=%B <range>`), so each layer's pull request updates only what that layer finishes, and step 6's session note with that layer's number.
 - Read Known issues from the ledger for that range's changed files (`git diff --name-only <layer below>...<layer>`).
 - Write its title and body by the reference. Verification names the top layer as where the checks ran.
 
