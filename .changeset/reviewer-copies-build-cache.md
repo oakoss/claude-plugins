@@ -1,5 +1,0 @@
----
-review-cycle: patch
----
-
-With mbx installed, reviewer legs in a Rust project build from mbx's shared cache instead of from scratch into their own copies. A leg's copy of a repository whose mise config you trust is now trusted too, so `cargo` runs through mise as in your checkout: measured on oakum, a leg's test build took 88 s with 338 cache hits, and the copy stayed 7 MB. Before, mise refused the copy's config, `cargo` failed, and a leg that fell back to `~/.cargo/bin/cargo` could build a full `target/` into the copy; that is the likely cause of a 112 GB leg folder, though it was not reproduced. Reviewer legs are now told to report a failing tool wrapper rather than route around it, and the cycle's sweep runs `mbx clean --under` the scratch folder, so the copies' build output leaves mbx's cache with them. A copy of a repository whose mise config you have not trusted stays untrusted, and without mbx a copy's `cargo` still builds a `target/` of its own. A leg that copies a repository by hand instead of with `copy-tree.sh` is not covered.
