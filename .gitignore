@@ -24,13 +24,12 @@ mise.local.toml
 # some projects commit their plans.
 .claude/plans/
 
-# Beads / Dolt
+# Leftovers of beads, which this repository used before tm.
+.beads/
+.beads-credential-key
+.beads.gate.lock
 .dolt/
 *.db
-.beads-credential-key
-.beads/proxieddb/
-# Transient bd lock at the repo root; left behind on exit.
-.beads.gate.lock
 
 # `claude plugin eval` writes its scored results and HTML report here, one
 # timestamped directory per run. Generated, regenerable, and large enough that

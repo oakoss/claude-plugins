@@ -16,35 +16,25 @@ Conventions for authoring plugins in this marketplace.
 
 ## Task tracking
 
-Use `bd` (beads). Run `bd prime` for the command reference and session protocol.
+<!-- tm:start -->
+This repo tracks its work in tm. Run `tm guide` for how to work with it.
+<!-- tm:end -->
 
-Run `pnpm run setup` after cloning. A fresh clone has no beads database — `.beads/embeddeddolt/` and `*.db` are gitignored — so until it runs, `bd` exits 3 in every `.beads/hooks/*` hook and each shim normalizes that to 0, skipping itself with one line on stderr. Setup runs `bd bootstrap`, which clones the task graph from `BD_SYNC_REMOTE` in `.beads/.env`; the graph lives on a Dolt remote, not in this repository. That file is gitignored because it names a private host, and without it bootstrap creates a fresh local database and everything still works.
+`.config/tm.toml` maps this repository to its tm Workspace, key `CPL`. tm keeps the Workspace on this machine, not in the repository, so a fresh clone restores it with `tm import <export>`, from the exports tm writes under `~/.tm/exports/<workspace>/`. A Workspace restored on a second machine forks from the first until they sync, so stop using tm for it on the first. Issues moved from beads on 2026-11-07: `tm show` still resolves an old id, so `tm show cpl-epc9` opens CPL-418. Beads' history is archived outside the repository, in `~/.tm/beads-archive/claude-plugins`, so no tool here takes this for a beads repository.
 
-Prefer `bd bootstrap` to `bd init`. Bootstrap leaves `core.hooksPath` unset and `AGENTS.md` untouched; `bd init` sets the former — making git bypass lefthook silently — rewrites the latter, and commits with a message commitlint rejects. `bd hooks install --beads` sets `core.hooksPath` too, so if you ever regenerate the shims, unset it afterwards. `core.hooksPath` must stay unset: `lefthook.yml` calls `.beads/hooks/*` directly, and lefthook is what runs commitlint and the formatters. `pnpm test` fails while it is set.
-
-The shims on disk carry `v1.2.2` markers while the binary is 1.3.0. A shim delegates to whichever `bd` is installed, so upgrading already changed the behaviour and only the generated shell policy is stale. That policy is inert while `BEADS_HOOK_TIMEOUT` is unset or a plain integer — measured identical across both sections. Set it to anything else (`abc`, `-1`, `300x`) and the v1.2.2 section exits 125 and blocks the commit, where v1.3.0 warns and falls back to 300 seconds. Regenerating is not blocked: `bd hooks install --beads` rewrites git-tracked shims happily and replaces the `v1.2.2` section cleanly while preserving content outside the markers. It refuses symlinked hooks, and that refusal aborts the whole run rather than skipping the one hook — nothing is written. The reason not to run it is the line above — it sets `core.hooksPath`, which must stay unset here. Unset it afterwards if you ever do. (Measured on bd 1.3.0 in a throwaway clone.)
-
-Do not run `bd setup codex`. This repository is worked in Claude Code; that command writes a `.codex/` directory and an `.agents/` skill nobody here reads. Both `bd init` and `bd setup codex` also append a managed block to this file — strip it and keep the pointer above.
-
-`bd dolt remote add` writes `sync.remote` into `.beads/config.yaml` when the remote is named `origin`, and `bd bootstrap` writes it on its adopting path. On bd 1.3.0 none of them commits it — nor does `bd dolt push` — so it sits as an uncommitted modification to a git-tracked file. Four consequences:
-
-- `bd init` silently configures a Dolt remote derived from `git origin` (`✓ Configured Dolt remote: origin → …`), and a later `bd dolt push` writes the task database into that git remote as `refs/dolt/data`, alongside a `refs/heads/__dolt_remote_info__` branch. Against a public GitHub origin that publishes the task graph. `bd bootstrap` never creates this remote, but it inherits one: when origin already carries `refs/dolt/data`, bootstrap clones from it and wires origin for future push/pull — its own `--help` says so — and the next `bd dolt push` republishes. Measured on bd 1.3.0: against a clean origin it plans `create fresh database` and leaves `bd dolt remote list` empty; with `refs/dolt/data` present it plans `clone from remote` and adopts. `pnpm run setup` is `bd bootstrap --yes`, so nothing prompts. `bd bootstrap --dry-run` shows which path applies; this repo's origin carries no dolt refs today, so it takes the fresh-database path. Point the remote at the Dolt host before any push.
-- `bd dolt push` with no Dolt remote configured does **not** adopt one. It prints `No remote is configured — skipping.` and exits 0 — a silent success, so check `bd dolt remote list` rather than the exit code. Its `--yes`, `--no-adopt` and `BD_NO_REMOTE_ADOPT=1` flags exist and `--help` describes a consent prompt, but no prompt appears under any stdin or TTY combination and `--yes` adopts nothing. The binary and its help text disagree. (Measured on bd 1.3.0.)
-- `git push` does not sync the task graph. The `pre-push` shim runs `bd hooks run pre-push`, which chains hooks and does not touch the Dolt remote, so `bd dolt push` has to be run explicitly. (Measured on bd 1.3.0 both with and without git's ref list on stdin: the remote's `refs/dolt/data` was unchanged across the hook run.)
-- The written `sync.remote` publishes the private host. Strip the `sync:` block from `config.yaml` before staging, or the next `git add -A` sweeps the private host into someone else's commit (lefthook's pre-commit refuses one staged); the Dolt-level remote lives in the gitignored database directory and survives on its own. Once a real remote exists, later pushes stop rewriting the file.
+Issue references go in the commit footer: `Closes CPL-n` when the commit finishes the Issue, a bare `Refs CPL-n` otherwise. Ship moves a finished Issue to `in_review`, and `tm git scan`, which merge runs, moves it to done once its commit is on main.
 
 ### Labels, parents, order and priority
 
-Four facts about a bead live in four places: labels say what it touches and what it does to a release, a parent says which branch it rides, a dependency says what comes first, and priority says how urgent it is. The scheme follows oakum's `docs/contributing/task-tracking.md`, with one label more because this repository ships several plugins.
+Four facts about an Issue live in four places: labels say what it touches and what it does to a release, a parent says which branch it rides, a `blocks` link says what comes first, and priority says how urgent it is. The scheme follows oakum's `docs/contributing/task-tracking.md`, with one label more because this repository ships several plugins.
 
-- **Labels are `<dimension>:<value>`.** Every bead carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, `plugin:session`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every bead but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. A container carries no `bump:` label, since `bd create --parent` copies its labels onto every child. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label when filing (`bd create … -l plugin:review-cycle,bump:patch`), and re-label when a decision changes the bump.
-- **The namespace is load-bearing.** `bd query` reads `label=none` as "has no labels", so a plain `none` label cannot be queried. Measured on bd 1.3.1 in oakum, which uses one: `bd query 'label=none'` returned 26 unlabelled beads, and `bd list --label none` the 71 that carry it.
-- **A parent is a branch or a finding set.** A branch that carries several beads gets a parent bead of type `task`, and `bd ready --parent <id>` is its checklist. `epic` is for a finding set or a rollout, such as `cpl-7ktn`, `cpl-bg0r` and `cpl-3utg`. `bd create --parent` copies the parent's labels onto the child; re-parenting copies nothing.
-- **A new finding joins the unclaimed parent whose branch already edits its file**, or takes a `related` link to it (`bd link <new> <parent> --type related`) when that parent's branch is in flight. Find that parent with `bd list --status open,in_progress,blocked,deferred --desc-contains <path> --limit 0`, since `bd search` matches only titles and ids.
-- **A bead that claims a cost or a saving says whether it was measured, and how.** An inferred cost is triaged as a question to measure first: `cpl-dkrr` was filed to cut a cost, and measuring showed the cost was elsewhere, so it closed unbuilt.
-- **Order is a dependency** (`bd dep add <later> <earlier>`); a `related` link blocks nothing. **Priority is urgency**: P0 now, P1 the next branch opened, P2 the next release, P3 scheduled, P4 may slip.
+- **Labels are `<dimension>:<value>`.** Every Issue carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, `plugin:session`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every Issue but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label when filing (`tm create --type task --title … --label plugin:review-cycle --label bump:patch`), and re-label when a decision changes the bump. Labels carried over from beads (`beads-type:`, `beads-status:`) are history.
+- **A parent is a branch or a finding set.** A branch that carries several Issues gets a parent of type `task`, and `tm list parent:<key>` is its checklist. `epic` is for a finding set or a rollout.
+- **A new finding joins the unclaimed parent whose branch already edits its file**; find it with `tm search <path>`, which reads descriptions too. When that branch is in flight, name the parent in the new Issue's description instead.
+- **An Issue that claims a cost or a saving says whether it was measured, and how.** An inferred cost is triaged as a question to measure first: `cpl-dkrr` was filed to cut a cost, and measuring showed the cost was elsewhere, so it closed unbuilt.
+- **Order is a link** (`tm link <earlier> blocks <later>`). **Priority is urgency**: high, the next branch opened; medium, the next release; low, scheduled; none, may slip. Work waiting on evidence before it is built sits in `triage`, which `tm ready` leaves out.
 
-Views that use these: `bd list --label plugin:pr-kit`, `bd query "status=open AND label=bump:minor"`, `bd stale`, `bd find-duplicates`, and `bd orphans` (open beads a commit already references).
+Views that use these: `tm ready`, `tm list labels:plugin:pr-kit`, `tm list status:todo labels:bump:minor`, and `tm list status:triage`.
 
 ## Layout
 
@@ -83,12 +73,11 @@ A rule here that a check enforces names the check; prose stays only where nothin
 | Manifest and marketplace conventions | `tests/manifests.spec.ts` (`pnpm test`) |
 | `core.hooksPath` stays unset | `tests/hooks-path.spec.ts` (`pnpm test`) |
 | No skill or agent names a `disable-model-invocation: true` skill | `tests/skill-references.spec.ts` (`pnpm test`) |
-| No `sync:` block staged in `.beads/config.yaml` | lefthook pre-commit `beads-sync` |
 | A bump file for every change under `plugins/<name>/`; unquoted plugin names; an exact oakum pin | `oakum check --strict` (CI `Bump files`) |
 | Plugin structure; `$` not passed into an imported function expression | `claude plugin validate --strict` (CI `Plugin manifests`) |
 | Conventional commit messages | commitlint (lefthook `commit-msg`) |
 | Types of the hooks modules (not `tests/` or prose anchors); lint and format everywhere | lefthook pre-commit, CI |
-| `bd dolt push` needs a remote; no `bd init` or `bd setup codex`; bead labels, parents and priorities; every function calling `$` stays in the registering file (validate passes one passed into an imported function declaration) | prose only |
+| Issue labels, parents and priorities; every function calling `$` stays in the registering file (validate passes one passed into an imported function declaration) | prose only |
 
 ## Hooks modules
 
