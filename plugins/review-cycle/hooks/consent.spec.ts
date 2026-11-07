@@ -597,10 +597,61 @@ describe('merges, approvals, releases and review replies', () => {
     ['not yet', 'Delete the branch `fix/x`?', { step: 'push', how: 'declined' }],
     ['not yet', 'Approve #12 and cut the release?', { step: 'approve', how: 'declined' }],
     ['wait', 'Reply to the review on #116?', { step: 'comment', how: 'declined' }],
+    ["don't reply yet", '', { step: 'comment', how: 'mentioned' }],
+    ['hold off on the replies', '', { step: 'comment', how: 'mentioned' }],
+    ["don't resolve the threads", '', { step: 'comment', how: 'mentioned' }],
+    ['stop replying to the bot', '', { step: 'comment', how: 'mentioned' }],
+    ['no need to respond to pullfrog', '', { step: 'comment', how: 'mentioned' }],
+    ['fix the lint, but don’t reply yet', '', { step: 'comment', how: 'mentioned' }],
+    ["don't reply to them yet", '', { step: 'comment', how: 'mentioned' }],
+    ["Don't reply to the review comments yet", '', { step: 'comment', how: 'mentioned' }],
+    ["don't reply on GitHub", '', { step: 'comment', how: 'mentioned' }],
+    ["fix the comments but don't reply yet", '', { step: 'comment', how: 'mentioned' }],
+    ["don't reply until CI passes", '', { step: 'comment', how: 'mentioned' }],
+    ['wait before replying to coderabbit', '', { step: 'comment', how: 'mentioned' }],
+    // Asked for replies, a put-off of resolving still holds resolving.
+    ["reply to the threads but don't resolve them", '', { step: 'comment', how: 'mentioned' }],
+    // A noun, a reply asked for, or a put-off of something else holds nothing;
+    // a decline of the push holds the push.
+    ['fix the review comments', '', null],
+    ['reply to the review', '', null],
+    ["don't forget to reply to the threads", '', null],
+    ["don't hesitate to answer the bot", '', null],
+    ['you can reply now, no need to hold off on the replies', '', null],
+    ["don't push, reply to the bot", '', { step: 'push', how: 'mentioned' }],
     ['merge it', '', null],
     ['not yet', 'Should I rename the helper?', null],
   ])('"%s" after "%s" holds for %j', (prompt, offer, reason) => {
     expect(holdOf(prompt, offer)).toEqual(reason);
+  });
+  test.each([
+    ["don't reply yet", true],
+    ['hold off on the replies', true],
+    ['stop replying to the bot', true],
+    ['fix the lint but hold off on the replies', true],
+    ['push it. stop answering plus stop pushing', true],
+    ['stop replying — abort', true],
+    ['stop replying I changed my mind', true],
+    ['fix the review comments', false],
+    ["don't forget to reply to the threads", false],
+    // Read generously by design: a chat remark costs the turn's grant.
+    ["don't respond so verbosely", true],
+    ['hold off', true],
+    ['stop', true],
+    ['stop, I need to resolve the conflicts', true],
+    ["stop, I'll answer the reviewer", true],
+    ['hold off, I want to resolve the conflicts first', true],
+    ["hold off, I'll respond to the reviewer myself", true],
+    ["stop everything and don't reply to anyone", true],
+    ['stop and reply to the reviewer instead', true],
+    ['stop replying, abort', true],
+    ['stop replying and stop', true],
+    ['stop answering and wait', true],
+    ['hold off on replying, wait', true],
+    ['stop commenting and hold off', true],
+    ["push it, but don't merge yet", true],
+  ])('a hold of replies drops the grant as any hold does: "%s" drops it: %s', (prompt, drops) => {
+    expect(dropsGrant(prompt)).toBe(drops);
   });
   test('"not yet" to an offered merge holds; a merge request does not', () => {
     expect(holdsOf('not yet', 'Merge #116 now?')).toBe(true);
@@ -921,6 +972,16 @@ describe('a message ends the asks for once ready that outlast it', () => {
     ['push it and open a PR. Not yet, open a PR for it later.', true],
     ['push it. Not yet.', false],
     ['not yet, did the push go through?', false],
+    // A reply hold ends them as any hold does.
+    ["not yet, don't reply", true],
+    ["don't reply yet", true],
+    // After a push hold, a reply put-off leaves them: the message is not about merging.
+    ["don't push or reply yet", false],
+    ["don't push yet and reply to the comments", false],
+    ["don't respond so verbosely. hold off on the docs push", false],
+    ["don't open a PR yet. don't reply yet", false],
+    ["don't approve it yet. don't reply yet", false],
+    ["don't reply yet. don't merge yet", true],
   ] as const)('%s → %s', (prompt, ends) => {
     expect(endsReady(prompt)).toBe(ends);
   });

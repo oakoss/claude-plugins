@@ -1889,7 +1889,27 @@ function mentionOf(text: string, grant: Grant): HoldReason | null {
   if (RELEASE_WORD.test(text) && !grant.release && !grant.readyRelease) {
     return mentioned('release');
   }
+  if (repliesPutOff(text)) return mentioned('comment');
   return null;
+}
+
+// A clause that opens by putting off and goes on to name a reply. Generous on
+// purpose: reading a chat remark as one costs the turn's grant, and missing one
+// posts a reply the user put off. "fix the review comments" opens with no put-off.
+const PUT_OFF = String.raw`(?:don['’]?t|do\s+not|never|hold\s+off(?:\s+on)?|stop|no\s+need\s+to|wait\s+(?:to|before|on))`;
+const REPLY_VERB = String.raw`(?:reply|replies|replying|respond|responding|resolve|resolving|answer|answering|comment|commenting)`;
+// "don't forget to reply" and "no need to hold off on the replies" ask for one;
+// "stop everything" and "stop and reply instead" stop the turn.
+const ASKS = String.raw`(?!\s+(?:forget|hesitate|hold|wait|worry|everything|all|and|now)\b)`;
+const REPLY_HELD = new RegExp(
+  String.raw`^\s*(?:(?:but|and|so|then|ok|okay|please|actually)\b[\s,]*)*${PUT_OFF}\b${ASKS}[^.!?]*?\b${REPLY_VERB}\b`,
+  'i',
+);
+
+function repliesPutOff(text: string): boolean {
+  return sentences(text).some((s) =>
+    s.split(/[,;:]|\bbut\b/i).some((clause) => REPLY_HELD.test(clause)),
+  );
 }
 
 function declines(text: string, grant: Grant): boolean {
@@ -1946,7 +1966,15 @@ export function endsReady(prompt: string, previousAnswer = ''): boolean {
   prompt = landPhrase(prompt);
   if (!dropsGrant(prompt, previousAnswer)) return false;
   const { hold, putOff } = readHold(prompt, previousAnswer);
-  if (hold === null || hold.step === 'merge' || hold.step === 'release') return true;
+  // A reply hold ends them as a general hold does: a misread asks again.
+  if (
+    hold === null ||
+    hold.step === 'comment' ||
+    hold.step === 'merge' ||
+    hold.step === 'release'
+  ) {
+    return true;
+  }
   // A decline holds from its lowest step, but ends a merge it also offered.
   if (hold.how === 'declined' && (putOff.includes('merge') || putOff.includes('release'))) {
     return true;

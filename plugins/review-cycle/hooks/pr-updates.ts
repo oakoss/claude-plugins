@@ -5,9 +5,19 @@
 import type { Lookup } from './gh-verdict';
 import type { DryRunRef } from './push-verdict';
 
-export const PR_UPDATES = ['ask', 'push fixes'] as const;
+// Ordered: each value allows what the ones before it do.
+export const PR_UPDATES = [
+  'ask',
+  'push fixes',
+  'push and reply',
+  'push, reply and resolve',
+] as const;
 export type PrUpdates = (typeof PR_UPDATES)[number];
 export const DEFAULT_PR_UPDATES: PrUpdates = 'ask';
+
+export function allows(setting: PrUpdates, at: PrUpdates): boolean {
+  return PR_UPDATES.indexOf(setting) >= PR_UPDATES.indexOf(at);
+}
 
 export type PrSource = 'default' | 'user' | 'project' | 'local';
 export type PrUpdatesInForce = Readonly<{ prUpdates: PrUpdates; source: PrSource }>;
