@@ -510,6 +510,19 @@ describe('verdictOf', () => {
     },
   );
 
+  test('a run that failed with no failed job fails the PR as a whole', () => {
+    const startup = { ...ci([]), conclusion: 'STARTUP_FAILURE' };
+    const v = verdictAt(pull([startup]), {});
+    expect(v).toEqual({
+      kind: 'failing',
+      workflowId: 1,
+      workflow: 'CI',
+      job: null,
+      url: 'https://x/run/1',
+    });
+    expect(textOf(watched(pull([startup])))).toContain('✗ CI failed');
+  });
+
   test('a failure outside the required workflows does not fail the PR', () => {
     expect(verdictAt(pull([green(), codeql('FAILURE')]), {}).kind).toBe('ready');
   });
@@ -1596,6 +1609,19 @@ describe('after a merge', () => {
     expect(v.kind).toBe('merged-failing');
     expect(isSettled(v, p, later)).toBe(false);
     expect(delayOf(v, p, later)).toBe(10_000);
+  });
+
+  test('a merge whose run failed with no failed job fails, and stays until a run passes', () => {
+    const p = merged([
+      { ...release(null), jobs: [], status: 'done', conclusion: 'STARTUP_FAILURE' },
+    ]);
+    const later = at + 3_600_000;
+    const v = verdictAt(p, {}, 'github.com', later);
+    expect(v).toMatchObject({ kind: 'merged-failing', job: null });
+    expect(textOf(watched(p))).toBe('#128 merged into main · ✗ Release failed');
+    expect(toastOf('#128', v, 'merged-running')).toBe('#128 merged: Release failed');
+    expect(isSettled(v, p, later)).toBe(false);
+    expect(delayOf(v, p, later)).toBe(60_000);
   });
 
   test('a failed merge stays, read each minute until a run of it passes', () => {
