@@ -456,12 +456,18 @@ export function errorLine(text: string): string {
 
 export type Verdict =
   | { kind: 'running'; gate: Workflow }
-  | { kind: 'failing'; workflowId: number; workflow: string; job: string; url: string }
+  | { kind: 'failing'; workflowId: number; workflow: string; job: string | null; url: string }
   | { kind: 'ready' }
   | { kind: 'blocked'; reason: string }
   | { kind: 'waiting'; reason: string }
   | { kind: 'merged-running'; gate: Workflow }
-  | { kind: 'merged-failing'; workflowId: number; workflow: string; job: string; url: string }
+  | {
+      kind: 'merged-failing';
+      workflowId: number;
+      workflow: string;
+      job: string | null;
+      url: string;
+    }
   | { kind: 'merged-passed' }
   | { kind: 'merged-waiting' }
   | { kind: 'closed' };
@@ -476,6 +482,7 @@ export function isMergeFresh(pull: Pick<Pull, 'mergedAt'>, now: number): boolean
 const gates = (w: Workflow) => w.jobs.some((j) => j.isRequired);
 const failedJobs = (w: Workflow) =>
   w.jobs.filter((j) => j.status === 'done' && failed(j.conclusion));
+const isFailedRun = (w: Workflow) => w.status === 'done' && failed(w.conclusion);
 
 type Gated = Pick<Pull, 'workflows' | 'isGated'>;
 
@@ -485,11 +492,12 @@ function counts(runs: Gated): (w: Workflow) => boolean {
   return (w) => !runs.isGated || gates(w);
 }
 
-// The job that failed, not the summary job that failed on it.
+// The job that failed, not the summary job that failed on it; a run that
+// failed with none, as a startup failure does, fails as a whole, named only
+// when no counted run has a failed job.
 function failure(runs: Gated): Verdict | null {
-  const isCounted = counts(runs);
-  for (const w of runs.workflows) {
-    if (!isCounted(w)) continue;
+  const counted = runs.workflows.filter(counts(runs));
+  for (const w of counted) {
     const bad = failedJobs(w);
     const job = bad.find((j) => !j.isRequired) ?? bad[0];
     if (job) {
@@ -497,8 +505,12 @@ function failure(runs: Gated): Verdict | null {
       return { kind: 'failing', workflowId: w.id, workflow: w.name, job: job.name, url };
     }
   }
-  return null;
+  const w = counted.find((r) => isFailedRun(r));
+  return w ? { kind: 'failing', workflowId: w.id, workflow: w.name, job: null, url: w.url } : null;
 }
+
+const failedText = (v: { workflow: string; job: string | null }) =>
+  v.job === null ? `${v.workflow} failed` : `${v.workflow}: ${v.job} failed`;
 
 // The running workflow the merge waits on longest.
 function gateOf(running: Workflow[], estimates: Record<string, number>, host: string): Workflow {
@@ -569,8 +581,6 @@ function mergedVerdict(
   if (runs?.kind === 'running') return { ...runs, kind: 'merged-running' };
   return { kind: 'merged-passed' };
 }
-
-const isFailedRun = (w: Workflow) => w.status === 'done' && failed(w.conclusion);
 
 // Anything on the head commit failed: a required App check, a finished run, or
 // a job of a run still going.
@@ -781,11 +791,9 @@ export function toastOf(
     const note = running.length === 0 ? '' : `; ${running.join(', ')} still running, not required`;
     return `${label} is ready to merge${note}`;
   }
-  if (verdict.kind === 'failing') return `${label} ${verdict.workflow}: ${verdict.job} failed`;
+  if (verdict.kind === 'failing') return `${label} ${failedText(verdict)}`;
   if (verdict.kind === 'merged-passed') return `${label}${after}: its checks passed`;
-  if (verdict.kind === 'merged-failing') {
-    return `${label}${after}: ${verdict.workflow}: ${verdict.job} failed`;
-  }
+  if (verdict.kind === 'merged-failing') return `${label}${after}: ${failedText(verdict)}`;
   return null;
 }
 
@@ -945,10 +953,7 @@ function conditionsOf(
       : `GitHub reports ${name} ready to merge.${note}`;
     found.push({ key: keyOf(watch, 'ready'), text });
   }
-  // A run that failed with no failed job leaves the verdict passed; it is told
-  // below instead.
-  const isJoblessFailure = (pull.mergeRuns?.workflows ?? []).some((w) => isFailedRun(w));
-  if (verdict.kind === 'merged-passed' && !isEarly && !isJoblessFailure) {
+  if (verdict.kind === 'merged-passed' && !isEarly) {
     const text = watch.push
       ? `The checks on ${name} passed.`
       : `${name} merged into ${pull.base}, and ${passedOn(pull)}.`;
@@ -1323,7 +1328,7 @@ function bodyOf(
     return [...lead, { text: ' ○ waiting on checks', isDim: true }, ...tail];
   }
   if (v.kind === 'failing' || v.kind === 'merged-failing') {
-    const reason = { text: ` ${v.workflow}: ${v.job} failed`, url: v.url || undefined };
+    const reason = { text: ` ${failedText(v)}`, url: v.url || undefined };
     return [...lead, icon(' ✗', 'red'), reason, ...others(v.workflowId), ...tail];
   }
   if (v.kind === 'blocked') {
