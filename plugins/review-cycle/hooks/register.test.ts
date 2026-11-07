@@ -4307,6 +4307,125 @@ const RAN_PUSH =
 // The on-screen line for a step the setting runs unasked is a /config choice.
 const NOTICE = { options: { unaskedNotice: true } };
 
+const updating = (prUpdates: string) => ({
+  pluginConfigs: { 'review-cycle': { options: { prUpdates } } },
+});
+const OWN_PULL = {
+  number: 99,
+  author: { login: 'me' },
+  isCrossRepository: false,
+  url: 'https://github.com/o/r/pull/99',
+  reviewDecision: '',
+};
+// A push updating `branch` on github.com/o/r, which heads these open pull requests.
+function openPull(pulls: unknown[], branch = 'fix/x'): (a: string) => Partial<Run> | null {
+  return (a) => {
+    if (/^git (?:-c \S+ )*push --dry-run /.test(a)) {
+      const line = ` \trefs/heads/${branch}:refs/heads/${branch}\t${'c'.repeat(7)}..${'d'.repeat(7)}`;
+      return { stdout: ['To git@github.com:o/r.git', line, 'Done'].join('\n') };
+    }
+    if (a.startsWith('git ls-remote --symref')) return { stdout: 'ref: refs/heads/main\tHEAD\n' };
+    if (a.startsWith(`gh pr list --head ${branch} --state open`)) {
+      return { stdout: JSON.stringify(pulls) };
+    }
+    if (a.startsWith('gh api --hostname github.com user')) return { stdout: 'me\n' };
+    return null;
+  };
+}
+
+describe('the prUpdates setting', () => {
+  test("push fixes lets a push to the user's own open pull request run, and says so", async ($, on) => {
+    const w = fakeWorld(
+      on,
+      pushing({ settings: { local: updating('push fixes') }, git: openPull([OWN_PULL]) }),
+    );
+    await say($, 'fix the failing test');
+    const r = await bash($, 'git push');
+    expect(ran(r)).toBe(true);
+    const line =
+      "review-cycle: ran a push of `fix/x` to #99 without asking, since the prUpdates setting is push fixes (.claude/settings.local.json) and #99 is the user's own open pull request. If git rejects it, stop and tell the user rather than force it.";
+    expect(contextOf(r)).toEqual([line]);
+    // Shown whatever the unasked-step notice says.
+    expect(w.logs).toEqual([line]);
+  });
+  test('the /config value is read', { options: { prUpdates: 'push fixes' } }, async ($, on) => {
+    fakeWorld(on, pushing({ git: openPull([OWN_PULL]) }));
+    await say($, 'fix the failing test');
+    const r = await bash($, 'git push');
+    expect(ran(r)).toBe(true);
+    expect(contextOf(r)[0]).toContain('push fixes (/config)');
+  });
+  test('a held push still asks', async ($, on) => {
+    fakeWorld(
+      on,
+      pushing({ settings: { local: updating('push fixes') }, git: openPull([OWN_PULL]) }),
+    );
+    await say($, "fix the failing test, but don't push yet");
+    expect(ran(await bash($, 'git push'))).toBe(false);
+  });
+  test('a session no one watches still asks', async ($, on) => {
+    fakeWorld(
+      on,
+      pushing({ settings: { local: updating('push fixes') }, git: openPull([OWN_PULL]) }),
+    );
+    await say($, 'fix the failing test', 'sdk');
+    const r = await bash($, 'git push');
+    expect(ran(r)).toBe(false);
+    expect(denied(r, 'prUpdates')).toBe(false);
+  });
+  test('the default asks, as before', async ($, on) => {
+    fakeWorld(on, pushing({ git: openPull([OWN_PULL]) }));
+    await say($, 'fix the failing test');
+    const r = await bash($, 'git push');
+    expect(denied(r, "doesn't ask for a push")).toBe(true);
+    expect(denied(r, 'prUpdates')).toBe(false);
+  });
+  for (const [what, pulls, why] of [
+    ['no open pull request', [], '`fix/x` heads no open pull request'],
+    ['an approved one', [{ ...OWN_PULL, reviewDecision: 'APPROVED' }], '#99 is approved'],
+    ["someone else's", [{ ...OWN_PULL, author: { login: 'alice' } }], '#99 is not one you opened'],
+    ['a fork', [{ ...OWN_PULL, isCrossRepository: true }], '#99 comes from another repository'],
+  ] as const) {
+    test(`push fixes asks for a push to a branch with ${what}, and says why`, async ($, on) => {
+      const git = openPull([...pulls]);
+      fakeWorld(on, pushing({ settings: { local: updating('push fixes') }, git }));
+      await say($, 'fix the failing test');
+      const r = await bash($, 'git push');
+      expect(denied(r, "doesn't ask for a push")).toBe(true);
+      expect(
+        denied(
+          r,
+          `The prUpdates setting lets a push to the user's own open pull request run, but not this one: ${why}`,
+        ),
+      ).toBe(true);
+    });
+  }
+  test('a push to the default branch or a tool branch, and a force push, still ask', async ($, on) => {
+    const local = updating('push fixes');
+    fakeWorld(on, pushing({ settings: { local }, git: openPull([OWN_PULL], 'main') }));
+    await say($, 'fix the failing test');
+    expect(denied(await bash($, 'git push origin main'), 'default branch')).toBe(true);
+    expect(
+      denied(await bash($, 'git push --force-with-lease'), "doesn't ask for a force push"),
+    ).toBe(true);
+  });
+  test('a push to a branch its tool rebuilds asks', async ($, on) => {
+    const git = openPull([OWN_PULL], 'renovate/deps');
+    fakeWorld(on, pushing({ settings: { local: updating('push fixes') }, git }));
+    await say($, 'fix the failing test');
+    expect(denied(await bash($, 'git push'), 'a branch its own tool rebuilds')).toBe(true);
+  });
+  test(
+    'a committed project file can only make it ask',
+    { options: { prUpdates: 'push fixes' } },
+    async ($, on) => {
+      fakeWorld(on, pushing({ settings: { project: updating('ask') }, git: openPull([OWN_PULL]) }));
+      await say($, 'fix the failing test');
+      expect(denied(await bash($, 'git push'), "doesn't ask for a push")).toBe(true);
+    },
+  );
+});
+
 describe('the stop-before setting', () => {
   test('a push below the rung runs without asking, told to the agent but not shown', async ($, on) => {
     const w = fakeWorld(on, pushing({ settings: { local: stops('open PR') } }));

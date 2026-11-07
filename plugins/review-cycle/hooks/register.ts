@@ -128,9 +128,19 @@ import {
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
 import { OFFER_STEPS, offerQuestion } from './offers';
 import {
+  configuredPrUpdates,
+  DEFAULT_PR_UPDATES,
+  effectivePrUpdates,
+  OPEN_PULL_FIELDS,
+  prUpdatesOf,
+  type PrUpdates,
+  type PrUpdatesInForce,
+} from './pr-updates';
+import {
   escalatePush,
   judgePush,
   stackLayerPushed,
+  type PrUpdating,
   type PushConsent,
   type Unasked,
 } from './push-judge';
@@ -180,6 +190,7 @@ type ConfigHook = MatchedHook<
     key:
       | 'review-cycle.enabled'
       | 'review-cycle.stopBefore'
+      | 'review-cycle.prUpdates'
       | 'review-cycle.nudge'
       | 'review-cycle.unaskedNotice'
       | 'review-cycle.modelCheck';
@@ -286,6 +297,7 @@ type GateState = {
   gateOn: boolean;
   // From user or managed settings, which alone reach the register options.
   stopBefore: StopBefore | null;
+  prUpdates: PrUpdates | null;
   // The user's /config value for the end-of-turn review nudge.
   nudge: boolean;
   // The user's /config value for showing a step the setting ran unasked.
@@ -339,6 +351,7 @@ const state: GateState = {
   reviewerChanges: [],
   gateOn: true,
   stopBefore: null,
+  prUpdates: null,
   nudge: true,
   unaskedNotice: false,
   hold: null,
@@ -569,6 +582,7 @@ type Unkept =
   | 'sweepServed'
   | 'gateOn'
   | 'stopBefore'
+  | 'prUpdates'
   | 'nudge'
   | 'owed'
   | 'unaskedNotice'
@@ -1974,6 +1988,7 @@ async function judgeBash(
         push,
         granted,
         model,
+        prUpdating($),
       );
     const escalated = await escalatePush(judge, () => secondRead($));
     const { verdict } = escalated;
@@ -2063,15 +2078,57 @@ async function ladderOf($: $): Promise<InForce> {
   return withMandate(set, state.mandate?.epic ?? null);
 }
 
+// As ladderOf reads stopBefore. A file that cannot be read asks, and so does a
+// session with no one to see the pushes it lets through (-p, the Agent SDK).
+async function prUpdatesInForce($: $): Promise<PrUpdatesInForce & { unreadable?: string }> {
+  const values: Partial<Record<'project' | 'local', PrUpdates | null>> = {};
+  for (const source of ['project', 'local'] as const) {
+    try {
+      const settings = await $.settings.read({ source });
+      values[source] = configuredPrUpdates(settings.pluginConfigs);
+    } catch (error) {
+      const unreadable = `${where(source)}: ${messageOf(error)}`;
+      return { prUpdates: DEFAULT_PR_UPDATES, source: 'default', unreadable };
+    }
+  }
+  const set = effectivePrUpdates(state.prUpdates, values.project ?? null, values.local ?? null);
+  return state.said.origin === 'sdk' ? { prUpdates: DEFAULT_PR_UPDATES, source: 'default' } : set;
+}
+
+function prUpdating($: $): PrUpdating {
+  return {
+    setting: () => prUpdatesInForce($),
+    reads: {
+      openPulls: (branch) =>
+        ghRead(
+          $,
+          ['pr', 'list', '--head', branch, '--state', 'open', '--json', OPEN_PULL_FIELDS],
+          `the open pull request for \`${branch}\``,
+          MERGE_LOOKUP_MS,
+        ),
+      viewer: (host) =>
+        ghRead(
+          $,
+          ['api', '--hostname', host, 'user', '--jq', '.login'],
+          `your GitHub login on ${host}`,
+          MERGE_LOOKUP_MS,
+        ),
+    },
+  };
+}
+
 // Told to the agent, so the step is never silent. Worded as having run, not
 // succeeded: the command may still fail.
-function ranUnasked($: $, { step, ladder, ready }: Unasked): string {
+function ranUnasked($: $, { step, ladder, ready, prUpdate }: Unasked): string {
   const line =
-    ready === undefined
-      ? `review-cycle: ran ${ASKED_FOR[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`
-      : `review-cycle: ran ${ASKED_FOR[step]} now, though the user asked for it once the pull request is ready: ${ready}.`;
-  // A step the setting lets through repeats a choice the user made once.
-  if (ready !== undefined || state.unaskedNotice) $.ui.log(line);
+    prUpdate !== undefined
+      ? `review-cycle: ran a push of ${prUpdate.branches.map((b) => `\`${b}\``).join(', ')} to #${prUpdate.pull} without asking, since the prUpdates setting is push fixes (${where(prUpdate.source)}) and #${prUpdate.pull} is the user's own open pull request. If git rejects it, stop and tell the user rather than force it.`
+      : ready === undefined
+        ? `review-cycle: ran ${ASKED_FOR[step]} without asking, since the stop-before setting is ${ladder.stopBefore} (${where(ladder.source)}).`
+        : `review-cycle: ran ${ASKED_FOR[step]} now, though the user asked for it once the pull request is ready: ${ready}.`;
+  // A step the setting lets through repeats a choice the user made once; a
+  // push to a pull request already open is shown whatever the notice says.
+  if (ready !== undefined || prUpdate !== undefined || state.unaskedNotice) $.ui.log(line);
   return line;
 }
 
@@ -2598,6 +2655,14 @@ async function onStatus(
     held: state.hold !== null,
     heldBy: held(),
     mandate: state.mandate,
+  };
+  const updates = await prUpdatesInForce($);
+  status.prUpdates = {
+    ...updates,
+    from: updates.unreadable === undefined ? where(updates.source) : 'unreadable settings',
+    // A fix is a commit first, which only stop-before lets through.
+    ...(updates.prUpdates !== 'ask' &&
+      !may.commit && { waitsOn: 'commits, which stop-before holds' }),
   };
   status.mayCommit = may.commit;
   status.mayPush = may.push;
@@ -3148,12 +3213,14 @@ function onBashError(
 export const register: Register = (on, options) => {
   state.gateOn = options.enabled !== false;
   state.stopBefore = stopBeforeOf(options.stopBefore);
+  state.prUpdates = prUpdatesOf(options.prUpdates);
   state.nudge = options.nudge !== false;
   state.unaskedNotice = options.unaskedNotice === true;
   state.modelCheck = options.modelCheck !== false;
   on('config.set', { key: 'review-cycle.modelCheck' }, onConfigSet);
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
   on('config.set', { key: 'review-cycle.stopBefore' }, onConfigSet);
+  on('config.set', { key: 'review-cycle.prUpdates' }, onConfigSet);
   on('config.set', { key: 'review-cycle.nudge' }, onConfigSet);
   on('config.set', { key: 'review-cycle.unaskedNotice' }, onConfigSet);
   on('tool.call', { tool: 'Edit' }, onEditSlop);

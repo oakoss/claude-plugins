@@ -26,6 +26,13 @@
       "options": ["commit", "push", "open PR", "merge", "release", "never stop"],
       "default": "push"
     },
+    "prUpdates": {
+      "type": "string",
+      "title": "Pull request updates",
+      "description": "What the agent may do to a pull request already open, apart from Stop before. ask: nothing more than Stop before allows. push fixes: a push to a branch heading your own open, unapproved pull request in the repository it pushes to runs without asking, so a fix for CI or a review goes out, and is shown on screen. A first push, a push to the default branch, a force push (so a lower layer of a stack), a tag push, a branch a tool rebuilds (version, Renovate, Dependabot) and a pull request from a fork still ask, and nothing changes under claude -p. The fix's commit still follows Stop before: at commit, the agent asks for the commit first. A project's .claude/settings.json can only ask more; .claude/settings.local.json can set either. Only you can change this, here in /config.",
+      "options": ["ask", "push fixes"],
+      "default": "ask"
+    },
     "nudge": {
       "type": "boolean",
       "title": "Review nudge",
