@@ -506,7 +506,14 @@ function ghRefusal(
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
   const unreviewed =
     kind === 'push' ? ' It writes to GitHub directly, so no review covers it.' : '';
-  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${askThem(naming, example, shown)}`;
+  const ask = kind === 'comment' ? askComment(shown) : askThem(naming, example, shown);
+  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${ask}`;
+}
+
+// A yes reads as consent only to the question the grammar knows, so a fuller
+// one ("Reply to and resolve the four review threads on #109?") grants nothing.
+function askComment(shown: string): string {
+  return `stop and end your reply with the question mcp__review-cycle__offer gives for step comment and the pull request, word for word and alone in its last paragraph, such as "Reply to the review on #116?", then end your turn; their answer decides. Put what the replies say above it, not in the question: a question that names the threads, how many, or resolving them is not read as asked. The command: ${shown}`;
 }
 
 // Commits and approvals are not consent the grammar misses.
