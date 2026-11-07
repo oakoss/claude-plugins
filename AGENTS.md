@@ -32,7 +32,7 @@ Four facts about an Issue live in four places: labels say what it touches and wh
 - **A parent is a branch or a finding set.** A branch that carries several Issues gets a parent of type `task`, and `tm list parent:<key>` is its checklist. `epic` is for a finding set or a rollout.
 - **A new finding joins the unclaimed parent whose branch already edits its file**; find it with `tm search <path>`, which reads descriptions too. When that branch is in flight, name the parent in the new Issue's description instead.
 - **An Issue that claims a cost or a saving says whether it was measured, and how.** An inferred cost is triaged as a question to measure first: `cpl-dkrr` was filed to cut a cost, and measuring showed the cost was elsewhere, so it closed unbuilt.
-- **Order is a link** (`tm link <earlier> blocks <later>`). **Priority is urgency**: high, the next branch opened; medium, the next release; low, scheduled; none, may slip. Work waiting on evidence before it is built sits in `triage`, which `tm ready` leaves out.
+- **Order is a link** (`tm link <earlier> blocks <later>`). **Priority is urgency**: urgent, now; high, the next branch opened; medium, the next release; low, scheduled; none, may slip. Work waiting on evidence before it is built sits in `triage`, which `tm ready` leaves out.
 
 Views that use these: `tm ready`, `tm list labels:plugin:pr-kit`, `tm list status:todo labels:bump:minor`, and `tm list status:triage`.
 
