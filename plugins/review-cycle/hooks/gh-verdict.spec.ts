@@ -244,6 +244,15 @@ describe('GitHub writes on the ladder', () => {
   test('a comment needs the request whatever the rung', async () => {
     const r = await judge([{ kind: 'comment' }], world('never stop'));
     expect(r).toMatchObject({ deny: expect.stringContaining('"Reply to the review on #116?"') });
+    // The agent asks the offer tool's question, not a fuller one the grammar refuses.
+    expect(r).toMatchObject({
+      deny: expect.stringContaining(
+        'the question mcp__review-cycle__offer gives for step comment and the pull request, word for word',
+      ),
+    });
+    expect(r).toMatchObject({
+      deny: expect.stringContaining('names the threads, how many, or resolving them'),
+    });
     expect(await judge([{ kind: 'comment' }], world('commit'), grant({ comment: true }))).toEqual({
       ran: [],
     });

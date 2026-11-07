@@ -8177,6 +8177,23 @@ describe('the offer tool', () => {
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
     expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
   });
+  test('a refused comment points at its question, and a yes to it posts', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr comment 109 --body done');
+    expect(denied(r, 'the question mcp__review-cycle__offer gives for step comment')).toBe(true);
+    // The fuller question an agent wrote in oakterm (#109) is not read as asked.
+    await endTurn($, 'answer', 'Reply to and resolve the four review threads on #109?');
+    await say($, 'yes');
+    expect(denied(await bash($, 'gh pr comment 109 --body done'), 'a comment on GitHub')).toBe(
+      true,
+    );
+    const question = await offered($, { step: 'comment', pulls: ['109'] });
+    expect(question).toBe('Reply to the review on #109?');
+    await endTurn($, 'answer', `Each reply names its fix commit.\n\n${question}`);
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr comment 109 --body done'))).toBe(true);
+  });
   test('an offer it cannot phrase says why', async ($, on) => {
     fakeWorld(on);
     const r = (await $.tool.call({
