@@ -2155,6 +2155,10 @@ const LOOKUP_MS = [5000];
 // since GitHub is slow at times and asking them again gains nothing.
 const MERGE_LOOKUP_MS = [5000, 10_000];
 
+// A real host's timeout reads "aborted: still running after 5000ms" (measured
+// on 2.1.319); the test kit's reads "timed out".
+const TIMED_OUT = /timed? ?out|still running after/i;
+
 // What a gh read printed, or why it asks: "looking up <what> failed (…)" or
 // "… printed nothing". `slow` only when every try timed out.
 async function ghRead($: $, args: string[], what: string, schedule = LOOKUP_MS): Promise<Lookup> {
@@ -2166,12 +2170,11 @@ async function ghRead($: $, args: string[], what: string, schedule = LOOKUP_MS):
       break;
     } catch (error) {
       failed = messageOf(error);
-      // The wording of a timeout is the test kit's; a real host's is inferred to match.
-      if (!/timed? ?out/i.test(failed)) break;
+      if (!TIMED_OUT.test(failed)) break;
     }
   }
   if (r === null) {
-    const slow = /timed? ?out/i.test(failed);
+    const slow = TIMED_OUT.test(failed);
     return slow
       ? { asks: `looking up ${what} failed (${failed})`, slow }
       : { asks: `looking up ${what} failed (${failed})` };

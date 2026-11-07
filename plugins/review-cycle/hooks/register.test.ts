@@ -5226,6 +5226,7 @@ describe('the stop-before setting', () => {
       settings: { local: stops('release') },
       git: github('fix/x'),
       reject: (a) => a.startsWith('gh pr view'),
+      rejectWith: 'aborted: still running after 5000ms',
     });
     await say($, 'merge 62');
     const r = await bash($, 'gh pr merge 62');
