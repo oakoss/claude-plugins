@@ -369,7 +369,7 @@ describe('ship: what it may do unasked', () => {
       ['name those layers and ask before pushing', 'ask before pushing'],
       ['On a no, stop before pushing', 'stop on no'],
       ['return with `git checkout <branch>` whether they pass or fail', 'return to branch'],
-      ["so each layer's pull request closes only what that layer finishes", 'per-layer closes'],
+      ["so each layer's pull request updates only what that layer finishes", 'per-layer updates'],
     ]);
     expect(text).toContain('one of its `branches` has `isCurrent: true`');
   });
@@ -514,46 +514,59 @@ describe('ship: what it may do unasked', () => {
     ]);
   });
 
-  test('only finished items close, and only beads close here', () => {
-    expectAnchors(text, 'ship closes', [
+  test('each tracker updates only its own finished items, with its own commands', () => {
+    expectAnchors(text, 'ship updates', [
       [
         'a `Refs` item only when this branch completes it, such as the bead the work was started for. Every other `Refs` item stays a `Refs` line, open.',
         'finished items only',
       ],
       [
-        'Close only beads here, and on the update path only items the publish did not close:',
-        'only beads',
+        'Each tracker the repository shows acts only on its own items, and on the update path only on items the publish did not:',
+        'own ids only',
       ],
+      ['- **beads** (a `.beads/` directory), on beads ids:', 'beads on its ids'],
+      ['tm move <id> in_review', 'tm: in review at ship'],
+      ["leave it to its tracker's own integration, and say so in the report", 'others left'],
     ]);
+    // A command named in a project's AGENTS.md is not an override: a quick
+    // reference's bare `bd close <id>` would drop the reason.
+    const step5 = text.slice(text.indexOf('## 5. '), text.indexOf('## 6. '));
+    expect(step5).toContain('tm move <id> in_review');
+    expect(step5).not.toMatch(/AGENTS\.md|CLAUDE\.md/);
     expect([...anyFenceLines, ...inlineCode].filter((l) => /\bclose\b/.test(l))).toEqual([
       'bd close <id> --reason "<one line: what shipped>"',
     ]);
   });
 
-  test('each closed bead notes the pull request and the session that shipped it', () => {
+  test('each updated item notes the pull request and the session that shipped it', () => {
     expectAnchors(text, 'ship session note', [
       [
-        'when step 5 closed beads in this run and `echo "$CLAUDE_CODE_SESSION_ID"` prints an ID',
+        'when step 5 updated items in this run and `echo "$CLAUDE_CODE_SESSION_ID"` prints an ID',
         'only with a session',
       ],
       [
         'bd note <id> "shipped in #<number> from session $CLAUDE_CODE_SESSION_ID (claude -r $CLAUDE_CODE_SESSION_ID)"',
         'note command',
       ],
+      [
+        'tm comment <id> "shipped in #<number> from session $CLAUDE_CODE_SESSION_ID (claude -r $CLAUDE_CODE_SESSION_ID)"',
+        'tm note command',
+      ],
+      ["with its tracker's note command", 'tracker note'],
       ['then push the task graph again when step 5 pushed it', 'graph pushed after'],
       ["and step 6's session note with that layer's number", 'per layer'],
     ]);
   });
 
   test('the task graph is pushed only when a remote exists', () => {
-    expect(text).toMatch(/bd dolt remote list\nbd dolt push/);
+    expect(text).toMatch(/bd dolt remote list\n\s*bd dolt push/);
     expect(text).toContain(
       'When `bd dolt remote list` lists nothing, skip the push and say so in the report',
     );
   });
 
   test('the branch is pushed before any item is closed', () => {
-    expect(text).toMatch(/## 4\. Push[\s\S]*## 5\. Close finished tracker items/);
+    expect(text).toMatch(/## 4\. Push[\s\S]*## 5\. Update finished tracker items/);
     expect(text).toContain('A refused push ends the ship here, before any item is closed.');
     expect(text).not.toContain('reopen');
   });
@@ -598,7 +611,7 @@ describe('ship: what it may do unasked', () => {
       expect(front).toContain(phrase);
     }
     // Loaded with every session's skill list, so it states the order the body runs.
-    expect(front).toContain("pushes, closes the branch's finished tracker items");
+    expect(front).toContain("pushes, updates the branch's finished tracker items");
   });
 });
 
@@ -661,6 +674,19 @@ describe('release-check: reads, never releases', () => {
         'fix goes to the bump file',
       ],
       ["Never edit the release pull request's branch", 'rebuilt branch'],
+    ]);
+  });
+});
+
+describe('merge: tracker items close once merged', () => {
+  test('tm closes merged items once the default branch is current', () => {
+    expectAnchors(skillText('pr-kit', 'merge'), 'merge closes', [
+      [
+        'in a repository with a `.config/tm.toml`, close the tm items the merge finished',
+        'tm only',
+      ],
+      ['once the default branch is current, run `tm git scan`', 'after the pull'],
+      ['A tracker ship already closed, such as beads, needs nothing here.', 'beads untouched'],
     ]);
   });
 });

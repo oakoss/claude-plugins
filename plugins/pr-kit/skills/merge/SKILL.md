@@ -37,6 +37,8 @@ gh pr merge <number> --<method> --delete-branch
 
 The merge commit on the default branch (`gh pr view <number> --json mergeCommit,mergedAt`, where after a stack merge `<number>` is the top pull request of the set, never the stack's number), every pull request it merged, and what is left: open layers above it, a version pull request the merge triggered. An empty `mergedAt` right after the merge means it has not merged yet, as when a merge queue took it: say so rather than report it merged. Bringing the local default branch current (`git pull --ff-only` on it) needs no question.
 
+Then, in a repository with a `.config/tm.toml`, close the tm items the merge finished: once the default branch is current, run `tm git scan` and report what it moved. A tracker ship already closed, such as beads, needs nothing here.
+
 When pr-watch's watch tool exists and the repository has an open release pull request, one whose head branch (`gh pr list --state open --json number,headRefName`) is `version-packages`, ends in `/version-packages`, or starts with `changeset-release/`, call the tool on it without `wake`, so its rebuild and checks show above the prompt. Never offer or run its merge: merging it is the release, and stays the user's ask.
 
 ## Stack
