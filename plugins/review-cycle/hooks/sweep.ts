@@ -63,6 +63,20 @@ export async function sweep(run: Run, sleep: Sleep, dir: string, own: number): P
     }
     if (left.size > 0) errors.push(`still running after KILL: ${listed(left).join(' ')}`);
   }
+  // A Rust copy built through mbx keeps its target in mbx's cache, outside
+  // `dir`, recorded under the real path: macOS's /var is /private/var.
+  try {
+    const real = await run(['realpath', dir]);
+    const root = (real.exitCode === 0 && real.stdout.trim()) || dir;
+    const mbx = await run(['mbx', 'clean', '--under', root]);
+    if (mbx.exitCode !== 0) {
+      errors.push(`mbx clean failed: ${mbx.stderr.trim() || `exit ${mbx.exitCode}`}`);
+    }
+  } catch (error) {
+    // No mbx to start means none of its build output; anything else is reported.
+    const why = error instanceof Error ? error.message : String(error);
+    if (!why.includes('ENOENT')) errors.push(`mbx clean did not finish: ${why}`);
+  }
   const rm = await run(['rm', '-rf', '--', dir]);
   const removed = rm.exitCode === 0;
   if (!removed) errors.push(`rm failed: ${rm.stderr.trim() || `exit ${rm.exitCode}`}`);

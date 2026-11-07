@@ -8,8 +8,10 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import { sweep, type Run } from '../hooks/sweep';
 
+// Like $.process.run, a command that cannot start rejects, naming ENOENT.
 const run: Run = (argv) => {
   const r = spawnSync(argv[0] ?? '', argv.slice(1), { encoding: 'utf8' });
+  if (r.error) return Promise.reject(new Error(r.error.message));
   return Promise.resolve({
     exitCode: r.status ?? 1,
     stdout: r.stdout ?? '',
