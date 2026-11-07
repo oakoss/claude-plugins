@@ -18,6 +18,7 @@ import {
 import { firstLine, type Git } from './git';
 import type { PushSpec } from './git-args';
 import { holds, type Hold } from './hold';
+import { prUpdateOf, type PrReads, type PrUpdatesInForce } from './pr-updates';
 import {
   askingReason,
   parseDryRun,
@@ -31,8 +32,15 @@ import {
 } from './push-verdict';
 import { anonymized, layerOf, parseCatalog, remoteOf, type LeaseIo } from './stack';
 
-// A push a requested pull request needs (`forPr`) runs unasked, not noted.
-export type Unasked = GhUnasked & { forPr?: true };
+// A push a requested pull request needs (`forPr`) runs unasked, not noted;
+// one `prUpdates` let through names the pull request it updates.
+export type Unasked = GhUnasked & {
+  forPr?: true;
+  prUpdate?: { pull: number; branches: string[]; source: PrUpdatesInForce['source'] };
+};
+
+// The `prUpdates` setting and the GitHub reads it needs.
+export type PrUpdating = { setting: () => Promise<PrUpdatesInForce>; reads: PrReads };
 
 export const LEASE = '`--force-with-lease --force-if-includes`';
 
@@ -187,6 +195,7 @@ export async function judgePush(
   spec: PushSpec,
   granted: Grant,
   model: ModelSteps = {},
+  prs?: PrUpdating,
 ): Promise<PushVerdict> {
   const missing = unasked(spec, granted);
   if (missing === null) {
@@ -202,20 +211,58 @@ export async function judgePush(
   const byModel =
     (model.pr === true && !holds(consent().held, 'push')) ||
     permitted(granted, ladder, consent().held, model).push;
-  const outcome = await pushOutcome(missing, bySetting || byModel, () =>
+  const update =
+    missing === 'push' && !bySetting && !byModel && !holds(consent().held, 'push')
+      ? await prUpdateFor(git, top, spec, prs)
+      : null;
+  const byUpdate = update !== null && 'pull' in update;
+  const outcome = await pushOutcome(missing, bySetting || byModel || byUpdate, () =>
     alwaysAsks(git, top, spec),
   );
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
+    const unmet = update !== null && 'why' in update ? update : null;
     return {
-      deny: pushRefusal(consent, commits, outcome.missing, granted, ladder, outcome.always),
+      deny: pushRefusal(consent, commits, outcome.missing, granted, ladder, outcome.always, unmet),
       step: 'push',
+    };
+  }
+  if (byUpdate && !bySetting && !byModel) {
+    return {
+      ran: {
+        step: 'push',
+        ladder,
+        prUpdate: { pull: update.pull, branches: update.branches, source: update.source },
+      },
     };
   }
   // A push the model's yes to a pull request let through is that pull
   // request's, as a typed request's is.
   if (!bySetting) return { ran: model.pr === true ? { step: 'push', ladder, forPr: true } : null };
   return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
+}
+
+type Update =
+  | { pull: number; branches: string[]; source: PrUpdatesInForce['source'] }
+  | { why: string; source: PrUpdatesInForce['source'] };
+
+// Whether `prUpdates` lets this push through, or why not; null when the
+// setting asks, so a refusal names it only when it was on.
+async function prUpdateFor(
+  git: Git,
+  top: string,
+  spec: PushSpec,
+  prs: PrUpdating | undefined,
+): Promise<Update | null> {
+  if (prs === undefined) return null;
+  const { prUpdates, source } = await prs.setting();
+  if (prUpdates !== 'push fixes') return null;
+  if (spec.argv === null || spec.after !== null) {
+    return { why: 'the gate cannot tell which branch it updates', source };
+  }
+  const targets = await pushTargets(git, top, spec.argv);
+  if (targets.failed !== null) return { why: `a dry run of it failed (${targets.failed})`, source };
+  return { ...(await prUpdateOf(targets.refs, prs.reads)), source };
 }
 
 // A push judged, then, when it refuses short of final, judged again with the
@@ -245,9 +292,14 @@ function pushRefusal(
   granted: Grant,
   ladder: InForce,
   always: string | null,
+  unmet: { why: string } | null = null,
 ): string {
   const { held, unread, shown } = consent();
   const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
+  const update =
+    unmet === null
+      ? ''
+      : ` The prUpdates setting lets a push to the user's own open pull request run, but not this one: ${unmet.why}.`;
   const ask = (example: string) => askThem('what it pushes and where', example, shown);
   switch (missing) {
     case 'bare': {
@@ -262,7 +314,7 @@ function pushRefusal(
       if (always === DELETES) {
         return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('"Delete `fix/x` from `origin`?"')}`;
       }
-      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
+      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${update}${alone} To push, ${ask('"Push `fix/x` to `origin`?"')}`;
     }
     default: {
       const unhandled: never = missing;
