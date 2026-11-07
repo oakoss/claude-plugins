@@ -4,6 +4,18 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.38.0 (2026-11-07)
+
+### Added
+
+A new `/config` setting, Pull request updates (`prUpdates`), lets the fix for a failing check or a review go out without asking. Set to `push fixes`, a push runs unasked when every branch it updates heads your own open, unapproved pull request, on the same host and repository the push goes to; before, the agent asked before every such push unless Stop before let all pushes through. Each one is shown on screen and told to the agent, naming the branch and pull request. A first push, the default branch, a force push (so a lower layer of a stack), a tag, a version, Renovate or Dependabot branch, a fork's or someone else's pull request, an approved one, another host or a local path, and any GitHub read that fails still ask, and the refusal says why `push fixes` did not apply. The default, `ask`, changes nothing. The fix's commit still follows Stop before, a committed `.claude/settings.json` can only make it ask, and it is off under `claude -p`.
+
+### Fixed
+
+The commit gate now recognises a GitHub lookup that times out. A real timeout says "aborted: still running after …", which the gate did not read as a timeout, so a slow lookup confirming a merge you asked for was not tried again for longer, and you were asked to approve it rather than told GitHub did not answer in time. Measured on Claude Code 2.1.319.
+
+With mbx installed, reviewer legs in a Rust project build from mbx's shared cache instead of from scratch into their own copies. A leg's copy of a repository whose mise config you trust is now trusted too, so `cargo` runs through mise as in your checkout: measured on oakum, a leg's test build took 88 s with 338 cache hits, and the copy stayed 7 MB. Before, mise refused the copy's config, `cargo` failed, and a leg that fell back to `~/.cargo/bin/cargo` could build a full `target/` into the copy; that is the likely cause of a 112 GB leg folder, though it was not reproduced. Reviewer legs are now told to report a failing tool wrapper rather than route around it, and the cycle's sweep runs `mbx clean --under` the scratch folder, so the copies' build output leaves mbx's cache with them. A copy of a repository whose mise config you have not trusted stays untrusted, and without mbx a copy's `cargo` still builds a `target/` of its own. A leg that copies a repository by hand instead of with `copy-tree.sh` is not covered.
+
 ## 0.37.0 (2026-11-06)
 
 ### Added
