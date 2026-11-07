@@ -493,22 +493,20 @@ function counts(runs: Gated): (w: Workflow) => boolean {
 }
 
 // The job that failed, not the summary job that failed on it; a run that
-// failed with none, as a startup failure does, fails as a whole.
+// failed with none, as a startup failure does, fails as a whole, named only
+// when no counted run has a failed job.
 function failure(runs: Gated): Verdict | null {
-  const isCounted = counts(runs);
-  for (const w of runs.workflows) {
-    if (!isCounted(w)) continue;
+  const counted = runs.workflows.filter(counts(runs));
+  for (const w of counted) {
     const bad = failedJobs(w);
     const job = bad.find((j) => !j.isRequired) ?? bad[0];
     if (job) {
       const url = job.url || w.url;
       return { kind: 'failing', workflowId: w.id, workflow: w.name, job: job.name, url };
     }
-    if (isFailedRun(w)) {
-      return { kind: 'failing', workflowId: w.id, workflow: w.name, job: null, url: w.url };
-    }
   }
-  return null;
+  const w = counted.find((r) => isFailedRun(r));
+  return w ? { kind: 'failing', workflowId: w.id, workflow: w.name, job: null, url: w.url } : null;
 }
 
 const failedText = (v: { workflow: string; job: string | null }) =>

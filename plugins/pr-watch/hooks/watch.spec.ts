@@ -521,6 +521,15 @@ describe('verdictOf', () => {
       url: 'https://x/run/1',
     });
     expect(textOf(watched(pull([startup])))).toContain('✗ CI failed');
+    expect(toastOf('#1', v, 'running')).toBe('#1 CI failed');
+    // A named job failure in a later run is said first.
+    expect(verdictAt(pull([startup, codeql('FAILURE')]), {})).toMatchObject({
+      workflow: 'CodeQL',
+      job: 'Analyze',
+    });
+    // On a gated pull request, a run with no required job is not counted.
+    const docs = { ...flow(3, 'Docs', []), conclusion: 'STARTUP_FAILURE' };
+    expect(verdictAt(pull([green(), docs], { isGated: true }), {}).kind).toBe('ready');
   });
 
   test('a failure outside the required workflows does not fail the PR', () => {
@@ -1685,6 +1694,22 @@ describe('needsTrunk and followTrunk', () => {
       expect(needsTrunk({ ...onMerge([]), stack }, late)).toBe(false);
       expect(needsTrunk({ ...onMerge([release('FAILURE')]), stack }, late)).toBe(true);
     }
+  });
+
+  test('a merge whose run failed with no failed job clears once a later run passes', () => {
+    const startup = {
+      ...release(null),
+      jobs: [],
+      status: 'done' as const,
+      conclusion: 'STARTUP_FAILURE',
+    };
+    const p = follow(onMerge([startup]), [
+      commit('next', [runOf(2, release('SUCCESS'))]),
+      commit('m', []),
+    ]);
+    const v = verdictAt(p, {}, 'github.com', late);
+    expect(v.kind).toBe('merged-passed');
+    expect(isSettled(v, p, late)).toBe(true);
   });
 
   test("a merge commit with no runs follows the oldest later commit's that has some", () => {
