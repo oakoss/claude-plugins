@@ -1,0 +1,7 @@
+---
+review-cycle: minor
+---
+
+The agent can now answer review findings on your pull request without you approving every reply. Two new `prUpdates` values, set in `/config`, build on `push fixes`: `push and reply` lets the agent reply to review threads a bot opened on your own open, unapproved pull request, and `push, reply and resolve` also resolves them once a reply names the commit that fixed the finding. A thread a person opened, and a top-level comment, still need your request.
+
+Replies go through two new tools rather than `gh`: `mcp__review-cycle__threads` lists a pull request's open threads, and `mcp__review-cycle__reply` posts up to 10 replies a call. Each reply must cite a commit already pushed to the pull request; a reply that defers a finding gives no commit and leaves its thread open; a reply already on the thread is not posted again; and `preview: true` shows what would happen. Only this repository's pull requests are answered, and never by a subagent. A reply the setting runs is shown on screen with its pull request and links. Putting replies off, as in "don't reply yet", holds them until you ask for one. With the setting at `ask`, a reply you asked for still runs through the same tool, and one you did not ask for is refused with the question to ask. Only `push, reply and resolve` resolves a thread, asked or not, so a thread a person opened stays open for them to resolve. A push the setting lets through now names the setting that let it, rather than always saying `push fixes`.

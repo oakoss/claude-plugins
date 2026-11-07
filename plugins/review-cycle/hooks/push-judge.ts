@@ -18,7 +18,7 @@ import {
 import { firstLine, type Git } from './git';
 import type { PushSpec } from './git-args';
 import { holds, type Hold } from './hold';
-import { prUpdateOf, type PrReads, type PrUpdatesInForce } from './pr-updates';
+import { allows, prUpdateOf, type PrReads, type PrUpdatesInForce } from './pr-updates';
 import {
   askingReason,
   parseDryRun,
@@ -36,7 +36,12 @@ import { anonymized, layerOf, parseCatalog, remoteOf, type LeaseIo } from './sta
 // one `prUpdates` let through names the pull request it updates.
 export type Unasked = GhUnasked & {
   forPr?: true;
-  prUpdate?: { pull: number; branches: string[]; source: PrUpdatesInForce['source'] };
+  prUpdate?: {
+    pull: number;
+    branches: string[];
+    setting: PrUpdatesInForce['prUpdates'];
+    source: PrUpdatesInForce['source'];
+  };
 };
 
 // The `prUpdates` setting and the GitHub reads it needs.
@@ -232,7 +237,12 @@ export async function judgePush(
       ran: {
         step: 'push',
         ladder,
-        prUpdate: { pull: update.pull, branches: update.branches, source: update.source },
+        prUpdate: {
+          pull: update.pull,
+          branches: update.branches,
+          setting: update.setting,
+          source: update.source,
+        },
       },
     };
   }
@@ -243,7 +253,12 @@ export async function judgePush(
 }
 
 type Update =
-  | { pull: number; branches: string[]; source: PrUpdatesInForce['source'] }
+  | {
+      pull: number;
+      branches: string[];
+      setting: PrUpdatesInForce['prUpdates'];
+      source: PrUpdatesInForce['source'];
+    }
   | { why: string; source: PrUpdatesInForce['source'] };
 
 // Whether `prUpdates` lets this push through, or why not; null when the
@@ -256,13 +271,14 @@ async function prUpdateFor(
 ): Promise<Update | null> {
   if (prs === undefined) return null;
   const { prUpdates, source } = await prs.setting();
-  if (prUpdates !== 'push fixes') return null;
+  if (!allows(prUpdates, 'push fixes')) return null;
   if (spec.argv === null || spec.after !== null) {
     return { why: 'the gate cannot tell which branch it updates', source };
   }
   const targets = await pushTargets(git, top, spec.argv);
   if (targets.failed !== null) return { why: `a dry run of it failed (${targets.failed})`, source };
-  return { ...(await prUpdateOf(targets.refs, prs.reads)), source };
+  const update = await prUpdateOf(targets.refs, prs.reads);
+  return 'why' in update ? { ...update, source } : { ...update, setting: prUpdates, source };
 }
 
 // A push judged, then, when it refuses short of final, judged again with the
