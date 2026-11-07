@@ -73,5 +73,21 @@ printf '%s\n' "$found" \
     cp ${clone[@]+"${clone[@]}"} -RP "$nm/." "$dest/$nm"
   done
 
+# mise refuses an untrusted config, and with it every tool it wraps, such as
+# cargo through mbx's shared build cache. The copy holds the checkout's own
+# config, so it is trusted when the checkout's is, and never otherwise.
+if command -v mise >/dev/null 2>&1; then
+  shown=$repo
+  if [ -n "${HOME:-}" ] && [ "${repo#"${HOME%/}"/}" != "$repo" ]; then
+    # mise names a path under the home directory with a literal ~.
+    # shellcheck disable=SC2088
+    shown="~/${repo#"${HOME%/}"/}"
+  fi
+  if mise -C "$repo" trust --show 2>/dev/null | grep -qxF "$shown: trusted"; then
+    mise -C "$dest" trust --yes --quiet >/dev/null 2>&1 \
+      || echo "copy-tree: mise could not trust the copy's config, so tools mise wraps may refuse to run in it" >&2
+  fi
+fi
+
 trap - EXIT
 echo "$dest"
