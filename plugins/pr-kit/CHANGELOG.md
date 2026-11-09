@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.6.0 (2026-11-09)
+
+### Added
+
+Ship and merge now work with tm as well as beads. Each tracker the repository shows acts only on its own ids: beads items close at ship as before, tm items move to `in_review`, and any other item, GitHub issues included, is left to its own integration and said so in the report. Ship notes the pull request and session on each item it updates, with `bd note` or `tm comment`. In a tm repository, once the default branch is current after a merge, merge runs `tm git scan`, which closes each item a `Closes` line on the default branch names. Before, tm items such as `Closes OT-303` stayed open at ship.
+
+### Fixed
+
+Get PR comments now lists each review thread's id beside its item, and says to answer threads through review-cycle's reply tool, citing the pushed fix commit, when that tool is installed. Before, the list dropped the ids and the agent replied with `gh`, which asks every time even when your `prUpdates` setting lets replies run.
+
 ## 0.5.0 (2026-11-06)
 
 ### Added

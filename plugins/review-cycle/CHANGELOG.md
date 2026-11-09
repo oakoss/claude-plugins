@@ -4,6 +4,26 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.38.0 (2026-11-09)
+
+### Added
+
+A new `/config` setting, Pull request updates (`prUpdates`), lets the fix for a failing check or a review go out without asking. Set to `push fixes`, a push runs unasked when every branch it updates heads your own open, unapproved pull request, on the same host and repository the push goes to; before, the agent asked before every such push unless Stop before let all pushes through. Each one is shown on screen and told to the agent, naming the branch and pull request. A first push, the default branch, a force push (so a lower layer of a stack), a tag, a version, Renovate or Dependabot branch, a fork's or someone else's pull request, an approved one, another host or a local path, and any GitHub read that fails still ask, and the refusal says why `push fixes` did not apply. The default, `ask`, changes nothing. The fix's commit still follows Stop before, a committed `.claude/settings.json` can only make it ask, and it is off under `claude -p`.
+
+The agent can now answer review findings on your pull request without you approving every reply. Two new `prUpdates` values, set in `/config`, build on `push fixes`: `push and reply` lets the agent reply to review threads a bot opened on your own open, unapproved pull request, and `push, reply and resolve` also resolves them once a reply names the commit that fixed the finding. A thread a person opened, and a top-level comment, still need your request.
+
+Replies go through two new tools rather than `gh`: `mcp__review-cycle__threads` lists a pull request's open threads, and `mcp__review-cycle__reply` posts up to 10 replies a call. Each reply must cite a commit already pushed to the pull request; a reply that defers a finding gives no commit and leaves its thread open; a reply already on the thread is not posted again; and `preview: true` shows what would happen. Only this repository's pull requests are answered, and never by a subagent. A reply the setting runs is shown on screen with its pull request and links. Putting replies off, as in "don't reply yet", holds them until you ask for one. With the setting at `ask`, a reply you asked for still runs through the same tool, and one you did not ask for is refused with the question to ask. Only `push, reply and resolve` resolves a thread, asked or not, so a thread a person opened stays open for them to resolve.
+
+### Fixed
+
+A refused comment on GitHub now tells the agent to ask the offer tool's own question, such as "Reply to the review on #116?", word for word, and to put what the replies say above it. Before, the refusal asked the agent to name where the comment goes and what it says, so agents wrote fuller questions ("Reply to and resolve the four review threads on #109?") that a yes could not grant, so you had to answer the same question twice.
+
+The commit gate now recognises a GitHub lookup that times out. A real timeout says "aborted: still running after …", which the gate did not read as a timeout, so a slow lookup confirming a merge you asked for was not tried again for longer, and you were asked to approve it rather than told GitHub did not answer in time. Measured on Claude Code 2.1.319.
+
+With mbx installed, reviewer legs in a Rust project build from mbx's shared cache instead of from scratch into their own copies. A leg's copy of a repository whose mise config you trust is now trusted too, so `cargo` runs through mise as in your checkout: measured on oakum, a leg's test build took 88 s with 338 cache hits, and the copy stayed 7 MB. Before, mise refused the copy's config, `cargo` failed, and a leg that fell back to `~/.cargo/bin/cargo` could build a full `target/` into the copy; that is the likely cause of a 112 GB leg folder, though it was not reproduced. Reviewer legs are now told to report a failing tool wrapper rather than route around it, and the cycle's sweep runs `mbx clean --under` the scratch folder, so the copies' build output leaves mbx's cache with them. A copy of a repository whose mise config you have not trusted stays untrusted, and without mbx a copy's `cargo` still builds a `target/` of its own. A leg that copies a repository by hand instead of with `copy-tree.sh` is not covered.
+
+Review scratch directories no longer get left behind. A session that was resumed or forked forgot the directories its review had made, so the end-of-cycle sweep answered "No scratch directory to sweep" and left the reviewer copies on disk. The sweep now reads those directories back from the scratch tool's answers in the conversation. A directory read back is left alone while the session that made it is still running, as a forked session's parent may be, or while a process is using it. A file or symlink carrying a deny-delete ACL, which blocked `rm` even in your own shell, is now unlocked and the directory removed; only what lies wholly inside the directory is changed, so a symlink's target or a hard-linked file elsewhere keeps its ACL.
+
 ## 0.37.0 (2026-11-06)
 
 ### Added
