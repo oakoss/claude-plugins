@@ -8449,7 +8449,16 @@ describe('the reply tools', () => {
     expect(JSON.parse(r.result)).toEqual({
       pull: 109,
       threads: [
-        { thread: 'PRRT_1', path: 'a.rs', line: 7, byBot: true, author: 'pullfrog', body: 'x' },
+        {
+          thread: 'PRRT_1',
+          path: 'a.rs',
+          line: 7,
+          outdated: false,
+          byBot: true,
+          author: 'pullfrog',
+          body: 'x',
+          lastBy: '',
+        },
       ],
     });
   });

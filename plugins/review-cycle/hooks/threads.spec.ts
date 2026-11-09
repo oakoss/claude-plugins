@@ -244,9 +244,11 @@ describe('threadFactsOf', () => {
 const node = (id: string, isResolved: boolean) => ({
   id,
   isResolved,
+  isOutdated: true,
   path: 'a.rs',
   line: 3,
   first: { nodes: [{ author: { __typename: 'Bot', login: 'pullfrog' }, body: 'x' }] },
+  last: { nodes: [{ author: { login: 'jbabin91' } }] },
 });
 const page = (hasNextPage: boolean) =>
   JSON.stringify({
@@ -266,7 +268,16 @@ describe('openThreadsOf', () => {
   test('lists the unresolved threads, and says when GitHub has more past the first page', () => {
     expect(openThreadsOf(page(false), 7)).toEqual({
       threads: [
-        { thread: 'PRRT_b', path: 'a.rs', line: 3, byBot: true, author: 'pullfrog', body: 'x' },
+        {
+          thread: 'PRRT_b',
+          path: 'a.rs',
+          line: 3,
+          outdated: true,
+          byBot: true,
+          author: 'pullfrog',
+          body: 'x',
+          lastBy: 'jbabin91',
+        },
       ],
       more: false,
     });
@@ -275,6 +286,16 @@ describe('openThreadsOf', () => {
     holes.data.repository.pullRequest.reviewThreads.nodes.unshift(null);
     expect(openThreadsOf(JSON.stringify(holes), 7)).toMatchObject({
       threads: [{ thread: 'PRRT_b' }],
+    });
+  });
+
+  test('reads a thread missing the outdated flag or a last comment as current and unanswered', () => {
+    const bare = JSON.parse(page(false));
+    const open = bare.data.repository.pullRequest.reviewThreads.nodes[1];
+    delete open.isOutdated;
+    open.last = { nodes: [] };
+    expect(openThreadsOf(JSON.stringify(bare), 7)).toMatchObject({
+      threads: [{ thread: 'PRRT_b', outdated: false, lastBy: '' }],
     });
   });
 });

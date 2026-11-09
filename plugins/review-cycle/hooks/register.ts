@@ -879,7 +879,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'threads',
       description:
-        "The open (unresolved) review threads of a pull request in this repository: each thread's id, file, line, whether a bot opened it, who did, and its first comment. Use the ids with review-cycle's reply tool. Read-only. It reads the first 100 threads; more: true means there are others it left out.",
+        "The open (unresolved) review threads of a pull request in this repository: each thread's id, file, line, whether a later push outdated it, whether a bot opened it, who did, its first comment, and who wrote its last (lastBy). Use the ids with review-cycle's reply tool. Read-only. It reads the first 100 threads; more: true means there are others it left out.",
       inputSchema: {
         type: 'object',
         properties: { pr: { type: 'string', description: 'The pull request number, "109".' } },
