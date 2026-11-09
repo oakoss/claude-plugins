@@ -1278,5 +1278,9 @@
     "offer": "Reply to and resolve the six review threads on #95?",
     "may": ["comment"],
     "missed": true
+  },
+  {
+    "prompt": "Ok, lets merge them",
+    "may": []
   }
 ]
