@@ -73,7 +73,7 @@ Keep a thread that has `isOutdated` true and `isResolved` false. Outdated means 
 
 ## Group and prioritize
 
-Collapse the raw feedback into one action list. For each item, capture the file:line (for inline comments), who raised it, and what it asks for. Order by how much it blocks merge:
+Collapse the raw feedback into one action list. For each item, capture the file:line (for inline comments), the thread's `id`, who raised it, and what it asks for. Order by how much it blocks merge:
 
 1. **Blocking** — `CHANGES_REQUESTED`, correctness/security concerns, "this must change before merge."
 2. **Should address** — substantive suggestions the reviewer expects a response to.
@@ -87,16 +87,16 @@ Don't pad the list. Merge duplicate threads that ask for the same thing. Drop re
 PR #<n> — <title>   (<review state: changes requested / approved / open>)
 
 Blocking (N):
-  - file:line — <ask> (@reviewer)
+  - file:line — <ask> (@reviewer) [<thread id>]
 
 Should address (N):
-  - file:line — <ask> (@reviewer)
+  - file:line — <ask> (@reviewer) [<thread id>]
 
 Optional / nits (N):
-  - file:line — <ask> (@reviewer)
+  - file:line — <ask> (@reviewer) [<thread id>]
 
 Possibly stale — verify (N):
-  - file:originalLine — <ask> (@reviewer) — outdated, never resolved
+  - file:originalLine — <ask> (@reviewer) [<thread id>] — outdated, never resolved
 
 Open questions (still need an answer):
   - <question> (@reviewer)
@@ -104,4 +104,4 @@ Open questions (still need an answer):
 
 End with a one-line read: is this PR blocked, and on what.
 
-To act on the list, hand it to the fix-vs-defer policy — fix the blocking and should-address items inline, decide the nits.
+To act on the list, hand it to the fix-vs-defer policy — fix the blocking and should-address items inline, decide the nits. When review-cycle's `mcp__review-cycle__reply` tool exists, answer each thread through it by its id once the fix is pushed, citing the fix commit, rather than with `gh`: it runs unasked when the user's `prUpdates` setting allows it, and says why and what to ask when it does not.
