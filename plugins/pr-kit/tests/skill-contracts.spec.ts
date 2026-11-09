@@ -299,6 +299,18 @@ describe('fix-merge-conflicts: markers and sides', () => {
     ]);
   });
 
+  test('a finished rebase is checked commit by commit', () => {
+    expectAnchors(finish, 'fix-merge-conflicts range-diff', [
+      ['`git range-diff --creation-factor=100 <upstream> ORIG_HEAD HEAD`', 'range-diff command'],
+      ['(compare `git show <old>` with `git show <new>`)', 'pair fallback'],
+      ['or as a `<` alone when it was dropped', 'dropped commit'],
+      [
+        'read each changed line and confirm the commit still does what it meant to',
+        'every change confirmed',
+      ],
+    ]);
+  });
+
   test('a rebase is detected before sides are picked', () => {
     expectAnchors(text, 'fix-merge-conflicts rebase', [
       [
@@ -756,6 +768,10 @@ describe('merge: only what was asked, and a stack as one', () => {
       [
         'stop and say why when `state` is not `OPEN`, `isDraft` is true, or `mergeStateStatus` is `BLOCKED`, `BEHIND` or `DIRTY`',
         'state stops',
+      ],
+      [
+        'For `BEHIND` against the default branch, offer "push it" from a checkout of `headRefName`',
+        'behind offers push it',
       ],
       [
         '`UNSTABLE` means a check has not passed: one that failed, or one still running.',
