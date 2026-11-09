@@ -738,6 +738,10 @@
       "prompt": "Ok, lets reply and resolve them",
       "offer": "Reply to and resolve the six review threads on #95?",
       "reply": "{\"steps\": {\"comment\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Ok, lets reply and resolve them\"}"
+    },
+    {
+      "prompt": "Ok, lets merge them",
+      "reply": "{\"steps\": {\"merge\": {\"now\": true, \"condition\": false, \"declined\": false}}, \"prs\": [], \"quote\": \"Ok, lets merge them\"}"
     }
   ]
 }
