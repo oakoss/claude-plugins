@@ -8797,6 +8797,17 @@ describe('the offer tool', () => {
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
     expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
   });
+  test('a refused gh thread reply points at the reply tool', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
+    await say($, 'I updated the configs. You should be able to handle this on your own');
+    // The command an agent ran in oakterm (#118) under push, reply and resolve.
+    const r = await bash(
+      $,
+      "gh api graphql -f query='mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{url}}}' -f t=PRRT_1 -f b=done",
+    );
+    expect(denied(r, 'mcp__review-cycle__reply tool instead')).toBe(true);
+    expect(denied(r, 'mcp__review-cycle__offer')).toBe(false);
+  });
   test('a refused comment points at its question, and a yes to it posts', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });
     await say($, 'fix the parser');

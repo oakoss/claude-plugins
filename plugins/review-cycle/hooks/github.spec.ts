@@ -50,6 +50,34 @@ describe('gh api', () => {
     expect(kinds(command)).toEqual(expected);
   });
 
+  test('a review thread reply and resolve are marked; an unresolve or top-level comment is not', () => {
+    const reply = { kind: 'comment', thread: 'reply' };
+    expect(one('gh api repos/{owner}/{repo}/pulls/116/comments/5/replies -f body=x')).toEqual(
+      reply,
+    );
+    expect(
+      one('gh api repos/{owner}/{repo}/pulls/116/comments -F in_reply_to=5 -f body=x'),
+    ).toEqual(reply);
+    expect(one('gh api repos/{owner}/{repo}/pulls/116/comments --input body.json')).toEqual({
+      kind: 'comment',
+    });
+    const mutation = (name: string) =>
+      one(`gh api graphql -f query='mutation { ${name}(input:{}) { x } }'`);
+    expect(mutation('addPullRequestReviewThreadReply')).toEqual(reply);
+    expect(mutation('resolveReviewThread')).toEqual({ kind: 'comment', thread: 'resolve' });
+    // The reply tool cannot unresolve.
+    expect(mutation('unresolveReviewThread')).toEqual({ kind: 'comment' });
+    expect(one('gh api repos/{owner}/{repo}/issues/9/comments -f body=x')).toEqual({
+      kind: 'comment',
+    });
+    expect(one('gh api repos/{owner}/{repo}/pulls/116/comments -f body=x')).toEqual({
+      kind: 'comment',
+    });
+    expect(one("gh api graphql -f query='mutation { addComment(input:{}) { x } }'")).toEqual({
+      kind: 'comment',
+    });
+  });
+
   test('a merge names its pull request and a named repository to the lookup', () => {
     expect(one('gh api -X PUT repos/{owner}/{repo}/pulls/116/merge')).toEqual({
       kind: 'merge',
@@ -402,7 +430,7 @@ describe('GitHub MCP tools', () => {
     ['mcp__github__pull_request_review_write', { event: 'approve' }, { kind: 'approve' }],
     ['mcp__github__pull_request_review_write', { method: 'create' }, { kind: 'comment' }],
     ['mcp__github__add_issue_comment', {}, { kind: 'comment' }],
-    ['mcp__github__add_reply_to_pull_request_comment', {}, { kind: 'comment' }],
+    ['mcp__github__add_reply_to_pull_request_comment', {}, { kind: 'comment', thread: 'reply' }],
     ['mcp__github__add_comment_to_pending_review', {}, { kind: 'comment' }],
     ['mcp__github__update_issue_comment', {}, { kind: 'comment' }],
     [

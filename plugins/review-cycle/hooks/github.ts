@@ -39,7 +39,10 @@ export type GhAction =
   // `auto` waits for what GitHub requires to merge: `gh pr merge --auto`.
   | { kind: 'merge'; admin: boolean; auto: boolean; lookup: readonly string[] | Unlookable }
   | { kind: 'approve' }
-  | { kind: 'comment' }
+  // `thread`: a reply to a review thread, which review-cycle's reply tool posts
+  // instead, or a resolve, which it does only under one setting. It cannot
+  // unresolve.
+  | { kind: 'comment'; thread?: 'reply' | 'resolve' }
   | { kind: 'release' }
   | { kind: 'push'; ref: PushRef }
   // github/gh-stack: `push`, `sync` and `submit` push every active branch of
@@ -258,6 +261,13 @@ function restAction(
     }
     return { kind: field('event')?.toUpperCase() === 'APPROVE' ? 'approve' : 'comment' };
   }
+  if (/^pulls\/[^/]+\/comments\/[^/]+\/replies\/?$/.test(path)) {
+    return { kind: 'comment', thread: 'reply' };
+  }
+  // An --input body may hold anything, so only a field written out counts.
+  if (/^pulls\/[^/]+\/comments\/?$/.test(path) && call.fields.has('in_reply_to')) {
+    return { kind: 'comment', thread: 'reply' };
+  }
   if (/^(pulls|issues)\/[^/]+\/comments(\/|$)|^(pulls|issues)\/comments(\/|$)/.test(path)) {
     return { kind: 'comment' };
   }
@@ -323,7 +333,6 @@ const MUTATIONS: Record<string, GhAction | 'review' | 'ref' | 'update'> = {
       'addComment',
       'addPullRequestReviewComment',
       'addPullRequestReviewThread',
-      'addPullRequestReviewThreadReply',
       'updateIssueComment',
       'updatePullRequestReview',
       'updatePullRequestReviewComment',
@@ -331,12 +340,13 @@ const MUTATIONS: Record<string, GhAction | 'review' | 'ref' | 'update'> = {
       'deletePullRequestReview',
       'deletePullRequestReviewComment',
       'dismissPullRequestReview',
-      'resolveReviewThread',
       'unresolveReviewThread',
       'minimizeComment',
       'unminimizeComment',
     ].map((name) => [name, { kind: 'comment' } as const]),
   ),
+  addPullRequestReviewThreadReply: { kind: 'comment', thread: 'reply' },
+  resolveReviewThread: { kind: 'comment', thread: 'resolve' },
   ...Object.fromEntries(
     [
       'createCommitOnBranch',
@@ -581,6 +591,7 @@ export function mcpAction(tool: string, input: Record<string, unknown>): GhActio
   if (name === 'update_pull_request') {
     return input.draft === false || input.draft === 'false' ? { kind: 'pr' } : null;
   }
+  if (name === 'add_reply_to_pull_request_comment') return { kind: 'comment', thread: 'reply' };
   if (MCP_COMMENT.has(name)) return { kind: 'comment' };
   // gh's lookup of the default branch needs the repository spelled out.
   if (repo === null) return { kind: 'push', ref: asking('it does not name its repository', false) };

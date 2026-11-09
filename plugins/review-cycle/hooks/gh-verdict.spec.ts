@@ -241,6 +241,55 @@ describe('GitHub writes on the ladder', () => {
     expect(r).toMatchObject({ deny: expect.stringContaining('could not read the local settings') });
   });
 
+  test('a refused thread reply points at the reply tool, not the offer question', async () => {
+    const r = await judge([{ kind: 'comment', thread: 'reply' }], world('never stop'));
+    expect(r).toMatchObject({
+      deny: expect.stringContaining(
+        "with review-cycle's mcp__review-cycle__reply tool instead, taking thread ids from mcp__review-cycle__threads: it runs without asking when the user's prUpdates setting allows the reply",
+      ),
+    });
+    expect(r).not.toMatchObject({ deny: expect.stringContaining('mcp__review-cycle__offer') });
+    // A top-level comment beside the reply still needs the offer question.
+    const mixed = await judge(
+      [{ kind: 'comment', thread: 'reply' }, { kind: 'comment' }],
+      world('never stop'),
+    );
+    expect(mixed).toMatchObject({
+      deny: expect.stringContaining('the question mcp__review-cycle__offer gives for step comment'),
+    });
+    expect(mixed).not.toMatchObject({ deny: expect.stringContaining('push, reply and resolve') });
+    expect(
+      await judge(
+        [{ kind: 'comment', thread: 'reply' }],
+        world('commit'),
+        grant({ comment: true }),
+      ),
+    ).toEqual({ ran: [] });
+  });
+
+  test('a refused resolve asks, and names the setting under which the reply tool resolves', async () => {
+    const runs: GhAction[][] = [
+      [{ kind: 'comment', thread: 'resolve' }],
+      [
+        { kind: 'comment', thread: 'reply' },
+        { kind: 'comment', thread: 'resolve' },
+      ],
+    ];
+    for (const actions of runs) {
+      const r = await judge(actions, world('never stop'));
+      expect(r).toMatchObject({
+        deny: expect.stringContaining(
+          "When the user's prUpdates setting is `push, reply and resolve`, review-cycle's mcp__review-cycle__reply tool resolves a thread a bot opened",
+        ),
+      });
+      expect(r).toMatchObject({
+        deny: expect.stringContaining(
+          'the question mcp__review-cycle__offer gives for step comment',
+        ),
+      });
+    }
+  });
+
   test('a comment needs the request whatever the rung', async () => {
     const r = await judge([{ kind: 'comment' }], world('never stop'));
     expect(r).toMatchObject({ deny: expect.stringContaining('"Reply to the review on #116?"') });
