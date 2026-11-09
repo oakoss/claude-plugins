@@ -15,7 +15,7 @@ Run every command that writes, pushes, or closes as its own Bash call. A commit 
 git status --porcelain
 git branch --show-current
 gh api user --jq .login
-gh repo view --json owner,viewerPermission,defaultBranchRef,isFork
+gh repo view --json owner,viewerPermission,defaultBranchRef,isFork,nameWithOwner,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed
 gh pr view --json number,url,state,isDraft,title,body,headRefOid,closedAt
 gh stack view --json
 ```
@@ -140,7 +140,7 @@ The note is plain text. `claude -r` resumes the session until Claude Code's clea
 
 ## 7. Report
 
-The pull request URL, the items step 5 updated and how, and anything the checks or review left for the user. Merging is theirs to ask for.
+The pull request URL, the items step 5 updated and how, and anything the checks or review left for the user. Merging is theirs to ask for. When review-cycle's `mcp__review-cycle__offer` tool exists, end the report with its merge question, word for word on a line of its own, so a "yes" answers it: review-cycle grants a merge that names no pull request only against a merge question. Ask one question for every pull request the report names as opened or updated that is not a draft, and none when every one is a draft. Pass each as `<nameWithOwner>#<n>`, since the report's URLs make a bare number read as another repository's, and `method` when the repository allows only one merge method; for a stack, ask `stack` for its top layer.
 
 ## Stack path
 

@@ -342,6 +342,24 @@ describe('ship: what it may do unasked', () => {
     ]);
   });
 
+  test('the report ends with the merge question, so a yes merges what it opened', () => {
+    expectAnchors(section(text, '7. Report', 'ship'), 'ship report', [
+      [
+        'end the report with its merge question, word for word on a line of its own',
+        'merge question',
+      ],
+      [
+        'review-cycle grants a merge that names no pull request only against a merge question',
+        'why',
+      ],
+      [
+        'Ask one question for every pull request the report names as opened or updated that is not a draft',
+        'every pull request, no drafts',
+      ],
+      ['Pass each as `<nameWithOwner>#<n>`', 'qualified pulls'],
+    ]);
+  });
+
   test('merge, auto-merge, ready and draft wait for the user', () => {
     expectAnchors(text, 'ship asks', [
       [

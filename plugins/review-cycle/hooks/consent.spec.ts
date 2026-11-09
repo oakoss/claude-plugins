@@ -2933,6 +2933,20 @@ describe('a reply picking among the pull requests a merge offer named', () => {
     const g = grantOf(reply, OFFER);
     expect(g.merge && (g.mergeNamed.length === 0 || g.mergeNamed.includes('4'))).toBe(false);
   });
+  // pr-kit's ship report: its links make a bare #344 read as another
+  // repository's, so the question names each pull request in full.
+  test('a ship report with links and tracker keys, ending in the full-name merge question, takes a yes', () => {
+    const report = [
+      'Both PRs are open. Moved CPL-443 to in_review; vitest 5490 passed.',
+      '',
+      '| [#344](https://github.com/oakoss/claude-plugins/pull/344) | review-cycle patch |',
+      '| [#345](https://github.com/oakoss/claude-plugins/pull/345) | none |',
+      '',
+      'Squash-merge oakoss/claude-plugins#344 and oakoss/claude-plugins#345?',
+    ].join('\n');
+    const both = merging('oakoss/claude-plugins#344', 'oakoss/claude-plugins#345');
+    expect(grantOf('yes', report)).toEqual(both);
+  });
   test('"both" needs two offered, "them" two or more', () => {
     expect(grantOf('merge both', 'Merge #3?').mergeNamed).not.toEqual(['3']);
     expect(grantOf('yes, merge both', 'Should I merge #3, #4 and #5?')).toEqual(NONE);
