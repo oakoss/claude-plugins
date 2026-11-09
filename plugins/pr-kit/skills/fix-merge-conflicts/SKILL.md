@@ -77,6 +77,8 @@ git grep --cached -nE '^(<{7,}|\|{7,}|>{7,})( |$)|^={7,}$' -- ':/'  # markers in
 
 All three commands must print nothing. `-- ':/'` searches the whole repository from any directory, and `{7,}` covers the diff3 `|||||||` line and a `conflict-marker-size` above the default of 7. A smaller size needs its own pattern. The working-tree search covers the file you forgot to stage, and the `--cached` one covers a file you staged before fixing it. `git grep` exits 1 when it finds nothing. An exit of 128 or a `fatal:` line means the search did not run, so the check failed. `git diff --cached --check` is not a substitute: it reads only staged content and also fails on trailing whitespace. A line of only `=` signs can be a Markdown or reStructuredText heading underline, so read each hit before you treat it as a marker. Then report.
 
+During a rebase, say in the report how to check it once `git rebase --continue` finishes: `git range-diff --creation-factor=100 <upstream> ORIG_HEAD HEAD` lists each commit before and after it was replayed. `=` marks a commit that came through unchanged. Every other commit shows as a `!` with its diff, as a `<` and a `>` with the same subject (compare `git show <old>` with `git show <new>`), or as a `<` alone when it was dropped: read each changed line and confirm the commit still does what it meant to. `ORIG_HEAD` holds the branch as it was before the rebase until another reset, merge or rebase moves it.
+
 ## Output
 
 ```text
