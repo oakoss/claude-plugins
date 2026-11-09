@@ -152,7 +152,7 @@ import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 import { type LeaseIo, readStack, stackLease } from './stack';
 import { SUMMARY_TOOL, summaryHeader, summaryText } from './summary';
-import { sweep } from './sweep';
+import { madeByAnother, ownerOf, scratchNamed, sweep } from './sweep';
 import {
   MAX_REPLIES,
   OPEN_THREADS_QUERY,
@@ -3077,7 +3077,7 @@ async function registerScratch($: $): Promise<void> {
     await $.tool.register({
       name: 'sweep',
       description:
-        'Ends every process still running in, or naming a path inside, a scratch directory mcp__review-cycle__scratch made this session, then removes the directory. Call it once the cycle ends, after every leg reported, was dropped, or was stopped. Reports per directory how many processes it ended, whether it removed the directory, and any errors; a directory it could not remove stays listed for the next sweep.',
+        'Ends every process still running in, or naming a path inside, a scratch directory mcp__review-cycle__scratch made in this conversation, before a resume or fork included, then removes the directory. Call it once the cycle ends, after every leg reported, was dropped, or was stopped. Reports per directory how many processes it ended, whether it removed the directory, and any errors; a directory it could not remove stays listed for the next sweep.',
       inputSchema: { type: 'object', properties: {} },
     });
     state.sweepServed = true;
@@ -3103,10 +3103,7 @@ async function onScratch(
     };
   }
   try {
-    const tmpdir = await $.env.get('TMPDIR');
-    // An empty TMPDIR is as good as none.
-    const tmp = tmpdir?.replace(/\/+$/, '') ? tmpdir.replace(/\/+$/, '') : '/tmp';
-    const r = await run($, ['mktemp', '-d', `${tmp}/review-cycle.XXXXXX`]);
+    const r = await run($, ['mktemp', '-d', `${await tmpRoot($)}/review-cycle.XXXXXX`]);
     const dir = r.stdout.trim();
     if (r.exitCode !== 0 || dir === '') {
       return {
@@ -3114,6 +3111,15 @@ async function onScratch(
       };
     }
     state.scratch.push(dir);
+    // So a sweep reading it back can tell whether its maker still runs; ps
+    // prints the time in the caller's zone and language (measured), so pinned.
+    await run($, [
+      'sh',
+      '-c',
+      String.raw`printf "%s\t%s\n" "$PPID" "$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$PPID")" > "$1/.owner"`,
+      'sh',
+      dir,
+    ]);
     return {
       result: `${dir}\nGive every reviewer leg this path: each makes its private directory with mktemp -d ${dir}/leg.XXXXXX. Call mcp__review-cycle__sweep when the cycle ends.`,
     };
@@ -3121,6 +3127,44 @@ async function onScratch(
     return {
       result: `review-cycle could not make a scratch directory (${messageOf(error)}). ${fallback}`,
     };
+  }
+}
+
+// An empty TMPDIR is as good as none.
+async function tmpRoot($: $): Promise<string> {
+  const tmpdir = (await $.env.get('TMPDIR')) ?? '';
+  const trimmed = tmpdir.replace(/\/+$/, '');
+  return trimmed === '' ? '/tmp' : trimmed;
+}
+
+// $.session.messages() answers at most this many (claude-code.d.ts).
+const TRANSCRIPT_READ = 4096;
+
+// A resumed or forked session starts with an empty `state.scratch`; its
+// transcript keeps the scratch tool's answers, which name each directory.
+async function scratchFromTranscript($: $): Promise<{ dirs: string[]; why?: string }> {
+  try {
+    const messages = await $.session.messages();
+    if ('deny' in messages) return { dirs: [], why: `the transcript could not be read` };
+    // The read holds only the newest entries, so older answers may be missing.
+    const cut =
+      messages.length >= TRANSCRIPT_READ
+        ? `only the newest ${TRANSCRIPT_READ} messages were read`
+        : undefined;
+    const texts = messages.flatMap((m) =>
+      m.toolUses.flatMap((u) =>
+        u.tool === 'mcp__review-cycle__scratch' && typeof u.text === 'string' ? [u.text] : [],
+      ),
+    );
+    const named = scratchNamed(texts, await tmpRoot($)).filter((d) => !state.scratch.includes(d));
+    const dirs: string[] = [];
+    for (const dir of named) {
+      const there = await run($, ['test', '-d', dir]);
+      if (there.exitCode === 0) dirs.push(dir);
+    }
+    return cut === undefined ? { dirs } : { dirs, why: cut };
+  } catch (error) {
+    return { dirs: [], why: `reading the transcript failed (${messageOf(error)})` };
   }
 }
 
@@ -3133,17 +3177,60 @@ async function onSweep(
     state.reviewing = null;
     reviewingPr = false;
   }
-  if (state.scratch.length === 0) return { result: 'No scratch directory to sweep.' };
+  return { result: await sweepScratch($) };
+}
+
+// Why a directory read back must be left, or null to sweep it: its `.owner`
+// names another Claude Code process that still runs. A directory without a
+// readable mark is left to `spareInUse`.
+async function ownerStillRunning($: $, dir: string): Promise<string | null> {
+  const mark = await run($, ['cat', `${dir}/.owner`]);
+  const owner = ownerOf(mark.stdout);
+  if (owner === null) return null;
+  const self = await run($, ['sh', '-c', 'echo "$PPID"']);
+  const own = Number(self.stdout.trim());
+  const now = await run($, [
+    'env',
+    'LC_ALL=C',
+    'TZ=UTC0',
+    'ps',
+    '-o',
+    'lstart=',
+    '-p',
+    String(owner.pid),
+  ]);
+  return madeByAnother(owner, own, now.stdout)
+    ? `made by a session still running (pid ${owner.pid})`
+    : null;
+}
+
+// Sweeps every scratch directory this conversation made, and says what it did.
+async function sweepScratch($: $): Promise<string> {
+  const earlier = await scratchFromTranscript($);
+  const unread =
+    earlier.why === undefined
+      ? ''
+      : ` Directories made before a resume or fork may not all have been looked for: ${earlier.why}.`;
+  const dirs = [...state.scratch, ...earlier.dirs];
+  if (dirs.length === 0) return `No scratch directory to sweep.${unread}`;
   const swept = [];
-  for (const dir of state.scratch) {
+  for (const dir of dirs) {
     let r;
     try {
-      r = await sweep(
-        (argv) => run($, argv),
-        (ms) => $.clock.sleep(ms),
-        dir,
-        0,
-      );
+      const own = state.scratch.includes(dir);
+      // A fork shares its parent's transcript, so the parent may still be
+      // working in a directory read from it, between rounds as well as during.
+      const runner = own ? null : await ownerStillRunning($, dir);
+      r =
+        runner === null
+          ? await sweep(
+              (argv) => run($, argv),
+              (ms) => $.clock.sleep(ms),
+              dir,
+              0,
+              { spareInUse: !own },
+            )
+          : { dir, stopped: 0, removed: false, errors: [`left: ${runner}`] };
     } catch (error) {
       r = { dir, stopped: 0, removed: false, errors: [messageOf(error)] };
     }
@@ -3151,7 +3238,7 @@ async function onSweep(
     if (r.removed) state.scratch = state.scratch.filter((d) => d !== dir);
     swept.push(r);
   }
-  return { result: JSON.stringify(swept, null, 2) };
+  return `${JSON.stringify(swept, null, 2)}${unread}`;
 }
 
 // The Codex leg's receipt comes from its command log, so the cycle grades what

@@ -22,6 +22,8 @@ type World = {
   // `rejectWith`'s message, as a command that cannot start does.
   reject?: (argv: string) => boolean;
   rejectWith?: string;
+  // What $.session.messages() answers; an empty transcript when unset.
+  messages?: unknown;
   // Answers a git call itself, ahead of the scripted git.
   git?: (argv: string) => Partial<Run> | null | undefined;
   // Answers an Edit or Write itself, after it wrote `files`; null keeps the
@@ -419,6 +421,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
   on('session.start', () => ({ cwd: '/repo' }));
   on('turn.complete', ($: unknown, e: { answer: string }) => ({ text: e.answer }));
   on('config.set', ($: unknown, e: { value: unknown }) => ({ value: e.value }));
+  on('session.messages', () => ({ value: w.messages ?? [] }));
   on('settings.read', async ($: unknown, e: { source?: 'project' | 'local' }) => {
     await w.settingsRead?.();
     const answer = e.source && w.settings?.[e.source];
@@ -6712,6 +6715,15 @@ describe('the stop-before setting', () => {
   });
 });
 
+// The scratch tool's answer in a transcript, as $.session.messages() gives it.
+const scratchAnswer = (dir: string) => ({
+  role: 'assistant',
+  text: '',
+  toolUses: [
+    { tool_use_id: dir, tool: 'mcp__review-cycle__scratch', input: {}, text: `${dir}\nGive…` },
+  ],
+});
+
 describe('the scratch directory', () => {
   test('scratch makes one under TMPDIR, and sweep removes it once', async ($, on) => {
     const w = fakeWorld(on, {
@@ -6734,6 +6746,184 @@ describe('the scratch directory', () => {
     );
     const again = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
     expect(again.result).toBe('No scratch directory to sweep.');
+  });
+  test('sweep also removes the directories this conversation made before a resume', async ($, on) => {
+    const w = fakeWorld(on, {
+      messages: [
+        scratchAnswer('/tmp/review-cycle.old111'),
+        scratchAnswer('/tmp/review-cycle.gone22'),
+      ],
+      git: (a) => (a === 'test -d /tmp/review-cycle.gone22' ? { exitCode: 1 } : null),
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      { dir: '/tmp/review-cycle.old111', stopped: 0, removed: true, errors: [] },
+    ]);
+    const argvs = w.calls.map((c) => c.argv.join(' '));
+    expect(argvs).not.toContain('rm -rf -- /tmp/review-cycle.gone22');
+  });
+  test('a transcript it cannot read says so, and this session’s own still go', async ($, on) => {
+    fakeWorld(on, {
+      messages: { deny: 'no transcript' },
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(swept.result).toContain('"dir": "/tmp/review-cycle.abc123"');
+    expect(swept.result).toContain(
+      'may not all have been looked for: the transcript could not be read',
+    );
+  });
+  test('a directory read from the transcript that something still uses is left, nothing ended', async ($, on) => {
+    const w = fakeWorld(on, {
+      messages: [scratchAnswer('/tmp/review-cycle.par111')],
+      git: (a) => (a.startsWith('pgrep -f /tmp/review-cycle') ? { stdout: '4242\n' } : null),
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      {
+        dir: '/tmp/review-cycle.par111',
+        stopped: 0,
+        removed: false,
+        errors: ['left: in use by 4242'],
+      },
+    ]);
+    const argvs = w.calls.map((c) => c.argv.join(' '));
+    expect(argvs.some((a) => a.startsWith('kill '))).toBe(false);
+    expect(argvs).not.toContain('rm -rf -- /tmp/review-cycle.par111');
+  });
+  test('a directory read back is left while the session that made it runs, and swept after', async ($, on) => {
+    let running = true;
+    const w = fakeWorld(on, {
+      messages: [scratchAnswer('/tmp/review-cycle.par111')],
+      git: (a) =>
+        a === 'cat /tmp/review-cycle.par111/.owner'
+          ? { stdout: '500\tSat Nov  7 14:42:33 2026\n' }
+          : a === 'sh -c echo "$PPID"'
+            ? { stdout: '600\n' }
+            : a === 'env LC_ALL=C TZ=UTC0 ps -o lstart= -p 500'
+              ? running
+                ? { stdout: 'Sat Nov  7 14:42:33 2026  \n' }
+                : { exitCode: 1 }
+              : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    const first = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(first.result)).toEqual([
+      {
+        dir: '/tmp/review-cycle.par111',
+        stopped: 0,
+        removed: false,
+        errors: ['left: made by a session still running (pid 500)'],
+      },
+    ]);
+    expect(w.calls.map((c) => c.argv.join(' '))).not.toContain(
+      'rm -rf -- /tmp/review-cycle.par111',
+    );
+    running = false;
+    const after = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(after.result)).toEqual([
+      { dir: '/tmp/review-cycle.par111', stopped: 0, removed: true, errors: [] },
+    ]);
+  });
+  test('scratch marks the directory with the process that made it', async ($, on) => {
+    const w = fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const mark = w.calls.find(
+      (c) => c.argv[0] === 'sh' && c.argv.includes('/tmp/review-cycle.abc123'),
+    );
+    expect(mark?.argv[2]).toContain('"$PPID"');
+    expect(mark?.argv[2]).toContain('> "$1/.owner"');
+  });
+  test("only the scratch tool's answers name a directory to sweep", async ($, on) => {
+    const bashAnswer = {
+      role: 'assistant',
+      text: '',
+      toolUses: [{ tool_use_id: 'b', tool: 'Bash', input: {}, text: '/tmp/review-cycle.other9\n' }],
+    };
+    const w = fakeWorld(on, { messages: [bashAnswer] });
+    await ($ as any).session.start({ source: 'startup' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(swept.result).toBe('No scratch directory to sweep.');
+    expect(w.calls.map((c) => c.argv.join(' '))).not.toContain(
+      'rm -rf -- /tmp/review-cycle.other9',
+    );
+  });
+  test('a transcript read at its limit says older directories may be missed', async ($, on) => {
+    const filler = { role: 'user', text: 'x', toolUses: [] };
+    fakeWorld(on, { messages: Array.from({ length: 4096 }, () => filler) });
+    await ($ as any).session.start({ source: 'startup' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(swept.result).toContain('only the newest 4096 messages were read');
+  });
+  test('ACLs it cannot clear are reported, and the directory kept', async ($, on) => {
+    fakeWorld(on, {
+      git: (a) =>
+        a.startsWith('mktemp -d /tmp/review-cycle.')
+          ? { stdout: '/tmp/review-cycle.abc123\n' }
+          : a === 'rm -rf -- /tmp/review-cycle.abc123'
+            ? { exitCode: 1, stderr: 'rm: …: Permission denied' }
+            : a.startsWith('find /tmp/review-cycle.abc123 -type l')
+              ? { exitCode: 1, stderr: "chmod: invalid option -- 'N'" }
+              : null,
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      {
+        dir: '/tmp/review-cycle.abc123',
+        stopped: 0,
+        removed: false,
+        errors: [
+          "clearing ACLs failed: chmod: invalid option -- 'N'",
+          'rm failed: rm: …: Permission denied',
+        ],
+      },
+    ]);
+  });
+  test('a directory a deny-delete ACL holds is unlocked, then removed', async ($, on) => {
+    // Only these exact commands unlock: links themselves, and directories and
+    // single-link files, so nothing outside the directory changes.
+    const unlocking = new Set([
+      'find /tmp/review-cycle.abc123 -type l -exec chmod -h -N {} +',
+      'find /tmp/review-cycle.abc123 ( -type d -o -type f -links 1 ) -exec chmod -N {} +',
+    ]);
+    const ran = new Set<string>();
+    const w = fakeWorld(on, {
+      git: (a) => {
+        if (a.startsWith('mktemp -d /tmp/review-cycle.'))
+          return { stdout: '/tmp/review-cycle.abc123\n' };
+        if (unlocking.has(a)) {
+          ran.add(a);
+          return { stdout: '' };
+        }
+        if (a === 'rm -rf -- /tmp/review-cycle.abc123' && ran.size < unlocking.size) {
+          return { exitCode: 1, stderr: 'rm: …/locked.json: Permission denied' };
+        }
+        return null;
+      },
+    });
+    await ($ as any).session.start({ source: 'startup' });
+    await $.tool.call({ tool: 'mcp__review-cycle__scratch' });
+    const swept = (await $.tool.call({ tool: 'mcp__review-cycle__sweep' })) as { result: string };
+    expect(JSON.parse(swept.result)).toEqual([
+      { dir: '/tmp/review-cycle.abc123', stopped: 0, removed: true, errors: [] },
+    ]);
+    const rms = w.calls.filter((c) => c.argv.join(' ') === 'rm -rf -- /tmp/review-cycle.abc123');
+    expect(rms).toHaveLength(2);
   });
   test("sweep removes mbx's build output under the directory before the directory", async ($, on) => {
     const w = fakeWorld(on, {

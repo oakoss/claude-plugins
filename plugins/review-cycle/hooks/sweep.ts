@@ -46,9 +46,25 @@ function listed(pids: Set<number>): string[] {
   return [...pids].map(String);
 }
 
-export async function sweep(run: Run, sleep: Sleep, dir: string, own: number): Promise<Swept> {
+export type SweepOptions = Readonly<{
+  // Leave the directory, ending nothing, when a process holds it or the look
+  // for one failed: it may belong to another session that is still working.
+  spareInUse?: boolean;
+}>;
+
+export async function sweep(
+  run: Run,
+  sleep: Sleep,
+  dir: string,
+  own: number,
+  options: SweepOptions = {},
+): Promise<Swept> {
   const errors: string[] = [];
   const found = await holders(run, dir, own, errors);
+  if (options.spareInUse === true && (found.size > 0 || errors.length > 0)) {
+    const why = found.size > 0 ? `in use by ${listed(found).join(' ')}` : 'could not tell';
+    return { dir, stopped: 0, removed: false, errors: [...errors, `left: ${why}`] };
+  }
   let left = new Set<number>();
   if (found.size > 0) {
     // kill's exit status is not read: a process that exited between the look
@@ -77,9 +93,67 @@ export async function sweep(run: Run, sleep: Sleep, dir: string, own: number): P
     const why = error instanceof Error ? error.message : String(error);
     if (!why.includes('ENOENT')) errors.push(`mbx clean did not finish: ${why}`);
   }
-  const rm = await run(['rm', '-rf', '--', dir]);
+  let rm = await run(['rm', '-rf', '--', dir]);
+  if (rm.exitCode !== 0) {
+    // A deny-delete ACL stops rm even for the owner (measured: a leg's copied
+    // settings file, and symlinks a leg made). macOS's chmod -N drops one;
+    // elsewhere chmod refuses -N. Only what is wholly inside `dir` changes: a
+    // link itself (-h), a directory, or a file with no other hard link.
+    const links = await run(['find', dir, '-type', 'l', '-exec', 'chmod', '-h', '-N', '{}', '+']);
+    const rest = await run([
+      'find',
+      dir,
+      '(',
+      '-type',
+      'd',
+      '-o',
+      '-type',
+      'f',
+      '-links',
+      '1',
+      ')',
+      '-exec',
+      'chmod',
+      '-N',
+      '{}',
+      '+',
+    ]);
+    const failed = [links, rest].find((r) => r.exitCode !== 0);
+    if (failed === undefined) {
+      rm = await run(['rm', '-rf', '--', dir]);
+    } else {
+      errors.push(`clearing ACLs failed: ${failed.stderr.trim() || `exit ${failed.exitCode}`}`);
+    }
+  }
   const removed = rm.exitCode === 0;
   if (!removed) errors.push(`rm failed: ${rm.stderr.trim() || `exit ${rm.exitCode}`}`);
   const stopped = [...found].filter((pid) => !left.has(pid)).length;
   return { dir, stopped, removed, errors };
+}
+
+export type Owner = Readonly<{ pid: number; started: string }>;
+
+// The scratch tool's `.owner` mark: `<pid>\t<ps -o lstart=>`.
+export function ownerOf(mark: string): Owner | null {
+  const [pid, started] = mark.trim().split('\t');
+  const n = Number(pid);
+  const at = started?.trim() ?? '';
+  return Number.isInteger(n) && n > 1 && at !== '' ? { pid: n, started: at } : null;
+}
+
+// The start time tells a running owner from a later process given its pid.
+export function madeByAnother(owner: Owner, own: number, startedNow: string): boolean {
+  return owner.pid !== own && startedNow.trim() === owner.started;
+}
+
+// The scratch directories the scratch tool's answers in `texts` name: each
+// answer's first line is the directory it made under `tmp`.
+export function scratchNamed(texts: readonly string[], tmp: string): string[] {
+  const prefix = `${tmp}/review-cycle.`;
+  const dirs = texts.flatMap((text) => {
+    const first = text.split('\n', 1)[0]?.trim() ?? '';
+    const rest = first.slice(prefix.length);
+    return first.startsWith(prefix) && /^[A-Za-z0-9]+$/.test(rest) ? [first] : [];
+  });
+  return [...new Set(dirs)];
 }
