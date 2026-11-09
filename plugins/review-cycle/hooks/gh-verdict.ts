@@ -501,14 +501,36 @@ function ghRefusal(
   always: string | null,
   held: Hold,
   unread: UnreadOffer | null,
+  thread: Threads = null,
 ): string {
   const [naming, example] = GH_ASK[kind];
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
   const unreviewed =
     kind === 'push' ? ' It writes to GitHub directly, so no review covers it.' : '';
+  if (thread === 'reply') {
+    return `${notAsked(kind, ladder, held, unread)}, so nothing ran. ${REPLY_TOOL} The command: ${shown}`;
+  }
+  const resolves = thread === 'resolve' ? ` ${RESOLVE_TOOL}` : '';
   const ask = kind === 'comment' ? askComment(shown) : askThem(naming, example, shown);
-  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed} To go ahead, ${ask}`;
+  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed}${resolves} To go ahead, ${ask}`;
 }
+
+// The thread actions of a refused call: replies alone, which the reply tool
+// posts instead, or replies and resolves, which it does only under one setting.
+type Threads = 'reply' | 'resolve' | null;
+
+function threadsOf(actions: readonly GhAction[]): Threads {
+  const comments = actions.filter((a) => a.kind === 'comment');
+  if (comments.every((a) => a.thread === 'reply')) return 'reply';
+  return comments.every((a) => a.thread !== undefined) ? 'resolve' : null;
+}
+
+// The reply tool decides by the prUpdates setting, which a `gh` call cannot.
+const REPLY_TOOL =
+  "Reply to a review thread with review-cycle's mcp__review-cycle__reply tool instead, taking thread ids from mcp__review-cycle__threads: it runs without asking when the user's prUpdates setting allows the reply, and says what to ask when it does not.";
+
+const RESOLVE_TOOL =
+  "When the user's prUpdates setting is `push, reply and resolve`, review-cycle's mcp__review-cycle__reply tool resolves a thread a bot opened, with the reply that names its fix commit, without asking; otherwise ask.";
 
 // A yes reads as consent only to the question the grammar knows, so a fuller
 // one ("Reply to and resolve the four review threads on #109?") grants nothing.
@@ -563,8 +585,8 @@ export async function judgeGh(
   const used = { ready: [] as string[], release: false };
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const refuse = (kind: keyof typeof GH_ASK, always: string | null) => ({
-    deny: ghRefusal(shown, kind, ladder, always, held, unread),
+  const refuse = (kind: keyof typeof GH_ASK, always: string | null, thread: Threads = null) => ({
+    deny: ghRefusal(shown, kind, ladder, always, held, unread, thread),
     ...(kind !== 'approve' && { step: kind }),
   });
   // A stack merge is judged as the merges it expands to, in its place, each
@@ -589,7 +611,8 @@ export async function judgeGh(
         };
       }
       case 'comment': {
-        if (!granted.comment) return refuse('comment', null);
+        // A top-level comment beside a thread action still needs the offer question.
+        if (!granted.comment) return refuse('comment', null, threadsOf(actions));
         break;
       }
       case 'approve': {
