@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.8.0 (2026-11-09)
+
+### Added
+
+pr-watch now follows the GitHub App checks a merge does not wait on, such as an AI reviewer's. While one runs, the line names it (`#84 ✓ ready to merge · pullfrog ●`) and marks it `✗` if it fails, and the ready toast and what Claude is told say it is still running, so Claude stops calling a pull request done while its reviewer works. When one that ran a minute or more finishes, Claude is told how it ended, with a link, once per run on a head commit, so it can read the review without polling. A check that finishes in seconds, such as the CodeQL App's, says nothing, and a check suite an App leaves queued with no runs is ignored.
+
+### Fixed
+
+A workflow run that fails without any failed job, such as a startup failure from a broken workflow file, now counts as a failure. Before, the watch line read "✓ checks passed" for a merge or push with such a run, and the watch could end before a re-run; an open pull request could read ready. The line now says "<workflow> failed", and a merged pull request's watch stays until a run passes.
+
 ## 0.7.1 (2026-11-06)
 
 ### Fixed
