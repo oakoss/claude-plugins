@@ -193,15 +193,18 @@ export const MAX_REPLIES = 10;
 
 // gh fills {owner} and {repo} in -F fields from the current repository (measured).
 export const OPEN_THREADS_QUERY =
-  'query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved path line first:comments(first:1){nodes{author{__typename login} body}}}}}}}';
+  'query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved isOutdated path line first:comments(first:1){nodes{author{__typename login} body}} last:comments(last:1){nodes{author{login}}}}}}}}';
 
 export type OpenThread = Readonly<{
   thread: string;
   path: string;
   line: number | null;
+  // A later push changed the lines the thread was left on.
+  outdated: boolean;
   byBot: boolean;
   author: string;
   body: string;
+  lastBy: string;
 }>;
 
 const BODY_SHOWN = 600;
@@ -222,6 +225,7 @@ export function openThreadsOf(
   type Node = {
     id?: unknown;
     isResolved?: unknown;
+    isOutdated?: unknown;
     path?: unknown;
     line?: unknown;
     first?: {
@@ -230,6 +234,7 @@ export function openThreadsOf(
         body?: unknown;
       } | null)[];
     };
+    last?: { nodes?: ({ author?: { login?: unknown } | null } | null)[] };
   };
   const pr = (
     doc as {
@@ -250,14 +255,17 @@ export function openThreadsOf(
     if (n === null || typeof n.id !== 'string' || n.isResolved !== false) return [];
     const first = n.first?.nodes?.[0];
     const body = typeof first?.body === 'string' ? first.body : '';
+    const lastBy = n.last?.nodes?.[0]?.author?.login;
     return [
       {
         thread: n.id,
         path: typeof n.path === 'string' ? n.path : '',
         line: typeof n.line === 'number' ? n.line : null,
+        outdated: n.isOutdated === true,
         byBot: first?.author?.__typename === 'Bot',
         author: typeof first?.author?.login === 'string' ? first.author.login : '',
         body: body.length > BODY_SHOWN ? `${body.slice(0, BODY_SHOWN)}…` : body,
+        lastBy: typeof lastBy === 'string' ? lastBy : '',
       },
     ];
   });
