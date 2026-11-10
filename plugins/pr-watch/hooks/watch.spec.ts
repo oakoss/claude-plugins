@@ -44,6 +44,7 @@ import {
   toastOf,
   verdictOf,
   QUIET_CAP,
+  REPLY_TOOL,
   settingsOf,
   tellsOf,
   toldAfter,
@@ -1164,6 +1165,25 @@ describe('wakeOf', () => {
     expect(woke.text).toContain('@carol requested changes on o/r#128: https://x/carol');
     expect(woke.text).not.toContain('@alice');
     expect(after(p, woke).text).toBeNull();
+  });
+
+  test('a review with threads names the reply tool once; an approval or a comment does not', () => {
+    const quiet = { heard: { since: null, keys: [] } };
+    const running = [ci([job('Test', null)])];
+    const reviewed = after(
+      pull(running, {
+        activity: [
+          said('pullfrog', minute(1), 'reviewed', true),
+          said('carol', minute(2), 'requested changes on'),
+        ],
+      }),
+      quiet,
+    );
+    expect(reviewed.text?.split(REPLY_TOOL)).toHaveLength(2);
+    for (const did of ['approved', 'commented on']) {
+      const one = pull(running, { activity: [said('dave', minute(3), did)] });
+      expect(after(one, quiet).text).not.toContain(REPLY_TOOL);
+    }
   });
 
   test('tells no comment that slides back into the window once a newer one is deleted', () => {
