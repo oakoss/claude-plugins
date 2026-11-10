@@ -80,8 +80,9 @@ export type Pull = {
   // The head commit an open pull request's `workflows` ran on.
   headOid?: string;
   // Set when `mergeRuns` holds later trunk commits' runs: one later commit's
-  // in place of none (`isLater`), newer passing runs of `since`, or both.
-  followed?: { isLater: boolean; since: string[] };
+  // in place of none (`isLater`), newer passing runs of `since`, the runs of
+  // `replaced` a later commit's run cancelled, or more than one of these.
+  followed?: { isLater: boolean; since: string[]; replaced?: string[] };
   // The stack it is a layer of, null in none, unset until GitHub's stacks API
   // answers; `stackAt` is when it was asked, so a `gh stack` command since
   // has it asked again.

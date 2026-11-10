@@ -454,9 +454,17 @@ export function errorLine(text: string): string {
   return line.replace(/^gh: /, '') || 'no message';
 }
 
+// `cancelled`: what failed was cancelled, as a run is when a newer one replaces it.
 export type Verdict =
   | { kind: 'running'; gate: Workflow }
-  | { kind: 'failing'; workflowId: number; workflow: string; job: string | null; url: string }
+  | {
+      kind: 'failing';
+      workflowId: number;
+      workflow: string;
+      job: string | null;
+      url: string;
+      cancelled?: true;
+    }
   | { kind: 'ready' }
   | { kind: 'blocked'; reason: string }
   | { kind: 'waiting'; reason: string }
@@ -467,6 +475,7 @@ export type Verdict =
       workflow: string;
       job: string | null;
       url: string;
+      cancelled?: true;
     }
   | { kind: 'merged-passed' }
   | { kind: 'merged-waiting' }
@@ -495,22 +504,39 @@ function counts(runs: Gated): (w: Workflow) => boolean {
 // The job that failed, not the summary job that failed on it; a run that
 // failed with none, as a startup failure does, fails as a whole, named only
 // when no counted run has a failed job.
+const failing = (w: Workflow, job: string | null, url: string, how: string | null): Verdict => ({
+  kind: 'failing',
+  workflowId: w.id,
+  workflow: w.name,
+  job,
+  url,
+  ...(how === 'CANCELLED' && { cancelled: true }),
+});
+
+// The failed job to name: one that failed over one GitHub cancelled beside it,
+// as fail-fast cancels a matrix's other jobs, then one not required, as a
+// summary job fails on the others.
+function shownJob(bad: readonly Job[]): Job | undefined {
+  const real = bad.filter((j) => j.conclusion !== 'CANCELLED');
+  const pool = real.length > 0 ? real : bad;
+  return pool.find((j) => !j.isRequired) ?? pool[0];
+}
+
 function failure(runs: Gated): Verdict | null {
   const counted = runs.workflows.filter(counts(runs));
   for (const w of counted) {
     const bad = failedJobs(w);
-    const job = bad.find((j) => !j.isRequired) ?? bad[0];
-    if (job) {
-      const url = job.url || w.url;
-      return { kind: 'failing', workflowId: w.id, workflow: w.name, job: job.name, url };
-    }
+    const job = shownJob(bad);
+    if (job) return failing(w, job.name, job.url || w.url, job.conclusion);
   }
   const w = counted.find((r) => isFailedRun(r));
-  return w ? { kind: 'failing', workflowId: w.id, workflow: w.name, job: null, url: w.url } : null;
+  return w ? failing(w, null, w.url, w.conclusion) : null;
 }
 
-const failedText = (v: { workflow: string; job: string | null }) =>
-  v.job === null ? `${v.workflow} failed` : `${v.workflow}: ${v.job} failed`;
+const failedText = (v: { workflow: string; job: string | null; cancelled?: true }) => {
+  const how = v.cancelled ? 'cancelled' : 'failed';
+  return v.job === null ? `${v.workflow} ${how}` : `${v.workflow}: ${v.job} ${how}`;
+};
 
 // The running workflow the merge waits on longest.
 function gateOf(running: Workflow[], estimates: Record<string, number>, host: string): Workflow {
@@ -620,18 +646,25 @@ export function followTrunk(pull: Pull, trunk: readonly Commit[]): Pull {
   const { runs } = chain[base]!;
   const newer = chain.slice(base + 1).flatMap((c) => c.runs.workflows);
   const since: string[] = [];
+  const replaced: string[] = [];
   const workflows = runs.workflows.map((w) => {
     if (!isFailedRun(w)) return w;
     // A skipped run, as from an `if:` on every job, passed nothing.
-    const last = newer.findLast(
-      (n) => n.id === w.id && n.status === 'done' && n.conclusion !== 'SKIPPED',
-    );
+    const later = newer.filter((n) => n.id === w.id && n.conclusion !== 'SKIPPED');
+    // Cancelled when a later commit's run of it began: that run, finished or not,
+    // stands for the merge commit's.
+    if (w.conclusion === 'CANCELLED' && later.length > 0) {
+      replaced.push(w.name);
+      return later.at(-1)!;
+    }
+    const last = later.findLast((n) => n.status === 'done');
     if (!last || !PASSED.has(last.conclusion ?? '')) return w;
     since.push(w.name);
     return last;
   });
-  if (base === 0 && since.length === 0) return pull;
-  return { ...pull, mergeRuns: { ...runs, workflows }, followed: { isLater: base > 0, since } };
+  if (base === 0 && since.length === 0 && replaced.length === 0) return pull;
+  const followed = { isLater: base > 0, since, ...(replaced.length > 0 && { replaced }) };
+  return { ...pull, mergeRuns: { ...runs, workflows }, followed };
 }
 
 // What stops a merge on the pull request itself; a draft's line says it too.
@@ -744,14 +777,20 @@ export function shownOf(verdict: Verdict): string {
   return verdict.kind;
 }
 
-const commitOf = (followed: Pull['followed']) =>
-  followed?.isLater ? 'a later commit' : 'the merge commit';
+const commitOf = (followed: Pull['followed'], workflow?: string) =>
+  followed?.isLater || (workflow !== undefined && followed?.replaced?.includes(workflow))
+    ? 'a later commit'
+    : 'the merge commit';
+
+// Whether what passed ran on a later commit, in place of or after the merge commit's.
+const passedLater = (followed: Pull['followed']) =>
+  followed?.isLater === true || (followed?.replaced?.length ?? 0) > 0;
 
 function passedOn({ followed, base }: Pull): string {
   if (followed?.since.length) {
     return `${followed.since.join(', ')} failed on ${commitOf(followed)} and since passed on ${base}`;
   }
-  return followed?.isLater
+  return passedLater(followed)
     ? `a later commit's checks on ${base} passed`
     : "the merge commit's checks passed";
 }
@@ -989,20 +1028,22 @@ function conditionsOf(
   }
   const isMerged = verdict.kind.startsWith('merged-');
   const workflows = isMerged ? (pull.mergeRuns?.workflows ?? []) : pull.workflows;
-  const where = isMerged && !watch.push ? ` on ${commitOf(pull.followed)}` : '';
   for (const w of workflows) {
+    const where = isMerged && !watch.push ? ` on ${commitOf(pull.followed, w.name)}` : '';
     const bad = failedJobs(w);
     const key = JSON.stringify([w.id, w.url, w.attempt]);
     if (bad.length === 0) {
       if (!isFailedRun(w)) continue;
       const how = (w.conclusion ?? '').toLowerCase();
-      found.push({ key, text: `${w.name} failed (${how})${where} for ${name}: ${w.url}` });
+      const ended = how === 'cancelled' ? 'was cancelled' : `failed (${how})`;
+      found.push({ key, text: `${w.name} ${ended}${where} for ${name}: ${w.url}` });
       continue;
     }
     const jobs = bad.map((j) => j.name).join(', ');
-    const log = bad[0]!.url || w.url;
+    const log = (bad.find((j) => j.conclusion !== 'CANCELLED') ?? bad[0])!.url || w.url;
     const run = w.url && w.url !== log ? `; the run: ${w.url}` : '';
-    const text = `${w.name}: ${jobs} failed${where} for ${name}: ${log}${run}`;
+    const ended = bad.every((j) => j.conclusion === 'CANCELLED') ? 'cancelled' : 'failed';
+    const text = `${w.name}: ${jobs} ${ended}${where} for ${name}: ${log}${run}`;
     found.push({ key, text });
   }
   return found;
@@ -1228,8 +1269,12 @@ const BAR_MIN = 8;
 const MARK_COLOR: Record<string, string> = { '✓': 'green', '✗': 'red', '●': 'blue' };
 
 // How a finished run that did not pass ended: `failed`, or its own word, as `stale`.
-const endOf = (w: Workflow) =>
-  failed(w.conclusion) || !w.conclusion ? 'failed' : w.conclusion.toLowerCase();
+const endOf = (w: Pick<Workflow | Job, 'conclusion'>) =>
+  w.conclusion === 'CANCELLED'
+    ? 'cancelled'
+    : failed(w.conclusion) || !w.conclusion
+      ? 'failed'
+      : w.conclusion.toLowerCase();
 
 function markSegments(w: Workflow): Segment[] {
   const mark = markOf(w);
@@ -1319,7 +1364,7 @@ function bodyOf(
     const passed =
       since.length > 0
         ? ` ${since.join(', ')} failed, since passed`
-        : pull.followed?.isLater
+        : passedLater(pull.followed)
           ? ' checks passed on a later commit'
           : ' checks passed';
     return [...lead, icon(' ✓', 'green'), { text: passed }, ...tail];
@@ -1348,8 +1393,8 @@ function bodyOf(
       ? { text: ` ${app.name} failed`, url: app.url || undefined, skip: null }
       : jobbed
         ? {
-            text: ` ${jobbed.name}: ${failedJobs(jobbed)[0]!.name} failed`,
-            url: failedJobs(jobbed)[0]!.url || jobbed.url || undefined,
+            text: ` ${jobbed.name}: ${shownJob(failedJobs(jobbed))!.name} ${endOf(shownJob(failedJobs(jobbed))!)}`,
+            url: shownJob(failedJobs(jobbed))!.url || jobbed.url || undefined,
             skip: jobbed.id,
           }
         : run
@@ -1380,17 +1425,18 @@ function bodyOf(
   const estimate = estimates[estimateKey(watch.host, gate.id)] ?? 0;
   const url = gate.url || undefined;
   const mark = icon(' ●', 'blue');
+  const later = pull.followed?.replaced?.includes(gate.name) ? ' on a later commit' : '';
   if (gate.isRerun) {
     // The bar's length is the whole workflow's, which a re-run of failed jobs undercuts.
     const start =
       gate.runId === undefined
         ? undefined
         : estimates[rerunKey(watch.host, gate.runId, gate.attempt)];
-    const name = { text: ` ${gateTextOf(gate)}`, url };
+    const name = { text: ` ${gateTextOf(gate)}${later}`, url };
     const clock = start === undefined ? [] : [{ text: ` ${clockText(now - start)}`, isDim: true }];
     return [...lead, mark, name, ...clock, ...others(gate.id), ...tail];
   }
-  const head = [...lead, mark, { text: ` ${gateTextOf(gate)} `, url }];
+  const head = [...lead, mark, { text: ` ${gateTextOf(gate)}${later} `, url }];
   if (estimate <= 0) {
     return [...head, { text: clockText(elapsed), isDim: true }, ...others(gate.id), ...tail];
   }

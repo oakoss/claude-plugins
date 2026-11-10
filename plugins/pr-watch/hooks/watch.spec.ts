@@ -1090,6 +1090,17 @@ describe('wakeOf', () => {
     expect(after(onMerge, {}, push).passed).toEqual([]);
   });
 
+  test('a cancelled run or job is told cancelled, not failed', () => {
+    const run = merged([{ ...ci([]), conclusion: 'CANCELLED' }]);
+    expect(after(run).news).toEqual([
+      'CI was cancelled on the merge commit for o/r#128: https://x/run/1',
+    ]);
+    const jobs = pull([ci([job('Build', 'CANCELLED'), job('Test', null)])]);
+    expect(after(jobs).news).toEqual([
+      'CI: Build cancelled for o/r#128: https://x/Build; the run: https://x/run/1',
+    ]);
+  });
+
   test('a re-run on the same commit tells a draft’s passing again only after a failure', () => {
     const first = after(draftOn([green()]));
     const rerun = after(draftOn([ci([job('CI Summary', null, true)])]), first);
@@ -1694,6 +1705,89 @@ describe('needsTrunk and followTrunk', () => {
       expect(needsTrunk({ ...onMerge([]), stack }, late)).toBe(false);
       expect(needsTrunk({ ...onMerge([release('FAILURE')]), stack }, late)).toBe(true);
     }
+  });
+
+  test('a merge run a later commit’s run cancelled follows that run, running, passed or failed', () => {
+    const cancelled = onMerge([release('CANCELLED'), codeql('SUCCESS')]);
+    const running = follow(cancelled, [commit('next', [runOf(2, release(null))]), commit('m', [])]);
+    expect(verdictAt(running, {}, 'github.com', late).kind).toBe('merged-running');
+    expect(running.followed).toEqual({ isLater: false, since: [], replaced: ['Release'] });
+    expect(textOf(watched(running))).toContain('● Release on a later commit');
+    const rerun = { ...runOf(2, release(null)), isRerun: true, attempt: 2, runId: 9 };
+    const again = follow(cancelled, [commit('next', [rerun]), commit('m', [])]);
+    expect(textOf(watched(again))).toContain('● Release re-run on a later commit');
+    const passed = follow(cancelled, [
+      commit('next', [runOf(2, release('SUCCESS'))]),
+      commit('m', []),
+    ]);
+    expect(verdictAt(passed, {}, 'github.com', late).kind).toBe('merged-passed');
+    const failed = follow(cancelled, [
+      commit('next', [runOf(2, release('FAILURE'))]),
+      commit('m', []),
+    ]);
+    expect(verdictAt(failed, {}, 'github.com', late)).toMatchObject({
+      kind: 'merged-failing',
+      job: 'Publish',
+    });
+    expect(failed.followed).toEqual({ isLater: false, since: [], replaced: ['Release'] });
+    expect(verdictAt(failed, {}, 'github.com', late)).not.toHaveProperty('cancelled');
+  });
+
+  test('a cancelled run follows the newest later run of it, never a skipped one', () => {
+    const cancelled = onMerge([release('CANCELLED')]);
+    const newest = follow(cancelled, [
+      commit('n2', [runOf(3, release(null))]),
+      commit('n1', [runOf(2, release('FAILURE'))]),
+      commit('m', []),
+    ]);
+    expect(verdictAt(newest, {}, 'github.com', late).kind).toBe('merged-running');
+    const skipped = { ...runOf(2, release(null)), status: 'done' as const, conclusion: 'SKIPPED' };
+    const alone = follow(cancelled, [commit('n1', [skipped]), commit('m', [])]);
+    expect(verdictAt(alone, {}, 'github.com', late)).toMatchObject({
+      kind: 'merged-failing',
+      cancelled: true,
+    });
+  });
+
+  test("another workflow's failure on the merge commit is told there, not on a later commit", () => {
+    const mixed = onMerge([release('CANCELLED'), codeql('FAILURE')]);
+    const p = follow(mixed, [commit('next', [runOf(2, release(null))]), commit('m', [])]);
+    const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+    const told = wakeOf(pr, p, verdictAt(p, {}, 'github.com', late), {});
+    expect(told.news).toEqual([
+      expect.stringContaining('CodeQL: Analyze failed on the merge commit'),
+    ]);
+  });
+
+  test('a cancelled run nothing replaced says cancelled, not failed', () => {
+    const alone = follow(onMerge([release('CANCELLED')]), [commit('m', [])]);
+    const v = verdictAt(alone, {}, 'github.com', late);
+    expect(v).toMatchObject({ kind: 'merged-failing', cancelled: true });
+    expect(verdictAt(pull([ci([job('Build', 'CANCELLED')])]), {})).toMatchObject({
+      kind: 'failing',
+      cancelled: true,
+    });
+    expect(verdictAt(pull([ci([job('Build', 'FAILURE')])]), {})).not.toHaveProperty('cancelled');
+    // A draft names a workflow the merge does not wait on by how it ended.
+    const draft = draftOn([green(), { ...codeql(null), status: 'done', conclusion: 'CANCELLED' }], {
+      isGated: true,
+    });
+    expect(textOf(watched(draft))).toContain('✗ CodeQL cancelled');
+    // Fail-fast cancels a matrix's other jobs: the one that failed is named.
+    const matrix = pull([ci([job('test (a)', 'CANCELLED'), job('test (b)', 'FAILURE')])]);
+    expect(verdictAt(matrix, {})).toMatchObject({ job: 'test (b)' });
+    expect(verdictAt(matrix, {})).not.toHaveProperty('cancelled');
+    const failFast = flow(2, 'Matrix', [job('test (a)', 'CANCELLED'), job('test (b)', 'FAILURE')]);
+    expect(textOf(watched(draftOn([green(), failFast], { isGated: true })))).toContain(
+      '✗ Matrix: test (b) failed',
+    );
+    const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+    expect(wakeOf(pr, matrix, verdictAt(matrix, {}), {}).news).toEqual([
+      expect.stringContaining('failed for o/r#128: https://x/test (b)'),
+    ]);
+    // GitHub cancels a run's unfinished jobs with it.
+    const jobs = draftOn([green(), codeql('CANCELLED')], { isGated: true });
+    expect(textOf(watched(jobs))).toContain('✗ CodeQL: Analyze cancelled');
   });
 
   test('a merge whose run failed with no failed job clears once a later run passes', () => {
