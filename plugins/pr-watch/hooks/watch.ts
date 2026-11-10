@@ -1054,6 +1054,11 @@ const HEARD_KEPT = 100;
 // comments alone.
 export const QUIET_CAP = 10;
 
+// review-cycle's reply tool runs a reply unasked when the user's setting
+// allows it, where `gh` always asks; pr-watch does not know whether it exists.
+export const REPLY_TOOL =
+  "Answer a review's threads, once the fix is pushed, with review-cycle's mcp__review-cycle__reply tool when it exists, rather than with gh.";
+
 // The comments and reviews not heard before, and what is heard after them. The
 // first read hears what is there without telling it; a read that cannot tell
 // whose they are hears nothing.
@@ -1070,10 +1075,13 @@ function hearOf(
   // when a newer one was deleted.
   const since = heard.since === null ? -Infinity : Date.parse(heard.since);
   const lines: string[] = [];
+  let threads = false;
   for (const a of pull.activity) {
     if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || !tells(a)) continue;
     lines.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
+    threads ||= a.isReview && a.did !== 'approved';
   }
+  if (threads) lines.push(REPLY_TOOL);
   const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
   return { heard: { since: heard.since, keys: kept }, lines };
 }
