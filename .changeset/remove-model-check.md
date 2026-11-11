@@ -1,0 +1,5 @@
+---
+review-cycle: minor
+---
+
+The model check is gone, and with it the **Model check** setting in `/config`. When your message did not read as a request, the gate used to ask a model before refusing a push, pull request, approval or release, and to ask it whether an answer had only mentioned a pull request. Now a request the gate does not read is refused, and the refusal hands the agent the one question to ask you, so the cost is one "yes". Measured on this repository's own sessions, the model check granted four requests in five days, so expect about one more question a day where you phrase requests loosely. It was removed because, measured alone on the 304-row consent corpus, it gave seven wrong yeses a pass and changed its answer on nine rows between two runs. The gate no longer makes any model call, so nothing is billed for it. A `modelCheck` value already saved in your settings is no longer read; what `/config` shows for it is unverified. Misses a model check granted in earlier versions stay in `/review-cycle:misses` and in the status tool's `byModel` count until newer misses push them out of the 200 kept.

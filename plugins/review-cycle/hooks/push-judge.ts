@@ -6,13 +6,9 @@ import { covers, type Grant, type UnreadOffer } from './consent';
 import {
   askThem,
   offerThem,
-  couldNotJudge,
   notAsked,
   permitted,
   type InForce,
-  type ModelSteps,
-  type ModelYesOf,
-  type SecondRead,
   type Unasked as GhUnasked,
 } from './gh-verdict';
 import { firstLine, type Git } from './git';
@@ -186,9 +182,7 @@ async function coveredAsks(
   };
 }
 
-export type PushVerdict =
-  | { deny: string; step?: 'push'; final?: true }
-  | { ran: Unasked | null; note?: string };
+export type PushVerdict = { deny: string; step?: 'push' } | { ran: Unasked | null; note?: string };
 
 // What the push may run, or why not: a grant covers it, or a plain push the
 // ladder or a requested pull request lets through, unless it always asks.
@@ -200,29 +194,23 @@ export async function judgePush(
   commits: boolean,
   spec: PushSpec,
   granted: Grant,
-  model: ModelSteps = {},
   prs?: PrUpdating,
 ): Promise<PushVerdict> {
   const missing = unasked(spec, granted);
   if (missing === null) {
     const c = await coveredAsks(git, top, consent, commits, spec, granted.pushNamed);
     if (c === null) return { ran: null };
-    return 'deny' in c ? { deny: c.deny, final: true } : { ran: null, note: c.note };
+    return 'deny' in c ? { deny: c.deny } : { ran: null, note: c.note };
   }
   const ladder = await ladderOf();
   const forPr = granted.pr && !holds(consent().held, 'push');
   const bySetting = forPr || permitted(granted, ladder, consent().held).push;
-  // The model's yes to a push, or to the pull request it needs, lets it through
-  // as the setting does, so the pushes that always ask still ask.
-  const byModel =
-    (model.pr === true && !holds(consent().held, 'push')) ||
-    permitted(granted, ladder, consent().held, model).push;
   const update =
-    missing === 'push' && !bySetting && !byModel && !holds(consent().held, 'push')
+    missing === 'push' && !bySetting && !holds(consent().held, 'push')
       ? await prUpdateFor(git, top, spec, prs)
       : null;
   const byUpdate = update !== null && 'pull' in update;
-  const outcome = await pushOutcome(missing, bySetting || byModel || byUpdate, () =>
+  const outcome = await pushOutcome(missing, bySetting || byUpdate, () =>
     alwaysAsks(git, top, spec),
   );
   if (outcome.kind === 'covered') return { ran: null };
@@ -233,7 +221,7 @@ export async function judgePush(
       step: 'push',
     };
   }
-  if (byUpdate && !bySetting && !byModel) {
+  if (byUpdate && !bySetting) {
     return {
       ran: {
         step: 'push',
@@ -247,9 +235,7 @@ export async function judgePush(
       },
     };
   }
-  // A push the model's yes to a pull request let through is that pull
-  // request's, as a typed request's is.
-  if (!bySetting) return { ran: model.pr === true ? { step: 'push', ladder, forPr: true } : null };
+  if (!bySetting) return { ran: null };
   return { ran: forPr ? { step: 'push', ladder, forPr: true } : { step: 'push', ladder } };
 }
 
@@ -280,23 +266,6 @@ async function prUpdateFor(
   if (targets.failed !== null) return { why: `a dry run of it failed (${targets.failed})`, source };
   const update = await prUpdateOf(targets.refs, prs.reads);
   return 'why' in update ? { ...update, source } : { ...update, setting: prUpdates, source };
-}
-
-// A push judged, then, when it refuses short of final, judged again with the
-// model's yes. `yes` is the yes that let it through.
-export async function escalatePush<Y extends ModelYesOf>(
-  judge: (model?: ModelSteps) => Promise<PushVerdict>,
-  second: () => Promise<SecondRead<Y>>,
-): Promise<{ verdict: PushVerdict; yes: Y | null }> {
-  const first = await judge();
-  if (!('deny' in first) || first.final) return { verdict: first, yes: null };
-  const read = await second();
-  if (read === null) return { verdict: first, yes: null };
-  if (read.why !== undefined) {
-    return { verdict: { ...first, deny: first.deny + couldNotJudge(read.why) }, yes: null };
-  }
-  const verdict = await judge(read.steps);
-  return { verdict, yes: 'deny' in verdict ? null : read };
 }
 
 // The gate does not ask: the agent asks in its reply, so the user can answer

@@ -89,7 +89,7 @@ describe('recording misses', () => {
 });
 
 describe('countsOf', () => {
-  test('splits the refused from what the model check read, from the oldest date', () => {
+  test('splits the refused from the records of kind model, from the oldest date', () => {
     const list = [
       miss('a', 'refused', '2026-11-01'),
       miss('b', 'model', '2026-11-02'),
