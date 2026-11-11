@@ -3851,6 +3851,22 @@ describe('a force push', () => {
 });
 
 describe('a push the user asked for', () => {
+  test('"delete the branch" deletes a remote branch', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git push origin --delete fix/x'))).toBe(false);
+    await say($, 'delete the branch');
+    expect(ran(await bash($, 'git push origin --delete fix/x'))).toBe(true);
+  });
+  test('"ship them" pushes and opens the pull request', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(false);
+    await say($, 'ok, lets ship them');
+    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
+    expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+  });
   test('is not reported as one the user did not ask for', async ($, on) => {
     const head = 'c'.repeat(40);
     const theirs = 'd'.repeat(40);
@@ -5405,6 +5421,13 @@ describe('the stop-before setting', () => {
     expect(denied(r, 'pushes every active branch of the stack with --force-with-lease')).toBe(true);
     expect(denied(await bash($, 'gh stack modify'), 'is interactive')).toBe(true);
     expect(denied(await bash($, 'gh stack merge 4 --yes --squash'), 'below it')).toBe(true);
+  });
+  test('"force push the stack" lets a stack push run', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'fix the parser');
+    expect(ran(await bash($, 'gh stack push'))).toBe(false);
+    await say($, 'force push the stack');
+    expect(ran(await bash($, 'gh stack push'))).toBe(true);
   });
   test('gh stack link pushes its branches: the default one needs naming', async ($, on) => {
     fakeWorld(on, { git: github('fix/x') });
