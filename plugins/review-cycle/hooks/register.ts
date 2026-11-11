@@ -1795,7 +1795,7 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const c = ghConsent(state.message.grant)();
+  const c = ghConsent(state.message.grant);
   const gh = await judgeGh(
     shown,
     [action],
@@ -2004,15 +2004,15 @@ async function saveMisses($: $): Promise<void> {
   }
 }
 
-// The consent a GitHub call is judged against, as it stands at each judgement.
-function ghConsent(grant: Grant): () => GhConsent {
-  return () => ({
+// The consent a GitHub call is judged against.
+function ghConsent(grant: Grant): GhConsent {
+  return {
     grant,
     held: held(),
     unread: state.message.unread,
     pointed: pointedNow(),
     standing: state.standing,
-  });
+  };
 }
 
 function pushConsent(command: string): PushConsent {
@@ -2044,7 +2044,7 @@ async function judgeBash(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
       );
     }
-    const c = ghConsent(granted)();
+    const c = ghConsent(granted);
     const gh = await judgeGh(
       quote(e.command),
       actions,

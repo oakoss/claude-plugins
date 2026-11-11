@@ -601,12 +601,10 @@ export async function judgeGh(
     const { action } = item;
     const granted = item.granted ?? asked;
     const may = permitted(granted, ladder, held);
-    // Only a step the setting let through is noted as run unasked.
-    const bySetting = may;
     switch (action.kind) {
       case 'pr': {
         if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
-        if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
+        if (!granted.pr && may.pr) ran.push({ step: 'pr', ladder });
         break;
       }
       case 'unread': {
@@ -622,12 +620,12 @@ export async function judgeGh(
       }
       case 'approve': {
         if (!may.approve) return refuse('approve', null);
-        if (!granted.approve && bySetting.approve) ran.push({ step: 'approve', ladder });
+        if (!granted.approve && may.approve) ran.push({ step: 'approve', ladder });
         break;
       }
       case 'release': {
         if (!may.release) return refuse('release', null);
-        if (!granted.release && bySetting.release) ran.push({ step: 'release', ladder });
+        if (!granted.release && may.release) ran.push({ step: 'release', ladder });
         break;
       }
       case 'push': {
@@ -655,7 +653,7 @@ export async function judgeGh(
           return { deny: `${asked} ${c.unnamed.why}, so nothing ran. ${then}` };
         }
         const outcome = await pushOutcome(needed, may.push, () => pushAsks(lookups, ref));
-        if (outcome.kind === 'unasked' && bySetting.push) ran.push({ step: 'push', ladder });
+        if (outcome.kind === 'unasked' && may.push) ran.push({ step: 'push', ladder });
         if (outcome.kind !== 'refused') break;
         if (outcome.missing === 'bare') {
           return {
@@ -854,7 +852,6 @@ export async function judgeGh(
           release: granted.release || readyRelease,
         };
         const mayHere = permitted(asked, ladder, held);
-        const setHere = mayHere;
         // A merge the user asked for covers oakum's version pull request too:
         // merging it is the only way to release, so "merge it" asks for that,
         // unless the same message held off a release ("merge 131. don't release yet")
@@ -868,7 +865,7 @@ export async function judgeGh(
         // unasked is looked up only so its note names the step it is.
         const readyOnly = target !== null && covers.ready && !covers.now && !action.auto;
         if (mayHere.merge && mayHere.release && !readyOnly) {
-          if (!asked.merge && setHere.merge && setHere.release) {
+          if (!asked.merge) {
             const it = 'cannot' in action.lookup ? null : await mergeStep(lookups, action.lookup);
             const step = it !== null && 'step' in it ? it.step : 'merge';
             if (!asked[step]) ran.push({ step, ladder });
@@ -895,7 +892,7 @@ export async function judgeGh(
         if ('asks' in which) return refuse('merge', which.asks);
         const step = which.step;
         if (!mayHere[step]) return refuse(step, null);
-        if (!asked[step] && setHere[step]) ran.push({ step, ladder });
+        if (!asked[step] && mayHere[step]) ran.push({ step, ladder });
         break;
       }
       case 'stack': {
@@ -915,7 +912,7 @@ export async function judgeGh(
             }
           }
           if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
-          if (!granted.pr && bySetting.pr) ran.push({ step: 'pr', ladder });
+          if (!granted.pr && may.pr) ran.push({ step: 'pr', ladder });
         }
         // `link` pushes plainly; the rest lease every active branch.
         if (action.step === 'link') {
@@ -958,7 +955,7 @@ export async function judgeGh(
               );
             }
           }
-          if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
+          if (!covers(granted, 'push') && may.push) ran.push({ step: 'push', ladder });
           break;
         }
         if (covers(granted, 'lease')) break;
@@ -984,7 +981,7 @@ export async function judgeGh(
             deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease. A push request covers that only while each branch is where this agent last pushed it, and ${bound.asks}, so nothing ran. If they want it, ${ask}`,
           };
         }
-        if (!covers(granted, 'push') && bySetting.push) ran.push({ step: 'push', ladder });
+        if (!covers(granted, 'push') && may.push) ran.push({ step: 'push', ladder });
         break;
       }
       case 'stack-merge': {
