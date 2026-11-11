@@ -2,12 +2,12 @@ import { describe, expect, test } from 'vitest';
 
 import { readCommand } from './command';
 import { NO_GRANT, type Grant } from './consent';
-import type { InForce, ModelSteps, SecondRead } from './gh-verdict';
+import type { InForce } from './gh-verdict';
 import type { Git, Run } from './git';
 import type { PushSpec } from './git-args';
 import type { Hold } from './hold';
 import type { StopBefore } from './ladder';
-import { escalatePush, judgePush, LEASE, stackLayerPushed, type PushConsent } from './push-judge';
+import { judgePush, LEASE, stackLayerPushed, type PushConsent } from './push-judge';
 
 function specOf(command: string): PushSpec {
   const c = readCommand(command).classification;
@@ -90,7 +90,6 @@ describe('a push the user did not ask for', () => {
       ),
       step: 'push',
     });
-    expect(at).not.toHaveProperty('final');
   });
 
   test('asks whatever the setting when it pushes to the default branch', async () => {
@@ -200,11 +199,10 @@ describe('a push the user asked for', () => {
     expect(w.calls.filter((c) => c.includes('--porcelain'))).toHaveLength(1);
   });
 
-  test('to a default branch it did not name asks, finally, with the offer that covers it', async () => {
+  test('to a default branch it did not name asks, with the offer that covers it', async () => {
     const r = await judge('git push origin main', world([TO_MAIN]), grant({ push: 'push' }));
     expect(r).toMatchObject({
       deny: expect.stringContaining('which the request did not name'),
-      final: true,
     });
     expect(r).toMatchObject({
       deny: expect.stringContaining('The question: Push to `main`? The command:'),
@@ -237,7 +235,7 @@ describe('a push the user asked for', () => {
       'push',
       true,
     );
-    expect(r).toMatchObject({ deny: expect.stringContaining('the default branch'), final: true });
+    expect(r).toMatchObject({ deny: expect.stringContaining('the default branch') });
     expect(w.calls).toContain('git symbolic-ref -q HEAD');
   });
 
@@ -250,7 +248,7 @@ describe('a push the user asked for', () => {
       'push',
       true,
     );
-    expect(r).toMatchObject({ deny: expect.stringContaining('the default branch'), final: true });
+    expect(r).toMatchObject({ deny: expect.stringContaining('the default branch') });
   });
 
   test('a commit whose branch cannot be read counts an up-to-date default branch', async () => {
@@ -262,7 +260,7 @@ describe('a push the user asked for', () => {
       'push',
       true,
     );
-    expect(r).toMatchObject({ deny: expect.stringContaining('the default branch'), final: true });
+    expect(r).toMatchObject({ deny: expect.stringContaining('the default branch') });
   });
 
   test('asks first when a step before it can change where it goes, or it is built at run time', async () => {
@@ -273,102 +271,11 @@ describe('a push the user asked for', () => {
     );
     expect(after).toMatchObject({
       deny: expect.stringContaining('`git fetch` runs before it'),
-      final: true,
     });
     const built = await judge('git push origin "$BRANCH"', world(), grant({ push: 'push' }));
     expect(built).toMatchObject({
       deny: expect.stringContaining('built at run time'),
-      final: true,
     });
-  });
-});
-
-// The push judged at the push rung, as escalatePush calls it.
-const judgeOf =
-  (command: string, w: ReturnType<typeof world>, g = grant()) =>
-  (model?: ModelSteps) => {
-    const ladder: InForce = { stopBefore: 'push', source: 'local' };
-    return judgePush(
-      w.git,
-      () => Promise.resolve(ladder),
-      '/repo',
-      consent(),
-      false,
-      specOf(command),
-      g,
-      model,
-    );
-  };
-
-describe('the escalation from grammar to model', () => {
-  type Yes = { steps: ModelSteps; quote: string };
-  function reads(second: SecondRead<Yes>) {
-    const asked: string[] = [];
-    const read = () => {
-      asked.push('second');
-      return Promise.resolve(second);
-    };
-    return { asked, read };
-  }
-
-  test('a push the grammar allows asks the model nothing', async () => {
-    const m = reads(null);
-    const r = await escalatePush(
-      judgeOf('git push origin fix/x', world(), grant({ push: 'push' })),
-      m.read,
-    );
-    expect(r).toEqual({ verdict: { ran: null }, yes: null });
-    expect(m.asked).toEqual([]);
-  });
-
-  test('a final refusal asks the model nothing', async () => {
-    const m = reads({ steps: { push: true }, quote: 'x' });
-    const r = await escalatePush(
-      judgeOf('git push origin main', world([TO_MAIN]), grant({ push: 'push' })),
-      m.read,
-    );
-    expect(r.verdict).toMatchObject({ final: true });
-    expect(m.asked).toEqual([]);
-  });
-
-  test("the model's yes lets the refused push through, and is returned", async () => {
-    const yes = { steps: { push: true }, quote: 'ship it' } as const;
-    const r = await escalatePush(judgeOf('git push origin fix/x', world()), reads(yes).read);
-    expect(r).toEqual({ verdict: { ran: null }, yes });
-  });
-
-  test('a model that cannot judge adds why and keeps the step; nothing to add keeps the refusal', async () => {
-    const judge = judgeOf('git push origin fix/x', world());
-    const plain = await escalatePush(judge, reads(null).read);
-    const why = await escalatePush(judge, reads({ why: 'timed out' }).read);
-    expect(plain.verdict).toMatchObject({ step: 'push' });
-    expect(why.verdict).toEqual({
-      deny: `${(plain.verdict as { deny: string }).deny} The model check could not judge the message (timed out).`,
-      step: 'push',
-    });
-  });
-
-  test("the model's yes to a pull request does not carry a push the user held off", async () => {
-    const ladder: InForce = { stopBefore: 'push', source: 'local' };
-    const r = await judgePush(
-      world().git,
-      () => Promise.resolve(ladder),
-      '/repo',
-      consent({ step: 'push', how: 'mentioned' }),
-      false,
-      specOf('git push origin fix/x'),
-      grant(),
-      { pr: true },
-    );
-    expect(r).toMatchObject({ deny: expect.stringContaining('held off') });
-  });
-
-  test('a yes that does not cover the push leaves it refused, with no yes', async () => {
-    const r = await escalatePush(
-      judgeOf('git push origin fix/x', world()),
-      reads({ steps: { approve: true }, quote: 'sign off' }).read,
-    );
-    expect(r).toMatchObject({ verdict: { step: 'push' }, yes: null });
   });
 });
 

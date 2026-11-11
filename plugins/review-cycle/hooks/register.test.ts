@@ -101,16 +101,6 @@ type World = {
   bashFails?: boolean;
   // Every line the plugin logged.
   logs?: string[];
-  // The model check's reply text; 'error', 'aborted' or 'throw' fail the call.
-  model?: string;
-  // Its reply to whether the answer offered a merge's pull request; 'error' or 'throw' fails it.
-  target?: string;
-  // Runs while the model check is asked.
-  onModel?: () => void;
-  // Each prompt the model check was sent.
-  modelPrompts?: string[];
-  // Each call's instructions and token budget, by prompt.
-  modelCalls?: { prompt: string; system: string; maxTokens: number }[];
   // What a reload left in the host's store, which the load's first read of it
   // gets; 'unreadable' refuses that read. Unset, the store starts empty.
   kept?: { record: unknown } | 'unreadable';
@@ -432,52 +422,8 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     (w.logs ??= []).push(e.text);
     return { value: undefined };
   });
-  on('model.complete', ($: unknown, e: { prompt: string; maxTokens?: number; system?: string }) => {
-    (w.modelPrompts ??= []).push(e.prompt);
-    (w.modelCalls ??= []).push({
-      prompt: e.prompt,
-      system: e.system ?? '',
-      maxTokens: e.maxTokens ?? 0,
-    });
-    w.onModel?.();
-    const usage = { input_tokens: 0, output_tokens: 0 };
-    if (e.prompt.startsWith("The agent's answer ends:")) {
-      if (w.target === 'throw') return { deny: 'model blocked' };
-      if (w.target === 'error') {
-        return {
-          value: {
-            isAnswered: false,
-            reason: 'api-error',
-            status: 529,
-            error: 'overloaded',
-            usage,
-          },
-        };
-      }
-      return { value: { isAnswered: true, text: w.target ?? OFFERED, usage } };
-    }
-    if (w.model === 'throw') return { deny: 'model blocked' };
-    if (w.model === 'aborted') return { value: { isAnswered: false, reason: 'aborted', usage } };
-    if (w.model === 'error') {
-      return {
-        value: {
-          isAnswered: false,
-          reason: 'api-error',
-          status: 529,
-          error: 'overloaded',
-          usage,
-        },
-      };
-    }
-    return { value: { isAnswered: true, text: w.model ?? NOTHING_ASKED, usage } };
-  });
   return w;
 }
-
-// The model check's answer when nothing is asked.
-const NOTHING_ASKED = '{"steps": {}, "quote": ""}';
-// Its answer when a merge's pull request is offered.
-const OFFERED = '{"offers": true, "sure": true}';
 
 // consent.ts's NO_GRANT, as a kept record holds it.
 const NO_GRANT_KEPT = {
@@ -497,12 +443,6 @@ const NO_GRANT_KEPT = {
   release: false,
   comment: false,
 };
-const MENTIONED = 'The offer names no PR.\n\n{"offers": false, "sure": true}';
-const verdictFor = (step: string, quote: string, flags = {}) =>
-  JSON.stringify({
-    steps: { [step]: { now: true, condition: false, declined: false, ...flags } },
-    quote,
-  });
 
 const RECEIPT = 'execution: npm test - ok\nattempted-but-failed: none\n\nNo findings.';
 
@@ -2097,11 +2037,8 @@ describe('a reload of the module', () => {
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
   });
 
-  test('takes back a decline under a lower hold, so the model is still not asked', async ($, on) => {
-    const w = fakeWorld(
-      on,
-      pushing({ model: verdictFor('push', 'sounds good'), git: remoteSide({}) }),
-    );
+  test('takes back a decline under a lower hold, so a later message still pushes nothing', async ($, on) => {
+    fakeWorld(on, pushing({ git: remoteSide({}) }));
     reloadInto(
       on,
       keptRecord({ hold: { floor: { step: 'push', how: 'mentioned' }, declined: true } }),
@@ -2109,7 +2046,6 @@ describe('a reload of the module', () => {
     await startSession($);
     await say($, 'sounds good');
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
   });
 
   test('a request inside a pasted block is not the user asking', async ($, on) => {
@@ -5872,41 +5808,8 @@ describe('the stop-before setting', () => {
   // The answer offers an unnumbered merge; its last bullet only mentions release PR #52.
   const mentioned =
     'The branch is current.\n- **Release PR #52:** it should not trigger Visual.\n\nSay the word to merge.';
-  test('a merge of a pull request the answer only mentioned runs another', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge');
-    const r = await bash($, 'gh pr merge 74 --squash');
-    expect(ran(r)).toBe(true);
-    expect(r.context?.join('\n')).toContain('the model check read #52 as mentioned');
-    expect(w.modelPrompts?.at(-1)).toContain('The candidate: pull request #52.');
-    expect(w.modelCalls?.at(-1)).toMatchObject({
-      system: expect.stringContaining("Decide whether the agent's answer offers to merge"),
-      maxTokens: 100,
-    });
-  });
-  test('the GitHub MCP merge gets the same reading of a pull request only mentioned', async ($, on) => {
-    fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge');
-    const r = await mcp($, 'mcp__github__merge_pull_request', {
-      owner: 'o',
-      repo: 'r',
-      pullNumber: 74,
-    });
-    expect(ran(r)).toBe(true);
-    expect(r.context?.join('\n')).toContain('the model check read #52 as mentioned');
-  });
   test('a merge of the pull request the answer offered runs no other', async ($, on) => {
-    fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x'), target: OFFERED });
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
     await endTurn($, 'answer', mentioned);
     await say($, 'ok, lets merge');
     const other = 'it merges #74, and the user asked to merge #52';
@@ -5965,6 +5868,19 @@ describe('the stop-before setting', () => {
     expect(await bash($, 'gh pr merge 46 --auto')).toMatchObject({
       deny: expect.stringContaining("doesn't ask for a merge"),
     });
+  });
+  test('a merge asked for once ready runs through the GitHub tool once it is ready', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('merge') },
+      git: (a) =>
+        a === 'git symbolic-ref --quiet --short HEAD'
+          ? { stdout: 'main\n' }
+          : github('fix/x', 'main', false, 'github.com/o/r', 'CLEAN')(a),
+    });
+    await say($, 'merge 46 once CI passes');
+    await say($, 'While we wait on that lets plan out our next bit of work');
+    const merge = { owner: 'o', repo: 'r', pullNumber: 46 };
+    expect(ran(await mcp($, 'mcp__github__merge_pull_request', merge))).toBe(true);
   });
   test('a merge asked for once ready runs on a wake only once it is ready', async ($, on) => {
     let state = 'BLOCKED';
@@ -6119,135 +6035,17 @@ describe('the stop-before setting', () => {
     expect(denied(r, 'pointed at #200: reading the current branch failed (')).toBe(true);
     expect(denied(r, 'The question: Merge #200? The command:')).toBe(true);
   });
-  test('an unanswered reading refuses, says why, and is asked again', async ($, on) => {
-    const w = fakeWorld(on, {
+  test('the pull request the answer named stands for a merge that names none', async ($, on) => {
+    fakeWorld(on, {
       settings: { local: stops('release') },
       git: github('fix/x'),
-      target: 'error',
     });
     await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge');
-    const r = await bash($, 'gh pr merge 74 --squash');
-    expect(denied(r, 'the user asked to merge #52')).toBe(true);
-    expect(
-      denied(r, 'could not judge whether the answer offered #52 (an API error, overloaded)'),
-    ).toBe(true);
-    w.target = 'throw';
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'model blocked')).toBe(true);
-    w.target = MENTIONED;
-    expect(ran(await bash($, 'gh pr merge 74 --squash'))).toBe(true);
-  });
-  test('an unread or unsure reading refuses and is not asked again', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: '{"offers": "no", "sure": true}',
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge');
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'its reply could not be read')).toBe(
-      true,
-    );
-    w.target = MENTIONED;
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
-      true,
-    );
-    w.target = '{"offers": false, "sure": false}';
-    await say($, 'ok, lets merge');
-    const r = await bash($, 'gh pr merge 74 --squash');
-    expect(denied(r, 'the user asked to merge #52')).toBe(true);
-    expect(denied(r, 'could not judge')).toBe(false);
-  });
-  test('a reading belongs to its message', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge');
-    expect(ran(await bash($, 'gh pr merge 74 --squash'))).toBe(true);
-    expect(ran(await bash($, 'gh pr merge 74 --squash'))).toBe(true);
-    await endTurn($, 'answer', mentioned);
-    w.target = OFFERED;
     await say($, 'ok, lets merge');
     expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
       true,
     );
-    expect(w.modelPrompts?.filter((p) => p.includes('The candidate:'))).toHaveLength(2);
   });
-  test('a pull request an earlier queued message typed is not read again', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'merge 52');
-    await queue($, 'ok, lets merge');
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
-      true,
-    );
-    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
-  });
-  test('a merge a queued message joined is not read again', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge');
-    await queue($, 'push it');
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
-      true,
-    );
-    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
-  });
-  test('a merge from the Agent SDK is not read again', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, lets merge', 'sdk');
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
-      true,
-    );
-    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
-  });
-  test('a pull request the message named is not read again', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('release') },
-      git: github('fix/x'),
-      target: MENTIONED,
-    });
-    await endTurn($, 'answer', mentioned);
-    await say($, 'ok, merge 52');
-    expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
-      true,
-    );
-    expect(w.modelPrompts?.some((p) => p.includes('The candidate:'))).not.toBe(true);
-  });
-  test(
-    'with the model check off, the pull request the answer named stands',
-    {
-      options: { modelCheck: false },
-    },
-    async ($, on) => {
-      fakeWorld(on, {
-        settings: { local: stops('release') },
-        git: github('fix/x'),
-        target: MENTIONED,
-      });
-      await endTurn($, 'answer', mentioned);
-      await say($, 'ok, lets merge');
-      expect(denied(await bash($, 'gh pr merge 74 --squash'), 'the user asked to merge #52')).toBe(
-        true,
-      );
-    },
-  );
   test('a merge once ready whose lookup fails asks for a release too', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('fail') });
     await say($, 'merge it when its ready');
@@ -7638,348 +7436,14 @@ describe('an epic mandate', () => {
   });
 });
 
-async function missedSteps($: any): Promise<string[][]> {
-  const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
-  const { misses } = JSON.parse((r as { result: string }).result);
-  return misses.map((m: { steps: string[] }) => m.steps);
-}
-
-describe('the model check', () => {
-  const SHIP = 'Ok, lets ship the react aria update';
-  const LINE =
-    'review-cycle: the model check read "ship the react aria update" as asking for a push.';
-  const OFF = { options: { modelCheck: false } };
-
-  test("its yes does not outlast the session's end", async ($, on) => {
-    fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
-    on('session.end', () => ({ sessionId: 's' }));
-    await say($, SHIP);
-    await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-  });
-  test("a yes after the session's end answers no offer from before it", async ($, on) => {
+describe("a session's end", () => {
+  test('a yes after it answers no offer from before it', async ($, on) => {
     fakeWorld(on, pushing({}));
     on('session.end', () => ({ sessionId: 's' }));
     await endTurn($, 'answer', 'Should I push fix/x?');
     await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
     await say($, 'yes');
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-  });
-  test('a push the grammar refuses runs on its yes, shown and kept with the misses', async ($, on) => {
-    fakeStore(on);
-    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
-    await say($, SHIP);
-    const r = await bash($, 'git push origin fix/x');
-    expect(ran(r)).toBe(true);
-    expect(has(contextOf(r), LINE)).toBe(true);
-    expect(has(contextOf(r), 'without the user asking')).toBe(false);
-    expect(has(contextOf(r), 'without asking, since')).toBe(false);
-    expect(w.logs).toEqual([LINE]);
-    expect(w.modelCalls).toMatchObject([
-      {
-        system: expect.stringContaining('does it ask the agent to take any of these steps now'),
-        maxTokens: 300,
-      },
-    ]);
-    const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
-    const listed = JSON.parse((misses as { result: string }).result);
-    expect(listed.misses).toEqual([
-      {
-        message: SHIP,
-        offer: '',
-        steps: ['push'],
-        refusal: 'granted by the model check: "ship the react aria update"',
-        kind: 'model',
-        saved: true,
-        key: expect.any(String),
-      },
-    ]);
-    expect(listed.counts).toMatchObject({ kept: 1, refused: 0, byModel: 1 });
-  });
-  test('is not asked about a push the user asked for that goes somewhere they did not name', async ($, on) => {
-    let calls = 0;
-    const git = remoteSide({
-      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
-    });
-    fakeWorld(
-      on,
-      pushing({ git, model: verdictFor('push', 'push it'), onModel: () => void calls++ }),
-    );
-    await say($, 'push it');
-    expect(denied(await bash($, 'git push origin main'), 'which the request did not name')).toBe(
-      true,
-    );
-    expect(calls).toBe(0);
-  });
-  test('a newer message during the call stops the step, and nothing is shown or kept', async ($, on) => {
-    const w = fakeWorld(
-      on,
-      pushing({
-        model: verdictFor('push', 'ship the react aria update'),
-        onModel: () => void say($, 'wait, stop'),
-      }),
-    );
-    await say($, SHIP);
-    expect(denied(await bash($, 'git push origin fix/x'), 'sent a new message')).toBe(true);
-    expect(w.logs ?? []).toEqual([]);
-    const misses = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
-    expect(JSON.parse((misses as { result: string }).result).misses).toEqual([]);
-  });
-  test('a request typed in during the call stops a step only its yes allowed', async ($, on) => {
-    fakeWorld(
-      on,
-      pushing({
-        model: verdictFor('push', 'ship the react aria update'),
-        onModel: () =>
-          void ($ as any).prompt.submit({
-            text: 'Lets file the beads',
-            origin: { kind: 'composer' },
-            wait: false,
-            turnId: 't',
-          }),
-      }),
-    );
-    await say($, SHIP);
-    expect(denied(await bash($, 'git push origin fix/x'), 'sent a new message')).toBe(true);
-  });
-  test('its yes covers neither a force push nor a step it did not grant', async ($, on) => {
-    fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
-    await say($, SHIP);
-    expect(ran(await bash($, 'git push --force origin fix/x'))).toBe(false);
-    expect(ran(await bash($, 'gh pr review 116 -a'))).toBe(false);
-    expect(ran(await bash($, 'gh release create v1'))).toBe(false);
-  });
-  test('a gh push to the default branch it grants still asks', async ($, on) => {
-    const model = verdictFor('push', 'ship the react aria update');
-    fakeWorld(on, { git: github('fix/x'), model });
-    await say($, SHIP);
-    const r = await bash($, 'gh api repos/{owner}/{repo}/contents/a.md -X PUT -f branch=main');
-    expect(denied(r, 'it pushes to `main`, the default branch')).toBe(true);
-  });
-  test('its yes to a pull request lets the push it needs run', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
-    await say($, 'sure, send it up for review');
-    const r = await bash($, 'git push origin fix/x');
-    expect(ran(r)).toBe(true);
-    expect(has(contextOf(r), 'without the user asking')).toBe(false);
-    expect(has(contextOf(r), 'without asking, since')).toBe(false);
-    expect(w.logs).toEqual([
-      'review-cycle: the model check read "send it up for review" as asking for a pull request.',
-    ]);
-  });
-  test('a push beside a pull request its yes allowed is still reported', async ($, on) => {
-    fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
-    await say($, 'sure, send it up for review');
-    const r = await bash($, 'gh pr create --fill && ./release.sh');
-    expect(ran(r)).toBe(true);
-    expect(has(contextOf(r), 'pushed to origin/fix/x without the user asking')).toBe(true);
-  });
-  test('its yes to a pull request lets the push run past a merge hold', async ($, on) => {
-    fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
-    await say($, "send it up for review, but don't merge it yet");
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
-  });
-  test('its yes to a pull request leaves a push hold in place', async ($, on) => {
-    fakeWorld(on, pushing({ model: verdictFor('pr', 'send it up for review') }));
-    await say($, 'send it up for review, but keep my local commits off the push');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-  });
-  test('its yes to a push leaves a pull request held', async ($, on) => {
-    const model = verdictFor('push', 'ship the react aria update');
-    fakeWorld(on, { settings: { local: stops('never stop') }, model });
-    await say($, SHIP);
-    expect(ran(await bash($, 'gh pr create --fill'))).toBe(false);
-  });
-  test('an approval and a release run on its yes', async ($, on) => {
-    const w = fakeWorld(on, { model: verdictFor('approve', 'sign off on 116') });
-    await say($, 'go ahead and sign off on 116');
-    const approved = await bash($, 'gh pr review 116 -a');
-    expect(ran(approved)).toBe(true);
-    expect(has(contextOf(approved), 'without asking, since')).toBe(false);
-    w.model = verdictFor('release', 'cut it');
-    await say($, 'yep, cut it');
-    const released = await bash($, 'gh release create v1');
-    expect(ran(released)).toBe(true);
-    expect(has(contextOf(released), 'without asking, since')).toBe(false);
-  });
-  test('a GitHub tool runs on its yes, told and shown', async ($, on) => {
-    const w = fakeWorld(on, { model: verdictFor('pr', 'ship the react aria update') });
-    await say($, SHIP);
-    const r = await mcp($, 'mcp__github__create_pull_request', {});
-    const line =
-      'review-cycle: the model check read "ship the react aria update" as asking for a pull request.';
-    expect(ran(r)).toBe(true);
-    expect(has(contextOf(r), line)).toBe(true);
-    expect(w.logs).toEqual([line]);
-  });
-  test('a failed call is asked again by the next step', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: 'error' }));
-    await say($, SHIP);
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    w.model = verdictFor('push', 'ship the react aria update');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
-    expect(w.modelPrompts).toHaveLength(2);
-  });
-  test('it is sent the message and the offer it answered', async ($, on) => {
-    const w = fakeWorld(on);
-    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
-    await say($, 'sure, send it up');
-    await bash($, 'git push origin fix/x');
-    expect(w.modelPrompts).toEqual([
-      "The agent's last question:\n<question>\nFixed.\nPush fix/x to origin?\n</question>\n\nThe person's latest message:\n<message>\nsure, send it up\n</message>",
-    ]);
-  });
-  test('a pull request the grammar refuses runs on its yes', async ($, on) => {
-    const w = fakeWorld(on, { model: verdictFor('pr', 'ship the react aria update') });
-    await say($, SHIP);
-    const r = await bash($, 'gh pr create --fill');
-    const line =
-      'review-cycle: the model check read "ship the react aria update" as asking for a pull request.';
-    expect(ran(r)).toBe(true);
-    expect(has(contextOf(r), line)).toBe(true);
-    expect(has(contextOf(r), 'without asking, since')).toBe(false);
-    expect(w.logs).toEqual([line]);
-  });
-  test('a no, or a step tied to a condition, leaves the refusal as it was', async ($, on) => {
-    const w = fakeWorld(on, {
-      model: verdictFor('push', 'ship the react aria update', { condition: true }),
-    });
-    await say($, SHIP);
-    const r = await bash($, 'git push origin fix/x');
-    expect(denied(r, 'so nothing ran.')).toBe(true);
-    expect(denied(r, 'model check')).toBe(false);
-    expect(w.logs ?? []).toEqual([]);
-  });
-  for (const [model, command, why] of [
-    ['error', 'git push origin fix/x', 'an API error, overloaded'],
-    ['error', 'gh pr create --fill', 'an API error, overloaded'],
-    ['aborted', 'git push origin fix/x', 'it ran out of time or was interrupted'],
-    ['throw', 'git push origin fix/x', ''],
-    [verdictFor('push', 'words never typed'), 'git push origin fix/x', 'its reply quoted words'],
-  ]) {
-    const label = why === '' ? model : why;
-    test(`a failed call (${label}) refuses ${command}, naming why`, async ($, on) => {
-      fakeWorld(on, { model });
-      await say($, SHIP);
-      const r = await bash($, command ?? '');
-      expect(denied(r, `The model check could not judge the message (${why}`)).toBe(true);
-    });
-  }
-  test('a push refused after the model could not judge is kept as a miss', async ($, on) => {
-    fakeWorld(on, pushing({ model: 'error' }));
-    await say($, 'should we push it?');
-    expect(denied(await bash($, 'git push origin fix/x'), 'could not judge')).toBe(true);
-    expect(await missedSteps($)).toEqual([['push']]);
-  });
-  test("a push the model's yes does not cover is kept as a miss", async ($, on) => {
-    fakeWorld(on, pushing({ model: verdictFor('approve', 'sign off on 116') }));
-    await say($, 'should we push it, and sign off on 116?');
-    expect(denied(await bash($, 'git push origin fix/x'), 'so nothing ran.')).toBe(true);
-    const steps = await missedSteps($);
-    expect(steps.flat()).toContain('push');
-  });
-  test('a reply it cannot read refuses, saying so', async ($, on) => {
-    fakeWorld(on, { model: 'it asks to push' });
-    await say($, SHIP);
-    const r = await bash($, 'git push origin fix/x');
-    expect(denied(r, 'could not judge the message (its reply could not be read)')).toBe(true);
-  });
-  test('a push to the default branch it grants still asks', async ($, on) => {
-    const main = { 'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'] };
-    const model = verdictFor('push', 'ship the react aria update');
-    fakeWorld(on, pushing({ git: remoteSide(main), model }));
-    await say($, SHIP);
-    const r = await bash($, 'git push origin main');
-    expect(denied(r, 'asks whatever the setting: it pushes to `main`, the default branch.')).toBe(
-      true,
-    );
-  });
-  test('it is asked once per message', async ($, on) => {
-    const w = fakeWorld(on);
-    await say($, SHIP);
-    await bash($, 'git push origin fix/x');
-    await bash($, 'gh pr create --fill');
-    expect(w.modelPrompts).toHaveLength(1);
-    await say($, 'and the docs?');
-    await bash($, 'git push origin fix/x');
-    expect(w.modelPrompts).toHaveLength(2);
-  });
-  test('a step the grammar grants is never sent to it', async ($, on) => {
-    const w = fakeWorld(on, pushing({}));
-    await say($, 'push it');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('after a message that declined a step, it is never asked', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'not yet') }));
-    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
-    await say($, 'not yet');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('a decline under an earlier, lower hold keeps later messages unasked', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'sounds good') }));
-    await say($, "don't push yet");
-    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
-    await say($, 'not yet');
-    await ($ as any).turn.complete({ answer: 'Ok, holding.', reason: 'answer' });
-    await say($, 'sounds good');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('a request that lifts a decline lets the next message be asked', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'ship the react aria update') }));
-    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
-    await say($, 'not yet');
-    await say($, 'open a PR');
-    await ($ as any).turn.complete({ answer: 'Opened.', reason: 'answer' });
-    await say($, 'ship the react aria update');
-    await bash($, 'git push origin fix/x');
-    expect(w.modelPrompts).toBeDefined();
-  });
-  test('a decline outlasts a later mention, which keeps later messages unasked', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'sounds good') }));
-    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
-    await say($, 'not yet');
-    await say($, 'did the merge go through?');
-    await ($ as any).turn.complete({ answer: 'Not yet.', reason: 'answer' });
-    await say($, 'sounds good');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('a decline under an earlier, lower hold keeps a queued message unasked', async ($, on) => {
-    const w = fakeWorld(on, pushing({ model: verdictFor('push', 'thanks') }));
-    await say($, "don't push yet");
-    await ($ as any).turn.complete({ answer: 'Fixed.\nPush fix/x to origin?', reason: 'answer' });
-    await say($, 'not yet');
-    await queue($, 'thanks');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('switched off in /config, it is never asked', OFF, async ($, on) => {
-    const w = fakeWorld(on, { model: verdictFor('push', 'ship the react aria update') });
-    await say($, SHIP);
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('under claude -p it is never asked', async ($, on) => {
-    const w = fakeWorld(on, { model: verdictFor('push', 'ship the react aria update') });
-    await say($, SHIP, 'sdk');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
-    expect(w.modelPrompts).toBeUndefined();
-  });
-  test('only the user switches it, in /config', async ($, on) => {
-    fakeWorld(on);
-    const change = {
-      key: 'review-cycle.modelCheck',
-      value: false,
-      previous: true,
-      provider: { plugin: 'review-cycle', tier: 'user' as const },
-    };
-    const byPlugin = await $.config.set({ ...change, origin: { kind: 'plugin', name: 'other' } });
-    expect(byPlugin).toEqual({ deny: expect.stringContaining('only by the user') });
-    const byUser = await $.config.set({ ...change, origin: { kind: 'composer' } });
-    expect(byUser).toEqual({ value: false });
   });
 });
 

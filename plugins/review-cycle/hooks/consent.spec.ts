@@ -1531,8 +1531,7 @@ describe('an affirmative grants what the previous answer asked', () => {
     ['merge it', '#131 is green. The version PR is separate. Merge it?', merging('131')],
     ['merge it', '#134 is green. Merge it before the release?', merging('134')],
     // The words alone cannot tell an offered pull request from one mentioned
-    // beside an unnumbered offer, so the grammar names it in both; the gate's
-    // model check reads which it was.
+    // beside an unnumbered offer, so the grammar names it in both.
     [
       'ok, lets merge',
       'The branch is current.\n- **Release PR #52:** it should not trigger Visual.\n\nSay the word to merge.',

@@ -2,16 +2,11 @@ import { describe, expect, test } from 'vitest';
 
 import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
 import {
-  escalateGh,
   judgeGh,
   NO_STANDING,
   parsePullRequest,
   type GhLookups,
-  type GhModel,
   type MissStep,
-  type ModelSteps,
-  type SecondRead,
-  type TargetGrant,
   type InForce,
   type Lookup,
   type Standing,
@@ -116,7 +111,7 @@ async function judge(
   held: Hold = null,
   pointed: readonly string[] = [],
 ) {
-  return judgeGh('the call', actions, granted, held, w.lookups, {}, null, pointed);
+  return judgeGh('the call', actions, granted, held, w.lookups, null, pointed);
 }
 
 describe('GitHub writes on the ladder', () => {
@@ -442,7 +437,6 @@ describe('a push through GitHub', () => {
     const tag = push({ asks: 'it pushes a tag', force: false, tag: 'v1.2.0' });
     expect(await judge([tag], world('commit'), grant({ push: 'push' }))).toMatchObject({
       deny: expect.stringContaining('The question: Push the `v1.2.0` tag? The command:'),
-      final: true,
     });
     const named = grant({ push: 'push', pushNamed: ['tag:v1.2.0'] });
     expect(await judge([tag], world('commit'), named)).toEqual({ ran: [] });
@@ -492,7 +486,6 @@ describe('a push through GitHub', () => {
     });
     expect(await judge([built], world('commit'), grant({ push: 'push' }))).toMatchObject({
       deny: expect.stringContaining('Write the branch and repository out'),
-      final: true,
     });
   });
 
@@ -977,7 +970,7 @@ describe('a merge', () => {
       const merge62: GhAction = { kind: 'merge', admin: false, auto: true, lookup: ['62'] };
       const merge63: GhAction = { ...merge62, lookup: ['63'] };
       const run = (a: GhAction, w: ReturnType<typeof world>, s: Standing) =>
-        judgeGh('the call', [a], grant(), null, w.lookups, {}, null, [], s);
+        judgeGh('the call', [a], grant(), null, w.lookups, null, [], s);
       expect(await run(merge62, world('push', at('62')), bound)).toEqual({
         ran: [],
         used: { ready: [], release: true },
@@ -1297,7 +1290,6 @@ describe('a merge', () => {
           NO_GRANT,
           null,
           linesmith().lookups,
-          {},
           null,
           [],
           ask,
@@ -1314,7 +1306,6 @@ describe('a merge', () => {
           asked('merge it'),
           null,
           w.lookups,
-          {},
           null,
           ['53'],
           ask,
@@ -1332,7 +1323,7 @@ describe('a merge', () => {
         });
         const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
         const ask = standing({ ready: ['linesmith#53'], main: ['linesmith#53'] });
-        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, {}, null, [], ask);
+        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, null, [], ask);
         expect(r).toMatchObject({
           deny: expect.stringContaining('once the default branch is done'),
         });
@@ -1346,7 +1337,7 @@ describe('a merge', () => {
         });
         const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
         const ask = standing({ ready: ['linesmith#53'], main: ['53'] });
-        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, {}, null, [], ask);
+        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, null, [], ask);
         expect(r).toMatchObject({ ran: [] });
       });
 
@@ -1922,7 +1913,7 @@ function standing(s: Partial<Standing>): Standing {
 }
 
 async function judged(w: ReturnType<typeof world>, g: Grant, s: Standing, auto = false) {
-  return judgeGh('the call', [merge(auto)], g, null, w.lookups, {}, null, [], s);
+  return judgeGh('the call', [merge(auto)], g, null, w.lookups, null, [], s);
 }
 
 // oakum's version pull request as #`pr`, ready to merge.
@@ -1953,129 +1944,3 @@ function beside(selector?: string): GhAction {
     lookup: { cannot: 'beside', ...(selector !== undefined && { selector }) },
   };
 }
-
-const consent = (g: Grant) => () => ({
-  grant: g,
-  held: null,
-  unread: null,
-  pointed: [],
-  standing: NO_STANDING,
-});
-
-describe('the escalation from grammar to model', () => {
-  type Yes = { steps: ModelSteps; quote: string };
-  function model(
-    second: SecondRead<Yes>,
-    target?: TargetGrant,
-  ): GhModel<Yes> & { asked: string[] } {
-    const asked: string[] = [];
-    return {
-      asked,
-      second: () => {
-        asked.push('second');
-        return Promise.resolve(second);
-      },
-      ...(target !== undefined && {
-        target: () => {
-          asked.push('target');
-          return Promise.resolve(target);
-        },
-      }),
-    };
-  }
-  const escalate = (
-    actions: GhAction[],
-    w: ReturnType<typeof world>,
-    m: GhModel<Yes>,
-    g = grant(),
-  ) => escalateGh('the call', actions, consent(g), () => w.lookups, m);
-
-  test('a call the grammar allows asks the model nothing', async () => {
-    const m = model(null, null);
-    const r = await escalate([{ kind: 'pr' }], world('merge'), m);
-    expect('deny' in r.gh).toBe(false);
-    expect(m.asked).toEqual([]);
-  });
-
-  test("the model's yes lets a refused step through, and says so", async () => {
-    const m = model({ steps: { pr: true }, quote: 'open one' });
-    const r = await escalate([{ kind: 'pr' }], world('open PR'), m);
-    expect(r.gh).toEqual({ ran: [] });
-    expect(r.yes).toEqual({ steps: { pr: true }, quote: 'open one' });
-  });
-
-  test('a model that cannot judge adds why to the refusal; nothing to add keeps it', async () => {
-    const plain = await escalate([{ kind: 'pr' }], world('open PR'), model(null));
-    const why = await escalate([{ kind: 'pr' }], world('open PR'), model({ why: 'timed out' }));
-    expect(plain.gh).toMatchObject({
-      deny: expect.stringContaining("doesn't ask for a pull request"),
-    });
-    expect(why.gh).toEqual({
-      deny: `${(plain.gh as { deny: string }).deny} The model check could not judge the message (timed out).`,
-      step: 'pr',
-    });
-    expect(why.yes).toBeNull();
-  });
-
-  test('a final refusal asks neither read', async () => {
-    const tag = push({ asks: 'it pushes a tag', force: false, tag: 'v1.2.0' });
-    const m = model({ steps: { push: true }, quote: 'x' }, null);
-    const r = await escalate([tag], world('commit'), m, grant({ push: 'push' }));
-    expect(r.gh).toMatchObject({ final: true });
-    expect(m.asked).toEqual([]);
-  });
-
-  test("a merge's target read as only mentioned runs under the unnamed grant, and the model is not asked again", async () => {
-    const unnamed = grant({ merge: true });
-    const m = model({ steps: {}, quote: 'x' }, { grant: unnamed, n: '7' });
-    const r = await escalate([merge(false)], world('merge'), m);
-    expect('deny' in r.gh).toBe(false);
-    expect(r).toMatchObject({ granted: unnamed, target: '7', yes: null });
-    expect(m.asked).toEqual(['target']);
-  });
-
-  test('a target the model could not read adds why, and the second read still runs', async () => {
-    const m = model(null, { why: 'no answer', n: '7' });
-    const first = await escalate([merge(false)], world('merge'), model(null));
-    const r = await escalate([merge(false)], world('merge'), m);
-    expect(r.gh).toEqual({
-      deny: `${(first.gh as { deny: string }).deny} The model check could not judge whether the answer offered #7 (no answer).`,
-      step: 'merge',
-    });
-    expect(r.target).toBeNull();
-    expect(m.asked).toEqual(['target', 'second']);
-  });
-
-  test('consent is read again at each judgement, since a message can arrive while the model is asked', async () => {
-    let reads = 0;
-    const later = () => {
-      reads += 1;
-      return consent(grant())();
-    };
-    const m = model({ steps: { pr: true }, quote: 'open one' });
-    const r = await escalateGh(
-      'the call',
-      [{ kind: 'pr' }],
-      later,
-      () => world('open PR').lookups,
-      m,
-    );
-    expect(r.gh).toEqual({ ran: [] });
-    // Once for the grant, then once for each of the two judgements.
-    expect(reads).toBe(3);
-  });
-
-  test('a target grant the grammar still refuses keeps the first refusal', async () => {
-    const m = model(null, { grant: grant(), n: '7' });
-    const first = await escalate([merge(false)], world('merge'), model(null));
-    const r = await escalate([merge(false)], world('merge'), m);
-    expect(r.gh).toEqual(first.gh);
-    expect(r).toMatchObject({ granted: grant(), target: null });
-  });
-
-  test('without a target read the same refusal goes straight to the second read', async () => {
-    const m = model(null);
-    await escalate([merge(false)], world('merge'), m);
-    expect(m.asked).toEqual(['second']);
-  });
-});

@@ -1,5 +1,5 @@
 // The gate's consent misses, kept across sessions and repositories so their
-// rate shows whether the grammar or the model check needs work. One
+// rate shows whether the grammar needs work. One
 // list per user: the plugin's store is one file, and the grammar is one for
 // every repository. Pure; register.ts binds the store.
 
@@ -7,8 +7,8 @@ import { HOLD_STEPS, type HoldStep } from './hold';
 import { prune, readJournal, writeEntry } from './journal';
 import type { Store } from './ledger-store';
 
-// 'refused': the gate refused the step. 'model': the model check read the
-// message for the grammar, so the user was not refused.
+// 'refused': the gate refused the step. 'model' is read from records kept by
+// earlier versions, where a model check granted the step; nothing writes it.
 export type MissKind = 'refused' | 'model';
 
 export type RecordedMiss = Readonly<{

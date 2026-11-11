@@ -32,26 +32,13 @@ import {
   type Grant,
   type Mandate,
 } from './consent';
-import {
-  askOf,
-  closingNamed,
-  judge,
-  offerOf,
-  mentionedOf,
-  RULES,
-  TARGET,
-  targetAskOf,
-  unnamed,
-  type Judged,
-  type ModelGrant,
-} from './consent-model';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { cycleOf, isSummary, readCycles, recordCycle, rollupOf } from './cycles';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   askThem,
   ASKED_FOR,
-  escalateGh,
+  judgeGh,
   notAsked,
   parsePullRequest,
   permitted,
@@ -59,11 +46,9 @@ import {
   PR_JQ,
   type GhConsent,
   type GhLookups,
-  type GhModel,
   type MissStep,
   type InForce,
   type Lookup,
-  type ModelSteps,
   type Standing,
   type Used,
   NO_STANDING,
@@ -95,7 +80,7 @@ import {
 } from './git';
 import type { Finishes } from './git-args';
 import { MCP_GITHUB, mcpAction, shownCall } from './github';
-import { declinedSince, holdAfter, holds, type Hold, type HoldState, type HoldStep } from './hold';
+import { holdAfter, holds, type Hold, type HoldState, type HoldStep } from './hold';
 import { entryName } from './journal';
 import { isKept, keptOf, offKept, restoredOf, type Restored } from './kept';
 import {
@@ -137,7 +122,6 @@ import {
   type PrUpdatesInForce,
 } from './pr-updates';
 import {
-  escalatePush,
   judgePush,
   stackLayerPushed,
   type PrUpdating,
@@ -205,8 +189,7 @@ type ConfigHook = MatchedHook<
       | 'review-cycle.stopBefore'
       | 'review-cycle.prUpdates'
       | 'review-cycle.nudge'
-      | 'review-cycle.unaskedNotice'
-      | 'review-cycle.modelCheck';
+      | 'review-cycle.unaskedNotice';
   }
 >;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
@@ -260,9 +243,6 @@ type Miss = {
   key: string | null;
 };
 
-type ModelRead = Judged | { kind: 'unanswered'; why: string };
-type ModelAsk = { message: number; text: string; before: string; read: Promise<ModelRead> };
-
 type GateState = {
   // undefined until resolved; null when the session is not in a repository.
   root: Repo | null | undefined;
@@ -277,12 +257,6 @@ type GateState = {
   lastAnswer: string;
   // The user's latest message, the answer it replied to, and where it came from.
   said: { text: string; before: string; origin: PromptOrigin['kind'] | null };
-  // The model check's reading of message number `message`, asked once.
-  model: ModelAsk | null;
-  // Whether that message's answer offered pull request `n`, asked once.
-  target: { message: number; n: string; read: Promise<TargetRead> } | null;
-  // The user's /config value for asking a model when the grammar refuses.
-  modelCheck: boolean;
   // Refusals of a step the user's message or the offer it answered named:
   // candidate consent-grammar misses, kept in this session only.
   misses: Miss[];
@@ -348,9 +322,6 @@ const state: GateState = {
   messages: 0,
   lastAnswer: '',
   said: { text: '', before: '', origin: null },
-  model: null,
-  target: null,
-  modelCheck: true,
   misses: [],
   shellAliases: new Map(),
   aliasError: null,
@@ -584,9 +555,6 @@ type Equal<A, B> =
 type Unkept =
   | 'root'
   | 'said'
-  | 'model'
-  | 'target'
-  | 'modelCheck'
   | 'shellAliases'
   | 'aliasError'
   | 'aliasErrorShown'
@@ -1827,27 +1795,25 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const { gh, yes, target } = await escalateGh(
+  const c = ghConsent(state.message.grant);
+  const gh = await judgeGh(
     shown,
     [action],
-    ghConsent(state.message.grant),
-    () => ghLookups($),
-    ghModel($),
+    c.grant,
+    c.held,
+    ghLookups($),
+    c.unread,
+    c.pointed,
+    c.standing,
   );
   if ('deny' in gh) return deny(gh.deny, gh.step);
-  const told = target === null ? null : targetRan($, target);
   const stale = overtaken(message, next.signal, 'call');
   if (stale !== null) return stale;
   const r = await next(e);
   if (r.deny !== undefined) return r;
   // A merge that failed fulfilled nothing, so its ask stands.
   if (r.isError !== true) spend(gh.used);
-  const notes = [
-    ...(told === null ? [] : [told]),
-    ...(yes === null ? [] : [modelRan($, yes)]),
-    ...unaskedNotes($, gh.ran),
-    ...(gh.notes ?? []),
-  ];
+  const notes = [...unaskedNotes($, gh.ran), ...(gh.notes ?? [])];
   return notes.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...notes] };
 }
 
@@ -1973,58 +1939,6 @@ async function onBashEdits(
   return note === null ? result : withNote(result, note);
 }
 
-// The model check's reading of the user's latest message, asked once per
-// message; one that got no answer is asked again by the next step. None where
-// it does not run: switched off, under -p or the Agent SDK, or while a message
-// that declined a step holds.
-function modelRead($: $): ModelAsk | null {
-  const { text, before, origin } = state.said;
-  if (!state.modelCheck || origin === 'sdk' || text.trim() === '') return null;
-  if (declinedSince(state.hold)) return null;
-  if (state.model?.message !== state.messages) {
-    const ask = { message: state.messages, text, before, read: askModel($, text, before) };
-    state.model = ask;
-    void ask.read.then((r) => {
-      if (r.kind === 'unanswered' && state.model === ask) state.model = null;
-    });
-  }
-  return state.model;
-}
-
-async function complete(
-  $: $,
-  system: string,
-  prompt: string,
-  maxTokens: number,
-): Promise<{ text: string } | { why: string }> {
-  try {
-    const r = await $.model.complete({
-      model: 'sonnet',
-      effort: 'low',
-      maxTokens,
-      timeoutMs: 15_000,
-      system: [{ text: system, cache: true }],
-      prompt,
-    });
-    if (r.isAnswered) return { text: r.text };
-    return {
-      why:
-        r.reason === 'api-error'
-          ? `an API error, ${r.error}`
-          : r.reason === 'aborted'
-            ? 'it ran out of time or was interrupted'
-            : 'an empty reply',
-    };
-  } catch (error) {
-    return { why: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-async function askModel($: $, text: string, before: string): Promise<ModelRead> {
-  const r = await complete($, RULES, askOf(text, offerOf(before)), 300);
-  return 'why' in r ? { kind: 'unanswered', why: r.why } : judge(r.text, text);
-}
-
 function recordMiss(miss: Omit<Miss, 'saved' | 'key'>): void {
   const known = state.misses.find((m) => sameMiss(m, miss));
   const entry = { ...miss, saved: known?.saved ?? false, key: known?.key ?? null };
@@ -2090,150 +2004,19 @@ async function saveMisses($: $): Promise<void> {
   }
 }
 
-// The model's yes, with the message it read.
-type ModelYes = Readonly<{
-  steps: ModelSteps;
-  added: ModelGrant;
-  quote: string;
-  text: string;
-  before: string;
-}>;
-
-// What a refused step gets from the model check: its yes, why it could not
-// judge the message, or nothing.
-async function secondRead($: $): Promise<ModelYes | { why: string } | null> {
-  const ask = modelRead($);
-  if (ask === null) return null;
-  const read = await ask.read;
-  if (read.kind === 'unanswered') return { why: read.why };
-  if (read.kind === 'refused') {
-    if (read.why === 'malformed') return { why: 'its reply could not be read' };
-    if (read.why === 'quote') return { why: 'its reply quoted words the message does not hold' };
-    return null;
-  }
-  const m = read.grant;
-  const steps: ModelSteps = {
-    ...(m.push === 'push' ? { push: true } : {}),
-    ...(m.pr ? { pr: true } : {}),
-    ...(m.approve ? { approve: true } : {}),
-    ...(m.release ? { release: true } : {}),
-  } as const;
-  return { steps, added: m, quote: read.quote, text: ask.text, before: ask.before };
-}
-
-// The typed grant with the model's yes, for reporting what ran, never for
-// deciding what may.
-function withModel(granted: Grant, m: ModelGrant): Grant {
+// The consent a GitHub call is judged against.
+function ghConsent(grant: Grant): GhConsent {
   return {
-    ...granted,
-    push: m.push === 'push' && !covers(granted, 'push') ? 'push' : granted.push,
-    pr: granted.pr || m.pr,
-    approve: granted.approve || m.approve,
-    release: granted.release || m.release,
-  };
-}
-
-const MODEL_STEPS = ['push', 'pr', 'approve', 'release'] as const;
-
-// Once the step ran: shown and told, and kept with the misses as a candidate
-// for the grammar.
-function modelRan($: $, yes: ModelYes): string {
-  const steps = MODEL_STEPS.filter((s) => yes.steps[s] === true);
-  const line = `review-cycle: the model check read "${yes.quote}" as asking for ${steps.map((s) => ASKED_FOR[s]).join(' and ')}.`;
-  $.ui.log(line);
-  recordMiss({
-    message: clip(yes.text),
-    offer: clip(offerOf(yes.before)),
-    steps: [...steps],
-    refusal: clip(`granted by the model check: "${yes.quote}"`),
-    kind: 'model',
-  });
-  // The step may run after its hook has kept the gate.
-  void keep($);
-  return line;
-}
-
-async function ranByModel(
-  $: $,
-  result: Output<BashHook> | Promise<Output<BashHook>>,
-  yes: ModelYes,
-): Promise<Output<BashHook>> {
-  const r = await result;
-  if (r.deny !== undefined) return r;
-  return { ...r, context: [...(r.context ?? []), modelRan($, yes)] };
-}
-
-// The merge's grant naming no pull request, when the model check reads the
-// one the grammar took from the answer as mentioned rather than offered.
-async function offeredUnnamed(
-  $: $,
-  granted: Grant,
-): Promise<{ grant: Grant; n: string } | { why: string; n: string } | null> {
-  const { before, origin } = state.said;
-  // A grant a queued message joined is not one message the model can be shown.
-  const text = state.message.said;
-  if (!state.modelCheck || origin === 'sdk' || text === null || text.trim() === '') return null;
-  if (declinedSince(state.hold)) return null;
-  const n = closingNamed(granted, text);
-  if (n === null) return null;
-  if (state.target?.message !== state.messages || state.target.n !== n) {
-    const ask = { message: state.messages, n, read: askTarget($, before, n, text) };
-    state.target = ask;
-    // One that got no answer is asked again by the next step.
-    void ask.read.then((r) => {
-      if (r.kind === 'unanswered' && state.target === ask) state.target = null;
-    });
-  }
-  const read = await state.target.read;
-  if (read.kind !== 'read') return { why: read.why, n };
-  return read.mentioned ? { grant: unnamed(granted, n), n } : null;
-}
-
-// The consent a GitHub call is judged against, as it stands at each judgement.
-function ghConsent(grant: Grant): () => GhConsent {
-  return () => ({
     grant,
     held: held(),
     unread: state.message.unread,
     pointed: pointedNow(),
     standing: state.standing,
-  });
+  };
 }
 
 function pushConsent(command: string): PushConsent {
   return () => ({ held: held(), unread: state.message.unread, shown: quote(command) });
-}
-
-function ghModel($: $): GhModel<ModelYes> {
-  return { second: () => secondRead($), target: (granted) => offeredUnnamed($, granted) };
-}
-
-type TargetRead =
-  | { kind: 'read'; mentioned: boolean }
-  | { kind: 'unanswered' | 'unread'; why: string };
-
-async function askTarget($: $, before: string, n: string, text: string): Promise<TargetRead> {
-  const r = await complete($, TARGET, targetAskOf(before, n, text), 100);
-  if ('why' in r) return { kind: 'unanswered', why: r.why };
-  const mentioned = mentionedOf(r.text);
-  return mentioned === null
-    ? { kind: 'unread', why: 'its reply could not be read' }
-    : { kind: 'read', mentioned };
-}
-
-function targetRan($: $, n: string): string {
-  const line = `review-cycle: the model check read #${n} as mentioned beside the merge the answer offered, not offered itself, so the merge names no pull request and oakum's version pull request still asks.`;
-  $.ui.log(line);
-  const { text, before } = state.said;
-  recordMiss({
-    message: clip(text),
-    offer: clip(offerOf(before)),
-    steps: ['merge'],
-    refusal: clip(`#${n} read by the model check as mentioned, not offered`),
-    kind: 'model',
-  });
-  void keep($);
-  return line;
 }
 
 async function judgeBash(
@@ -2261,16 +2044,18 @@ async function judgeBash(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
       );
     }
-    const read = await escalateGh(
+    const c = ghConsent(granted);
+    const gh = await judgeGh(
       quote(e.command),
       actions,
-      ghConsent(granted),
-      () => ghLookups($),
-      ghModel($),
+      c.grant,
+      c.held,
+      ghLookups($),
+      c.unread,
+      c.pointed,
+      c.standing,
     );
-    const { gh, yes } = read;
     if ('deny' in gh) return deny(gh.deny, gh.step);
-    const told = read.target === null ? null : targetRan($, read.target);
     // Only a merge that succeeded ends a standing ask, and a filter's status hides that.
     const standing = gh.used !== undefined && (gh.used.ready.length > 0 || gh.used.release);
     if (standing && reading.endsInFilter) {
@@ -2291,12 +2076,10 @@ async function judgeBash(
         );
       }
     }
-    const grant = yes === null ? read.granted : withModel(read.granted, yes.added);
     const checked = rewrite === 'alone' ? 'history' : 'unchecked';
-    const watched = watch($, await ensureRoot($), e, next, checked, grant, since, gh.ran);
-    const ran = yes === null ? await watched : await ranByModel($, watched, yes);
+    const ran = await watch($, await ensureRoot($), e, next, checked, c.grant, since, gh.ran);
     if (ran.deny === undefined && ran.isError !== true) spend(gh.used);
-    const notes = [...(told === null ? [] : [told]), ...(gh.notes ?? [])];
+    const notes = gh.notes ?? [];
     const r =
       notes.length === 0 || ran.deny !== undefined
         ? ran
@@ -2337,27 +2120,20 @@ async function judgeBash(
     }
   }
   const ran: Unasked[] = [];
-  let yes: ModelYes | null = null;
   let note: string | null = null;
   if (cls.push) {
     const commits = cls.commit !== null && finishes === null;
-    const push = cls.push;
-    const judge = (model?: ModelSteps) =>
-      judgePush(
-        gitOf($),
-        () => ladderOf($),
-        root.top,
-        pushConsent(e.command),
-        commits,
-        push,
-        granted,
-        model,
-        prUpdating($),
-      );
-    const escalated = await escalatePush(judge, () => secondRead($));
-    const { verdict } = escalated;
+    const verdict = await judgePush(
+      gitOf($),
+      () => ladderOf($),
+      root.top,
+      pushConsent(e.command),
+      commits,
+      cls.push,
+      granted,
+      prUpdating($),
+    );
     if ('deny' in verdict) return deny(verdict.deny, verdict.step);
-    yes = escalated.yes;
     // Only a push that would run is steered, so its own refusals come first.
     const layer = await stackLayerPushed(gitOf($), root.top, cls.push, leaseIoOf($, root));
     if (layer !== null) {
@@ -2376,13 +2152,9 @@ async function judgeBash(
         : cls.history !== null
           ? 'history'
           : 'push';
-  if (yes === null) {
-    const r = await watch($, root, e, next, checked, granted, message, ran);
-    if (note === null || r.deny !== undefined) return r;
-    return { ...r, context: [...(r.context ?? []), note] };
-  }
-  const watched = watch($, root, e, next, checked, withModel(granted, yes.added), message, ran);
-  return ranByModel($, watched, yes);
+  const r = await watch($, root, e, next, checked, granted, message, ran);
+  if (note === null || r.deny !== undefined) return r;
+  return { ...r, context: [...(r.context ?? []), note] };
 }
 
 // The refusal when a reviewer has not seen all of what a real commit would
@@ -3670,8 +3442,6 @@ export const register: Register = (on, options) => {
   state.prUpdates = prUpdatesOf(options.prUpdates);
   state.nudge = options.nudge !== false;
   state.unaskedNotice = options.unaskedNotice === true;
-  state.modelCheck = options.modelCheck !== false;
-  on('config.set', { key: 'review-cycle.modelCheck' }, onConfigSet);
   on('config.set', { key: 'review-cycle.enabled' }, onConfigSet);
   on('config.set', { key: 'review-cycle.stopBefore' }, onConfigSet);
   on('config.set', { key: 'review-cycle.prUpdates' }, onConfigSet);
@@ -3687,7 +3457,7 @@ export const register: Register = (on, options) => {
     state.standing = NO_STANDING;
     state.reviewing = null;
     state.message = { ...state.message, ...UNGRANTED, unread: null, said: null };
-    // Neither the model's yes nor the last offer outlasts the conversation it read.
+    // The last offer does not outlast the conversation it was made in.
     state.said = { text: '', before: '', origin: null };
     state.lastAnswer = '';
     // A fresh conversation may start something else, so an epic job ends here too.
