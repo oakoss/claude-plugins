@@ -126,7 +126,7 @@ import {
   saveMiss,
 } from './misses';
 import { asksUser, nudgeOf, nudgeOn } from './nudge';
-import { OFFER_STEPS, offerQuestion } from './offers';
+import { OFFER_STEPS, OPERATIONS, offerQuestion } from './offers';
 import {
   configuredPrUpdates,
   DEFAULT_PR_UPDATES,
@@ -854,7 +854,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'offer',
       description:
-        "Returns the one question to ask for a held step you are about to offer the user (a merge, stack merge, release, push, force-push, pull request, approval, or a reply to a pull request's review, resolving its threads included). End your answer with it, word for word, on a line of its own, with nothing after it: review-cycle's consent grammar reads a yes to that question exactly. Reword it and a yes may be held.",
+        "Returns the one question to ask for a held step you are about to offer the user, or that the gate refused (a commit, finishing a rebase, merge, cherry-pick or revert, a push, force-push, remote branch delete, pull request, merge, stack merge or push, release, approval, or a reply to a pull request's review, resolving its threads included). End your answer with it, word for word, on a line of its own, with nothing after it: review-cycle's consent grammar reads a yes to that question exactly. Reword it and a yes may be held.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -863,11 +863,25 @@ async function onSessionStart(
             type: 'array',
             items: { type: 'string' },
             description:
-              'Pull requests: "316", or "owner/name#53" in another repository. merge takes one or more; release, approve, comment and stack (up to) one.',
+              'Pull requests: "316", or "owner/name#53" in another repository. merge takes one or more; release, merge-release, approve, comment and stack (up to) one.',
           },
           method: { type: 'string', enum: ['merge', 'squash', 'rebase'] },
-          branch: { type: 'string', description: 'For push, force-push and push-pr.' },
-          remote: { type: 'string', description: 'For a push; origin when left out.' },
+          branch: {
+            type: 'string',
+            description:
+              'For commit, finish, push, force-push, force-push-bare, delete and push-pr.',
+          },
+          remote: { type: 'string', description: 'For a push or delete; origin when left out.' },
+          operation: {
+            type: 'string',
+            enum: [...OPERATIONS],
+            description: 'For finish.',
+          },
+          version: {
+            type: 'string',
+            description:
+              'For a release with no pull request: its tag or <package>@<version>, "v0.25.0".',
+          },
         },
         required: ['step'],
       },
@@ -2494,8 +2508,8 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
       : '';
   const ask =
     finishes === null
-      ? `To commit, ${askThem('what it commits and on which branch', '"Commit the changes to `fix/x`?"', quote(command))}`
-      : `To finish the ${finishes}, which commits the resolution, ${askThem('what it commits and on which branch', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
+      ? `To commit, ${askThem('commit', '"Commit the changes to `fix/x`?"', quote(command))}`
+      : `To finish the ${finishes}, which commits the resolution, ${askThem('finish', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
   return `${notAsked('commit', ladder, held(), state.message.unread)}${setting}, so nothing ran. ${ask}`;
 }
 

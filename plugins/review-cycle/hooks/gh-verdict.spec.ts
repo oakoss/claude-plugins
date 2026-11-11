@@ -604,7 +604,9 @@ describe('a merge', () => {
             `it merges #1, and the user named no pull request, and ${unnamedDeny}`,
           ),
         });
-        expect(r).toMatchObject({ deny: expect.stringContaining('"Merge #1?"') });
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('The question: Merge #1? The command:'),
+        });
       }
     });
 
@@ -637,7 +639,9 @@ describe('a merge', () => {
       const headless = world('merge', { pullRequest: { asks: 'looking it up failed (x)' } });
       const failed = await judge([merge(false)], headless, grant({ merge: true }));
       expect(failed).toMatchObject({ deny: expect.stringContaining('looking it up failed (x)') });
-      expect(failed).toMatchObject({ deny: expect.stringContaining('"Merge #1?"') });
+      expect(failed).toMatchObject({
+        deny: expect.stringContaining('The question: Merge #1? The command:'),
+      });
       const slow = world('merge', { pullRequest: { asks: 'it timed out', slow: true } });
       expect(await judge([merge(false)], slow, grant({ merge: true }))).toMatchObject({
         deny: expect.stringContaining(
@@ -803,6 +807,7 @@ describe('a merge', () => {
     });
     const r = await judge([{ kind: 'merge', admin: false, auto: false, lookup: ['62'] }], w);
     expect(r).toMatchObject({ deny: expect.stringContaining('"Merge and release #62?"') });
+    expect(r).toMatchObject({ deny: expect.stringContaining('gives for step merge-release,') });
   });
 
   test('not allowed, names why the lookup could not tell', async () => {
@@ -1010,7 +1015,9 @@ describe('a merge', () => {
       async (stopBefore) => {
         const r = await judge([merge(false)], world(stopBefore), ready);
         expect(r).toMatchObject({ deny: expect.stringContaining('`gh pr merge 1 --auto`') });
-        expect(r).toMatchObject({ deny: expect.stringContaining('"Merge #116 now?"') });
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('The question: Merge #1? The command:'),
+        });
       },
     );
 
@@ -1237,7 +1244,9 @@ describe('a merge', () => {
       expect(r).toMatchObject({
         deny: expect.stringContaining('#46 in evil/other, not this repository'),
       });
-      expect(r).toMatchObject({ deny: expect.stringContaining('"Merge evil/other#46?"') });
+      expect(r).toMatchObject({
+        deny: expect.stringContaining('The question: Merge evil/other#46? The command:'),
+      });
     });
 
     describe('in a repository the user named', () => {
@@ -1254,6 +1263,20 @@ describe('a merge', () => {
       ])('%j merges it', async (prompt, offer) => {
         const r = await judge([there(53, 'oakoss/linesmith')], linesmith(), asked(prompt, offer));
         expect(r).toEqual({ ran: [] });
+      });
+
+      test('a merge once ready names the repository in its question and its --auto command', async () => {
+        const r = await judge(
+          [there(53, 'oakoss/linesmith')],
+          linesmith('BLOCKED'),
+          asked('merge oakoss/linesmith#53 once it is ready'),
+        );
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('The question: Merge oakoss/linesmith#53? The command:'),
+        });
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('`gh pr merge 53 --auto --repo oakoss/linesmith`'),
+        });
       });
 
       test("a name without its owner names only this repository's owner's", async () => {
@@ -1340,7 +1363,7 @@ describe('a merge', () => {
         const w = world('never stop', { mergeTarget: pull(53, 'CLEAN', 'oakoss/linesmith') });
         const r = await judge([there(53, 'oakoss/linesmith')], w, asked('merge 53'));
         expect(r).toMatchObject({
-          deny: expect.stringContaining('"Merge oakoss/linesmith#53?"'),
+          deny: expect.stringContaining('The question: Merge oakoss/linesmith#53? The command:'),
         });
       });
 

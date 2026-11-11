@@ -39,6 +39,50 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
       { push: 'push', pr: true },
     ],
     [{ step: 'pr' }, 'Open a pull request?', { pr: true }],
+    [{ step: 'commit', branch: 'fix/x' }, 'Commit the changes to `fix/x`?', { commit: true }],
+    [
+      { step: 'finish', branch: 'fix/x', operation: 'rebase' },
+      'Commit the resolution to `fix/x` and finish the rebase?',
+      { finish: ['rebase'] },
+    ],
+    [
+      { step: 'finish', branch: 'fix/x', operation: 'cherry-pick' },
+      'Commit the resolution to `fix/x` and finish the cherry-pick?',
+      { finish: ['cherry-pick'] },
+    ],
+    [
+      { step: 'finish', branch: 'fix/x', operation: 'merge' },
+      'Commit the resolution to `fix/x` and finish the merge?',
+      { finish: ['merge'] },
+    ],
+    [
+      { step: 'finish', branch: 'fix/x', operation: 'revert' },
+      'Commit the resolution to `fix/x` and finish the revert?',
+      { finish: ['revert'] },
+    ],
+    [{ step: 'delete', branch: 'fix/x' }, 'Delete `fix/x` from `origin`?', { push: 'push' }],
+    [
+      { step: 'force-push-bare', branch: 'fix/x' },
+      'Force-push `fix/x` to `origin` without a lease?',
+      { push: 'bare' },
+    ],
+    [{ step: 'stack-push' }, 'Force-push the stack with a lease?', { push: 'lease' }],
+    [
+      { step: 'stack-submit' },
+      'Force-push the stack with a lease and open its pull requests?',
+      { push: 'lease', pr: true },
+    ],
+    [
+      { step: 'merge-release', pulls: ['62'] },
+      'Merge and release #62?',
+      { merge: true, mergeNamed: ['62'], release: true },
+    ],
+    [{ step: 'release', version: 'v0.25.0' }, 'Release `v0.25.0`?', { release: true }],
+    [
+      { step: 'release', version: 'review-cycle@0.27.0' },
+      'Release `review-cycle@0.27.0`?',
+      { release: true },
+    ],
   ])('%j asks %s', (input, asked, grant) => {
     expect(question(input)).toBe(asked);
     for (const answer of [asked, `CI is green.\n\n${asked}`]) {
@@ -71,6 +115,16 @@ describe('an offer with no question', () => {
     [{ step: 'push' }],
     [{ step: 'push', branch: 'fix/`x`' }],
     [{ step: 'push', branch: 'fix/x', remote: 'a b' }],
+    [{ step: 'commit' }],
+    [{ step: 'finish', branch: 'fix/x' }],
+    [{ step: 'finish', branch: 'fix/x', operation: 'squash' }],
+    // The grammar reads neither as a named repository, so a yes would name #5 here.
+    [{ step: 'merge', pulls: ['o/.github#5'] }],
+    [{ step: 'merge', pulls: ['o/-r#5'] }],
+    [{ step: 'delete' }],
+    [{ step: 'merge-release', pulls: ['1', '2'] }],
+    [{ step: 'release', pulls: ['289'], version: 'v1' }],
+    [{ step: 'release', version: 'v1`; rm' }],
     [null],
   ])('%j', (input) => {
     expect(offerQuestion(input)).toHaveProperty('error');

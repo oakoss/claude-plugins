@@ -85,7 +85,9 @@ describe('a push the user did not ask for', () => {
     });
     const at = await judge('git push origin fix/x', world());
     expect(at).toMatchObject({
-      deny: expect.stringContaining('To push, stop and ask them'),
+      deny: expect.stringContaining(
+        'To push, stop and end your reply with the question mcp__review-cycle__offer gives for step push,',
+      ),
       step: 'push',
     });
     expect(at).not.toHaveProperty('final');
@@ -103,8 +105,12 @@ describe('a push the user did not ask for', () => {
   test('a bare force names the lease instead, and a lease asks for a force push', async () => {
     const bare = await judge('git push --force origin fix/x', world());
     expect(bare).toMatchObject({ deny: expect.stringContaining(`Use ${LEASE} instead`) });
+    expect(bare).toMatchObject({
+      deny: expect.stringContaining('gives for step force-push-bare,'),
+    });
     const lease = await judge('git push --force-with-lease origin fix/x', world());
     expect(lease).toMatchObject({ deny: expect.stringContaining("doesn't ask for a force push") });
+    expect(lease).toMatchObject({ deny: expect.stringContaining('gives for step force-push,') });
   });
 
   test.each([
@@ -163,6 +169,7 @@ describe('a push the user did not ask for', () => {
     expect(r).toMatchObject({
       deny: expect.stringContaining('also covers `gh pr merge --delete-branch`'),
     });
+    expect(r).toMatchObject({ deny: expect.stringContaining('gives for step delete,') });
   });
 
   test('a requested pull request lets the plain push through as its own', async () => {

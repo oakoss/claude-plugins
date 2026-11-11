@@ -3686,7 +3686,7 @@ describe('a push the user did not ask for', () => {
     expect(denied(r, "the user's latest message doesn't ask for a push, so nothing ran.")).toBe(
       true,
     );
-    expect(denied(r, 'stop and ask them in your reply')).toBe(true);
+    expect(denied(r, 'the question mcp__review-cycle__offer gives for step push,')).toBe(true);
     expect(denied(r, 'The command: git push origin fix/x')).toBe(true);
     expect(w.asked).toBeUndefined();
   });
@@ -4758,12 +4758,12 @@ describe('the stop-before setting', () => {
     expect(denied(await bash($, 'gh pr create --fill'), 'sent a new message')).toBe(true);
     expect(w.logs ?? []).toEqual([]);
   });
-  test('a pull request at the rung is refused, naming the branch to ask about', async ($, on) => {
+  test('a pull request at the rung is refused, with the question to ask', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('open PR') } });
     await say($, 'fix the parser');
     const r = await bash($, 'gh pr create --fill');
     expect(denied(r, "doesn't ask for a pull request")).toBe(true);
-    expect(denied(r, '"Open a PR from `fix/x` into `main`?"')).toBe(true);
+    expect(denied(r, 'The question: Open a pull request? The command:')).toBe(true);
   });
   test('by default a pull request asks, and a request for one lets it run', async ($, on) => {
     const w = fakeWorld(on);
@@ -4954,7 +4954,7 @@ describe('the stop-before setting', () => {
     expect(rest).toEqual([]);
     expect(miss.message).toBe('can we merge the version PRs whenever');
     expect(miss.steps).toEqual(['merge']);
-    expect(miss.refusal).toContain('stop and ask them in your reply');
+    expect(miss.refusal).toContain('the question mcp__review-cycle__offer gives for step');
     // A "yes" to an offer the grammar did not read is kept with that offer, a
     // dotted version and all.
     const closing = 'All green.\nShould I go ahead with the version bump merge for `v0.25.0`?';
@@ -5006,7 +5006,7 @@ describe('the stop-before setting', () => {
       message: 'can we merge the version PRs whenever',
       offer: '',
       steps: ['merge'],
-      refusal: expect.stringContaining('stop and ask them in your reply'),
+      refusal: expect.stringContaining('the question mcp__review-cycle__offer gives for step'),
       kind: 'refused',
       date: '2026-09-26',
       repo: '/repo',
@@ -5167,7 +5167,11 @@ describe('the stop-before setting', () => {
   test('a refused gh stack push the message named is kept as a miss', async ($, on) => {
     fakeWorld(on, { git: github('fix/x') });
     await say($, 'should we push the stack?');
-    expect(denied(await bash($, 'gh stack push'), "doesn't ask for a forced push")).toBe(true);
+    const refused = await bash($, 'gh stack push');
+    expect(denied(refused, "doesn't ask for a forced push")).toBe(true);
+    expect(denied(refused, 'The question: Force-push the stack with a lease? The command:')).toBe(
+      true,
+    );
     const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
     const [miss] = JSON.parse((r as { result: string }).result).misses;
     expect(miss?.steps).toEqual(['push']);
@@ -5358,12 +5362,9 @@ describe('the stop-before setting', () => {
     expect(denied(r, 'also pushes every active branch of the stack with --force-with-lease')).toBe(
       true,
     );
-    expect(denied(r, 'with a lease and open its PRs?"')).toBe(true);
-    await endTurn(
-      $,
-      'answer',
-      'Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?',
-    );
+    const question = 'Force-push the stack with a lease and open its pull requests?';
+    expect(denied(r, `The question: ${question} The command:`)).toBe(true);
+    await endTurn($, 'answer', question);
     await say($, 'yes');
     expect(ran(await bash($, 'gh stack submit --auto'))).toBe(true);
   });
@@ -5434,9 +5435,9 @@ describe('the stop-before setting', () => {
           : github('two')(a);
     const w = fakeWorld(on, { settings: { local: stops('push') }, git: answers });
     await say($, 'merge it');
-    expect(denied(await bash($, 'gh stack merge 3 --yes --squash'), 'merges #2, #3 together')).toBe(
-      true,
-    );
+    const refused = await bash($, 'gh stack merge 3 --yes --squash');
+    expect(denied(refused, 'merges #2, #3 together')).toBe(true);
+    expect(denied(refused, 'The question: Merge #2 and #3? The command:')).toBe(true);
     await say($, 'merge #2 and #3');
     expect(ran(await bash($, 'gh stack merge 3 --yes --squash'))).toBe(true);
     const looked = w.calls.map((c) => c.argv.join(' ')).filter((a) => a.startsWith('gh '));
@@ -5907,7 +5908,7 @@ describe('the stop-before setting', () => {
     await say($, 'merge that PR');
     const r = await bash($, 'gh pr merge 200 --squash');
     expect(denied(r, 'neither they nor the answer they replied to named #200')).toBe(true);
-    expect(denied(r, '"Merge #200?"')).toBe(true);
+    expect(denied(r, 'The question: Merge #200? The command:')).toBe(true);
   });
   test('a queued merge keeps the number it named beside an unnamed one', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
@@ -5919,9 +5920,13 @@ describe('the stop-before setting', () => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await endTurn($, 'answer', farUp.replace('#40 passes', '#130 fails, and #40 passes'));
     await say($, 'merge it; do not merge 130');
-    expect(denied(await bash($, 'gh pr merge 130 --squash'), '"Merge #130?"')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 130 --squash'), 'The question: Merge #130? ')).toBe(
+      true,
+    );
     await queue($, 'thanks');
-    expect(denied(await bash($, 'gh pr merge 130 --squash'), '"Merge #130?"')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 130 --squash'), 'The question: Merge #130? ')).toBe(
+      true,
+    );
   });
   test('a merge asked for once ready outlasts unrelated messages, until used', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
@@ -6089,7 +6094,7 @@ describe('the stop-before setting', () => {
     await say($, 'merge it');
     const r = await bash($, 'gh pr merge 200 --squash');
     expect(denied(r, 'pointed at #200: reading the current branch failed (')).toBe(true);
-    expect(denied(r, '"Merge #200?"')).toBe(true);
+    expect(denied(r, 'The question: Merge #200? The command:')).toBe(true);
   });
   test('an unanswered reading refuses, says why, and is asked again', async ($, on) => {
     const w = fakeWorld(on, {
@@ -6554,6 +6559,7 @@ describe('the stop-before setting', () => {
     expect(denied(r, "doesn't ask for a commit")).toBe(true);
     const offer = 'Commit the resolution to `fix/x` and finish the rebase?';
     expect(denied(r, `"${offer}"`)).toBe(true);
+    expect(denied(r, 'gives for step finish,')).toBe(true);
     await ($ as any).turn.complete({
       answer: `Reviewed and clean. ${offer}`,
       durationMs: 1,
@@ -6601,6 +6607,7 @@ describe('the stop-before setting', () => {
     const r = await bash($, 'git commit -am x');
     expect(denied(r, "doesn't ask for a commit")).toBe(true);
     expect(denied(r, '"Commit the changes to `fix/x`?"')).toBe(true);
+    expect(denied(r, 'gives for step commit,')).toBe(true);
     await ($ as any).turn.complete({
       answer: 'Reviewed and clean. Commit the changes to `fix/x`?',
       durationMs: 1,
@@ -8796,6 +8803,51 @@ describe('the offer tool', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(true);
     expect(ran(await bash($, 'gh pr create --fill'))).toBe(true);
+  });
+  test('a refused merge points at its question, and a yes to it merges', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh pr merge 3');
+    expect(denied(r, 'the question mcp__review-cycle__offer gives for step merge,')).toBe(true);
+    await endTurn($, 'answer', await offered($, { step: 'merge', pulls: ['3'] }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 3'))).toBe(true);
+  });
+  test('a yes to its merge and release question merges the version pull request', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('oakum/version-packages') });
+    await endTurn($, 'answer', await offered($, { step: 'merge-release', pulls: ['130'] }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
+  });
+  test('a yes to its release question for a version releases it', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('fix/x') });
+    const question = await offered($, { step: 'release', version: 'v0.25.0' });
+    expect(question).toBe('Release `v0.25.0`?');
+    await endTurn($, 'answer', question);
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh release create v0.25.0'))).toBe(true);
+  });
+  test('a yes to its bare force-push question lets that push run', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    await endTurn($, 'answer', await offered($, { step: 'force-push-bare', branch: 'fix/x' }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push --force origin fix/x'))).toBe(true);
+  });
+  test('a yes to its stack push question lets the stack push run', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    const question = await offered($, { step: 'stack-push' });
+    expect(question).toBe('Force-push the stack with a lease?');
+    await endTurn($, 'answer', question);
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh stack push'))).toBe(true);
+  });
+  test('a yes to its delete question deletes that branch', async ($, on) => {
+    fakeWorld(on, pushing({}));
+    const question = await offered($, { step: 'delete', branch: 'fix/x' });
+    expect(question).toBe('Delete `fix/x` from `origin`?');
+    await endTurn($, 'answer', question);
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin --delete fix/x'))).toBe(true);
   });
   test('a refused gh thread reply points at the reply tool', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') }, git: github('fix/x') });

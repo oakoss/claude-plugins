@@ -1,3 +1,5 @@
+import { FINISHES } from './git-args';
+
 export const OFFER_STEPS = [
   'merge',
   'release',
@@ -8,12 +10,23 @@ export const OFFER_STEPS = [
   'approve',
   'stack',
   'comment',
+  'commit',
+  'finish',
+  'delete',
+  'force-push-bare',
+  'stack-push',
+  'stack-submit',
+  'merge-release',
 ] as const;
-type OfferStep = (typeof OFFER_STEPS)[number];
+export type OfferStep = (typeof OFFER_STEPS)[number];
 
-const PULL = /^(?:[\w.-]+\/[\w.-]+#)?[1-9]\d*$/;
+// As the grammar reads a named repository (consent.ts QUALIFIED): each part
+// opens with a letter or digit.
+const PULL = /^(?:[a-z\d][\w.-]*\/[a-z\d][\w.-]*#)?[1-9]\d*$/i;
 const BRANCH = /^(?!-)[\w./-]+$/;
 const REMOTE = /^(?!-|\.{1,2}$)[\w.-]+$/;
+const VERSION = /^(?!-)[\w.@/+-]+$/;
+export const OPERATIONS: readonly string[] = FINISHES;
 const METHODS: Record<string, string> = {
   merge: 'Merge',
   squash: 'Squash-merge',
@@ -60,6 +73,11 @@ export function offerQuestion(input: unknown): { question: string } | { error: s
   if (typeof method !== 'string' || !Object.hasOwn(METHODS, method)) {
     return { error: 'method must be merge, squash or rebase' };
   }
+  const version = o.version;
+  if (version !== undefined && (typeof version !== 'string' || !VERSION.test(version))) {
+    return { error: 'version must be a tag or <package>@<version>' };
+  }
+  const operation = o.operation;
   const one = (what: string): string | { error: string } =>
     pulls.length === 1 ? what : { error: `${step} takes one pull request` };
   const onBranch = (what: (b: string) => string): string | { error: string } =>
@@ -69,7 +87,17 @@ export function offerQuestion(input: unknown): { question: string } | { error: s
       pulls.length === 0
         ? { error: 'merge needs at least one pull request' }
         : `${METHODS[method]} ${refs(pulls)}?`,
-    release: () => one(`Release ${refs(pulls)}?`),
+    release: () => {
+      if (typeof version !== 'string') {
+        return pulls.length === 1
+          ? `Release ${refs(pulls)}?`
+          : { error: 'release needs one pull request or a version' };
+      }
+      return pulls.length === 0
+        ? `Release \`${version}\`?`
+        : { error: 'release takes a pull request or a version, not both' };
+    },
+    'merge-release': () => one(`Merge and release ${refs(pulls)}?`),
     approve: () => one(`Approve ${refs(pulls)}?`),
     comment: () => one(`Reply to the review on ${refs(pulls)}?`),
     stack: () => (pulls.length === 0 ? 'Merge the stack?' : one(`Merge up to ${refs(pulls)}?`)),
@@ -77,6 +105,16 @@ export function offerQuestion(input: unknown): { question: string } | { error: s
     'force-push': () => onBranch((b) => `Force-push \`${b}\` to \`${remote}\` with a lease?`),
     'push-pr': () => onBranch((b) => `Push \`${b}\` to \`${remote}\` and open a pull request?`),
     pr: () => 'Open a pull request?',
+    commit: () => onBranch((b) => `Commit the changes to \`${b}\`?`),
+    finish: () =>
+      typeof operation === 'string' && OPERATIONS.includes(operation)
+        ? onBranch((b) => `Commit the resolution to \`${b}\` and finish the ${operation}?`)
+        : { error: `operation must be one of ${OPERATIONS.join(', ')}` },
+    delete: () => onBranch((b) => `Delete \`${b}\` from \`${remote}\`?`),
+    'force-push-bare': () =>
+      onBranch((b) => `Force-push \`${b}\` to \`${remote}\` without a lease?`),
+    'stack-push': () => 'Force-push the stack with a lease?',
+    'stack-submit': () => 'Force-push the stack with a lease and open its pull requests?',
   };
   const question = questions[step as OfferStep]();
   return typeof question === 'string' ? { question } : question;
