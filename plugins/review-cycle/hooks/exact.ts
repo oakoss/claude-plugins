@@ -183,8 +183,9 @@ const AGREE = new RegExp(
   String.raw`^(?:${AGREE_WORD}|great|perfect|cool|nice|looks good)[,.!]? `,
   'i',
 );
-const LEAD = /^(?:please|lets|let's|go ahead and|you can|we can|now|and|also|then) /i;
-const TAIL = / (?:please|now)$/i;
+const LEAD =
+  /^(?:(?:please|well|hey|now|also),? |(?:lets|let's|go ahead and|you can|we can|and|then) )/i;
+const TAIL = /,? (?:please|now)$/i;
 const GO = String.raw`go ahead|do it|do that|go for it|please do|proceed|(?:lets|let's) do (?:it|that)`;
 const YES = new RegExp(String.raw`^(?:(?:${AGREE_WORD})(?:[,.!]? (?:please|${GO}))?|${GO})$`, 'i');
 const JOIN = /[,;]? (?:and then|and|then) /gi;
