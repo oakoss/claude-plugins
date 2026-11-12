@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
+import { NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
+import { grantOf } from './exact';
 import {
   judgeGh,
   NO_STANDING,
@@ -213,7 +214,7 @@ describe('GitHub writes on the ladder', () => {
       how: 'declined',
     });
     expect(r).toMatchObject({
-      deny: expect.stringContaining('the user held off (they put off a push the agent offered)'),
+      deny: expect.stringContaining('the user held off (they put off a push)'),
     });
   });
 
@@ -288,7 +289,7 @@ describe('GitHub writes on the ladder', () => {
   test('a comment needs the request whatever the rung', async () => {
     const r = await judge([{ kind: 'comment' }], world('never stop'));
     expect(r).toMatchObject({ deny: expect.stringContaining('"Reply to the review on #116?"') });
-    // The agent asks the offer tool's question, not a fuller one the grammar refuses.
+    // The agent asks the offer tool's question, not a fuller one the reader refuses.
     expect(r).toMatchObject({
       deny: expect.stringContaining(
         'the question mcp__review-cycle__offer gives for step comment and the pull request, word for word',
@@ -1081,7 +1082,6 @@ describe('a merge', () => {
         'a ready merge answering "Merge #46?"',
         asked('merge it when its ready', 'Want me to merge #46?'),
       ],
-      ['a yes to "Merge #46 once it is ready?"', asked('yes', 'Merge #46 once it is ready?')],
     ])('after %s, refuses a merge of #47, now or with --auto', async (_, granted) => {
       for (const auto of [false, true]) {
         const r = await judge(
@@ -1193,8 +1193,8 @@ describe('a merge', () => {
       }
     });
 
-    test('after a yes to an offer naming two pull requests, refuses a merge now of either, not --auto', async () => {
-      const granted = asked('yes', 'Pushed #46 and #47.\nMerge it once CI passes?');
+    test('after an answer naming two pull requests, refuses a merge now of either, not --auto', async () => {
+      const granted = asked('merge it once CI passes', 'Pushed #46 and #47.');
       const now = await judge(
         [merge(false)],
         world('never stop', { mergeTarget: pull(46, 'CLEAN') }),
@@ -1251,8 +1251,7 @@ describe('a merge', () => {
         ['merge linesmith#53', ''],
         ['merge oakoss/linesmith#53', ''],
         ['merge https://github.com/oakoss/linesmith/pull/53', ''],
-        ['yes', 'Merge `oakoss/linesmith#53`?'],
-        ['yes', 'Merge [#53](https://github.com/oakoss/linesmith/pull/53)?'],
+        ['yes', 'Merge oakoss/linesmith#53?'],
       ])('%j merges it', async (prompt, offer) => {
         const r = await judge([there(53, 'oakoss/linesmith')], linesmith(), asked(prompt, offer));
         expect(r).toEqual({ ran: [] });
@@ -1541,7 +1540,7 @@ test('a held comment is named as the refusal names it', async () => {
   const r = await judge([{ kind: 'comment' }], world('never stop'), grant(), held);
   expect(r).toMatchObject({
     deny: expect.stringContaining(
-      "they put off a comment on GitHub the agent offered) and hasn't asked for a comment on GitHub",
+      "they put off a comment on GitHub) and hasn't asked for a comment on GitHub",
     ),
   });
 });

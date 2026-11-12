@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "consent:diff": "node scripts/consent-diff.ts",
     "format": "oxfmt 'plugins/**/*.{ts,tsx}' 'scripts/**/*.ts' 'tests/**/*.ts' '*.config.ts'",
     "format:check": "oxfmt --check 'plugins/**/*.{ts,tsx}' 'scripts/**/*.ts' 'tests/**/*.ts' '*.config.ts'",
     "lint": "oxlint",

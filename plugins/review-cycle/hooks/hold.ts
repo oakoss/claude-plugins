@@ -1,5 +1,5 @@
 // What a hold holds, how two holds combine, and how a message moves the one
-// in force. Pure, and imports only the ladder, so the grammar and the gate
+// in force. Pure, and imports only the ladder, so the reader and the gate
 // read one order.
 
 import { atOrAbove, type Step } from './ladder';

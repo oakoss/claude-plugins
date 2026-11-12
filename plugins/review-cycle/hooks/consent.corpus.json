@@ -33,8 +33,7 @@
   },
   {
     "prompt": "commit it as soon as you can, then push it",
-    "may": ["push"],
-    "missed": true
+    "may": ["push"]
   },
   {
     "prompt": "merge it when it's ready, but I'll check first",
@@ -191,8 +190,7 @@
   {
     "prompt": "yes, push on",
     "offer": "Want me to push?",
-    "may": ["push"],
-    "missed": true
+    "may": ["push"]
   },
   {
     "prompt": "commit on it",
@@ -312,8 +310,7 @@
   },
   {
     "prompt": "open a PR for the docs",
-    "may": ["pr"],
-    "missed": true
+    "may": ["pr"]
   },
   {
     "prompt": "create a test for the PR",
@@ -464,8 +461,7 @@
   {
     "prompt": "yes",
     "offer": "Can we push to main, or is it protected?",
-    "may": ["push"],
-    "missed": true
+    "may": ["push"]
   },
   {
     "prompt": "yes",
@@ -777,13 +773,11 @@
   },
   {
     "prompt": "finish the rebase for me",
-    "may": ["finish"],
-    "missed": true
+    "may": ["finish"]
   },
   {
     "prompt": "continue the rebase onto main",
-    "may": ["finish"],
-    "missed": true
+    "may": ["finish"]
   },
   {
     "prompt": "go ahead and land it",
@@ -793,14 +787,12 @@
   {
     "prompt": "yep, cut it",
     "offer": "Release `review-cycle@0.29.0`?",
-    "may": ["release"],
-    "missed": true
+    "may": ["release"]
   },
   {
     "prompt": "sure, send it up",
     "offer": "Push `fix/x` to `origin`?",
-    "may": ["push"],
-    "missed": true
+    "may": ["push"]
   },
   {
     "prompt": "merge it",
@@ -1200,8 +1192,7 @@
   {
     "prompt": "Ok, lets do that",
     "offer": "- the lockfile entry that fixes CI's frozen install;\n- the close button's space and missing brackets, and the gap above the band.\nNothing else is needed:\n- **Release note:** no new bump file. The existing `pr-watch: minor` covers these changes, since 0.1.0 hasn't released yet.\n- **Checks:** everything passes locally, including the frozen install that failed in CI.\nI'd push and update the description together. Should I go ahead?",
-    "may": ["push"],
-    "missed": true
+    "may": ["push"]
   },
   {
     "prompt": "Ok, lets merge it",
@@ -1226,8 +1217,7 @@
   {
     "prompt": "Push the branch delete",
     "offer": "`feat/reference-components` is still on `origin`. The commit gate blocked the delete because it only recognizes a request that says \"push\", and \"Lets delete it\" doesn't. I won't route around the gate with another command.\nEither of these works:\n- Reply \"push the branch delete\", and I'll run it.\n- Run it yourself: `! git push origin --delete feat/reference-components`",
-    "may": ["push"],
-    "missed": true
+    "may": ["push"]
   },
   {
     "prompt": "Ok, lets merge",
@@ -1242,8 +1232,7 @@
   {
     "prompt": "Ok, lets ship the react aria update",
     "offer": "| Docs tests, locally | 293 unit and 18 e2e passed |\nThe new Chromium 156 and the release's breaking changes, including the `screen` forwarding in device presets, didn't affect anything.\nSince 1.64 passes, it can go in now as its own PR or follow this one:\n- **Ship React Aria alone:** say `ship it`. Playwright then waits for Renovate's monthly group or a separate PR.\n- **Also do Playwright now:** a separate small branch that bumps `playwright` and `@playwright/test` to `^1.64.0`. It doesn't depend on the React Aria change.\nI'd ship React Aria now and do Playwright as its own PR right after, so each one reverts on its own.",
-    "may": ["pr", "push"],
-    "missed": true
+    "may": ["pr", "push"]
   },
   {
     "prompt": "Lets just leave it and we can merge PR 47",
@@ -1276,8 +1265,7 @@
   {
     "prompt": "Ok, lets reply and resolve them",
     "offer": "Reply to and resolve the six review threads on #95?",
-    "may": ["comment"],
-    "missed": true
+    "may": ["comment"]
   },
   {
     "prompt": "Ok, lets merge them",

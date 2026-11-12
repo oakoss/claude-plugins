@@ -269,7 +269,7 @@ async function prUpdateFor(
 }
 
 // The gate does not ask: the agent asks in its reply, so the user can answer
-// with anything at all. Their next message grants through the consent grammar.
+// with anything at all. Their next message grants through the consent reader.
 // `always` is why this push asks whatever the setting, when it does.
 function pushRefusal(
   consent: PushConsent,

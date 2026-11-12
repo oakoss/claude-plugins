@@ -104,12 +104,11 @@ describe('fix-ci: the round cap', () => {
   });
 });
 
-// review-cycle's consent spec pins that a yes to this exact question grants the
-// push; a reworded question can stop granting it.
+// review-cycle's gate reads a yes only to a question its offer tool writes.
 describe('fix-ci: the push question', () => {
-  test('asks the question review-cycle reads as a push request', () => {
+  test("asks the offer tool's push question", () => {
     expect(skillText('pr-kit', 'fix-ci')).toContain(
-      'end your answer with this question, word for word and unquoted: Should I commit and push the fixes?',
+      "get the question from review-cycle's `mcp__review-cycle__offer` tool (step `push`, with the branch) and end your answer with it, word for word, on a line of its own after a blank line",
     );
   });
   test('a job that may push does not stop to ask', () => {

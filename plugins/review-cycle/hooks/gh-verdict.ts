@@ -138,7 +138,7 @@ function heldWhy(held: HoldReason): string {
   const step = STEP_NAME[held.step];
   return held.how === 'mentioned'
     ? `their message mentioned ${step} without asking for one`
-    : `they put off ${step} the agent offered`;
+    : `they put off ${step}`;
 }
 
 // Why a reply granted nothing, when the refused step is one its offer named;
@@ -492,7 +492,7 @@ async function coveredAsks(
   return u === null ? { unchecked: t.asks } : { unnamed: u };
 }
 
-// Each example is one the consent grammar grants on a yes (consent.spec.ts).
+// Each example is one the consent reader grants on a yes (offers.spec.ts).
 const GH_ASK: Record<'merge' | 'approve' | 'release' | 'comment' | 'push', string> = {
   merge: '"Merge #116?"',
   approve: '"Approve #116?"',
@@ -539,13 +539,13 @@ const REPLY_TOOL =
 const RESOLVE_TOOL =
   "When the user's prUpdates setting is `push, reply and resolve`, review-cycle's mcp__review-cycle__reply tool resolves a thread a bot opened, with the reply that names its fix commit, without asking; otherwise ask.";
 
-// A yes reads as consent only to the question the grammar knows, so a fuller
+// A yes reads as consent only to the question the offer tool writes, so a fuller
 // one ("Reply to and resolve the four review threads on #109?") grants nothing.
 function askComment(shown: string): string {
   return `stop and end your reply with the question mcp__review-cycle__offer gives for step comment and the pull request, word for word and alone in its last paragraph, such as "Reply to the review on #116?", then end your turn; their answer decides. Put what the replies say above it, not in the question: a question that names the threads, how many, or resolving them is not read as asked. The command: ${shown}`;
 }
 
-// Commits and approvals are not consent the grammar misses.
+// Commits and approvals are not kept as misses.
 export type MissStep = 'push' | 'pr' | 'merge' | 'release' | 'comment';
 
 // `notes` tell the agent what ran unchecked.

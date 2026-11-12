@@ -3,17 +3,13 @@
 
 import {
   combine,
-  dropsGrant,
-  endsReady,
-  grantOf,
-  holdOf,
   joinPointed,
   pointedBy,
-  unreadOffer,
   type Grant,
   type Pointed,
   type UnreadOffer,
 } from './consent';
+import { dropsGrant, endsReady, grantOf, holdOf, unreadOffer } from './exact';
 import type { Hold } from './hold';
 
 export type MessageReading = Readonly<{

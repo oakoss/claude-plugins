@@ -18,23 +18,18 @@ import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
 import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
 import { committingAlias, readCommand, shownCommand, type Classification } from './command';
 import {
-  closingOf,
   covers,
-  grantOf,
   liftsHold,
-  mandateAfter,
   NAMED_ELSEWHERE,
   NO_GRANT,
   NOTHING_POINTED,
-  isReply,
-  stepsNamed,
   UNGRANTED,
   type Grant,
-  type Mandate,
 } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { cycleOf, isSummary, readCycles, recordCycle, rollupOf } from './cycles';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
+import { closingOf, grantOf, isReply, mandateAfter, stepsNamed, type Mandate } from './exact';
 import {
   askThem,
   ASKED_FOR,
@@ -258,7 +253,7 @@ type GateState = {
   // The user's latest message, the answer it replied to, and where it came from.
   said: { text: string; before: string; origin: PromptOrigin['kind'] | null };
   // Refusals of a step the user's message or the offer it answered named:
-  // candidate consent-grammar misses, kept in this session only.
+  // candidate consent misses, kept in this session only.
   misses: Miss[];
   // The user's shell aliases, which the Bash tool expands.
   shellAliases: Map<string, string>;
@@ -812,7 +807,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'misses',
       description:
-        "The gate's refusals of a push, pull request, merge or release that the user's latest message, or the offer it answered, named: candidate rows for the consent grammar's spec. Each has the message, the offer (the answer's last lines, when the message replied to it), the steps named and the refusal. `misses` is this session's; `recorded` the newest 20 from every session and repository, each with its date and repository, and `counts` covers the 200 kept. Read-only; nothing leaves the machine.",
+        "The gate's refusals of a push, pull request, merge or release that the user's latest message, or the offer it answered, named: candidate rows for the consent corpus. Each has the message, the offer (the answer's last lines, when the message replied to it), the steps named and the refusal. `misses` is this session's; `recorded` the newest 20 from every session and repository, each with its date and repository, and `counts` covers the 200 kept. Read-only; nothing leaves the machine.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -822,7 +817,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'offer',
       description:
-        "Returns the one question to ask for a held step you are about to offer the user, or that the gate refused (a commit, finishing a rebase, merge, cherry-pick or revert, a push, force-push, remote branch delete, pull request, merge, stack merge or push, release, approval, or a reply to a pull request's review, resolving its threads included). End your answer with it, word for word, on a line of its own, with nothing after it: review-cycle's consent grammar reads a yes to that question exactly. Reword it and a yes may be held.",
+        "Returns the one question to ask for a held step you are about to offer the user, or that the gate refused (a commit, finishing a rebase, merge, cherry-pick or revert, a push, force-push, remote branch delete, pull request, merge, stack merge or push, release, approval, or a reply to a pull request's review, resolving its threads included). End your answer with it, word for word, on a line of its own, with nothing after it: the gate reads a yes to that question exactly, and to no other. Reword it and a yes may be held.",
       inputSchema: {
         type: 'object',
         properties: {

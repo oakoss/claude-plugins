@@ -1,15 +1,16 @@
 // The corpus the user labeled: each message, the offer it answered, and the
-// steps it may grant ([] for none). `missed` marks a case the grammar does not
-// grant yet, so a change that starts granting one updates the corpus with it.
+// steps it may grant ([] for none). Most rows are phrasings the reader takes no
+// request from; the corpus holds it to granting nothing a row does not allow.
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, type Grant } from './consent';
+import type { Grant } from './consent';
 import corpus from './consent.corpus.json' with { type: 'json' };
+import { grantOf } from './exact';
 
-type Case = { prompt: string; offer?: string; may: string[]; missed?: boolean };
+type Case = { prompt: string; offer?: string; may: string[] };
 
 const STEPS = new Set(['push', 'pr', 'merge', 'approve', 'release', 'comment', 'finish']);
-const KEYS = new Set(['prompt', 'offer', 'may', 'missed']);
+const KEYS = new Set(['prompt', 'offer', 'may']);
 
 function steps(g: Grant): string[] {
   return [
@@ -34,13 +35,9 @@ describe('the labeled corpus', () => {
   test.each(named)('%s: is well formed', (_name, c) => {
     expect(Object.keys(c).filter((k) => !KEYS.has(k))).toEqual([]);
     expect(c.may.filter((s) => !STEPS.has(s))).toEqual([]);
-    if (c.missed !== undefined) expect([c.missed, c.may.length > 0]).toEqual([true, true]);
   });
 
-  // The gate runs what a held message grants, so a hold changes neither check.
   test.each(named)('%s', (_name, c) => {
-    const got = steps(grantOf(c.prompt, c.offer));
-    expect(got.filter((s) => !c.may.includes(s))).toEqual([]);
-    if (c.may.length > 0) expect(got.some((s) => c.may.includes(s))).toBe(c.missed !== true);
+    expect(steps(grantOf(c.prompt, c.offer)).filter((s) => !c.may.includes(s))).toEqual([]);
   });
 });
