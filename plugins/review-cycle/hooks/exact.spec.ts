@@ -184,6 +184,7 @@ const SAMPLES: Record<OfferStep, readonly [object, Partial<Grant>][]> = {
       { pulls: ['o/r#53'], method: 'rebase' },
       { merge: true, mergeNamed: ['o/r#53'] },
     ],
+    [{ pulls: ['Oakoss/Linesmith#53'] }, { merge: true, mergeNamed: ['oakoss/linesmith#53'] }],
   ],
   release: [
     [{ pulls: ['343'] }, { release: true }],
@@ -251,6 +252,7 @@ describe("a yes to the offer tool's question", () => {
       why: expect.stringContaining('"Want me to push and open the PR?"') as string,
       steps: ['push', 'pr'],
     });
+    expect(grantOf('yes', 'Merge Linesmith#53?')).toEqual(NO_GRANT);
     expect(unreadOffer('yes', 'Tests pass.')).toBeNull();
     // A step the answer only reported is not one it offered.
     expect(unreadOffer('yes', 'Pushed. Opened #12.\nWant me to fix the lint?')).toBeNull();

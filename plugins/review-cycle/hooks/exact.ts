@@ -256,7 +256,9 @@ function granting(all: readonly Part[]): Grant {
   return grant;
 }
 
-const PULL = String.raw`(?:${REPO}#${NUM}|#${NUM})`;
+// As offers.ts writes one: owner and name, matched by case.
+const OFFERED_REPO = String.raw`[A-Za-z\d][\w.-]*\/[A-Za-z\d][\w.-]*`;
+const PULL = String.raw`(?:${OFFERED_REPO}#${NUM}|#${NUM})`;
 const PULLS = String.raw`${PULL}(?:(?:, | and )${PULL})*`;
 const TICKED = '`[^`\\s]+`';
 const PUSHED = String.raw`\`(${BRANCH})\` to ${TICKED}`;
