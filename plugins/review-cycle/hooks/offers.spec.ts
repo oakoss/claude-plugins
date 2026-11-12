@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { grantOf, NO_GRANT } from './consent';
+import { NO_GRANT } from './consent';
+import { grantOf } from './exact';
 import { offerQuestion } from './offers';
 
 const question = (input: object): string => {
@@ -118,7 +119,7 @@ describe('an offer with no question', () => {
     [{ step: 'commit' }],
     [{ step: 'finish', branch: 'fix/x' }],
     [{ step: 'finish', branch: 'fix/x', operation: 'squash' }],
-    // The grammar reads neither as a named repository, so a yes would name #5 here.
+    // The reader takes neither as a named repository, so a yes would name #5 here.
     [{ step: 'merge', pulls: ['o/.github#5'] }],
     [{ step: 'merge', pulls: ['o/-r#5'] }],
     [{ step: 'delete' }],

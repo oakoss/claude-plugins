@@ -1,6 +1,6 @@
 // The gate's consent misses, kept across sessions and repositories so their
-// rate shows whether the grammar needs work. One
-// list per user: the plugin's store is one file, and the grammar is one for
+// rate shows which requests fall outside what the reader reads. One
+// list per user: the plugin's store is one file, and the reader is one for
 // every repository. Pure; register.ts binds the store.
 
 import { HOLD_STEPS, type HoldStep } from './hold';

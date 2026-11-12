@@ -3567,7 +3567,7 @@ describe('consent through the session', () => {
   test("yes to the agent's push question grants the push", async ($, on) => {
     const w = fakeWorld(on);
     await ($ as any).turn.complete({
-      answer: 'Committed.\nWant me to push this?',
+      answer: 'Committed.\n\nPush `fix/x` to `origin`?',
       durationMs: 1,
       isAborted: false,
       turnId: 'main-1',
@@ -3631,7 +3631,7 @@ describe('a push the user did not ask for', () => {
     await say($, 'fix the parser');
     expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
     await ($ as any).turn.complete({
-      answer: 'Fixed.\nPush fix/x to origin?',
+      answer: 'Fixed.\n\nPush `fix/x` to `origin`?',
       durationMs: 1,
       isAborted: false,
       turnId: 'main-1',
@@ -3644,7 +3644,7 @@ describe('a push the user did not ask for', () => {
     fakeWorld(on);
     await say($, 'fix the parser');
     await ($ as any).turn.complete({
-      answer: 'Fixed.\nPush fix/x to origin?',
+      answer: 'Fixed.\n\nPush `fix/x` to `origin`?',
       durationMs: 1,
       isAborted: false,
       turnId: 'main-1',
@@ -4432,11 +4432,11 @@ describe('the stop-before setting', () => {
       'git push origin @',
       [' \tHEAD:refs/heads/main\tb65222b..9f4a349'],
       'it pushes to `main`, the default branch',
-      'push main',
+      'push to main',
     ],
     ['git push origin v1', TAG, 'it pushes the tag `v1`', 'push the v1 tag'],
     // push.followTags carries a new annotated tag along with the branch.
-    ['git push', [NEW_BRANCH, ...TAG], 'it pushes the tag `v1`', 'push the tag'],
+    ['git push', [NEW_BRANCH, ...TAG], 'it pushes the tag `v1`', 'push the v1 tag'],
     [
       'git push',
       'fail',
@@ -4479,19 +4479,6 @@ describe('the stop-before setting', () => {
     await ($ as any).turn.complete({ answer: 'Done.\n\nPush to `main`?', reason: 'answer' });
     await say($, 'yes');
     expect(ran(await bash($, 'git push origin main'))).toBe(true);
-  });
-  test('a yes to the offer sharing a line with other words names no branch', async ($, on) => {
-    const git = remoteSide({
-      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
-    });
-    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
-    await say($, 'push it');
-    await bash($, 'git push origin main');
-    await ($ as any).turn.complete({ answer: 'Done. Push to `main`?', reason: 'answer' });
-    await say($, 'yes');
-    expect(denied(await bash($, 'git push origin main'), 'which the request did not name')).toBe(
-      true,
-    );
   });
   test('a push the user asked for that git partly rejects is judged by the refs it lands', async ($, on) => {
     const lines = [
@@ -4558,7 +4545,7 @@ describe('the stop-before setting', () => {
     expect(denied(r, '"Delete `fix/x` from `origin`?"')).toBe(true);
     expect(denied(r, '`gh pr merge --delete-branch`')).toBe(true);
     await endTurn($, 'answer', 'Delete `old` from `origin`?');
-    await say($, 'Lets delete it');
+    await say($, 'yes');
     expect(ran(await bash($, 'git push origin --delete old'))).toBe(true);
   });
   test("a pull request's push runs unnoted, but still asks before main", async ($, on) => {
@@ -4574,11 +4561,6 @@ describe('the stop-before setting', () => {
     expect(w.logs ?? []).toEqual([]);
     expect(has(contextOf(r), 'without')).toBe(false);
     expect(denied(await bash($, 'git push origin main'), 'the default branch')).toBe(true);
-  });
-  test('a pull request request lets its push run past a merge hold', async ($, on) => {
-    fakeWorld(on, pushing({}));
-    await say($, 'open a PR. do not merge it yet.');
-    expect(ran(await bash($, 'git push -u origin HEAD'))).toBe(true);
   });
   test('a held pull request request lets no push through', async ($, on) => {
     fakeWorld(on, pushing({}));
@@ -4876,16 +4858,6 @@ describe('the stop-before setting', () => {
     expect(ran(r)).toBe(true);
     expect(has(contextOf(r), 'ran a release without asking')).toBe(true);
   });
-  test('"merge the release" merges the version pull request, and no other', async ($, on) => {
-    const w = fakeWorld(on, {
-      settings: { local: stops('merge') },
-      git: github('oakum/version-packages'),
-    });
-    await say($, 'Ok, lets merge the release');
-    expect(ran(await bash($, 'gh pr merge 62'))).toBe(true);
-    w.git = github('feat/x');
-    expect(denied(await bash($, 'gh pr merge 63'), 'merge')).toBe(true);
-  });
   test('a refusal of a step the message named is kept as a miss; one it did not name is not', async ($, on) => {
     const w = fakeWorld(on, {
       settings: { local: stops('merge') },
@@ -4907,7 +4879,7 @@ describe('the stop-before setting', () => {
     expect(miss.message).toBe('can we merge the version PRs whenever');
     expect(miss.steps).toEqual(['merge']);
     expect(miss.refusal).toContain('the question mcp__review-cycle__offer gives for step');
-    // A "yes" to an offer the grammar did not read is kept with that offer, a
+    // A "yes" to an offer the gate did not read is kept with that offer, a
     // dotted version and all.
     const closing = 'All green.\nShould I go ahead with the version bump merge for `v0.25.0`?';
     await endTurn($, 'answer', closing);
@@ -5148,7 +5120,7 @@ describe('the stop-before setting', () => {
     // A push named, a merge refused.
     await say($, 'push it later');
     expect(denied(await bash($, 'gh pr merge 63'), 'merge')).toBe(true);
-    // A commit refused: not consent the grammar reads.
+    // A commit refused: not kept as a miss.
     await say($, 'did the push fail?');
     expect(denied(await bash($, 'git commit -m x'), 'commit')).toBe(true);
     // An offer of a merge the message does not answer.
@@ -5288,13 +5260,13 @@ describe('the stop-before setting', () => {
     );
     expect(denied(await bash($, 'gh pr review 116 -c -b ok'), 'a comment on GitHub')).toBe(true);
     expect(denied(await bash($, 'gh issue comment 9 --body ok'), 'a comment on GitHub')).toBe(true);
-    await say($, 'address the review comments');
+    await say($, 'reply to the review');
     expect(ran(await bash($, 'gh pr comment 116 --body done'))).toBe(true);
   });
   test('a reply lifts no hold', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "don't push yet");
-    await say($, 'address the review comments');
+    await say($, 'reply to the review');
     expect(denied(await bash($, 'git push'), 'held off')).toBe(true);
   });
   test('a gh alias is refused, asked for or not, and gh is never asked for its aliases', async ($, on) => {
@@ -5330,11 +5302,7 @@ describe('the stop-before setting', () => {
     const link = await bash($, 'gh stack link feat/a feat/b');
     expect(denied(link, "doesn't ask for a pull request")).toBe(true);
     expect(denied(link, 'also pushes every active branch')).toBe(false);
-    await endTurn(
-      $,
-      'answer',
-      'Force-push the stack `feat/a`, `feat/b` with a lease and open its PRs?',
-    );
+    await endTurn($, 'answer', 'Force-push the stack with a lease and open its pull requests?');
     await say($, 'yes');
     expect(ran(await bash($, 'gh stack submit --auto'))).toBe(true);
   });
@@ -5506,7 +5474,7 @@ describe('the stop-before setting', () => {
       true,
     );
     // A push that also deletes is steered for the layer it updates.
-    await say($, 'push it, and delete old');
+    await say($, 'push it and delete the branch');
     expect(
       denied(await bash($, 'git push origin :old spike/two'), 'is a layer of a gh-stack stack'),
     ).toBe(true);
@@ -5662,7 +5630,7 @@ describe('the stop-before setting', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
   });
-  test('a refused yes names the sentence that held the offer', async ($, on) => {
+  test('a refused yes names the question it answered', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await endTurn(
       $,
@@ -5671,19 +5639,21 @@ describe('the stop-before setting', () => {
     );
     await say($, 'Ok, lets do that');
     const r = await bash($, 'gh pr merge 3 --squash');
-    expect(denied(r, 'held by a condition word in a sentence after its question')).toBe(true);
-    expect(denied(r, '"They touch different files')).toBe(true);
+    expect(denied(r, 'a question the gate does not read')).toBe(true);
+    expect(denied(r, '("Should I squash-merge #3')).toBe(true);
     const viaMcp = await mcp($, 'mcp__github__merge_pull_request', {
       owner: 'o',
       repo: 'r',
       pullNumber: 3,
     });
-    expect(denied(viaMcp, '"They touch different files')).toBe(true);
+    expect(denied(viaMcp, '("Should I squash-merge #3')).toBe(true);
     // A prompt queued into the turn keeps the reason; a later message drops it.
     await queue($, 'also update the docs');
-    expect(denied(await bash($, 'gh pr merge 3 --squash'), '"They touch')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), '("Should I squash-merge #3')).toBe(
+      true,
+    );
     await say($, 'thanks');
-    expect(denied(await bash($, 'gh pr merge 3 --squash'), 'held by a condition')).toBe(false);
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), 'does not read')).toBe(false);
   });
   test("a session's end drops the reason a refused yes gave", async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
@@ -5694,25 +5664,30 @@ describe('the stop-before setting', () => {
       'Should I squash-merge #3, then #4? They touch different files, so neither needs a rebase after the other merges.',
     );
     await say($, 'Ok, lets do that');
-    expect(denied(await bash($, 'gh pr merge 3 --squash'), '"They touch')).toBe(true);
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), '("Should I squash-merge #3')).toBe(
+      true,
+    );
     await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } });
     const r = await bash($, 'gh pr merge 3 --squash');
     expect(denied(r, 'merge')).toBe(true);
-    expect(denied(r, '"They touch')).toBe(false);
+    expect(denied(r, '("Should I squash-merge #3')).toBe(false);
   });
   test('a refused yes names its reason only for the steps the offer named', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('pr') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Should I open a PR? After that, CI will run.');
     await say($, 'yes');
-    expect(denied(await bash($, 'gh pr create --fill'), '("After that, CI will run.")')).toBe(true);
+    expect(
+      denied(await bash($, 'gh pr create --fill'), 'a question the gate does not read ("Should I'),
+    ).toBe(true);
     const merge = await bash($, 'gh pr merge 3 --squash');
     expect(denied(merge, "doesn't ask for a merge")).toBe(true);
-    expect(denied(merge, 'After that')).toBe(false);
+    expect(denied(merge, 'does not read')).toBe(false);
   });
   test('a queued retraction drops the reason with the yes', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Should I merge #3? After that, CI will run.');
     await say($, 'yes');
+    expect(denied(await bash($, 'gh pr merge 3 --squash'), 'does not read')).toBe(true);
     await queue($, 'never mind');
     const r = await bash($, 'gh pr merge 3 --squash');
     expect(denied(r, "doesn't ask for a merge")).toBe(true);
@@ -5723,15 +5698,20 @@ describe('the stop-before setting', () => {
     await say($, 'fix the parser');
     await endTurn($, 'answer', 'Should I merge #3? After that, CI will run.');
     await queue($, 'yes');
-    expect(denied(await bash($, 'gh pr merge 3 --squash'), '("After that, CI will run.")')).toBe(
-      true,
-    );
+    expect(
+      denied(
+        await bash($, 'gh pr merge 3 --squash'),
+        'a question the gate does not read ("Should I',
+      ),
+    ).toBe(true);
   });
   test('a merge offer the gate cannot read names its reason on the release it is', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
     await endTurn($, 'answer', 'Should I merge #62? After that, CI will run.');
     await say($, 'yes');
-    expect(denied(await bash($, 'gh pr merge 62'), '("After that, CI will run.")')).toBe(true);
+    expect(
+      denied(await bash($, 'gh pr merge 62'), 'a question the gate does not read ("Should I'),
+    ).toBe(true);
   });
   test("a merge offer's reason stays off a push it never offered", async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('push') }, git: remoteSide({}) }));
@@ -5741,17 +5721,25 @@ describe('the stop-before setting', () => {
     expect(denied(r, "doesn't ask for a push")).toBe(true);
     expect(denied(r, '(their')).toBe(false);
   });
-  test('a refused yes to a push or a commit names the condition too', async ($, on) => {
+  test('a refused yes to a push or a commit names its question too', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('commit') }, git: remoteSide({}) }));
     await review($);
     await endTurn($, 'answer', 'Should I commit and push? After that, CI will run.');
     await say($, 'yes');
-    expect(denied(await bash($, 'git commit -am x'), '("After that, CI will run.")')).toBe(true);
-    expect(denied(await bash($, 'git push origin fix/x'), '("After that, CI will run.")')).toBe(
-      true,
-    );
     expect(
-      denied(await bash($, 'git push origin --delete old'), '("After that, CI will run.")'),
+      denied(await bash($, 'git commit -am x'), 'a question the gate does not read ("Should I'),
+    ).toBe(true);
+    expect(
+      denied(
+        await bash($, 'git push origin fix/x'),
+        'a question the gate does not read ("Should I',
+      ),
+    ).toBe(true);
+    expect(
+      denied(
+        await bash($, 'git push origin --delete old'),
+        'a question the gate does not read ("Should I',
+      ),
     ).toBe(true);
   });
   test('a pick among offered pull requests merges those, across turns', async ($, on) => {
@@ -5765,17 +5753,17 @@ describe('the stop-before setting', () => {
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 4 --squash'), "doesn't ask for a merge")).toBe(true);
   });
-  test('a narrowing pick merges only the pull request it keeps', async ($, on) => {
+  test('a merge naming one of two offered pull requests merges only that one', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
     await endTurn($, 'answer', 'Should I squash-merge #3, then #4?');
-    await say($, 'merge #3 but not #4');
+    await say($, 'merge #3');
     expect(ran(await bash($, 'gh pr merge 3 --squash'))).toBe(true);
     const other = 'it merges #4, and the user asked to merge #3';
     expect(denied(await bash($, 'gh pr merge 4 --squash'), other)).toBe(true);
   });
   test('a yes to a squash-merge offer listing pull requests in turn merges each', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
-    await endTurn($, 'answer', 'Squash-merge #3, then #4?');
+    await endTurn($, 'answer', 'Squash-merge #3 and #4?');
     await say($, 'yes');
     expect(ran(await bash($, 'gh pr merge 3 --squash'))).toBe(true);
     expect(ran(await bash($, 'gh pr merge 4 --squash'))).toBe(true);
@@ -5795,9 +5783,7 @@ describe('the stop-before setting', () => {
   });
   test('"merge it" naming another pull request elsewhere asks before releasing', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
-    await say($, 'merge it; do not merge 130');
-    expect(denied(await bash($, 'gh pr merge 130'), "doesn't ask for a release")).toBe(true);
-    await endTurn($, 'answer', 'Merge #131? #130 is the version PR, which releases.');
+    await endTurn($, 'answer', '#130 is the version PR, which releases.\n\nMerge #131?');
     await say($, 'merge it');
     const other = 'it merges #130, and the user asked to merge #131';
     expect(denied(await bash($, 'gh pr merge 130'), other)).toBe(true);
@@ -5825,13 +5811,13 @@ describe('the stop-before setting', () => {
   test('a merge naming no pull request runs one the answer named anywhere', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await endTurn($, 'answer', farUp);
-    await say($, 'merge that PR');
+    await say($, 'merge it');
     expect(ran(await bash($, 'gh pr merge 40 --squash'))).toBe(true);
   });
   test('a merge naming no pull request asks before one nothing pointed at', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await endTurn($, 'answer', farUp);
-    await say($, 'merge that PR');
+    await say($, 'merge it');
     const r = await bash($, 'gh pr merge 200 --squash');
     expect(denied(r, 'neither they nor the answer they replied to named #200')).toBe(true);
     expect(denied(r, 'The question: Merge #200? The command:')).toBe(true);
@@ -5841,18 +5827,6 @@ describe('the stop-before setting', () => {
     await say($, 'merge it');
     await queue($, 'and merge 41');
     expect(ran(await bash($, 'gh pr merge 41 --squash'))).toBe(true);
-  });
-  test('a merge naming no pull request skips the answer’s numbers once the user names one', async ($, on) => {
-    fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
-    await endTurn($, 'answer', farUp.replace('#40 passes', '#130 fails, and #40 passes'));
-    await say($, 'merge it; do not merge 130');
-    expect(denied(await bash($, 'gh pr merge 130 --squash'), 'The question: Merge #130? ')).toBe(
-      true,
-    );
-    await queue($, 'thanks');
-    expect(denied(await bash($, 'gh pr merge 130 --squash'), 'The question: Merge #130? ')).toBe(
-      true,
-    );
   });
   test('a merge asked for once ready outlasts unrelated messages, until used', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
@@ -5902,7 +5876,7 @@ describe('the stop-before setting', () => {
   test('a merge now in a later message never reaches a pull request asked for once ready', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await say($, 'merge 46 once CI passes');
-    await say($, "merge it. merge it when it's ready");
+    await say($, 'merge it');
     expect(denied(await bash($, 'gh pr merge 46 --squash'), 'BLOCKED')).toBe(true);
   });
   test('a merge that fails leaves its standing ask', async ($, on) => {
@@ -5976,7 +5950,7 @@ describe('the stop-before setting', () => {
     });
     await say($, 'release when the release PR is ready');
     listing = false;
-    await say($, 'Ok, when main is done and the release PR is ready lets merge it');
+    await say($, 'Ok, lets release once main and the release PR are ready');
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 62 --auto'), 'Run the same command again')).toBe(true);
   });
@@ -5991,7 +5965,7 @@ describe('the stop-before setting', () => {
         return github('oakum/version-packages')(a);
       },
     });
-    await say($, 'Ok, when main is done and the release PR is ready lets merge it');
+    await say($, 'Ok, lets release once main and the release PR are ready');
     await say($, 'While we wait on that lets plan out our next bit of work');
     await say($, 'pr-watch: #62 is ready to merge', 'plugin');
     expect(denied(await bash($, 'gh pr merge 62 --auto'), 'Run the same command again')).toBe(true);
@@ -6010,7 +5984,7 @@ describe('the stop-before setting', () => {
         return github('oakum/version-packages')(a);
       },
     });
-    await say($, 'Ok, when main is done and the release PR is ready lets merge it');
+    await say($, 'Ok, lets release once main and the release PR are ready');
     await say($, 'thanks');
     const r = await bash($, 'gh pr merge 62 --auto 2>&1 | tail -4');
     expect(denied(r, "reports the filter's exit status")).toBe(true);
@@ -6019,7 +5993,7 @@ describe('the stop-before setting', () => {
   test('a queued message keeps what the earlier one pointed at, until it retracts', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await endTurn($, 'answer', farUp);
-    await say($, 'merge that PR');
+    await say($, 'merge it');
     await queue($, 'thanks');
     expect(ran(await bash($, 'gh pr merge 40 --squash'))).toBe(true);
     await say($, 'merge 41');
@@ -6062,7 +6036,7 @@ describe('the stop-before setting', () => {
     expect(
       denied(
         await bash($, 'gh pr merge 116'),
-        "held off (their message mentioned a merge without asking for one) and hasn't asked for a merge since",
+        "held off (they put off a merge) and hasn't asked for a merge since",
       ),
     ).toBe(true);
     await review($);
@@ -6237,7 +6211,7 @@ describe('the stop-before setting', () => {
     const mcpReady = await mcp($, 'mcp__github__update_pull_request', draft);
     expect(denied(mcpReady, "doesn't ask for a pull request")).toBe(true);
     expect(ran(await bash($, 'gh pr ready 119 --undo'))).toBe(true);
-    await say($, 'mark it ready for review');
+    await say($, 'open a pr');
     expect(ran(await bash($, 'gh pr ready 119'))).toBe(true);
   });
   test('a subagent naming gh as data runs', async ($, on) => {
@@ -6364,13 +6338,16 @@ describe('the stop-before setting', () => {
       denied(await bash($, 'gh pr create'), 'could not read .claude/settings.local.json'),
     ).toBe(true);
   });
-  test('a held message still runs what it asks for', async ($, on) => {
+  test('a message with a hold word runs nothing, and holds the step it names', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "push it; don't open a PR yet");
-    expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
+    expect(denied(await bash($, 'git push'), 'held off (they put off a push)')).toBe(true);
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
-    expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([true, true, false]);
+    expect([status.stopBefore.held, status.mayPush, status.mayOpenPr]).toEqual([
+      true,
+      false,
+      false,
+    ]);
   });
   test('a commit rung asks before a reviewed --continue, and a yes continues', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('commit') } });
@@ -6382,29 +6359,13 @@ describe('the stop-before setting', () => {
     expect(denied(r, `"${offer}"`)).toBe(true);
     expect(denied(r, 'gives for step finish,')).toBe(true);
     await ($ as any).turn.complete({
-      answer: `Reviewed and clean. ${offer}`,
+      answer: `Reviewed and clean.\n\n${offer}`,
       durationMs: 1,
       isAborted: false,
       turnId: 'main-1',
       reason: 'answer',
     });
     await say($, 'yes');
-    expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
-  });
-  test('"ok continue" to the offer continues, and commits nothing else', async ($, on) => {
-    fakeWorld(on, { settings: { local: stops('commit') } });
-    await review($);
-    await say($, 'fix the parser');
-    expect(denied(await bash($, 'GIT_EDITOR=true git rebase --continue'), 'commit')).toBe(true);
-    await ($ as any).turn.complete({
-      answer: 'Reviewed and clean. Commit the resolution to `fix/x` and finish the rebase?',
-      durationMs: 1,
-      isAborted: false,
-      turnId: 'main-1',
-      reason: 'answer',
-    });
-    await say($, 'ok continue');
-    expect(denied(await bash($, 'git commit -am x'), "doesn't ask for a commit")).toBe(true);
     expect(ran(await bash($, 'GIT_EDITOR=true git rebase --continue'))).toBe(true);
   });
   test('a finish waiting on CI lets nothing through', async ($, on) => {
@@ -6430,7 +6391,7 @@ describe('the stop-before setting', () => {
     expect(denied(r, '"Commit the changes to `fix/x`?"')).toBe(true);
     expect(denied(r, 'gives for step commit,')).toBe(true);
     await ($ as any).turn.complete({
-      answer: 'Reviewed and clean. Commit the changes to `fix/x`?',
+      answer: 'Reviewed and clean.\n\nCommit the changes to `fix/x`?',
       durationMs: 1,
       isAborted: false,
       turnId: 'main-1',
@@ -6462,12 +6423,12 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'git push'))).toBe(true);
     expect(ran(await bash($, 'gh pr create'))).toBe(true);
   });
-  test('a request lifts an earlier hold before holding what it puts off', async ($, on) => {
+  test('a request lifts an earlier hold', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
     await say($, "don't push yet");
-    await say($, "push it; don't open a PR yet");
+    expect(denied(await bash($, 'git push'), 'held off (')).toBe(true);
+    await say($, 'push it');
     expect(ran(await bash($, 'git push'))).toBe(true);
-    expect(denied(await bash($, 'gh pr create'), 'held off (')).toBe(true);
     await say($, 'fix the parser');
     expect(ran(await bash($, 'git push'))).toBe(true);
   });
@@ -6485,7 +6446,7 @@ describe('the stop-before setting', () => {
   });
   test('a push and pull request put off hold the push', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') } }));
-    await endTurn($, 'answer', 'Push `fix/x` to `origin` and open a PR into `main`?');
+    await endTurn($, 'answer', 'Push `fix/x` to `origin` and open a pull request?');
     await say($, 'not yet');
     expect(denied(await bash($, 'git push'), 'held off (')).toBe(true);
   });

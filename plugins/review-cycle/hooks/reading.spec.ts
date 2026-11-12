@@ -1,17 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import {
-  combine,
-  dropsGrant,
-  endsReady,
-  grantOf,
-  holdOf,
-  NO_GRANT,
-  NOTHING_POINTED,
-  pointedBy,
-  unreadOffer,
-} from './consent';
+import { combine, NO_GRANT, NOTHING_POINTED, pointedBy } from './consent';
 import corpus from './consent.corpus.json' with { type: 'json' };
+import { dropsGrant, endsReady, grantOf, holdOf, unreadOffer } from './exact';
 import { consentJoined, consentOf, ownWords, readMessage, type Consent } from './reading';
 
 const OFFERS = [
@@ -29,7 +20,7 @@ const cases: [string, string][] = (corpus as { prompt: string; offer?: string }[
 );
 
 describe('readMessage', () => {
-  test('reads each field as the grammar does, over the labeled corpus', () => {
+  test('reads each field as the reader does, over the labeled corpus', () => {
     for (const [text, before] of cases) {
       const grant = grantOf(text, before);
       expect(readMessage(text, before), `${text} ‹after› ${before}`).toEqual({

@@ -20,7 +20,7 @@ export const OFFER_STEPS = [
 ] as const;
 export type OfferStep = (typeof OFFER_STEPS)[number];
 
-// As the grammar reads a named repository (consent.ts QUALIFIED): each part
+// As the reader reads a named repository (exact.ts QUALIFIED): each part
 // opens with a letter or digit.
 const PULL = /^(?:[a-z\d][\w.-]*\/[a-z\d][\w.-]*#)?[1-9]\d*$/i;
 const BRANCH = /^(?!-)[\w./-]+$/;
@@ -33,7 +33,7 @@ const METHODS: Record<string, string> = {
   rebase: 'Rebase-merge',
 };
 
-// A pull request as the gate's grammar reads it: #316, or owner/name#53.
+// A pull request as the gate reads it: #316, or owner/name#53.
 const ref = (pull: string): string => (pull.includes('#') ? pull : `#${pull}`);
 function refs(pulls: readonly string[]): string {
   const named = pulls.map((p) => ref(p));
@@ -42,7 +42,7 @@ function refs(pulls: readonly string[]): string {
     : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`;
 }
 
-// Each question is one the grammar reads a yes to exactly (pinned in offers.spec.ts).
+// Each question is one exact.ts QUESTIONS reads a yes to (pinned in offers.spec.ts).
 export function offerQuestion(input: unknown): { question: string } | { error: string } {
   if (typeof input !== 'object' || input === null) return { error: 'expected an object' };
   const o = input as Record<string, unknown>;
@@ -58,7 +58,7 @@ export function offerQuestion(input: unknown): { question: string } | { error: s
   ) {
     return { error: 'pulls must be distinct pull request numbers ("316") or "owner/name#53"' };
   }
-  // The grammar reads a bare number beside a named repository as unplaced.
+  // The reader takes a bare number beside a named repository as unplaced.
   if (new Set(pulls.map((p) => String(p).includes('#'))).size > 1) {
     return { error: 'name every pull request the same way: all "316", or all "owner/name#53"' };
   }
