@@ -174,7 +174,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     w.keptRead = true;
     if (w.kept === 'unreadable') return { deny: 'store unreadable' };
     if (w.kept === undefined) return { value: { version: 0 } };
-    return { value: { value: { shape: 'gate-9', value: w.kept.record }, version: 1 } };
+    return { value: { value: { shape: 'gate-10', value: w.kept.record }, version: 1 } };
   });
   const filesOf = (ref: string) => w.trees.get(ref) ?? w.commits[ref] ?? {};
   on(
@@ -1955,7 +1955,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-9');
+    expect(kept?.shape).toBe('gate-10');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     expect(kept?.value.message).toMatchObject({
@@ -2029,23 +2029,9 @@ describe('a reload of the module', () => {
 
   test('takes back a hold, so a push the user put off still waits', async ($, on) => {
     fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git: remoteSide({}) }));
-    reloadInto(
-      on,
-      keptRecord({ hold: { floor: { step: 'push', how: 'declined' }, declined: true } }),
-    );
+    reloadInto(on, keptRecord({ hold: { floor: { step: 'push', how: 'declined' } } }));
     await startSession($);
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
-  });
-
-  test('takes back a decline under a lower hold, so a later message still pushes nothing', async ($, on) => {
-    fakeWorld(on, pushing({ git: remoteSide({}) }));
-    reloadInto(
-      on,
-      keptRecord({ hold: { floor: { step: 'push', how: 'mentioned' }, declined: true } }),
-    );
-    await startSession($);
-    await say($, 'sounds good');
-    expect(ran(await bash($, 'git push origin fix/x'))).toBe(false);
   });
 
   test('a request inside a pasted block is not the user asking', async ($, on) => {
@@ -2143,7 +2129,7 @@ describe('a reload of the module', () => {
     await sayBeforeRecall(
       $,
       on,
-      { hold: { floor: { step: 'push', how: 'declined' }, declined: true } },
+      { hold: { floor: { step: 'push', how: 'declined' } } },
       'fix the parser',
     );
     expect(denied(await bash($, 'git push origin fix/x'), 'held off (')).toBe(true);
@@ -2261,7 +2247,7 @@ describe('a reload of the module', () => {
 
   for (const [name, fields] of [
     ['a review without its paths', { reviews: [{ type: 'code-reviewer', trees: ['a', 'b'] }] }],
-    ['a hold on no step', { hold: { floor: { step: 'tag', how: 'declined' }, declined: true } }],
+    ['a hold on no step', { hold: { floor: { step: 'tag', how: 'declined' } } }],
     ['a mandate on no epic', { mandate: { epic: '' } }],
     ['a mandate that is not one', { mandate: 'cpl-czgp' }],
     ['a message without its flags', { message: {} }],
@@ -2457,7 +2443,7 @@ describe('a reload of the module', () => {
           messages: 4,
           lastAnswer: 'Push it?',
           misses: [miss],
-          hold: { floor: { step: 'push', how: 'declined' }, declined: true },
+          hold: { floor: { step: 'push', how: 'declined' } },
           mandate: { epic: 'cpl-czgp' },
           roundsFrom: 1,
         }),

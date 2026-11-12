@@ -66,7 +66,6 @@ export type Kept = {
   // `HoldState` in hooks/hold.ts.
   hold: Readonly<{
     floor: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }>;
-    declined: boolean;
   }> | null;
   // The epic a "do epic <id>" message started a job on, until a hold ends it.
   mandate: Readonly<{ epic: string }> | null;

@@ -49,7 +49,7 @@ function source(): KeptSource & { message: { unread: null; said: string } } {
     capped: ['y'],
     scratch: ['/tmp/s'],
     reviewerChanges: ['git add'],
-    hold: { floor: { step: 'push', how: 'mentioned' }, declined: true },
+    hold: { floor: { step: 'push', how: 'mentioned' } },
     mandate: { epic: 'cpl-7ktn' },
     roundsFrom: 1,
     pushed: [['/repo/.git\torigin/main', SHA]],
@@ -148,7 +148,6 @@ describe('isKept', () => {
     ['a dropped review without its text', (k) => delete k.dropped[0].text],
     ['a capped leg that is not a string', (k) => (k.capped = [1])],
     ['a hold of an unknown kind', (k) => (k.hold.floor = { step: 'push', how: 'asked' })],
-    ['a decline that is not a flag', (k) => (k.hold.declined = 'yes')],
     ['a hold without its floor', (k) => delete k.hold.floor],
     ['a hold of an unknown step', (k) => (k.hold.floor = { step: 'deploy', how: 'mentioned' })],
     ['a hold of a prototype name', (k) => (k.hold.floor = { step: 'toString', how: 'mentioned' })],
@@ -222,7 +221,7 @@ describe('isKept', () => {
   test.each(STEPS)('takes a miss and a declined hold of %s', (step) => {
     const k = roundTrip(keptOf(source())) as Record<string, any>;
     k.misses[0].steps = [step];
-    k.hold = { floor: { step, how: 'declined' }, declined: true };
+    k.hold = { floor: { step, how: 'declined' } };
     expect(isKept(k)).toBe(true);
   });
 

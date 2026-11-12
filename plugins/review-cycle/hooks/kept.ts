@@ -106,7 +106,7 @@ function isLeg(entry: unknown): boolean {
 
 function isHold(h: unknown): boolean {
   if (h === null) return true;
-  if (!isRecord(h) || typeof h.declined !== 'boolean' || !isRecord(h.floor)) return false;
+  if (!isRecord(h) || !isRecord(h.floor)) return false;
   const { step, how } = h.floor;
   return isStep(step) && (how === 'mentioned' || how === 'declined');
 }

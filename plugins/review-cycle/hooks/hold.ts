@@ -10,13 +10,7 @@ export const HOLD_STEPS = ['push', 'pr', 'merge', 'approve', 'release', 'comment
 export type HoldStep = (typeof HOLD_STEPS)[number];
 export type HoldReason = Readonly<{ step: HoldStep; how: 'mentioned' | 'declined' }>;
 export type Hold = HoldReason | null;
-// `declined` outlives the floor's own reason: an earlier, lower mention keeps
-// the floor when a later message declines. Read it through `declinedSince`.
-export type HoldState = Readonly<{ floor: HoldReason; declined: boolean }> | null;
-
-export function declinedSince(state: HoldState): boolean {
-  return state !== null && (state.declined || state.floor.how === 'declined');
-}
+export type HoldState = Readonly<{ floor: HoldReason }> | null;
 
 // A reply on GitHub sits above every rung: any hold holds one, and a hold of
 // one holds only another.
@@ -38,8 +32,5 @@ export function lowerHold(a: Hold, b: Hold): Hold {
 export function holdAfter(prev: HoldState, lifts: boolean, hold: Hold): HoldState {
   const before = lifts ? null : prev;
   if (hold === null) return before;
-  return {
-    floor: lowerHold(before?.floor ?? null, hold),
-    declined: declinedSince(before) || hold.how === 'declined',
-  };
+  return { floor: lowerHold(before?.floor ?? null, hold) };
 }
