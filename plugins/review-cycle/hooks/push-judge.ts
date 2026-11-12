@@ -14,7 +14,6 @@ import {
 import { firstLine, type Git } from './git';
 import type { PushSpec } from './git-args';
 import { holds, type Hold } from './hold';
-import type { OfferStep } from './offers';
 import { allows, prUpdateOf, type PrReads, type PrUpdatesInForce } from './pr-updates';
 import {
   askingReason,
@@ -286,21 +285,22 @@ function pushRefusal(
     unmet === null
       ? ''
       : ` The prUpdates setting lets a push to the user's own open pull request run, but not this one: ${unmet.why}.`;
-  const ask = (step: OfferStep, example: string) => askThem(step, example, shown);
+  const ask = (step: 'force-push-bare' | 'force-push' | 'delete' | 'push') =>
+    askThem({ step, branch: 'fix/x' }, shown);
   switch (missing) {
     case 'bare': {
       const leaseToo = covers(granted, 'lease') ? '' : ', which also needs their request';
-      return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for a bare force, so nothing ran.${alone} Use ${LEASE} instead${leaseToo}; if they want a bare --force, ${ask('force-push-bare', '"Force-push `fix/x` to `origin` without a lease?"')}`;
+      return `a bare --force (or a \`+refspec\`) overwrites whatever the remote holds, and the user's latest message doesn't ask for a bare force, so nothing ran.${alone} Use ${LEASE} instead${leaseToo}; if they want a bare --force, ${ask('force-push-bare')}`;
     }
     case 'lease': {
-      return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('force-push', '"Force-push `fix/x` to `origin` with a lease?"')}`;
+      return `the user's latest message doesn't ask for a force push, so nothing ran.${alone} To force-push, ${ask('force-push')}`;
     }
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
       if (always === DELETES) {
-        return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('delete', '"Delete `fix/x` from `origin`?"')}`;
+        return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('delete')}`;
       }
-      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${update}${alone} To push, ${ask('push', '"Push `fix/x` to `origin`?"')}`;
+      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${update}${alone} To push, ${ask('push')}`;
     }
     default: {
       const unhandled: never = missing;

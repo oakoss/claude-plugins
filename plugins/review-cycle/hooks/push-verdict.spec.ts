@@ -136,11 +136,9 @@ describe('what a push the user asked for must name', () => {
     expect(unnamedTarget(refTo(to), MAIN, named, null)?.why ?? null).toBe(why);
   });
   test('the offer it suggests is one whose yes names the target', () => {
-    expect(unnamedTarget(refTo('refs/heads/main'), MAIN, [], null)?.offer).toBe(
-      '"Push to `main`?"',
-    );
+    expect(unnamedTarget(refTo('refs/heads/main'), MAIN, [], null)?.offer).toBe('Push to `main`?');
     expect(unnamedTarget(refTo('refs/tags/v1.2.0'), MAIN, [], null)?.offer).toBe(
-      '"Push the `v1.2.0` tag?"',
+      'Push the `v1.2.0` tag?',
     );
   });
   test('a default branch it cannot read is taken to be main or master', () => {

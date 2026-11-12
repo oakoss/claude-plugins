@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { NAMED_ELSEWHERE, NO_GRANT, type Grant } from './consent';
 import { grantOf } from './exact';
 import {
+  askThem,
   judgeGh,
   NO_STANDING,
   parsePullRequest,
@@ -15,6 +16,7 @@ import {
 import type { GhAction } from './github';
 import type { Hold, HoldStep } from './hold';
 import type { StopBefore } from './ladder';
+import type { Offer } from './offers';
 import type { StackRead } from './stack';
 
 type StackLookup = (n: number) => StackRead | { asks: string; slow?: true };
@@ -514,6 +516,40 @@ describe('a push through GitHub', () => {
         'review-cycle ran the push the user asked for without checking where it goes: gh is not logged in. If it may have reached the default branch or a tag they did not name, tell them.',
       ],
     });
+  });
+});
+
+describe('a refusal that names a step', () => {
+  test.each<Offer>([
+    { step: 'merge', pulls: ['116'] },
+    { step: 'merge-release', pull: '62' },
+    { step: 'approve', pull: '116' },
+    { step: 'release', version: 'v0.25.0' },
+    { step: 'push', branch: 'fix/x' },
+    { step: 'force-push', branch: 'fix/x' },
+    { step: 'force-push-bare', branch: 'fix/x' },
+    { step: 'delete', branch: 'fix/x' },
+    { step: 'commit', branch: 'fix/x' },
+    { step: 'finish', branch: 'fix/x', operation: 'rebase' },
+  ])('$step: names it, with an example a yes grants', (sample) => {
+    const refusal = askThem(sample, 'git x');
+    expect(refusal).toContain(`gives for step ${sample.step}, word for word`);
+    const example = /such as "(.+?)", then end your turn/.exec(refusal)?.[1] ?? '';
+    expect(grantOf('yes', `Done.\n\n${example}`)).not.toEqual(NO_GRANT);
+  });
+
+  test('an approval names the approve step', async () => {
+    const r = await judge([{ kind: 'approve' }], world('commit'));
+    expect(r).toMatchObject({ deny: expect.stringContaining('gives for step approve,') });
+    expect(r).toMatchObject({ deny: expect.stringContaining('such as "Approve #116?"') });
+  });
+
+  test('a merge whose pull request cannot be looked up names the merge step', async () => {
+    const lost = world('never stop', { mergeTarget: { asks: 'looking it up failed (z)' } });
+    const r = await judge([there(5, 'o/r')], lost, grantOf('merge 5'));
+    expect(r).toMatchObject({ deny: expect.stringContaining('looking it up failed (z)') });
+    expect(r).toMatchObject({ deny: expect.stringContaining('gives for step merge,') });
+    expect(r).toMatchObject({ deny: expect.stringContaining('such as "Merge #116?"') });
   });
 });
 
@@ -1269,6 +1305,31 @@ describe('a merge', () => {
         expect(r).toMatchObject({
           deny: expect.stringContaining('`gh pr merge 53 --auto --repo oakoss/linesmith`'),
         });
+      });
+
+      test('a repository `owner/name#n` cannot name is asked for by its URL, and a yes merges it', async () => {
+        const w = () => world('merge', { ...HOME, mergeTarget: pull(5, 'CLEAN', 'org/.github') });
+        const refused = await judge([there(5, 'org/.github')], w(), asked('merge 5'));
+        const question = 'Merge https://github.com/org/.github/pull/5?';
+        expect(refused).toMatchObject({
+          deny: expect.stringContaining(`The question: ${question} The command:`),
+        });
+        const yes = asked('yes', `It is in another repository.\n\n${question}`);
+        expect(await judge([there(5, 'org/.github')], w(), yes)).toEqual({ ran: [] });
+        const other = world('merge', { ...HOME, mergeTarget: pull(5, 'CLEAN', 'org/other') });
+        expect(await judge([there(5, 'org/other')], other, yes)).toHaveProperty('deny');
+      });
+
+      test('on another host than github.com, such a repository gets the command, not a link', async () => {
+        const enterprise = world('merge', {
+          repoUrl: { out: 'https://ghe.example.com/oakoss/claude-plugins' },
+          mergeTarget: { out: 'https://ghe.example.com/org/.github/pull/5 OPEN CLEAN\n' },
+        });
+        const r = await judge([there(5, 'org/.github')], enterprise, asked('merge 5'));
+        expect(r).toMatchObject({
+          deny: expect.stringContaining('give the user the command to run themselves'),
+        });
+        expect(r).not.toMatchObject({ deny: expect.stringContaining('github.com/org/.github') });
       });
 
       test("a name without its owner names only this repository's owner's", async () => {

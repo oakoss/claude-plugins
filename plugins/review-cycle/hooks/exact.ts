@@ -11,6 +11,7 @@ import {
 } from './consent';
 import { FINISHES, type Finishes } from './git-args';
 import { HOLD_STEPS, lowerHold, type Hold, type HoldReason, type HoldStep } from './hold';
+import { namedShort } from './offers';
 
 type Part = Partial<Grant>;
 
@@ -259,7 +260,8 @@ function granting(all: readonly Part[]): Grant {
 
 // As offers.ts writes one: owner and name, matched by case.
 const OFFERED_REPO = String.raw`[A-Za-z\d][\w.-]*\/[A-Za-z\d][\w.-]*`;
-const PULL = String.raw`(?:${OFFERED_REPO}#${NUM}|#${NUM})`;
+const OFFERED_URL = String.raw`https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/${NUM}`;
+const PULL = String.raw`(?:${OFFERED_REPO}#${NUM}|${OFFERED_URL}|#${NUM})`;
 const PULLS = String.raw`${PULL}(?:(?:, | and )${PULL})*`;
 const TICKED = '`[^`\\s]+`';
 const PUSHED = String.raw`\`(${BRANCH})\` to ${TICKED}`;
@@ -317,6 +319,9 @@ export function offered(before: string): Grant | null {
   if ((all.at(-2) ?? '').trim() !== '' || /[:,]$/.test((lines(before).at(-2) ?? '').trim())) {
     return null;
   }
+  // offers.ts writes a URL only for a repository `owner/name#n` cannot name.
+  const urls = last.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\//g);
+  if ([...urls].some((url) => namedShort(url[1] ?? ''))) return null;
   for (const [source, read] of QUESTIONS) {
     const m = new RegExp(source).exec(last);
     if (m !== null) return granting([read(m, before) ?? {}]);
