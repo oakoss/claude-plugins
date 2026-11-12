@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
 import {
-  declinedSince,
   holdAfter,
   holds,
   lowerHold,
@@ -62,14 +61,14 @@ describe('holdAfter', () => {
 
   test.each<[string, readonly Message[], HoldState]>([
     ['nothing held stays so', [[false, null]], null],
-    ['a hold holds', [[false, mentioned('merge')]], { floor: mentioned('merge'), declined: false }],
+    ['a hold holds', [[false, mentioned('merge')]], { floor: mentioned('merge') }],
     [
       'a later, higher hold keeps the earlier floor',
       [
         [false, mentioned('push')],
         [false, mentioned('merge')],
       ],
-      { floor: mentioned('push'), declined: false },
+      { floor: mentioned('push') },
     ],
     [
       'a later, lower hold lowers the floor',
@@ -77,23 +76,23 @@ describe('holdAfter', () => {
         [false, mentioned('merge')],
         [false, declined('push')],
       ],
-      { floor: declined('push'), declined: true },
+      { floor: declined('push') },
     ],
     [
-      'a decline of the same step keeps the earlier mention and is still a decline',
+      'a decline of the same step keeps the earlier mention',
       [
         [false, mentioned('push')],
         [false, declined('push')],
       ],
-      { floor: mentioned('push'), declined: true },
+      { floor: mentioned('push') },
     ],
     [
-      'a decline under a lower mention keeps the mention and is still a decline',
+      'a decline under a lower mention keeps the mention',
       [
         [false, mentioned('push')],
         [false, declined('merge')],
       ],
-      { floor: mentioned('push'), declined: true },
+      { floor: mentioned('push') },
     ],
     [
       'a decline outlasts a later mention',
@@ -101,7 +100,7 @@ describe('holdAfter', () => {
         [false, declined('push')],
         [false, mentioned('merge')],
       ],
-      { floor: declined('push'), declined: true },
+      { floor: declined('push') },
     ],
     [
       'a request lifts the hold, decline included',
@@ -117,7 +116,7 @@ describe('holdAfter', () => {
         [false, mentioned('push')],
         [true, mentioned('pr')],
       ],
-      { floor: mentioned('pr'), declined: false },
+      { floor: mentioned('pr') },
     ],
     [
       'a message that neither asks nor holds keeps the hold',
@@ -125,28 +124,9 @@ describe('holdAfter', () => {
         [false, declined('merge')],
         [false, null],
       ],
-      { floor: declined('merge'), declined: true },
+      { floor: declined('merge') },
     ],
   ])('%s', (_name, messages, expected) => {
     expect(after(messages)).toEqual(expected);
-  });
-
-  test('a declined floor not flagged stays declined under a later, lower hold', () => {
-    const unflagged = { floor: declined('merge'), declined: false };
-    expect(holdAfter(unflagged, false, mentioned('push'))).toEqual({
-      floor: mentioned('push'),
-      declined: true,
-    });
-  });
-});
-
-describe('declinedSince', () => {
-  test.each<[string, HoldState, boolean]>([
-    ['nothing held', null, false],
-    ['a mention alone', { floor: mentioned('push'), declined: false }, false],
-    ['a decline under a mention', { floor: mentioned('push'), declined: true }, true],
-    ['a declined floor, flagged or not', { floor: declined('push'), declined: false }, true],
-  ])('%s', (_name, state, expected) => {
-    expect(declinedSince(state)).toBe(expected);
   });
 });

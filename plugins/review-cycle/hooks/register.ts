@@ -348,7 +348,7 @@ const held = (): Hold => state.hold?.floor ?? null;
 // remembers is copied here after each change and read back at the start, the
 // latest message's grant included, so a reload mid-step does not ask twice.
 // Bump the shape whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-9' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-10' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
