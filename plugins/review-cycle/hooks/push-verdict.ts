@@ -2,6 +2,7 @@
 
 import { covers, type Grant, type PushLevel } from './consent';
 import type { PushSpec } from './git-args';
+import { pushTagQuestion, pushToQuestion } from './offers';
 
 export type Needed = Exclude<PushLevel, 'none'>;
 
@@ -95,7 +96,7 @@ export function unnamedTarget(
       if (namesTag(named, tag)) continue;
       return {
         why: `it pushes the tag \`${tag}\`, which the request did not name`,
-        offer: `"Push the \`${tag}\` tag?"`,
+        offer: pushTagQuestion(tag),
       };
     }
     const branch = to.replace(/^refs\/heads\//, '');
@@ -110,7 +111,7 @@ export function unnamedTarget(
     if (isDefault && !named.includes(branch.toLowerCase())) {
       return {
         why: `it pushes to \`${branch}\`, the default branch, which the request did not name`,
-        offer: `"Push to \`${branch}\`?"`,
+        offer: pushToQuestion(branch),
       };
     }
   }

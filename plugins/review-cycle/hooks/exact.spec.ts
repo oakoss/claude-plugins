@@ -264,6 +264,9 @@ describe("a yes to the offer tool's question", () => {
       steps: ['push', 'pr'],
     });
     expect(grantOf('yes', 'Merge Linesmith#53?')).toEqual(NO_GRANT);
+    // offers.ts writes a URL only where `owner/name#n` cannot name the repository.
+    expect(grantOf('yes', 'Merge https://github.com/o/r/pull/5?')).toEqual(NO_GRANT);
+    expect(grantOf('yes', 'Merge #4 and https://github.com/o/r/pull/5?')).toEqual(NO_GRANT);
     expect(unreadOffer('yes', 'Tests pass.')).toBeNull();
     // A step the answer only reported is not one it offered.
     expect(unreadOffer('yes', 'Pushed. Opened #12.\nWant me to fix the lint?')).toBeNull();

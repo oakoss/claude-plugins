@@ -78,6 +78,17 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
       'Merge and release #62?',
       { merge: true, mergeNamed: ['62'], release: true },
     ],
+    // `owner/name#n` cannot name a repository whose name opens with a dot.
+    [
+      { step: 'merge', pulls: ['o/.github#5'] },
+      'Merge https://github.com/o/.github/pull/5?',
+      { merge: true, mergeNamed: ['o/.github#5'] },
+    ],
+    [
+      { step: 'approve', pulls: ['.o/r#5'] },
+      'Approve https://github.com/.o/r/pull/5?',
+      { approve: true },
+    ],
     [{ step: 'release', version: 'v0.25.0' }, 'Release `v0.25.0`?', { release: true }],
     [
       { step: 'release', version: 'review-cycle@0.27.0' },
@@ -119,9 +130,8 @@ describe('an offer with no question', () => {
     [{ step: 'commit' }],
     [{ step: 'finish', branch: 'fix/x' }],
     [{ step: 'finish', branch: 'fix/x', operation: 'squash' }],
-    // The reader takes neither as a named repository, so a yes would name #5 here.
-    [{ step: 'merge', pulls: ['o/.github#5'] }],
     [{ step: 'merge', pulls: ['o/-r#5'] }],
+    [{ step: 'merge', pulls: ['o/...#5'] }],
     [{ step: 'delete' }],
     [{ step: 'merge-release', pulls: ['1', '2'] }],
     [{ step: 'release', pulls: ['289'], version: 'v1' }],

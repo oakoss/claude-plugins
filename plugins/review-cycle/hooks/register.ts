@@ -2275,8 +2275,8 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
       : '';
   const ask =
     finishes === null
-      ? `To commit, ${askThem('commit', '"Commit the changes to `fix/x`?"', quote(command))}`
-      : `To finish the ${finishes}, which commits the resolution, ${askThem('finish', `"Commit the resolution to \`fix/x\` and finish the ${finishes}?"`, quote(command))}`;
+      ? `To commit, ${askThem({ step: 'commit', branch: 'fix/x' }, quote(command))}`
+      : `To finish the ${finishes}, which commits the resolution, ${askThem({ step: 'finish', branch: 'fix/x', operation: finishes }, quote(command))}`;
   return `${notAsked('commit', ladder, held(), state.message.unread)}${setting}, so nothing ran. ${ask}`;
 }
 

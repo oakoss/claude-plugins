@@ -6,7 +6,7 @@ import { covers, NAMED_ELSEWHERE, NO_GRANT, type Grant, type UnreadOffer } from 
 import type { GhAction, PushRef, Unlookable } from './github';
 import { holds, type Hold, type HoldReason, type HoldStep } from './hold';
 import { asks, type Ladder, type Step } from './ladder';
-import { offerQuestion, type OfferStep } from './offers';
+import { namedShort, phraseOffer, type Offer } from './offers';
 import {
   askingReason,
   pushOutcome,
@@ -94,34 +94,25 @@ export function permitted(granted: Grant, ladder: Ladder, held: Hold): Allowed {
   };
 }
 
-export function askThem(step: OfferStep, example: string, shown: string): string {
-  return `stop and end your reply with the question mcp__review-cycle__offer gives for step ${step}, word for word and alone in its last paragraph, such as ${example}, then end your turn; their answer decides. Without that tool, ask in the example's form, naming the real pull request, branch or version. The command: ${shown}`;
+// Names the step for the agent to fill in; `sample` is that step with stand-in names.
+export function askThem(sample: Offer, shown: string): string {
+  return `stop and end your reply with the question mcp__review-cycle__offer gives for step ${sample.step}, word for word and alone in its last paragraph, such as "${phraseOffer(sample)}", then end your turn; their answer decides. Without that tool, ask in the example's form, naming the real pull request, branch or version. The command: ${shown}`;
 }
 
-// Writes the question out. When the offer tool refuses these names, `example`
-// is the question: the tool would refuse the agent the same way.
-export function askExactly(
-  offer:
-    | { step: 'pr' | 'stack-push' | 'stack-submit' }
-    | { step: 'merge'; pulls: readonly string[] },
-  example: string,
-  shown: string,
-): string {
-  const o = offerQuestion(offer);
-  return offerThem('question' in o ? o.question : example, shown);
-}
-
-// `refOf` is what the offer tool's `pulls` takes; `shownRef` is what its question shows.
-const refOf = (t: Pick<Target, 'number' | 'repo' | 'home'>): string =>
-  t.home ? t.number : `${t.repo}#${t.number}`;
-const shownRef = (t: Pick<Target, 'number' | 'repo' | 'home'>): string =>
-  t.home ? `#${t.number}` : refOf(t);
-
-// consent.ts offeredTargets reads an offer only as the answer's whole last
-// paragraph, so a yes to it names nothing when it shares a line.
-export function offerThem(offer: string, shown: string): string {
-  const question = offer.replace(/^"(.*)"$/, '$1');
+// exact.ts `offered` reads a question only as the answer's whole last
+// paragraph, so a yes to it grants nothing when it shares a line.
+export function offerThem(question: string, shown: string): string {
   return `stop and end your reply with this question alone in its last paragraph, without quotation marks, then end your turn; their answer decides. The question: ${question} The command: ${shown}`;
+}
+
+const askFor = (offer: Offer, shown: string): string => offerThem(phraseOffer(offer), shown);
+// A repository `owner/name#n` cannot name is asked for by its link, which
+// names a pull request on github.com alone.
+function askMerge(t: Pick<Target, 'number' | 'repo' | 'home' | 'github'>, shown: string): string {
+  if (!t.home && !t.github && !namedShort(t.repo)) {
+    return `give the user the command to run themselves: no question can name a pull request in ${t.repo} on this host. The command: ${shown}`;
+  }
+  return askFor({ step: 'merge', pulls: [t.home ? t.number : `${t.repo}#${t.number}`] }, shown);
 }
 
 const STEP_NAME: Record<HoldStep, string> = {
@@ -173,7 +164,7 @@ export function notAsked(
 }
 
 function prRefusal(shown: string, ladder: InForce, held: Hold, unread: UnreadOffer | null): string {
-  return `${notAsked('pr', ladder, held, unread)}, so nothing ran. To open one, ${askExactly({ step: 'pr' }, '"Open a pull request?"', shown)}`;
+  return `${notAsked('pr', ladder, held, unread)}, so nothing ran. To open one, ${askFor({ step: 'pr' }, shown)}`;
 }
 
 function submitRefusal(
@@ -182,7 +173,7 @@ function submitRefusal(
   held: Hold,
   unread: UnreadOffer | null,
 ): string {
-  return `${notAsked('pr', ladder, held, unread)}, and \`gh stack submit\` also pushes every active branch of the stack with --force-with-lease, so nothing ran. To run it, ${askExactly({ step: 'stack-submit' }, '"Force-push the stack with a lease and open its pull requests?"', shown)}`;
+  return `${notAsked('pr', ladder, held, unread)}, and \`gh stack submit\` also pushes every active branch of the stack with --force-with-lease, so nothing ran. To run it, ${askFor({ step: 'stack-submit' }, shown)}`;
 }
 
 // The branch oakum's version pull request comes from: merging it is the release.
@@ -208,6 +199,8 @@ type Target = {
   repo: string;
   home: boolean;
   homeOwner: string;
+  // Whether this repository's host, which is the pull request's, is github.com.
+  github: boolean;
 };
 
 // Whether a pull request the user named is the target: a number names one in
@@ -283,7 +276,7 @@ async function homeOf(
   const here = home.out.trim().toLowerCase();
   const m = /^([^/]+)\/[^/]+$/.exec(pathOf(here));
   if (hostOf(here) === undefined || m === null) return null;
-  return { repo: m[0], home: true, homeOwner: m[1] ?? '' };
+  return { repo: m[0], home: true, homeOwner: m[1] ?? '', github: hostOf(here) === 'github.com' };
 }
 
 // The pull request a merge reaches in this repository, as GitHub resolves its
@@ -317,7 +310,8 @@ async function targetOf(
   }
   const repo = pathOf(there);
   const homeOwner = pathOf(here).split('/')[0] ?? '';
-  return { number, state, mergeState, repo, home: there === here, homeOwner };
+  const github = hostOf(here) === 'github.com';
+  return { number, state, mergeState, repo, home: there === here, homeOwner, github };
 }
 
 // Whether a merge asked for once the pull request is ready may run now: why
@@ -492,25 +486,24 @@ async function coveredAsks(
   return u === null ? { unchecked: t.asks } : { unnamed: u };
 }
 
-// Each example is one the consent reader grants on a yes (offers.spec.ts).
-const GH_ASK: Record<'merge' | 'approve' | 'release' | 'comment' | 'push', string> = {
-  merge: '"Merge #116?"',
-  approve: '"Approve #116?"',
-  release: '"Release `v0.25.0`?"',
-  comment: '"Reply to the review on #116?"',
-  push: '"Push `fix/x` to `origin`?"',
+// Each kind's sample is typed to that kind's step.
+const GH_ASK: { [K in 'merge' | 'approve' | 'release' | 'push']: Offer & { step: K } } = {
+  merge: { step: 'merge', pulls: ['116'] },
+  approve: { step: 'approve', pull: '116' },
+  release: { step: 'release', version: 'v0.25.0' },
+  push: { step: 'push', branch: 'fix/x' },
 };
+type GhKind = keyof typeof GH_ASK | 'comment';
 
 function ghRefusal(
   shown: string,
-  kind: keyof typeof GH_ASK,
+  kind: GhKind,
   ladder: InForce,
   always: string | null,
   held: Hold,
   unread: UnreadOffer | null,
   thread: Threads = null,
 ): string {
-  const example = GH_ASK[kind];
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
   const unreviewed =
     kind === 'push' ? ' It writes to GitHub directly, so no review covers it.' : '';
@@ -518,7 +511,7 @@ function ghRefusal(
     return `${notAsked(kind, ladder, held, unread)}, so nothing ran. ${REPLY_TOOL} The command: ${shown}`;
   }
   const resolves = thread === 'resolve' ? ` ${RESOLVE_TOOL}` : '';
-  const ask = kind === 'comment' ? askComment(shown) : askThem(kind, example, shown);
+  const ask = kind === 'comment' ? askComment(shown) : askThem(GH_ASK[kind], shown);
   return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed}${resolves} To go ahead, ${ask}`;
 }
 
@@ -542,7 +535,7 @@ const RESOLVE_TOOL =
 // A yes reads as consent only to the question the offer tool writes, so a fuller
 // one ("Reply to and resolve the four review threads on #109?") grants nothing.
 function askComment(shown: string): string {
-  return `stop and end your reply with the question mcp__review-cycle__offer gives for step comment and the pull request, word for word and alone in its last paragraph, such as "Reply to the review on #116?", then end your turn; their answer decides. Put what the replies say above it, not in the question: a question that names the threads, how many, or resolving them is not read as asked. The command: ${shown}`;
+  return `stop and end your reply with the question mcp__review-cycle__offer gives for step comment and the pull request, word for word and alone in its last paragraph, such as "${phraseOffer({ step: 'comment', pull: '116' })}", then end your turn; their answer decides. Put what the replies say above it, not in the question: a question that names the threads, how many, or resolving them is not read as asked. The command: ${shown}`;
 }
 
 // Commits and approvals are not kept as misses.
@@ -590,7 +583,7 @@ export async function judgeGh(
   const used = { ready: [] as string[], release: false };
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const refuse = (kind: keyof typeof GH_ASK, always: string | null, thread: Threads = null) => ({
+  const refuse = (kind: GhKind, always: string | null, thread: Threads = null) => ({
     deny: ghRefusal(shown, kind, ladder, always, held, unread, thread),
     ...(kind !== 'approve' && { step: kind }),
   });
@@ -657,7 +650,7 @@ export async function judgeGh(
         if (outcome.kind !== 'refused') break;
         if (outcome.missing === 'bare') {
           return {
-            deny: `a forced ref update overwrites whatever the branch holds, with no lease, and the user's latest message doesn't ask for a bare force, so nothing ran. If they want one, ${askThem('force-push-bare', '"Force-push `fix/x` to `origin` without a lease?"', shown)}`,
+            deny: `a forced ref update overwrites whatever the branch holds, with no lease, and the user's latest message doesn't ask for a bare force, so nothing ran. If they want one, ${askThem({ step: 'force-push-bare', branch: 'fix/x' }, shown)}`,
             step: 'push',
           };
         }
@@ -716,7 +709,7 @@ export async function judgeGh(
             const named = [...nowNamed, ...readyNamed].map((n) => shownNamed(n)).join(', ');
             const remedy =
               t.remedy === null
-                ? `To go ahead, ${askThem('merge', '"Merge #116?"', shown)}`
+                ? `To go ahead, ${askThem(GH_ASK.merge, shown)}`
                 : `${t.remedy} The command: ${shown}`;
             lost = `the user asked to merge ${named || 'a pull request'}, and the gate cannot tell whether this is it: ${t.asks}, so nothing ran. ${remedy}`;
             // It may be one they named, and one merged now on readiness alone
@@ -729,7 +722,7 @@ export async function judgeGh(
             [nowNamed, readyNamed, standing.ready].every((l) => namedIn(l, t) === undefined)
           ) {
             return {
-              deny: `it merges #${t.number} in ${t.repo}, not this repository, and the user has not named it with its repository, so nothing ran. To go ahead, ${askExactly({ step: 'merge', pulls: [`${t.repo}#${t.number}`] }, `"Merge ${t.repo}#${t.number}?"`, shown)}`,
+              deny: `it merges #${t.number} in ${t.repo}, not this repository, and the user has not named it with its repository, so nothing ran. To go ahead, ${askMerge(t, shown)}`,
             };
           } else {
             const nowHere = namedIn(nowNamed, t);
@@ -744,7 +737,7 @@ export async function judgeGh(
             if (typeof pointing === 'object') {
               const remedy =
                 pointing.remedy === null
-                  ? `To go ahead, ${askExactly({ step: 'merge', pulls: [t.number] }, `"Merge #${t.number}?"`, shown)}`
+                  ? `To go ahead, ${askMerge(t, shown)}`
                   : `${pointing.remedy} The command: ${shown}`;
               lost = `the user named no pull request, and the gate cannot tell whether the conversation pointed at #${t.number}: ${pointing.asks}, so nothing ran. ${remedy}`;
               if (!unasked) return { deny: lost };
@@ -820,7 +813,7 @@ export async function judgeGh(
           }
           if ('asks' in now) {
             return {
-              deny: `the user asked to merge only once the pull request is ready, and ${now.asks}, so nothing ran. Run \`gh pr merge ${target.number} --auto${target.home ? '' : ` --repo ${target.repo}`}\`, which leaves the waiting to GitHub, or ${askExactly({ step: 'merge', pulls: [refOf(target)] }, `"Merge ${shownRef(target)}?"`, shown)}`,
+              deny: `the user asked to merge only once the pull request is ready, and ${now.asks}, so nothing ran. Run \`gh pr merge ${target.number} --auto${target.home ? '' : ` --repo ${target.repo}`}\`, which leaves the waiting to GitHub, or ${askMerge(target, shown)}`,
             };
           }
           ran.push({ step: 'merge', ladder, ready: now.ready });
@@ -842,7 +835,7 @@ export async function judgeGh(
           const unread = known !== null && 'asks' in known ? ` (${known.asks})` : '';
           if (known === null || 'asks' in known || known.step !== 'release') {
             return {
-              deny: `it merges #${target.number}, and ${wanted}${unread}, so nothing ran. To go ahead, ${askExactly({ step: 'merge', pulls: [refOf(target)] }, `"Merge ${shownRef(target)}?"`, shown)}`,
+              deny: `it merges #${target.number}, and ${wanted}${unread}, so nothing ran. To go ahead, ${askMerge(target, shown)}`,
             };
           }
         }
@@ -885,7 +878,7 @@ export async function judgeGh(
         if (refused && lost !== null) return { deny: lost };
         if ('asks' in which && mayHere.merge) {
           return {
-            deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem('merge-release', '"Merge and release #62?"', shown)}`,
+            deny: `the merge may be a release, which the user has not allowed: ${which.asks}. Nothing ran. To merge it, ${askThem({ step: 'merge-release', pull: '62' }, shown)}`,
             step: 'release',
           };
         }
@@ -959,11 +952,7 @@ export async function judgeGh(
           break;
         }
         if (covers(granted, 'lease')) break;
-        const ask = askExactly(
-          { step: 'stack-push' },
-          '"Force-push the stack with a lease?"',
-          shown,
-        );
+        const ask = askFor({ step: 'stack-push' }, shown);
         if (!may.push) {
           return {
             deny: `\`gh stack ${action.step}\` pushes every active branch of the stack with --force-with-lease, and the user's latest message doesn't ask for a forced push, so nothing ran. If they want it, ${ask}`,
@@ -1020,14 +1009,16 @@ export async function judgeGh(
         // without asking.
         const named = [...now, ...ready];
         const ladderMerges = permitted({ ...granted, merge: false }, ladder, held).merge;
+        const [bottom, ...above] = set.prs.map(String);
         if (
           !stacked &&
-          set.prs.length > 1 &&
+          bottom !== undefined &&
+          above.length > 0 &&
           !ladderMerges &&
           !set.prs.every((n) => named.some((e) => isLayer(e, n)))
         ) {
           return {
-            deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askExactly({ step: 'merge', pulls: set.prs.map(String) }, `"Merge ${listed}?"`, shown)}`,
+            deny: `\`gh stack merge\` merges ${listed} together, and the user's latest message doesn't name them all, so nothing ran. To merge them, ${askFor({ step: 'merge', pulls: [bottom, ...above] }, shown)}`,
           };
         }
         queue.unshift(
