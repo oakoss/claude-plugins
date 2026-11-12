@@ -13,5 +13,5 @@
     "jsxFactory": "h",
     "jsxFragmentFactory": "Fragment"
   },
-  "include": ["../../types/claude-code", "hooks", "types"]
+  "include": ["../../types/claude-code", "hooks", "types", "spec/*.ts"]
 }
