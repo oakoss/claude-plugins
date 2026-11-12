@@ -2171,12 +2171,12 @@ describe('telling Claude', () => {
     },
   );
 
-  // Who wakes Claude among a person's comment, a bot's comment and a bot's
-  // review, by setting.
+  // Who wakes Claude among a person's comment, a bot's comment, a bot's
+  // review and a release plan comment, by setting.
   const settings = [
     [{}, ['@alice']],
-    [{ botComments: 'reviews' }, ['@alice', '@rabbit']],
-    [{ botComments: 'comments and reviews' }, ['@alice', '@oakum', '@rabbit']],
+    [{ botComments: 'reviews' }, ['@alice', '@rabbit[bot]']],
+    [{ botComments: 'comments and reviews' }, ['@alice', '@oakum[bot]', '@rabbit[bot]']],
     [{ wake: 'checks', botComments: 'comments and reviews' }, []],
   ] as const;
   for (const [options, woken] of settings) {
@@ -2206,12 +2206,20 @@ describe('telling Claude', () => {
           state: 'COMMENTED',
           url: 'r/bot',
         };
-        gh.pr = commentedJson([person, bot], [review]);
+        const plan = {
+          author: { login: 'planner', __typename: 'Bot' },
+          createdAt: '2026-10-03T22:05:00Z',
+          url: 'c/plan',
+          body: '<!-- oakum:pr-plan -->\n## Release plan',
+        };
+        const quoted = { ...plan, author: { login: 'carol', __typename: 'User' }, url: 'c/quoted' };
+        gh.pr = commentedJson([person, bot, plan, quoted], [review]);
         await clock.advance(20_000);
         const text = seen.wakes.join('\n');
-        for (const who of ['@alice', '@oakum', '@rabbit']) {
+        for (const who of ['@alice', '@oakum[bot]', '@rabbit[bot]', '@planner']) {
           expect(text.includes(who)).toBe((woken as readonly string[]).includes(who));
         }
+        expect(text.includes('@carol commented on')).toBe(woken.length > 0);
       },
     );
   }

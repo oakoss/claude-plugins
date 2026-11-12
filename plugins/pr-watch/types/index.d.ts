@@ -46,6 +46,8 @@ export type Activity = {
   did: string;
   isBot: boolean;
   isReview: boolean;
+  // A bot's comment that only states a release tool's plan.
+  isPlan: boolean;
 };
 
 export type Pull = {

@@ -699,6 +699,7 @@ const said = (author: string, at: string, did = 'commented on', isBot = false) =
   did,
   isBot,
   isReview: did !== 'commented on',
+  isPlan: false,
 });
 
 describe('isQuotaLow', () => {
@@ -825,9 +826,10 @@ describe('settingsOf and tellsOf', () => {
     const person = said('alice', minute(1));
     const botReview = said('coderabbit', minute(2), 'reviewed', true);
     const botComment = said('oakum', minute(3), 'commented on', true);
+    const plan = { ...said('planner', minute(4), 'commented on', true), isPlan: true };
     const told = (wake: WakeSetting, bots: BotSetting) => {
       const tells = tellsOf(wake, bots);
-      return [person, botReview, botComment].filter((a) => tells(a)).map((a) => a.author);
+      return [person, botReview, botComment, plan].filter((a) => tells(a)).map((a) => a.author);
     };
     expect(told('checks and comments', 'never')).toEqual(['alice']);
     expect(told('checks and comments', 'reviews')).toEqual(['alice', 'coderabbit']);
@@ -1211,14 +1213,25 @@ describe('wakeOf', () => {
 
   test('tells a bot’s comment only when bots are asked for, and hears it either way', () => {
     const first = after(pull([]));
-    const p = pull([], { activity: [said('oakum[bot]', minute(1), 'commented on', true)] });
+    const p = pull([], { activity: [said('oakum', minute(1), 'commented on', true)] });
     const quiet = wakeOf(pr, p, verdictAt(p), first);
     expect(quiet.text).toBeNull();
-    expect(quiet.heard?.keys).toEqual(['https://x/oakum[bot]']);
+    expect(quiet.heard?.keys).toEqual(['https://x/oakum']);
     const tells = tellsOf('checks and comments', 'comments and reviews');
     expect(wakeOf(pr, p, verdictAt(p), first, { tells }).text).toContain(
       '@oakum[bot] commented on o/r#128',
     );
+  });
+
+  test('hears a release plan comment without telling it, whatever the setting', () => {
+    const first = after(pull([]));
+    const plan = { ...said('oakum', minute(1), 'commented on', true), isPlan: true };
+    const p = pull([], { activity: [plan, said('alice', minute(2))] });
+    const tells = tellsOf('checks and comments', 'comments and reviews');
+    const woke = wakeOf(pr, p, verdictAt(p), first, { tells });
+    expect(woke.text).toContain('@alice commented on');
+    expect(woke.text).not.toContain('@oakum');
+    expect(woke.heard?.keys).toEqual(['https://x/oakum', 'https://x/alice']);
   });
 
   test('stops comment-only wakes after QUIET_CAP in a row, saying so on the last', () => {

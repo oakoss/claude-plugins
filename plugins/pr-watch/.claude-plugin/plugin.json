@@ -23,7 +23,7 @@
     "botComments": {
       "type": "string",
       "title": "Bots wake Claude",
-      "description": "Which comments and reviews from authors GitHub marks as a bot also tell Claude, when Wake Claude includes comments. Reviews: a review bot's reviews, not plan, coverage or preview comments. Comments and reviews: everything a bot posts.",
+      "description": "Which comments and reviews from authors GitHub marks as a bot also tell Claude, when Wake Claude includes comments. Reviews: a review bot's reviews, not plan, coverage or preview comments. Comments and reviews: everything a bot posts but a release tool's plan comment.",
       "options": ["never", "reviews", "comments and reviews"],
       "default": "never"
     }

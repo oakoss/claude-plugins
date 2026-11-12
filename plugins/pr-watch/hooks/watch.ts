@@ -1119,7 +1119,7 @@ function hearOf(
   let threads = false;
   for (const a of pull.activity) {
     if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || !tells(a)) continue;
-    lines.push(`@${a.author} ${a.did} ${name}: ${a.url}`);
+    lines.push(`@${a.author}${a.isBot ? '[bot]' : ''} ${a.did} ${name}: ${a.url}`);
     threads ||= a.isReview && a.did !== 'approved';
   }
   if (threads) lines.push(REPLY_TOOL);
@@ -1143,10 +1143,11 @@ export function settingsOf(options: Record<string, unknown>): {
 }
 
 // Which comments and reviews are told, by the two /config settings. Those not
-// told are still heard, so a later change of setting reports no history.
+// told are still heard, so a later change of setting reports no history. A
+// release tool's plan comment is told under no setting.
 export function tellsOf(wake: WakeSetting, bots: BotSetting): (a: Activity) => boolean {
   if (wake !== 'checks and comments') return () => false;
-  if (bots === 'comments and reviews') return () => true;
+  if (bots === 'comments and reviews') return (a) => !a.isPlan;
   if (bots === 'reviews') return (a) => !a.isBot || a.isReview;
   return (a) => !a.isBot;
 }

@@ -40,7 +40,7 @@ const pullQuery = (isMerged: boolean) => `query($o: String!, $r: String!, $n: In
         ? `mergeCommit { oid ${suites('')} }`
         : `commits(last: 1) { nodes { commit { oid ${suites('isRequired(pullRequestNumber: $n)')} } } }`
     }
-    comments(last: 10) { nodes { author { login __typename } createdAt url } }
+    comments(last: 10) { nodes { author { login __typename } createdAt url body } }
     reviews(last: 10) { nodes { author { login __typename } submittedAt state url } }
   } }
 }`;
@@ -360,6 +360,11 @@ function runsOf({ workflows, isTruncated }: Checks): Runs {
 
 const isBot = (author: any) => author?.__typename === 'Bot';
 
+// How a release tool's plan comment opens: oakum's marker, and changeset-bot's
+// heading when it found a changeset. Its "No Changeset found" asks for one, so
+// it stays news.
+const PLAN = /^(?:<!-- oakum:pr-plan -->|###\s+🦋\s+Changeset detected)/;
+
 const REVIEWED: Record<string, string> = {
   APPROVED: 'approved',
   CHANGES_REQUESTED: 'requested changes on',
@@ -379,14 +384,17 @@ function activityOf(pr: any, viewer: string | null): Activity[] | null {
     if (author === null || author === viewer || !isTime(c.createdAt)) continue;
     const url = str(c.url) ?? '';
     const bot = isBot(c.author);
-    found.push({ author, at: c.createdAt, url, did: 'commented on', isBot: bot, isReview: false });
+    const isPlan = bot && PLAN.test(str(c.body) ?? '');
+    const did = 'commented on';
+    found.push({ author, at: c.createdAt, url, did, isBot: bot, isReview: false, isPlan });
   }
   for (const r of list(pr.reviews?.nodes)) {
     const author = str(r?.author?.login);
     const did = REVIEWED[str(r?.state) ?? ''];
     if (author === null || author === viewer || !did || !isTime(r.submittedAt)) continue;
     const url = str(r.url) ?? '';
-    found.push({ author, at: r.submittedAt, url, did, isBot: isBot(r.author), isReview: true });
+    const bot = isBot(r.author);
+    found.push({ author, at: r.submittedAt, url, did, isBot: bot, isReview: true, isPlan: false });
   }
   return found.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
