@@ -1,0 +1,849 @@
+import { describe, expect, test } from 'vitest';
+
+import {
+  attemptArgs,
+  estimateArgs,
+  parseAttemptStart,
+  parseEstimate,
+  parsePull,
+  parseQuota,
+  parseStack,
+  parseTrunk,
+  pullArgs,
+  pushArgs,
+  stackArgs,
+  trunkArgs,
+} from '../hooks/github';
+
+const queryOf = (args: string[]) => args.find((a) => a.startsWith('query=')) ?? '';
+
+// Shaped like `gh api graphql` output for oakoss/claude-plugins#128.
+function prOutput(suites: unknown[], pr: Record<string, unknown> = {}, more = false): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          number: 128,
+          title: 'feat: nudge',
+          url: 'https://github.com/oakoss/claude-plugins/pull/128',
+          state: 'OPEN',
+          isDraft: false,
+          mergeStateStatus: 'CLEAN',
+          reviewDecision: null,
+          commits: {
+            nodes: [
+              { commit: { checkSuites: { pageInfo: { hasNextPage: more }, nodes: suites } } },
+            ],
+          },
+          ...pr,
+        },
+      },
+    },
+  });
+}
+
+function suite(run: Record<string, unknown> = {}, jobs: unknown[] = []) {
+  return {
+    status: 'IN_PROGRESS',
+    conclusion: null,
+    workflowRun: {
+      runAttempt: 1,
+      createdAt: '2026-10-03T22:38:02Z',
+      url: 'https://github.com/oakoss/claude-plugins/actions/runs/37159100895',
+      workflow: { databaseId: 336_558_760, name: 'CI' },
+      ...run,
+    },
+    checkRuns: { nodes: jobs },
+  };
+}
+
+// An AI reviewer's App check, which the merge does not wait on.
+function reviewer(
+  status: string,
+  conclusion: string | null,
+  startedAt?: string,
+  completedAt?: string,
+  appId = 7,
+) {
+  return {
+    status,
+    conclusion,
+    app: { databaseId: appId },
+    workflowRun: null,
+    checkRuns: {
+      nodes: [
+        {
+          name: 'pullfrog',
+          status,
+          conclusion,
+          isRequired: false,
+          detailsUrl: 'https://pullfrog.com/run/1',
+          ...(startedAt ? { startedAt } : {}),
+          ...(completedAt ? { completedAt } : {}),
+        },
+      ],
+    },
+  };
+}
+
+// A GitHub App's suite holding one check, required unless said otherwise.
+function app(status: string, conclusion: string | null = null, isRequired = true) {
+  return {
+    status,
+    conclusion,
+    workflowRun: null,
+    checkRuns: { nodes: [{ name: 'Vercel', status, conclusion, isRequired }] },
+  };
+}
+
+const TYPECHECK = {
+  name: 'Typecheck',
+  status: 'COMPLETED',
+  conclusion: 'SUCCESS',
+  detailsUrl: 'https://x/job/1',
+  startedAt: '2026-10-03T22:38:05Z',
+  isRequired: false,
+};
+const SUMMARY = {
+  name: 'CI Summary',
+  status: 'QUEUED',
+  conclusion: null,
+  detailsUrl: 'https://x/job/2',
+  startedAt: null,
+  isRequired: true,
+};
+
+// A comment or review as parsePull reads it, made at 21:`minute`.
+const read = (
+  author: string,
+  minute: number,
+  url: string,
+  did: string,
+  isBot = false,
+  isPlan = false,
+) => ({
+  author,
+  at: `2026-10-03T21:${minute}:00Z`,
+  url,
+  did,
+  isBot,
+  isReview: did !== 'commented on',
+  isPlan,
+});
+
+describe('parsePull', () => {
+  test('reads the branch and repository it merges from, when GitHub says both', () => {
+    const head = { headRefName: 'feat/x', headRepository: { nameWithOwner: 'me/r' } };
+    expect(parsePull(prOutput([], head)).head).toEqual({ branch: 'feat/x', repo: 'me/r' });
+    const gone = { headRefName: 'feat/x', headRepository: null };
+    expect(parsePull(prOutput([], gone))).not.toHaveProperty('head');
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('headRefName headRepository');
+  });
+
+  test('reads a re-run’s attempt, which keeps the run’s URL', () => {
+    const [w] = parsePull(prOutput([suite({ runAttempt: 2 })])).workflows;
+    expect(w).toMatchObject({ attempt: 2, isRerun: true });
+    const [first] = parsePull(prOutput([suite({ runAttempt: undefined })])).workflows;
+    expect(first).toMatchObject({ attempt: 1, isRerun: false });
+  });
+
+  test('reads the run’s id, leaving it out when GitHub sends none', () => {
+    const [w] = parsePull(prOutput([suite({ databaseId: 38_675_041_432 })])).workflows;
+    expect(w?.runId).toBe(38_675_041_432);
+    const [none] = parsePull(prOutput([suite({ databaseId: 'x' })])).workflows;
+    expect(none).not.toHaveProperty('runId');
+    expect(queryOf(pullArgs('github.com', 'o/r', 1, false))).toContain('databaseId runAttempt');
+  });
+
+  test('reads the pull request and its workflows', () => {
+    const pull = parsePull(prOutput([suite({}, [TYPECHECK, SUMMARY])]));
+    expect(pull).toMatchObject({
+      number: 128,
+      state: 'OPEN',
+      merge: 'CLEAN',
+      review: null,
+      isDraft: false,
+      isGated: true,
+      isTruncated: false,
+    });
+    expect(pull.workflows).toEqual([
+      {
+        id: 336_558_760,
+        name: 'CI',
+        status: 'running',
+        conclusion: null,
+        startedAt: '2026-10-03T22:38:02Z',
+        isRerun: false,
+        attempt: 1,
+        url: 'https://github.com/oakoss/claude-plugins/actions/runs/37159100895',
+        jobs: [
+          {
+            name: 'Typecheck',
+            status: 'done',
+            conclusion: 'SUCCESS',
+            url: 'https://x/job/1',
+            isRequired: false,
+          },
+          {
+            name: 'CI Summary',
+            status: 'queued',
+            conclusion: null,
+            url: 'https://x/job/2',
+            isRequired: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  test('reads the review, draft, closed and finished states', () => {
+    const done = { ...suite(), status: 'COMPLETED', conclusion: 'FAILURE' };
+    const pull = parsePull(
+      prOutput([done], { reviewDecision: 'CHANGES_REQUESTED', isDraft: true, state: 'CLOSED' }),
+    );
+    expect(pull).toMatchObject({ review: 'CHANGES_REQUESTED', isDraft: true, state: 'CLOSED' });
+    expect(pull.workflows[0]).toMatchObject({ status: 'done', conclusion: 'FAILURE' });
+  });
+
+  test('a missing merge state reads as unknown', () => {
+    expect(parsePull(prOutput([], { mergeStateStatus: null })).merge).toBe('UNKNOWN');
+  });
+
+  test('marks a re-run, whose creation time is the first attempt’s', () => {
+    const rerun = suite({ runAttempt: 2 });
+    expect(parsePull(prOutput([rerun])).workflows[0]?.isRerun).toBe(true);
+  });
+
+  test('keeps only the newest run of each workflow', () => {
+    const cancelled = {
+      ...suite({ createdAt: '2026-10-03T22:00:00Z' }),
+      status: 'COMPLETED',
+      conclusion: 'CANCELLED',
+    };
+    const later = { ...suite({ createdAt: '2026-10-03T22:05:00Z' }), status: 'COMPLETED' };
+    const pull = parsePull(prOutput([cancelled, { ...later, conclusion: 'SUCCESS' }]));
+    expect(pull.workflows).toHaveLength(1);
+    expect(pull.workflows[0]?.conclusion).toBe('SUCCESS');
+    const reversed = parsePull(prOutput([{ ...later, conclusion: 'SUCCESS' }, cancelled]));
+    expect(reversed.workflows[0]?.conclusion).toBe('SUCCESS');
+  });
+
+  test('says when a required App check has not finished', () => {
+    expect(parsePull(prOutput([app('IN_PROGRESS')])).isRequiredPending).toBe(true);
+    expect(parsePull(prOutput([app('COMPLETED')])).isRequiredPending).toBe(false);
+    const required = { ...SUMMARY, status: 'IN_PROGRESS' };
+    expect(parsePull(prOutput([suite({}, [required])])).isRequiredPending).toBe(false);
+  });
+
+  test('a required check from a GitHub App gates the pull request', () => {
+    const app = {
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      workflowRun: null,
+      checkRuns: { nodes: [{ name: 'Cloudflare Pages', isRequired: true }] },
+    };
+    const pull = parsePull(prOutput([app, suite({}, [TYPECHECK])]));
+    expect(pull.isGated).toBe(true);
+    expect(pull.workflows.map((w) => w.name)).toEqual(['CI']);
+    expect(parsePull(prOutput([suite({}, [TYPECHECK])])).isGated).toBe(false);
+  });
+
+  test('says when GitHub has more check suites than it returned', () => {
+    expect(parsePull(prOutput([], {}, true)).isTruncated).toBe(true);
+  });
+
+  test('leaves out check suites that belong to no workflow, or that it cannot read', () => {
+    const app = { status: 'QUEUED', conclusion: null, workflowRun: null, checkRuns: { nodes: [] } };
+    const noId = suite({ workflow: { databaseId: 'abc', name: 'Bad' } });
+    const noName = suite({ workflow: { databaseId: 9, name: '' } });
+    const noTime = suite({ createdAt: 'nope' });
+    // Date.parse alone reads "1" as a year.
+    const looseTime = suite({ createdAt: '1' });
+    const zeroId = suite({ workflow: { databaseId: 0, name: 'Zero' } });
+    const badJobs = { ...suite(), checkRuns: { nodes: {} } };
+    const jobs = [null, 5, { ...TYPECHECK, name: '' }, SUMMARY];
+    const pull = parsePull(
+      prOutput([app, noId, noName, noTime, looseTime, zeroId, suite({}, jobs)]),
+    );
+    expect(pull.workflows.map((w) => w.name)).toEqual(['CI']);
+    expect(pull.workflows[0]?.jobs.map((j) => j.name)).toEqual(['CI Summary']);
+    expect(parsePull(prOutput([badJobs])).workflows[0]?.jobs).toEqual([]);
+  });
+
+  test('keeps the data GitHub sent beside an error', () => {
+    const out = JSON.parse(prOutput([]));
+    out.errors = [{ message: 'Resource not accessible by integration' }];
+    expect(parsePull(JSON.stringify(out)).number).toBe(128);
+  });
+
+  test('says what GitHub refused', () => {
+    const out = JSON.stringify({ errors: [{ message: 'Could not resolve to a Repository' }] });
+    expect(() => parsePull(out)).toThrow('Could not resolve to a Repository');
+  });
+
+  test('says when the pull request is missing or unreadable', () => {
+    const out = JSON.stringify({ data: { repository: { pullRequest: null } } });
+    expect(() => parsePull(out)).toThrow('pull request not found');
+    expect(() => parsePull(prOutput([], { number: 'x' }))).toThrow('pull request has no number');
+    expect(() => parsePull(prOutput([], { number: 0 }))).toThrow('pull request has no number');
+  });
+
+  test('says when gh printed something other than JSON', () => {
+    expect(() => parsePull('HTTP 502')).toThrow('gh printed something other than JSON');
+  });
+
+  test('reads comments and reviews by anyone but the viewer, oldest first', () => {
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: [
+            { author: { login: 'me' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
+            { author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' },
+            { author: null, createdAt: '2026-10-03T21:21:00Z', url: 'u/3' },
+            {
+              author: { login: 'oakum', __typename: 'Bot' },
+              createdAt: '2026-10-03T21:22:00Z',
+              url: 'u/4',
+            },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: 'bob' },
+              submittedAt: '2026-10-03T21:10:00Z',
+              state: 'APPROVED',
+              url: 'r/1',
+            },
+            { author: { login: 'carol' }, submittedAt: null, state: 'PENDING', url: 'r/2' },
+            {
+              author: { login: 'dan' },
+              submittedAt: '2026-10-03T21:30:00Z',
+              state: 'CHANGES_REQUESTED',
+              url: 'r/3',
+            },
+            {
+              author: { login: 'me' },
+              submittedAt: '2026-10-03T21:31:00Z',
+              state: 'APPROVED',
+              url: 'r/4',
+            },
+            {
+              author: { login: 'erin', __typename: 'Bot' },
+              submittedAt: '2026-10-03T21:32:00Z',
+              state: 'COMMENTED',
+              url: 'r/5',
+            },
+            {
+              author: { login: 'finn' },
+              submittedAt: '2026-10-03T21:33:00Z',
+              state: 'DISMISSED',
+              url: 'r/6',
+            },
+            {
+              author: { login: 'gus' },
+              submittedAt: '2026-10-03T21:34:00Z',
+              state: 'NEW_STATE',
+              url: 'r/7',
+            },
+          ],
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activity).toEqual([
+      read('bob', 10, 'r/1', 'approved'),
+      read('alice', 20, 'u/2', 'commented on'),
+      read('oakum', 22, 'u/4', 'commented on', true),
+      read('dan', 30, 'r/3', 'requested changes on'),
+      read('erin', 32, 'r/5', 'reviewed', true),
+      read('finn', 33, 'r/6', 'reviewed'),
+    ]);
+  });
+
+  test('marks a bot’s comment that opens as a release tool’s plan does', () => {
+    const plan = '<!-- oakum:pr-plan -->\n## Release plan';
+    const bodies: [string, string, string | null][] = [
+      ['oakoss', 'Bot', plan],
+      ['changeset-bot', 'Bot', '###  🦋  Changeset detected\n\nLatest commit: abc'],
+      ['changeset-bot', 'Bot', '###  ⚠️  No Changeset found'],
+      ['oakoss', 'Bot', `Coverage 91%\n${plan}`],
+      ['oakoss', 'Bot', null],
+      ['alice', 'User', plan],
+    ];
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: bodies.map(([login, __typename, text], i) => ({
+            author: { login, __typename },
+            createdAt: `2026-10-03T21:1${i}:00Z`,
+            url: `u/${i}`,
+            ...(text !== null && { body: text }),
+          })),
+        },
+        reviews: { nodes: [] },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activity?.map((a) => a.isPlan)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  test('reads the newest comment or review in the window, the viewer’s included', () => {
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: [
+            { author: { login: 'alice' }, createdAt: '2026-10-03T21:00:00Z', url: 'u/1' },
+            { author: { login: 'me' }, createdAt: '2026-10-03T21:50:00Z', url: 'u/2' },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: 'bob' },
+              submittedAt: '2026-10-03T21:40:00Z',
+              state: 'APPROVED',
+              url: 'r/1',
+            },
+          ],
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T21:50:00Z');
+    const review = {
+      author: { login: 'me' },
+      submittedAt: '2026-10-03T22:00:00Z',
+      state: 'APPROVED',
+      url: 'r/2',
+    };
+    body.data.repository.pullRequest.reviews.nodes.push(review);
+    expect(parsePull(JSON.stringify(body)).activityAt).toBe('2026-10-03T22:00:00Z');
+    expect(parsePull(prOutput([])).activityAt).toBeNull();
+  });
+
+  test('reads no comments when it cannot tell whose they are', () => {
+    const comments = {
+      nodes: [{ author: { login: 'alice' }, createdAt: '2026-10-03T21:20:00Z', url: 'u/2' }],
+    };
+    expect(parsePull(prOutput([], { comments })).activity).toBeNull();
+  });
+
+  test('reads no comments from a reply that left either list out', () => {
+    const comments = { nodes: [] };
+    for (const pr of [{ comments }, { comments, reviews: null }, { reviews: { nodes: [] } }]) {
+      const body = JSON.parse(prOutput([], pr));
+      body.data.viewer = { login: 'me' };
+      expect(parsePull(JSON.stringify(body)).activity).toBeNull();
+    }
+  });
+});
+
+// A successful run that took `s` seconds.
+const took = (s: number, attempt = 1) => ({
+  run_attempt: attempt,
+  run_started_at: '2026-10-03T22:00:00Z',
+  updated_at: new Date(Date.parse('2026-10-03T22:00:00Z') + s * 1000).toISOString(),
+});
+const runs = (...list: unknown[]) => JSON.stringify({ workflow_runs: list });
+
+describe('parseStack', () => {
+  test("a stack's number, trunk and layers, bottom first, merged ones kept and named", () => {
+    const stacks = [
+      {
+        number: 236,
+        base: { ref: 'main' },
+        pull_requests: [
+          { number: 233, merged_at: '2026-10-22T02:23:06Z' },
+          { number: 234, merged_at: null },
+          { number: 235 },
+        ],
+      },
+    ];
+    expect(parseStack(JSON.stringify(stacks))).toEqual({
+      number: 236,
+      trunk: 'main',
+      layers: [233, 234, 235],
+      merged: [233],
+    });
+  });
+  test('the first stack it is in', () => {
+    const stacks = [
+      { number: 236, base: { ref: 'main' } },
+      { number: 240, base: { ref: 'develop' } },
+    ];
+    expect(parseStack(JSON.stringify(stacks))).toEqual({
+      number: 236,
+      trunk: 'main',
+      layers: [],
+      merged: [],
+    });
+  });
+  test('[] names no stack', () => {
+    expect(parseStack('[]')).toBeNull();
+  });
+  test.each([
+    '[{"number":236,"base":{}}]',
+    '[{"number":236,"base":{"ref":""}}]',
+    '[{"base":{"ref":"main"}}]',
+    '[{"number":236,"base":{"ref":"main"},"pull_requests":[{"number":234},{"number":"x"}]}]',
+    '[{"number":236,"base":{"ref":"main"},"pull_requests":[{}]}]',
+  ])('%s is no answer: a place it gives would be wrong', (stdout) => {
+    expect(() => parseStack(stdout)).toThrow(
+      'gh printed a stack without its number, trunk or layers',
+    );
+  });
+  test.each(['{"message":"Not Found","status":"404"}', '{"0":{"base":{"ref":"x"}}}'])(
+    '%s is no answer, not no stack',
+    (stdout) => {
+      expect(() => parseStack(stdout)).toThrow('gh printed no list of stacks');
+    },
+  );
+  test('throws on what is not JSON', () => {
+    expect(() => parseStack('nope')).toThrow('gh printed something other than JSON');
+  });
+  test('asks the stacks API by pull request, on the host', () => {
+    expect(stackArgs('ghe.example.com', 'o/r', 235)).toEqual([
+      'gh',
+      'api',
+      '--hostname',
+      'ghe.example.com',
+      '-X',
+      'GET',
+      'repos/o/r/stacks',
+      '-f',
+      'pull_request=235',
+    ]);
+  });
+});
+
+const trunk = (nodes: unknown[]) =>
+  JSON.stringify({ data: { repository: { ref: { target: { history: { nodes } } } } } });
+const suites = (nodes: unknown[]) => ({ pageInfo: { hasNextPage: false }, nodes });
+
+describe('parseTrunk', () => {
+  test("reads each commit's oid and runs, newest first", () => {
+    const commits = parseTrunk(
+      trunk([
+        {
+          oid: 'b',
+          parents: { nodes: [{ oid: 'a' }, { oid: 'x' }, { id: 'no oid' }] },
+          checkSuites: suites([suite({}, [TYPECHECK])]),
+        },
+        { oid: 'a', checkSuites: suites([]) },
+      ]),
+    );
+    expect(commits.map((c) => c.parents)).toEqual([['a', 'x'], []]);
+    expect(commits.map((c) => c.oid)).toEqual(['b', 'a']);
+    expect(commits[0]?.runs.workflows.map((w) => w.name)).toEqual(['CI']);
+    expect(commits[1]?.runs).toEqual({ workflows: [], isTruncated: false });
+    const more = { oid: 'c', checkSuites: { pageInfo: { hasNextPage: true }, nodes: [] } };
+    expect(parseTrunk(trunk([more]))[0]?.runs.isTruncated).toBe(true);
+  });
+  test('skips a commit with no oid', () => {
+    expect(parseTrunk(trunk([{ checkSuites: suites([]) }]))).toEqual([]);
+  });
+  test('a branch that is gone has no commits', () => {
+    expect(parseTrunk(JSON.stringify({ data: { repository: { ref: null } } }))).toEqual([]);
+  });
+  test('throws on an error, or no repository', () => {
+    const errors = JSON.stringify({ errors: [{ message: 'Something went wrong' }] });
+    expect(() => parseTrunk(errors)).toThrow('Something went wrong');
+    expect(() => parseTrunk('{"data":{}}')).toThrow('repository not found');
+  });
+  test("asks for the branch's newest 10 commits by oid, on the host", () => {
+    const args = trunkArgs('ghe.example.com', 'o/r', 'main');
+    expect(args).toContain('b=refs/heads/main');
+    expect(args).toContain('o=o');
+    expect(args).toContain('r=r');
+    expect(args).toContain('--hostname');
+    const query = queryOf(args);
+    expect(query).toContain('history(first: 10) { nodes {');
+    expect(query).toContain('oid parents(first: 2) { nodes { oid } } checkSuites(first: 20)');
+    expect(query).not.toContain('since');
+  });
+  test('reads the merge commit’s oid', () => {
+    const merged = { state: 'MERGED', mergeCommit: { oid: 'abc', checkSuites: suites([]) } };
+    expect(parsePull(prOutput([], merged)).mergeOid).toBe('abc');
+    expect(parsePull(prOutput([]))).not.toHaveProperty('mergeOid');
+  });
+  test('marks a required App check that finished without passing', () => {
+    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE')])).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: '' },
+    ]);
+    expect(parsePull(prOutput([app('COMPLETED', 'SUCCESS')])).failedApps).toEqual([]);
+    expect(parsePull(prOutput([app('IN_PROGRESS', null)])).failedApps).toEqual([]);
+    expect(parsePull(prOutput([app('COMPLETED', 'FAILURE', false)])).failedApps).toEqual([]);
+    const linked = (status: string, conclusion: string | null, name: string | null = 'Vercel') => ({
+      ...app(status, conclusion),
+      checkRuns: {
+        nodes: [
+          { name, status, conclusion, isRequired: true, detailsUrl: `https://v/${conclusion}` },
+        ],
+      },
+    });
+    expect(parsePull(prOutput([linked('COMPLETED', 'FAILURE')])).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: 'https://v/FAILURE' },
+    ]);
+    expect(parsePull(prOutput([linked('COMPLETED', 'FAILURE', null)])).failedApps).toEqual([]);
+    // Run again, the newest run of a check stands for it.
+    const again = [linked('COMPLETED', 'FAILURE'), linked('COMPLETED', 'SUCCESS')];
+    expect(parsePull(prOutput(again)).failedApps).toEqual([]);
+    const byApp = (run: ReturnType<typeof linked>, id: number) => ({
+      ...run,
+      app: { databaseId: id },
+    });
+    const twoApps = [
+      byApp(linked('COMPLETED', 'FAILURE'), 1),
+      byApp(linked('COMPLETED', 'SUCCESS'), 2),
+    ];
+    expect(parsePull(prOutput(twoApps)).failedApps).toEqual([
+      { app: 1, name: 'Vercel', url: 'https://v/FAILURE' },
+    ]);
+    const twice = [linked('COMPLETED', 'FAILURE'), linked('COMPLETED', 'TIMED_OUT')];
+    expect(parsePull(prOutput(twice)).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: 'https://v/TIMED_OUT' },
+    ]);
+    // By when each run started, whatever order GitHub lists them in.
+    const at = (run: ReturnType<typeof linked>, startedAt: string | null) => ({
+      ...run,
+      checkRuns: { nodes: run.checkRuns.nodes.map((n) => ({ ...n, startedAt })) },
+    });
+    const newestFirst = [
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:05:00Z'),
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(newestFirst)).failedApps).toEqual([]);
+    const failedLast = [
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:05:00Z'),
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(failedLast)).failedApps).toHaveLength(1);
+    const queued = [
+      at(linked('QUEUED', null), null),
+      at(linked('COMPLETED', 'FAILURE'), '2026-11-02T10:00:00Z'),
+    ];
+    expect(parsePull(prOutput(queued)).failedApps).toEqual([]);
+    // An older run left queued waits on nothing once a newer one finished.
+    const stuck = [
+      at(linked('QUEUED', null), '2026-11-02T10:00:00Z'),
+      at(linked('COMPLETED', 'SUCCESS'), '2026-11-02T10:05:00Z'),
+    ];
+    expect(parsePull(prOutput(stuck)).isRequiredPending).toBe(false);
+    expect(parsePull(prOutput(queued)).isRequiredPending).toBe(true);
+  });
+  test('keeps an App check the merge does not wait on once it starts, newest first', () => {
+    expect(
+      parsePull(prOutput([reviewer('IN_PROGRESS', null, '2026-11-06T20:03:55Z')])).appRuns,
+    ).toEqual([
+      {
+        app: 7,
+        name: 'pullfrog',
+        status: 'running',
+        url: 'https://pullfrog.com/run/1',
+      },
+    ]);
+    const done = reviewer('COMPLETED', 'SUCCESS', '2026-11-06T20:03:55Z', '2026-11-06T20:08:24Z');
+    expect(parsePull(prOutput([done])).appRuns?.[0]).toMatchObject({
+      status: 'done',
+      took: 269_000,
+    });
+    // A suite queued with no runs, as the Claude and Renovate Apps leave one, is nothing.
+    const queued = {
+      status: 'QUEUED',
+      conclusion: null,
+      app: { databaseId: 8 },
+      workflowRun: null,
+      checkRuns: { nodes: [] },
+    };
+    expect(parsePull(prOutput([queued, reviewer('QUEUED', null)])).appRuns).toEqual([]);
+    // A required one is the gate's, not a reviewer's.
+    expect(parsePull(prOutput([app('IN_PROGRESS')])).appRuns).toEqual([]);
+    const rerun = reviewer('IN_PROGRESS', null, '2026-11-06T20:30:00Z');
+    for (const order of [
+      [done, rerun],
+      [rerun, done],
+    ]) {
+      expect(parsePull(prOutput(order)).appRuns?.map((a) => a.status)).toEqual(['running']);
+    }
+    // A run queued forever must not hide a later one, so the failure a queued
+    // re-run replaces shows until the re-run starts.
+    const failed = reviewer('COMPLETED', 'FAILURE', '2026-11-06T20:03:55Z', '2026-11-06T20:08:24Z');
+    for (const order of [
+      [failed, reviewer('QUEUED', null)],
+      [reviewer('QUEUED', null), failed],
+    ]) {
+      expect(parsePull(prOutput(order)).appRuns).toMatchObject([{ conclusion: 'FAILURE' }]);
+    }
+    const twoApps = [done, reviewer('IN_PROGRESS', null, '2026-11-06T20:30:00Z', undefined, 8)];
+    expect(parsePull(prOutput(twoApps)).appRuns).toHaveLength(2);
+    const backwards = reviewer(
+      'COMPLETED',
+      'SUCCESS',
+      '2026-11-06T20:08:24Z',
+      '2026-11-06T20:03:55Z',
+    );
+    expect(parsePull(prOutput([backwards])).appRuns?.[0]).toMatchObject({ took: null });
+  });
+  test('asks each check run when it started and ended', () => {
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('detailsUrl startedAt completedAt');
+  });
+  test('asks each check suite for its App', () => {
+    for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
+      expect(queryOf(args)).toContain('status conclusion app { databaseId }');
+    }
+  });
+  test('asks each comment for its body, merged or not', () => {
+    for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
+      expect(queryOf(args)).toMatch(/comments\(last: \d+\) \{ nodes \{ [^\n]*\bbody \}/);
+    }
+  });
+  test('reads the head commit’s oid', () => {
+    const head = { commits: { nodes: [{ commit: { oid: 'def', checkSuites: suites([]) } }] } };
+    expect(parsePull(prOutput([], head)).headOid).toBe('def');
+    expect(parsePull(prOutput([]))).not.toHaveProperty('headOid');
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('commit { oid checkSuites');
+  });
+});
+
+describe('parseQuota', () => {
+  test('reads the quota a query reported', () => {
+    const rateLimit = { cost: 1, remaining: 4912, limit: 5000, resetAt: '2026-10-08T21:00:00Z' };
+    expect(parseQuota(JSON.stringify({ data: { rateLimit } }))).toEqual({
+      remaining: 4912,
+      limit: 5000,
+      resetAt: '2026-10-08T21:00:00Z',
+    });
+  });
+
+  test('is null when the answer does not say', () => {
+    expect(parseQuota('<html>502</html>')).toBeNull();
+    expect(parseQuota(JSON.stringify({ data: {} }))).toBeNull();
+    // The reset time tells one window from the next.
+    const noReset = { remaining: 5, limit: 5000, resetAt: 'soon' };
+    expect(parseQuota(JSON.stringify({ data: { rateLimit: noReset } }))).toBeNull();
+    expect(
+      parseQuota(JSON.stringify({ data: { rateLimit: { remaining: 5, limit: 0 } } })),
+    ).toBeNull();
+  });
+});
+
+describe('attempt start', () => {
+  test('asks REST for the attempt, on the watch’s host', () => {
+    expect(attemptArgs('github.com', 'o/r', 9, 2)).toEqual([
+      'gh',
+      'api',
+      'repos/o/r/actions/runs/9/attempts/2',
+    ]);
+    expect(attemptArgs('ghe.example.com', 'o/r', 9, 2)).toContain('ghe.example.com');
+  });
+
+  test('reads run_started_at, and null for anything else', () => {
+    const start = JSON.stringify({ run_attempt: 2, run_started_at: '2026-10-15T03:15:16Z' });
+    expect(parseAttemptStart(start)).toBe(Date.parse('2026-10-15T03:15:16Z'));
+    expect(parseAttemptStart(JSON.stringify({ run_started_at: '1' }))).toBeNull();
+    expect(parseAttemptStart('null')).toBeNull();
+    expect(() => parseAttemptStart('<html>')).toThrow('gh printed something other than JSON');
+  });
+});
+
+describe('parseEstimate', () => {
+  test('is the last successful run’s length when it is the only one', () => {
+    const out = JSON.stringify({
+      workflow_runs: [
+        { run_started_at: '2026-10-03T22:49:09Z', updated_at: '2026-10-03T22:50:48Z' },
+      ],
+    });
+    expect(parseEstimate(out)).toBe(99_000);
+  });
+
+  test('is the median of the recent runs, not the latest', () => {
+    expect(parseEstimate(runs(took(133), took(254), took(277), took(231), took(297)))).toBe(
+      254_000,
+    );
+    expect(parseEstimate(runs(took(100), took(300), took(200), took(400)))).toBe(250_000);
+  });
+
+  test('leaves out a run with no length, and a missing run', () => {
+    expect(parseEstimate(runs(took(0), took(250)))).toBe(250_000);
+    expect(parseEstimate(runs(took(-5)))).toBeNull();
+    expect(parseEstimate(runs(null, took(250)))).toBe(250_000);
+  });
+
+  test('leaves out re-runs, whose length counts only what ran again', () => {
+    expect(parseEstimate(runs(took(7, 4), took(7, 2), took(250)))).toBe(250_000);
+  });
+
+  test('is 0 when the workflow never succeeded on a first attempt', () => {
+    expect(parseEstimate(runs())).toBe(0);
+    expect(parseEstimate(runs(took(7, 2)))).toBe(0);
+  });
+
+  test('is unknown when the answer does not say', () => {
+    expect(parseEstimate(JSON.stringify({ message: 'Not Found' }))).toBeNull();
+    expect(parseEstimate(JSON.stringify({ workflow_runs: [{ run_started_at: null }] }))).toBeNull();
+    const loose = { workflow_runs: [{ run_started_at: '1', updated_at: '2' }] };
+    expect(parseEstimate(JSON.stringify(loose))).toBeNull();
+    expect(parseEstimate('<html>502</html>')).toBeNull();
+  });
+});
+
+describe('the gh calls', () => {
+  test('name the repository and pull request, the number as an integer', () => {
+    const args = pullArgs('github.com', 'oakoss/claude-plugins', 128);
+    expect(args.slice(0, 3)).toEqual(['gh', 'api', 'graphql']);
+    expect(args).toContain('o=oakoss');
+    expect(args).toContain('r=claude-plugins');
+    expect(args.slice(-2)).toEqual(['-F', 'n=128']);
+    expect(args).not.toContain('--hostname');
+  });
+
+  test('ask for the head commit’s required checks', () => {
+    const query = pullArgs('github.com', 'a/b', 1).find((a) => a.startsWith('query='));
+    expect(query).toContain('commits(last: 1)');
+    expect(query).toContain('isRequired(pullRequestNumber: $n)');
+  });
+
+  test('ask for the base branch, when it merged, and the merge commit’s runs', () => {
+    const query = queryOf(pullArgs('github.com', 'a/b', 1, true));
+    for (const field of ['baseRefName', 'mergedAt', 'mergeCommit { oid checkSuites']) {
+      expect(query).toContain(field);
+    }
+    expect(query).not.toContain('commits(last: 1)');
+  });
+
+  test('ask an open pull request for its head commit’s runs alone', () => {
+    const query = queryOf(pullArgs('github.com', 'a/b', 1));
+    expect(query).toContain('commits(last: 1)');
+    expect(query).not.toContain('mergeCommit');
+  });
+
+  test('ask every query for the quota it leaves', () => {
+    for (const args of [
+      pullArgs('github.com', 'a/b', 1),
+      pullArgs('github.com', 'a/b', 1, true),
+      pushArgs('github.com', 'a/b', 'main'),
+      trunkArgs('github.com', 'a/b', 'main'),
+    ]) {
+      expect(queryOf(args)).toContain('rateLimit { cost remaining limit resetAt }');
+    }
+  });
+
+  test('pass a GitHub Enterprise host', () => {
+    expect(pullArgs('ghe.example.com', 'a/b', 1)).toContain('ghe.example.com');
+    expect(estimateArgs('ghe.example.com', 'a/b', 9)).toEqual([
+      'gh',
+      'api',
+      '--hostname',
+      'ghe.example.com',
+      'repos/a/b/actions/workflows/9/runs?status=success&per_page=10',
+    ]);
+  });
+});
