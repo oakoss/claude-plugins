@@ -5913,6 +5913,21 @@ describe('the stop-before setting', () => {
     await say($, 'thanks');
     expect(denied(await bash($, 'gh pr merge 47 --auto'), 'merge')).toBe(true);
   });
+  test('a request beside other work grants nothing and tells the agent to ask', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'Ok, lets file that then we can merge 358');
+    const note = (w.contexts ?? []).find((c) => c.includes('beside other work')) ?? '';
+    expect(note).toContain('seems to ask for a merge beside other work');
+    expect(note).toContain('mcp__review-cycle__offer');
+    expect(denied(await bash($, 'gh pr merge 358 --squash'), 'merge')).toBe(true);
+  });
+  test('a message that only names a step, or asks for it outright, gets no such note', async ($, on) => {
+    const w = fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
+    await say($, 'anything else before we merge?');
+    await say($, 'merge 358');
+    await say($, 'push it then merge it');
+    expect((w.contexts ?? []).filter((c) => c.includes('beside other work'))).toEqual([]);
+  });
   test('a merge hold typed into the running turn ends a standing merge', async ($, on) => {
     const w = fakeWorld(on, { settings: { local: stops('merge') }, git: onMain });
     await say($, 'merge 47 once CI passes');

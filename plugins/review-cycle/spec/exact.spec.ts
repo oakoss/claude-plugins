@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import { NO_GRANT, type Grant } from '../hooks/consent';
 import {
+  besideOf,
   dropsGrant,
   endsReady,
   grantOf,
@@ -287,6 +288,46 @@ describe("a yes to the offer tool's question", () => {
   test.each(['looks good', 'yes but wait', 'ok, ship it', 'great', ''])('%s is not', (text) =>
     expect(isReply(text)).toBe(false),
   );
+});
+
+describe('a request beside other work', () => {
+  test.each<[string, ReturnType<typeof besideOf>]>([
+    ['Ok, lets file that then we can merge 358', ['merge']],
+    ['merge 316 then start on cpl-12', ['merge']],
+    ['Ok, lets file the bead then ship', ['push', 'pr']],
+    ['lets file it and then release', ['release']],
+    ['Ok, lets ship it and start layer 2', ['push', 'pr']],
+    ["Can you explain Alice's suggestion to add the note and then ship it", ['push', 'pr']],
+    ['we can fix it next week then merge 5', ['merge']],
+    ['push it and fix the docs then merge 5', ['push', 'merge']],
+    ['merge 5 then fix the docs and push it', ['push', 'merge']],
+  ])('%s names %j, and grants nothing', (text, steps) => {
+    expect(besideOf(text)).toEqual(steps);
+    expect(grantOf(text)).toEqual(NO_GRANT);
+  });
+
+  test.each([
+    ['a request as a whole', 'merge 358'],
+    ['two requests', 'push it then merge it'],
+    ['a step only named', 'anything else before we merge?'],
+    ['a step only named', 'lets talk about merging then look at the docs'],
+    ['a hold', "lets file that then merge 358, but don't push"],
+    ['a hold', 'lets file that. wait, then merge 358'],
+    ['a standing ask', 'lets file that then merge it when its ready'],
+    ['a standing ask', 'lets file that then release when the release PR is ready'],
+    ['a commit alone', 'lets fix the wording and commit'],
+    ['a request after a sentence end', 'that looks wrong. merge 358'],
+    ['a message too long to be a request', `lets file ${'that '.repeat(60)}then merge 358`],
+    ['nothing to read', 'thanks and goodbye'],
+  ])('%s is none: %s', (_, text) => {
+    expect(besideOf(text)).toEqual([]);
+  });
+
+  test('reads the request with the previous answer, as a request alone is read', () => {
+    expect(besideOf('lets file that then merge it', 'Checks pass.\n\nMerge #53?')).toEqual([
+      'merge',
+    ]);
+  });
 });
 
 describe('holds', () => {

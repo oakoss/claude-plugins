@@ -4,6 +4,7 @@ import { NAMED_ELSEWHERE, NO_GRANT, type Grant } from '../hooks/consent';
 import { grantOf } from '../hooks/exact';
 import {
   askThem,
+  besideNote,
   judgeGh,
   NO_STANDING,
   parsePullRequest,
@@ -517,6 +518,14 @@ describe('a push through GitHub', () => {
       ],
     });
   });
+});
+
+test('the note for a request beside other work names its steps and the offer tool', () => {
+  const note = besideNote(['push', 'pr']);
+  expect(note).toContain('seems to ask for a push and a pull request beside other work');
+  expect(note).toContain('it granted nothing');
+  expect(note).toContain('the question mcp__review-cycle__offer gives for it');
+  expect(note).toContain('do not try it first');
 });
 
 describe('a refusal that names a step', () => {
