@@ -2066,6 +2066,8 @@ const reviewing = (status: string, conclusion: string | null): any => ({
   },
 });
 
+const running = () => headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED' });
+
 describe('asking about a merge', () => {
   const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
   const ASK = 'ask the user whether to merge it';
@@ -2219,6 +2221,64 @@ describe('asking about a merge', () => {
     await clock.advance(120_000);
     expect(seen.wakes).toHaveLength(1);
     expect(seen.wakes[0]).toContain(ASK);
+  });
+
+  const WILL_ASK = 'pr-watch wakes you to ask about its merge';
+
+  test('the watches tool says which pull request it will ask about', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const url129 = 'https://github.com/o/r/pull/129';
+    const gh: Gh = {
+      pr: running(),
+      prs: { 129: prJson({ number: 129, url: url129, mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]) },
+      view: OPEN,
+      views: { 129: JSON.stringify({ url: url129, state: 'OPEN', mergedAt: null }) },
+      stopBefore: {},
+    };
+    world(on, gh);
+    await start($);
+    await create($);
+    await tool($, 'watch', { pull: '129' });
+    await clock.advance(1000);
+    const listed = await tool($, 'watches');
+    const lines = listed.split('\n');
+    expect(lines.find((l) => l.startsWith(URL))).toContain(WILL_ASK);
+    expect(lines.find((l) => l.startsWith(url129))).not.toContain(WILL_ASK);
+    await tool($, 'watch', { pull: '128', wake: true });
+    expect(await tool($, 'watches')).not.toContain(WILL_ASK);
+  });
+
+  test(
+    'the watches tool promises no ask with waking off',
+    { options: { wake: 'off' } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      world(on, { pr: running(), view: OPEN, stopBefore: {} });
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      expect(await tool($, 'watches')).toContain(URL);
+      expect(await tool($, 'watches')).not.toContain(WILL_ASK);
+    },
+  );
+
+  test('the watches tool promises no ask where Claude merges unasked, or of a release', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = { pr: running(), view: OPEN, stopBefore: { user: 'release' } };
+    world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(await tool($, 'watches')).not.toContain(WILL_ASK);
+    gh.stopBefore = {};
+    expect(await tool($, 'watches')).toContain(WILL_ASK);
+    const release = {
+      headRefName: 'oakum/version-packages',
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    gh.pr = headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED', ...release });
+    await clock.advance(120_000);
+    expect(await tool($, 'watches')).not.toContain(WILL_ASK);
   });
 
   test('asks nothing where review-cycle lets Claude merge unasked', async ($, on) => {

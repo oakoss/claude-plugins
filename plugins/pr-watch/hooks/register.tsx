@@ -1087,13 +1087,26 @@ async function onUnwatchTool($: $, e: unknown): Promise<{ result: string }> {
   }
 }
 
+const WILL_ASK =
+  '; pr-watch wakes you to ask about its merge once it is ready with nothing running or failed';
+
 async function onWatchesTool($: $): Promise<{ result: string }> {
   try {
     const list = await read($, watches);
     if (list.length === 0) return { result: 'pr-watch is watching nothing.' };
     const now = await $.clock.now();
     const known = await read($, estimates);
-    return { result: list.map((w) => `${w.url}: ${textOf(w, now, known)}`).join('\n') };
+    // Said per line, so a skill can leave the merge question to pr-watch only
+    // where pr-watch will ask it.
+    const own = config.isAwake && !(await isMergeUnasked($)) ? await read($, ownPulls) : [];
+    const woken = await read($, wakeAsked);
+    const asks = (w: Watch) =>
+      own.includes(idOf(w)) && !woken.includes(idOf(w)) && !(w.pull && isReleasePull(w.pull));
+    return {
+      result: list
+        .map((w) => `${w.url}: ${textOf(w, now, known)}${asks(w) ? WILL_ASK : ''}`)
+        .join('\n'),
+    };
   } catch (error) {
     return { result: `pr-watch could not list its watches: ${errorText(error)}` };
   }
@@ -1136,7 +1149,8 @@ const TOOLS = [
   },
   {
     name: 'watches',
-    description: 'Lists what pr-watch is watching, each with what its line shows now. Read-only.',
+    description:
+      'Lists what pr-watch is watching, each with what its line shows now, and whether pr-watch wakes you to ask about its merge. Read-only.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];

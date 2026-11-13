@@ -341,6 +341,24 @@ describe('ship: what it may do unasked', () => {
     ]);
   });
 
+  test('the report asks nothing where pr-watch will ask once the pull request is clean', () => {
+    expectAnchors(section(text, '7. Report', 'ship'), 'ship report', [
+      ["When pr-watch's `mcp__pr-watch__watches` tool exists, call it.", 'the check'],
+      [
+        'When its answer says of every pull request the report names that pr-watch wakes you to ask about its merge',
+        'when',
+      ],
+      ['and none is a draft or a stack layer', 'not drafts or stacks'],
+      ['ask nothing now', 'no question'],
+      [
+        'a yes given now could merge it before a reviewer the merge does not wait on has finished',
+        'why',
+      ],
+      ['End the report by saying you will ask about merging once it is clean.', 'what it says'],
+      ["Otherwise, when review-cycle's `mcp__review-cycle__offer` tool exists", 'the fallback'],
+    ]);
+  });
+
   test('the report ends with the merge question, so a yes merges what it opened', () => {
     expectAnchors(section(text, '7. Report', 'ship'), 'ship report', [
       [
