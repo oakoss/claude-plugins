@@ -699,7 +699,8 @@ const said = (author: string, at: string, did = 'commented on', isBot = false) =
   did,
   isBot,
   isReview: did !== 'commented on',
-  isPlan: false,
+  isNotice: false,
+  isClean: false,
 });
 
 describe('isQuotaLow', () => {
@@ -826,7 +827,7 @@ describe('settingsOf and tellsOf', () => {
     const person = said('alice', minute(1));
     const botReview = said('coderabbit', minute(2), 'reviewed', true);
     const botComment = said('oakum', minute(3), 'commented on', true);
-    const plan = { ...said('planner', minute(4), 'commented on', true), isPlan: true };
+    const plan = { ...said('planner', minute(4), 'commented on', true), isNotice: true };
     const told = (wake: WakeSetting, bots: BotSetting) => {
       const tells = tellsOf(wake, bots);
       return [person, botReview, botComment, plan].filter((a) => tells(a)).map((a) => a.author);
@@ -895,10 +896,23 @@ describe('wakeOf', () => {
       headOid: 'a1',
     });
     const told = after(done, after(running));
-    expect(told.text).toContain(
+    // One that passed leaves Claude nothing to do, so it waits for the next prompt.
+    expect(told.news).toEqual([]);
+    expect(told.passed).toEqual([]);
+    expect(told.clean).toEqual([
       'pullfrog, not required to merge, finished (success) for o/r#128: https://pullfrog.com/run/1',
-    );
+    ]);
     expect(after(done, told).text).toBeNull();
+    const ended = (conclusion: string | null) =>
+      after(pull([green()], { appRuns: [reviewer('done', conclusion, 120_000)], headOid: 'c3' }));
+    for (const conclusion of ['NEUTRAL', 'SKIPPED']) {
+      expect(ended(conclusion).news, conclusion).toEqual([]);
+      expect(ended(conclusion).clean, conclusion).toHaveLength(1);
+    }
+    for (const conclusion of ['CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', null]) {
+      expect(ended(conclusion).news, String(conclusion)).toHaveLength(1);
+      expect(ended(conclusion).clean, String(conclusion)).toEqual([]);
+    }
     // A check that ran seconds, as the CodeQL App's does, is no review.
     const quick = pull([green()], { appRuns: [reviewer('done', 'SUCCESS', 3000)], headOid: 'a1' });
     expect(after(quick).text).not.toContain('pullfrog');
@@ -906,7 +920,9 @@ describe('wakeOf', () => {
       appRuns: [reviewer('done', 'FAILURE', 120_000)],
       headOid: 'b2',
     });
-    expect(after(next, told).text).toContain('pullfrog, not required to merge, finished (failure)');
+    expect(after(next, told).news).toEqual([
+      'pullfrog, not required to merge, finished (failure) for o/r#128: https://pullfrog.com/run/1',
+    ]);
   });
 
   test('says ready again once it stopped being ready, but not after GitHub recomputes', () => {
@@ -1011,6 +1027,7 @@ describe('wakeOf', () => {
       news: [],
       ready: null,
       passed: [],
+      clean: [],
       told: [],
       heard: { since: null, keys: [] },
     });
@@ -1133,6 +1150,10 @@ describe('wakeOf', () => {
     const again = heldWith(held, { ...held, news: ['@alice commented', '@bob commented'] });
     expect(again.news).toEqual(['@alice commented', '@bob commented']);
     expect(heldWith({ ...held, ready: woke.ready }, held).ready).toBe(woke.ready);
+    expect(again).not.toHaveProperty('clean');
+    const clean = heldWith({ ...held, clean: ['a', 'b'] }, { ...held, clean: ['b', 'c'] });
+    expect(clean.clean).toEqual(['a', 'b', 'c']);
+    expect(heldWith({ ...held, clean: ['a'] }, held).clean).toEqual(['a']);
   });
 
   test('tells each push its own passed checks', () => {
@@ -1225,13 +1246,53 @@ describe('wakeOf', () => {
 
   test('hears a release plan comment without telling it, whatever the setting', () => {
     const first = after(pull([]));
-    const plan = { ...said('oakum', minute(1), 'commented on', true), isPlan: true };
+    const plan = { ...said('oakum', minute(1), 'commented on', true), isNotice: true };
     const p = pull([], { activity: [plan, said('alice', minute(2))] });
     const tells = tellsOf('checks and comments', 'comments and reviews');
     const woke = wakeOf(pr, p, verdictAt(p), first, { tells });
     expect(woke.text).toContain('@alice commented on');
     expect(woke.text).not.toContain('@oakum');
     expect(woke.heard?.keys).toEqual(['https://x/oakum', 'https://x/alice']);
+  });
+
+  test('holds a bot’s review that found nothing for the next prompt, with no reply tool', () => {
+    const first = after(pull([]));
+    const clean = { ...said('pullfrog', minute(1), 'reviewed', true), isClean: true };
+    const tells = tellsOf('checks and comments', 'reviews');
+    const p = pull([], { activity: [clean] });
+    const woke = wakeOf(pr, p, verdictAt(p), first, { tells });
+    expect(woke.news).toEqual([]);
+    expect(woke.passed).toEqual([]);
+    expect(woke.clean).toEqual([
+      '@pullfrog[bot] reviewed o/r#128 and found no issues: https://x/pullfrog',
+    ]);
+    expect(woke.text).not.toContain(REPLY_TOOL);
+    expect(woke.heard).not.toHaveProperty('streak');
+    expect(wakeOf(pr, p, verdictAt(p), woke, { tells }).text).toBeNull();
+    // Bots not asked for: heard, and held nowhere.
+    expect(wakeOf(pr, p, verdictAt(p), first).text).toBeNull();
+    const both = pull([], { activity: [clean, said('carol', minute(2), 'reviewed')] });
+    const mixed = wakeOf(pr, both, verdictAt(both), first, { tells });
+    expect(mixed.news).toEqual(['@carol reviewed o/r#128: https://x/carol', REPLY_TOOL]);
+    expect(mixed.clean).toHaveLength(1);
+  });
+
+  test('a review that found nothing leaves the comment streak as it was, capped or not', () => {
+    const clean = { ...said('pullfrog', minute(1), 'reviewed', true), isClean: true };
+    const tells = tellsOf('checks and comments', 'reviews');
+    const p = pull([ci([job('Test', null)])], { activity: [clean] });
+    for (const streak of [2, QUIET_CAP + 1]) {
+      const woke = wakeOf(
+        pr,
+        p,
+        verdictAt(p),
+        { heard: { since: null, keys: [], streak } },
+        { tells },
+      );
+      expect(woke.heard?.streak).toBe(streak);
+      expect(woke.news).toEqual([]);
+      expect(woke.clean).toHaveLength(1);
+    }
   });
 
   test('stops comment-only wakes after QUIET_CAP in a row, saying so on the last', () => {
@@ -1305,6 +1366,7 @@ describe('wakeOf', () => {
       news: [],
       ready: null,
       passed: [],
+      clean: [],
       told: [],
       heard: undefined,
     });
@@ -1460,6 +1522,9 @@ describe('contextOf and suggestionOf', () => {
     );
     expect(contextOf([])).toBeNull();
     expect(contextOf([held('3', null)])).toBeNull();
+    expect(contextOf([{ ...held('4', null, ['x.']), clean: ['found no issues.'] }])).toBe(
+      'pr-watch, since your last turn: x. found no issues.',
+    );
   });
 
   test('offers no merge of a release pull request, whose merge is the release', () => {

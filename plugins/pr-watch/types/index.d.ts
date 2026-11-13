@@ -46,8 +46,11 @@ export type Activity = {
   did: string;
   isBot: boolean;
   isReview: boolean;
-  // A bot's comment that only states a release tool's plan.
-  isPlan: boolean;
+  // A bot's comment that asks nothing of anyone: a release tool's plan, or a
+  // reviewer saying it has started.
+  isNotice: boolean;
+  // A bot's review that opens by saying it found nothing.
+  isClean: boolean;
 };
 
 export type Pull = {
@@ -141,6 +144,8 @@ export type Held = {
   url: string;
   news: string[];
   ready: string | null;
+  // News of nothing wrong, which no asked wake covers and no resume tells again.
+  clean?: string[];
   // A release tool's version pull request, whose merge is the release.
   isRelease?: boolean;
 };

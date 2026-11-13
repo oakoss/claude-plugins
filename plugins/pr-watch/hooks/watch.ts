@@ -836,9 +836,9 @@ export function toastOf(
   return null;
 }
 
-// Something Claude is told of once, for as long as it lasts. A passed one is
-// news Claude cannot act on, so it never wakes Claude.
-type Condition = { key: string; text: string; isPassed?: true };
+// Something Claude is told of once, for as long as it lasts. A passed or clean
+// one is news Claude cannot act on, so it never wakes Claude.
+type Condition = { key: string; text: string; isPassed?: true; isClean?: true };
 
 type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
 
@@ -1023,7 +1023,8 @@ function conditionsOf(
       const link = app.url ? `: ${app.url}` : '';
       const text = `${app.name}, not required to merge, finished (${how}) for ${name}${link}`;
       const what = JSON.stringify([app.app, app.name, 'finished']);
-      found.push({ key: keyOf(watch, what, pull.headOid), text });
+      const key = keyOf(watch, what, pull.headOid);
+      found.push({ key, text, ...(PASSED.has(app.conclusion ?? '') && { isClean: true }) });
     }
   }
   const isMerged = verdict.kind.startsWith('merged-');
@@ -1052,20 +1053,30 @@ function conditionsOf(
 export type Memory = Pick<Watch, 'told' | 'heard'>;
 // `ready` is kept apart from the rest of the news, so a notice held past a
 // merge can leave it out, and so can one whose merge would need asking; `passed`
-// is news for the next prompt, never a wake. `text` is all of it, for a tool's answer.
+// is news for the next prompt, never a wake, unless the watch tool asked for
+// one; `clean` waits for the next prompt even then: a reviewer's check that
+// passed, a review that found nothing. `text` is all of it, for a tool's answer.
 export type Wake = {
   text: string | null;
   news: string[];
   ready: string | null;
   passed: string[];
+  clean: string[];
   told: string[];
   heard: Watch['heard'];
 };
 
 export function heldWith(was: Held, next: Held): Held {
   const news = [...new Set([...was.news, ...next.news])];
+  const clean = [...new Set([...(was.clean ?? []), ...(next.clean ?? [])])];
   const isRelease = next.isRelease === true || was.isRelease === true;
-  return { ...next, news, ready: next.ready ?? was.ready, ...(isRelease && { isRelease }) };
+  return {
+    ...next,
+    news,
+    ready: next.ready ?? was.ready,
+    ...(clean.length > 0 && { clean }),
+    ...(isRelease && { isRelease }),
+  };
 }
 
 // The ready line leads: it is the news Claude acts on.
@@ -1102,29 +1113,38 @@ export const REPLY_TOOL =
 
 // The comments and reviews not heard before, and what is heard after them. The
 // first read hears what is there without telling it; a read that cannot tell
-// whose they are hears nothing.
+// whose they are hears nothing. `clean` holds the reviews that found nothing,
+// which leave Claude nothing to do.
 function hearOf(
   pull: Pull,
   heard: Watch['heard'],
   name: string,
   tells: (a: Activity) => boolean,
-): { heard: Watch['heard']; lines: string[] } {
-  if (pull.activity === null) return { heard, lines: [] };
+): { heard: Watch['heard']; lines: string[]; clean: string[] } {
+  if (pull.activity === null) return { heard, lines: [], clean: [] };
   const keys = pull.activity.map(heardKey);
-  if (heard === undefined) return { heard: { since: pull.activityAt, keys }, lines: [] };
+  if (heard === undefined) {
+    return { heard: { since: pull.activityAt, keys }, lines: [], clean: [] };
+  }
   // An unheard item older than the first read's newest slid into the window
   // when a newer one was deleted.
   const since = heard.since === null ? -Infinity : Date.parse(heard.since);
   const lines: string[] = [];
+  const clean: string[] = [];
   let threads = false;
   for (const a of pull.activity) {
     if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || !tells(a)) continue;
-    lines.push(`@${a.author}${a.isBot ? '[bot]' : ''} ${a.did} ${name}: ${a.url}`);
+    const who = `@${a.author}${a.isBot ? '[bot]' : ''}`;
+    if (a.isClean) {
+      clean.push(`${who} ${a.did} ${name} and found no issues: ${a.url}`);
+      continue;
+    }
+    lines.push(`${who} ${a.did} ${name}: ${a.url}`);
     threads ||= a.isReview && a.did !== 'approved';
   }
   if (threads) lines.push(REPLY_TOOL);
   const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
-  return { heard: { since: heard.since, keys: kept }, lines };
+  return { heard: { since: heard.since, keys: kept }, lines, clean };
 }
 
 const WAKE_SETTINGS = ['off', 'checks', 'checks and comments'] as const;
@@ -1144,10 +1164,10 @@ export function settingsOf(options: Record<string, unknown>): {
 
 // Which comments and reviews are told, by the two /config settings. Those not
 // told are still heard, so a later change of setting reports no history. A
-// release tool's plan comment is told under no setting.
+// bot's notice is told under no setting.
 export function tellsOf(wake: WakeSetting, bots: BotSetting): (a: Activity) => boolean {
   if (wake !== 'checks and comments') return () => false;
-  if (bots === 'comments and reviews') return (a) => !a.isPlan;
+  if (bots === 'comments and reviews') return (a) => !a.isNotice;
   if (bots === 'reviews') return (a) => !a.isBot || a.isReview;
   return (a) => !a.isBot;
 }
@@ -1171,6 +1191,7 @@ export function wakeOf(
   const told = last.told ?? [];
   const news: string[] = [];
   const passed: string[] = [];
+  const clean: string[] = [];
   const kept: string[] = [];
   let ready: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
@@ -1178,6 +1199,7 @@ export function wakeOf(
     const isNew = !told.includes(c.key) && !isQuiet;
     if (isNew && c.key === keyOf(watch, 'ready')) ready = c.text;
     else if (isNew && c.isPassed) passed.push(c.text);
+    else if (isNew && c.isClean) clean.push(c.text);
     else if (isNew) news.push(c.text);
     kept.push(c.key);
   }
@@ -1195,7 +1217,8 @@ export function wakeOf(
     const key = draftKey(watch, pull);
     if (told.includes(key) && !kept.includes(key)) kept.push(key);
   }
-  const { heard: next, lines } = hearOf(pull, last.heard, name, tells);
+  const { heard: next, lines, clean: reviews } = hearOf(pull, last.heard, name, tells);
+  clean.push(...reviews);
   // So a chatty bot or thread cannot keep waking Claude, comments and reviews
   // stop after QUIET_CAP wakes in a row of nothing else, until other news comes.
   const before = last.heard?.streak ?? 0;
@@ -1208,15 +1231,19 @@ export function wakeOf(
     );
   }
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
-  const all = [...news, ...passed];
+  const all = [...news, ...passed, ...clean];
   const text = all.length === 0 && ready === null ? null : noticeOf(all, ready, watch.url);
-  return { text, news, ready, passed, told: kept, heard };
+  return { text, news, ready, passed, clean, told: kept, heard };
 }
 
 // What the person's next prompt carries of the news held back from waking
 // Claude: each line once, with what it may do about a ready pull request.
 export function contextOf(quiet: readonly Held[]): string | null {
-  const lines = quiet.flatMap((q) => [...(q.ready === null ? [] : [q.ready]), ...q.news]);
+  const lines = quiet.flatMap((q) => [
+    ...(q.ready === null ? [] : [q.ready]),
+    ...q.news,
+    ...(q.clean ?? []),
+  ]);
   if (lines.length === 0) return null;
   // A release pull request is not offered: its merge is the release. Beside
   // one, the offer names the pull requests it covers.

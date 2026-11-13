@@ -114,21 +114,15 @@ const SUMMARY = {
 };
 
 // A comment or review as parsePull reads it, made at 21:`minute`.
-const read = (
-  author: string,
-  minute: number,
-  url: string,
-  did: string,
-  isBot = false,
-  isPlan = false,
-) => ({
+const read = (author: string, minute: number, url: string, did: string, isBot = false) => ({
   author,
   at: `2026-10-03T21:${minute}:00Z`,
   url,
   did,
   isBot,
   isReview: did !== 'commented on',
-  isPlan,
+  isNotice: false,
+  isClean: false,
 });
 
 describe('parsePull', () => {
@@ -361,8 +355,9 @@ describe('parsePull', () => {
     ]);
   });
 
-  test('marks a bot’s comment that opens as a release tool’s plan does', () => {
+  test('marks a bot’s comment that is a release tool’s plan or a reviewer’s start', () => {
     const plan = '<!-- oakum:pr-plan -->\n## Release plan';
+    const start = 'New pull request. Leaping into action...';
     const bodies: [string, string, string | null][] = [
       ['oakoss', 'Bot', plan],
       ['changeset-bot', 'Bot', '###  🦋  Changeset detected\n\nLatest commit: abc'],
@@ -370,13 +365,18 @@ describe('parsePull', () => {
       ['oakoss', 'Bot', `Coverage 91%\n${plan}`],
       ['oakoss', 'Bot', null],
       ['alice', 'User', plan],
+      ['pullfrog', 'Bot', start],
+      ['pullfrog', 'Bot', `${start}\n\n1 finding: the parser drops state`],
+      ['alice', 'User', start],
+      ['pullfrog', 'Bot', `1 finding: the parser drops state\n${start}`],
+      ['pullfrog', 'Bot', `${'A long report on one line. '.repeat(3)}${start}`],
     ];
     const body = JSON.parse(
       prOutput([], {
         comments: {
           nodes: bodies.map(([login, __typename, text], i) => ({
             author: { login, __typename },
-            createdAt: `2026-10-03T21:1${i}:00Z`,
+            createdAt: `2026-10-03T21:${10 + i}:00Z`,
             url: `u/${i}`,
             ...(text !== null && { body: text }),
           })),
@@ -385,14 +385,59 @@ describe('parsePull', () => {
       }),
     );
     body.data.viewer = { login: 'me' };
-    expect(parsePull(JSON.stringify(body)).activity?.map((a) => a.isPlan)).toEqual([
+    expect(parsePull(JSON.stringify(body)).activity?.map((a) => a.isNotice)).toEqual([
       true,
+      true,
+      false,
+      false,
+      false,
+      false,
       true,
       false,
       false,
       false,
       false,
     ]);
+  });
+
+  test('marks a bot’s review that opens by saying it found nothing', () => {
+    const clean = '> ✅ No new issues found.\n\n**Reviewed changes**';
+    const reviews: [string, string, string, string | null][] = [
+      ['pullfrog', 'Bot', 'COMMENTED', clean],
+      ['pullfrog', 'Bot', 'COMMENTED', '> ℹ️ No new issues in this push. The threads are open.'],
+      ['pullfrog', 'Bot', 'COMMENTED', '> [!IMPORTANT]\n> 0 new findings. The earlier 4 are open.'],
+      ['pullfrog', 'Bot', 'COMMENTED', '> ⚠️ No new issues found, 3 earlier threads open'],
+      ['pullfrog', 'Bot', 'COMMENTED', `1 finding.\n${clean}`],
+      ['pullfrog', 'Bot', 'COMMENTED', null],
+      ['pullfrog', 'Bot', 'CHANGES_REQUESTED', clean],
+      ['alice', 'User', 'COMMENTED', clean],
+    ];
+    const body = JSON.parse(
+      prOutput([], {
+        comments: { nodes: [] },
+        reviews: {
+          nodes: reviews.map(([login, __typename, state, text], i) => ({
+            author: { login, __typename },
+            submittedAt: `2026-10-03T21:1${i}:00Z`,
+            state,
+            url: `r/${i}`,
+            ...(text !== null && { body: text }),
+          })),
+        },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activity?.map((a) => a.isClean)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(queryOf(pullArgs('github.com', 'o/r', 1))).toContain('submittedAt state url body');
   });
 
   test('reads the newest comment or review in the window, the viewer’s included', () => {
