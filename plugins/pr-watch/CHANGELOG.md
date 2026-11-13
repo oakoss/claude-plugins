@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.9.0 (2026-11-13)
+
+### Added
+
+Claude asks you about the merge once a pull request it opened is clean. A ready pull request used to wait for your next message, so unless you typed "merge 362" yourself nobody asked. Now, for a pull request Claude opened in this session, pr-watch wakes it once the pull request is ready to merge with nothing still running and nothing failed, an AI reviewer's check and a check the merge does not wait on included, and tells it to ask you whether to merge, ending its reply with the question review-cycle's offer tool gives, so a yes is all you type. Claude is told to ask only if nothing is left to do, such as an unanswered review thread or an unpushed fix. It asks once per head commit, and again after a check failed and passed. Nothing changes for a release pull request, for one you watch through the `watch` tool, where ready already wakes Claude (an asked wake, or review-cycle letting it merge unasked), or with Wake Claude `off`.
+
+### Fixed
+
+A cancelled run now reads as cancelled, not failed: the line shows `✗ CI cancelled` and Claude is told "CI was cancelled". When a merge commit's run was cancelled because a later commit on the branch started its own run of the same workflow, as happens when a second pull request merges seconds after the first, the merged pull request's line follows that later run, running or finished, and Claude is told nothing of the cancellation; it reads `✓ checks passed on a later commit` once that run passes. Before, pr-watch reported the cancellation as "CI failed (cancelled)" and woke Claude about a failure that never happened. In a fail-fast matrix, where GitHub cancels a failed job's siblings, the line now names the job that failed rather than a cancelled sibling, and Claude's message links that job's log.
+
+A release tool's plan comment no longer wakes Claude. With "Bots wake Claude" set to `comments and reviews`, oakum's release-plan comment and changeset-bot's "Changeset detected" were told as news on every pull request, and Claude had to open each to learn it asked for nothing. They are now never told, under any setting; changeset-bot's "No Changeset found" still is, since it asks for a changeset. A bot's news line also names it as a bot, `@oakoss[bot] commented on …`, so the kind of comment is clear without opening it.
+
+An AI reviewer that finds nothing no longer wakes Claude. On a clean pull request Pullfrog woke it three times, each a turn with nothing to do: for its comment that it had started, for its review saying `✅ No new issues found.`, and for its check finishing. Now the start comment is told under no setting, like a release tool's plan comment, and the clean review and a check that passed wait for your next message, which carries them to Claude. A review with findings, and a check that ended any other way, wake Claude as before. Only a review that opens as Pullfrog's clean one does counts as clean: a bot's review with no inline comments still wakes Claude, since its findings may be in its body.
+
+When pr-watch tells Claude about a review that is not an approval, such as a bot's review with inline findings, the message now also says to answer the review's threads, once the fix is pushed, with review-cycle's `mcp__review-cycle__reply` tool when it exists, rather than with `gh`. Before, an agent woken by "@pullfrog reviewed #118" replied with `gh`, which asks you every time, though review-cycle's `push, reply and resolve` setting allowed the reply.
+
+Claude is no longer told of merge conflicts that are already gone. When a pull request conflicted briefly while Claude was working, such as between the base branch moving and the push that merged it in, pr-watch held the news for the end of the turn and told it then, though the conflict had been cleared: Claude went looking and found nothing to resolve. Conflicts held through a turn are now dropped when a later read shows them gone. A release tool's version pull request never tells its conflicts, since the tool rebuilds it on the next push to the base branch; its line still shows `⚠ conflicts` once its checks finish, while they last.
+
+The `watches` tool says of each pull request whether pr-watch will wake Claude to ask about its merge. A skill that would ask the merge question itself, such as pr-kit's `ship`, can then leave it to pr-watch only where pr-watch will ask: for a pull request Claude opened in this session, with Wake Claude on, no wake asked through the `watch` tool, and review-cycle not letting Claude merge unasked. A release pull request is never asked about.
+
 ## 0.8.0 (2026-11-09)
 
 ### Added
