@@ -295,9 +295,16 @@ export default defineConfig({
       },
     },
     {
-      // Specs under a plugin's tests/ reach the module they test, and the shared
-      // helpers in the repository's tests/, from outside it.
-      files: ['**/*.test.ts', 'plugins/*/tests/**/*.ts'],
+      // A spec reaches the module it tests in the plugin's hooks/.
+      files: ['plugins/*/spec/**/*.ts'],
+      rules: {
+        'import/no-relative-parent-imports': 'off',
+      },
+    },
+    {
+      // Specs under a plugin's spec/node/ also reach the shared helpers in the
+      // repository's tests/.
+      files: ['**/*.test.ts', 'plugins/*/spec/node/**/*.ts'],
       rules: {
         'no-console': 'off',
         'import/no-relative-parent-imports': 'off',
