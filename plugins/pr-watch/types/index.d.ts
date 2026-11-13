@@ -144,6 +144,8 @@ export type Held = {
   url: string;
   news: string[];
   ready: string | null;
+  // `ready` tells Claude to ask about the merge, so it wakes Claude rather than waiting.
+  isAsk?: boolean;
   // News of nothing wrong, which no asked wake covers and no resume tells again.
   clean?: string[];
   // A release tool's version pull request, whose merge is the release.
@@ -163,6 +165,9 @@ declare module 'claude-code' {
       turn: { isTurning: boolean; held: Held[] };
       // Watch ids, kept apart from the watch so a read in flight cannot drop one.
       ownMerges: string[];
+      // Ids of the pull requests Claude opened in this session; kept apart for
+      // the same reason.
+      ownPulls: string[];
       // Watch ids whose ready line and passed checks wake Claude, as the watch
       // tool was asked; kept apart for the same reason.
       wakeAsked: string[];

@@ -17,6 +17,7 @@ import {
   GIVE_UP_AFTER,
   needsTrunk,
   isCleared,
+  askOf,
   isRefused,
   isUnreadable,
   isQuotaLow,
@@ -81,6 +82,9 @@ const reviewer = (
   return status === 'running' ? { ...at, status } : { ...at, status, conclusion, took };
 };
 const VERCEL = { app: 1, name: 'Vercel', url: 'https://x/vercel' };
+// A pull request whose head commit is known, its checks passed unless given.
+const headed = (over: Partial<Pull> = {}, workflows: Workflow[] = [green()]) =>
+  pull(workflows, { headOid: 'a1', ...over });
 const draftOn = (workflows: Workflow[], over: Partial<Pull> = {}) =>
   pull(workflows, { isDraft: true, headOid: 'a1', ...over });
 
@@ -933,6 +937,53 @@ describe('wakeOf', () => {
     expect(after(pull([green()]), running).text).toContain('ready to merge');
   });
 
+  test('asks about the merge once ready with nothing running, apart from the news', () => {
+    const at = headed;
+    const first = after(at());
+    expect(first.ask).toBe(askOf('o/r#128'));
+    expect(first.ready).toContain('ready to merge');
+    expect(first.text).not.toContain('ask the user');
+    expect(after(at(), first).ask).toBeNull();
+    // A reviewer still at work holds the ask back, until it is done.
+    const reviewing = after(at({ appRuns: [reviewer('running')] }));
+    expect(reviewing.ask).toBeNull();
+    expect(reviewing.ready).toContain('pullfrog was still running');
+    const done = at({ appRuns: [reviewer('done', 'SUCCESS', 120_000)] });
+    expect(after(done, reviewing).ask).toBe(askOf('o/r#128'));
+    expect(after(done, reviewing).ready).toBeNull();
+    expect(after(at({}, [green(), codeql(null)])).ask).toBeNull();
+    // Nothing ties one to a commit without its head, and a release is the user's.
+    expect(after(pull([green()])).ask).toBeNull();
+    const release = { branch: 'oakum/version-packages', repo: 'o/r' };
+    expect(after(at({ head: release })).ask).toBeNull();
+    expect(after(at({ merge: 'BLOCKED' })).ask).toBeNull();
+    expect(after(at({ isDraft: true })).ask).toBeNull();
+    // GitHub calls it ready with a check the merge does not wait on failed.
+    const optional = flow(3, 'Docs', [job('Build', 'FAILURE')]);
+    expect(after(at({}, [green(), optional])).ready).toContain('ready to merge');
+    expect(after(at({}, [green(), optional])).ask).toBeNull();
+    for (const conclusion of ['FAILURE', 'CANCELLED', null]) {
+      const ended = at({ appRuns: [reviewer('done', conclusion, 120_000)] });
+      expect(after(ended).ask, String(conclusion)).toBeNull();
+    }
+  });
+
+  test('asks once per head commit, whatever GitHub recomputes, unless a check failed since', () => {
+    const at = headed;
+    const asked = after(at());
+    const checking = after(at({ merge: 'UNKNOWN' }), asked);
+    expect(after(at(), checking).ask).toBeNull();
+    const rerun = after(at({ merge: 'BLOCKED' }, [ci([job('Test', null)])]), asked);
+    expect(after(at(), rerun).ask).toBeNull();
+    const behind = after(at({ merge: 'BEHIND' }), asked);
+    expect(after(at(), behind).ask).toBeNull();
+    const failed = after(at({ merge: 'BLOCKED' }, [ci([job('Test', 'FAILURE')])]), asked);
+    expect(after(at(), failed).ask).toBe(askOf('o/r#128'));
+    const refused = after(at({ appRuns: [reviewer('done', 'FAILURE', 120_000)] }), asked);
+    expect(after(at(), refused).ask).toBe(askOf('o/r#128'));
+    expect(after(at({ headOid: 'b2' }), asked).ask).toBe(askOf('o/r#128'));
+  });
+
   test('says nothing of running checks, a wait on review, or a branch behind its base', () => {
     expect(after(pull([ci([job('Test', null)])])).text).toBeNull();
     expect(after(pull([green()], { merge: 'BLOCKED', review: 'REVIEW_REQUIRED' })).text).toBeNull();
@@ -1026,6 +1077,7 @@ describe('wakeOf', () => {
       text: null,
       news: [],
       ready: null,
+      ask: null,
       passed: [],
       clean: [],
       told: [],
@@ -1154,6 +1206,15 @@ describe('wakeOf', () => {
     const clean = heldWith({ ...held, clean: ['a', 'b'] }, { ...held, clean: ['b', 'c'] });
     expect(clean.clean).toEqual(['a', 'b', 'c']);
     expect(heldWith({ ...held, clean: ['a'] }, held).clean).toEqual(['a']);
+    // An ask replaces a ready line held before it, and outlasts news that joins it.
+    const asking = { ...held, ready: 'ask', isAsk: true };
+    expect(heldWith({ ...held, ready: woke.ready }, asking)).toMatchObject({
+      ready: 'ask',
+      isAsk: true,
+    });
+    expect(heldWith(asking, held)).toMatchObject({ ready: 'ask', isAsk: true });
+    expect(heldWith(asking, { ...held, ready: woke.ready })).not.toHaveProperty('isAsk');
+    expect(heldWith({ ...held, ready: woke.ready }, held)).not.toHaveProperty('isAsk');
   });
 
   test('tells each push its own passed checks', () => {
@@ -1372,6 +1433,7 @@ describe('wakeOf', () => {
       text: null,
       news: [],
       ready: null,
+      ask: null,
       passed: [],
       clean: [],
       told: [],

@@ -2041,6 +2041,213 @@ describe('ready to merge, while merges need asking', () => {
   });
 });
 
+// A pull request whose head commit `oid` ran these suites.
+const headJson = (oid: string, suites: unknown[] = [PASSED_CI], over = {}) => {
+  const checkSuites = { pageInfo: { hasNextPage: false }, nodes: suites };
+  return prJson({ commits: { nodes: [{ commit: { oid, checkSuites } }] }, ...over });
+};
+const reviewing = (status: string, conclusion: string | null): any => ({
+  status,
+  conclusion,
+  app: { databaseId: 7 },
+  workflowRun: null,
+  checkRuns: {
+    nodes: [
+      {
+        name: 'pullfrog',
+        status,
+        conclusion,
+        isRequired: false,
+        detailsUrl: 'https://pullfrog.com/run/1',
+        startedAt: '2026-10-03T22:00:00Z',
+        ...(status === 'COMPLETED' && { completedAt: '2026-10-03T22:04:00Z' }),
+      },
+    ],
+  },
+});
+
+describe('asking about a merge', () => {
+  const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+  const ASK = 'ask the user whether to merge it';
+
+  test('wakes Claude once to ask, for a pull request it opened, in place of the ready line', async ($, on) => {
+    const gh: Gh = { pr: headJson('a1'), view: OPEN, stopBefore: {} };
+    const { seen, clock } = await readyIn($, on, gh);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(
+      `o/r#128 is ready to merge and nothing is still running on it.`,
+    );
+    expect(seen.wakes[0]).toContain(ASK);
+    expect(seen.wakes[0]).not.toContain('GitHub reports');
+    expect(seen.suggested).toEqual([]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toBeUndefined();
+    // Once per head commit, whatever GitHub recomputes.
+    gh.pr = headJson('a1', [PASSED_CI], { mergeStateStatus: 'UNKNOWN' });
+    await clock.advance(120_000);
+    gh.pr = headJson('a1');
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+    gh.pr = headJson('b2');
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(2);
+  });
+
+  test('asks nothing while a check the merge does not wait on has failed, then asks', async ($, on) => {
+    const gh: Gh = { pr: headJson('a1', [PASSED_CI, FAILING_CI]), view: OPEN, stopBefore: {} };
+    const { seen, clock } = await readyIn($, on, gh);
+    expect(seen.wakes.join('\n')).not.toContain(ASK);
+    gh.pr = headJson('a1');
+    await clock.advance(120_000);
+    expect(seen.wakes.at(-1)).toContain(ASK);
+  });
+
+  test('an ask that cannot wait wakes Claude once, with no ready line beside it', async ($, on) => {
+    const gh: Gh = { pr: headJson('a1'), view: OPEN, stopBefore: {}, quietFails: true };
+    const { seen } = await readyIn($, on, gh);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(ASK);
+    expect(seen.wakes[0]).not.toContain('GitHub reports');
+  });
+
+  for (const [what, state, wakes, last] of [
+    ['asks at the end of a turn, in place of a ready line held earlier in it', 'OPEN', 1, null],
+    ['asks nothing of a pull request merged during the turn', 'MERGED', 0, null],
+    ['asks nothing when its reviewer started again during the turn', 'OPEN', 0, 'IN_PROGRESS'],
+    ['asks nothing when its reviewer failed during the turn', 'OPEN', 0, 'FAILURE'],
+  ] as const) {
+    test(what, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = {
+        pr: headJson('a1', [PASSED_CI, reviewing('IN_PROGRESS', null)]),
+        view: OPEN,
+        stopBefore: {},
+      };
+      const seen = world(on, gh);
+      on('turn.start', () => ({ turnId: 't1' }));
+      on('turn.complete', () => ({ text: '' }));
+      await start($);
+      await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+      await create($);
+      await clock.advance(1000);
+      gh.pr = headJson('a1', [PASSED_CI, reviewing('COMPLETED', 'SUCCESS')]);
+      await clock.advance(120_000);
+      expect(seen.wakes).toEqual([]);
+      if (last) {
+        const again = last === 'IN_PROGRESS' ? reviewing(last, null) : reviewing('COMPLETED', last);
+        gh.pr = headJson('a1', [PASSED_CI, again]);
+        await clock.advance(120_000);
+      }
+      gh.view = JSON.stringify({ url: URL, state, mergedAt: null });
+      await ($ as any).turn.complete({
+        answer: '',
+        durationMs: 1,
+        isAborted: false,
+        turnId: 't1',
+        reason: 'answer',
+      });
+      await clock.advance(1);
+      expect(seen.wakes.filter((w) => w.includes(ASK))).toHaveLength(wakes);
+      expect(seen.wakes.join('\n')).not.toContain('GitHub reports');
+      await $.prompt.submit(person());
+      expect(seen.contexts[0]?.join('\n') ?? '').not.toContain('ready to merge');
+    });
+  }
+
+  test('waits for a reviewer still at work, then asks and drops the ready line it kept', async ($, on) => {
+    const gh: Gh = {
+      pr: headJson('a1', [PASSED_CI, reviewing('IN_PROGRESS', null)]),
+      view: OPEN,
+      stopBefore: {},
+    };
+    const { seen, clock } = await readyIn($, on, gh);
+    expect(seen.wakes).toEqual([]);
+    gh.pr = headJson('a1', [PASSED_CI, reviewing('COMPLETED', 'SUCCESS')]);
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(ASK);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]).toEqual([
+      'pr-watch, since your last turn: pullfrog, not required to merge, finished (success) for o/r#128: https://pullfrog.com/run/1',
+    ]);
+  });
+
+  test('asks nothing of a pull request Claude did not open', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED' }),
+      view: OPEN,
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128' });
+    gh.pr = headJson('a1');
+    await clock.advance(120_000);
+    expect(seen.wakes).toEqual([]);
+    await $.prompt.submit(person());
+    expect(seen.contexts[0]?.[0]).toContain('GitHub reports o/r#128 ready to merge.');
+  });
+
+  test('asks nothing where ready already wakes Claude: an asked wake, or merges unasked', async ($, on) => {
+    const gh: Gh = {
+      pr: headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED' }),
+      view: OPEN,
+      stopBefore: {},
+    };
+    const { seen, clock } = await readyIn($, on, gh);
+    await tool($, 'watch', { pull: '128', wake: true });
+    gh.pr = headJson('a1');
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.wakes[0]).not.toContain(ASK);
+  });
+
+  test('asks of a pull request watched before Claude opened it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED' }),
+      view: OPEN,
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128' });
+    await create($);
+    gh.pr = headJson('a1');
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(ASK);
+  });
+
+  test('asks nothing where review-cycle lets Claude merge unasked', async ($, on) => {
+    const gh: Gh = { pr: headJson('a1'), view: OPEN, stopBefore: { user: 'release' } };
+    const { seen } = await readyIn($, on, gh);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
+    expect(seen.wakes[0]).not.toContain(ASK);
+  });
+
+  test('asks nothing of a release pull request', async ($, on) => {
+    const release = {
+      headRefName: 'oakum/version-packages',
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    const { seen } = await readyIn($, on, {
+      pr: headJson('a1', [PASSED_CI], release),
+      view: OPEN,
+      stopBefore: {},
+    });
+    expect(seen.wakes).toEqual([]);
+  });
+
+  test('asks nothing with waking off', { options: { wake: 'off' } }, async ($, on) => {
+    const { seen } = await readyIn($, on, { pr: headJson('a1'), view: OPEN, stopBefore: {} });
+    expect(seen.wakes).toEqual([]);
+  });
+});
+
 describe('telling Claude', () => {
   test('wakes it once when the pull request becomes ready to merge', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
