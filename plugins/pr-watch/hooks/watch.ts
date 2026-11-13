@@ -876,6 +876,20 @@ const draftKey = (watch: Who, pull: Pull) => keyOf(watch, 'draft passed', pull.h
 // per head commit.
 const askKey = (watch: Who, pull: Pull) => keyOf(watch, 'ask', pull.headOid);
 
+const CONFLICTS = ' has merge conflicts with ';
+const conflictsOf = (name: string, base: string) => `${name}${CONFLICTS}${base}.`;
+// For a held line whose watch is gone, merged or closed: no base is left to rebuild it from.
+export const isConflictsLine = (line: string) => line.includes(CONFLICTS);
+
+// The conflicts line a turn may hold for a pull request whose conflicts have
+// cleared. Judged by the told key, as a held ready line is, so that GitHub
+// recomputing the merge state changes nothing.
+export function clearedConflicts(w: Watch): string | null {
+  const { pull } = w;
+  if (!pull || w.push || (w.told ?? []).includes(keyOf(w, 'conflicts'))) return null;
+  return conflictsOf(`${w.repo}#${w.number}`, pull.base);
+}
+
 // GitHub calls a pull request ready with a check it does not require failed.
 const isSound = (pull: Pull) =>
   !isFailing(pull) &&
@@ -1021,9 +1035,10 @@ function conditionsOf(
     const text = `The checks on ${name}, a draft, passed.`;
     found.push({ key: draftKey(watch, pull), text, isPassed: true });
   }
-  if (pull.state === 'OPEN' && pull.merge === 'DIRTY') {
-    const text = `${name} has merge conflicts with ${pull.base}.`;
-    found.push({ key: keyOf(watch, 'conflicts'), text });
+  // A release tool rebuilds its pull request on the next push to the base
+  // branch, so its conflicts leave Claude nothing to do.
+  if (pull.state === 'OPEN' && pull.merge === 'DIRTY' && !isReleasePull(pull)) {
+    found.push({ key: keyOf(watch, 'conflicts'), text: conflictsOf(name, pull.base) });
   }
   if (pull.state === 'OPEN' && pull.review === 'CHANGES_REQUESTED') {
     const text = `A reviewer requested changes on ${name}.`;

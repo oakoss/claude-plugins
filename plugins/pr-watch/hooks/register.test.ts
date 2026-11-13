@@ -2358,6 +2358,92 @@ describe('telling Claude', () => {
     expect(seen.wakes[1]).toContain('runs/2/job/20');
   });
 
+  for (const [what, after, wakes, last] of [
+    ['tells no conflicts a turn held once a later read shows them cleared', 'BLOCKED', 0, null],
+    ['tells none cleared in the turn though GitHub then recomputes', 'BLOCKED', 0, 'UNKNOWN'],
+    ['tells conflicts a turn held when they are still there at its end', 'DIRTY', 1, null],
+    ['tells conflicts a turn held while GitHub recomputes them', 'DIRTY', 1, 'UNKNOWN'],
+  ] as const) {
+    test(what, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: prJson({ mergeStateStatus: 'DIRTY' }, [RUNNING_CI]) };
+      const seen = world(on, gh);
+      on('turn.start', () => ({ turnId: 't1' }));
+      on('turn.complete', () => ({ text: '' }));
+      await start($);
+      await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+      await create($);
+      await clock.advance(1000);
+      gh.pr = prJson({ mergeStateStatus: after }, [RUNNING_CI]);
+      await clock.advance(60_000);
+      if (last) {
+        gh.pr = prJson({ mergeStateStatus: last }, [RUNNING_CI]);
+        await clock.advance(60_000);
+      }
+      expect(seen.wakes).toEqual([]);
+      await ($ as any).turn.complete({
+        answer: '',
+        durationMs: 1,
+        isAborted: false,
+        turnId: 't1',
+        reason: 'answer',
+      });
+      await clock.advance(1);
+      expect(seen.wakes).toHaveLength(wakes);
+      if (wakes) expect(seen.wakes[0]).toContain('o/r#128 has merge conflicts with');
+      // Cleared ones that come back are news again.
+      gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
+      await clock.advance(60_000);
+      gh.pr = prJson({ mergeStateStatus: 'DIRTY' }, [RUNNING_CI]);
+      await clock.advance(60_000);
+      expect(seen.wakes).toHaveLength(wakes + 1);
+    });
+  }
+
+  for (const [state, merge] of [
+    ['MERGED', 'UNKNOWN'],
+    ['MERGED', 'CLEAN'],
+    ['CLOSED', 'DIRTY'],
+  ] as const) {
+    test(`tells no conflicts a turn held of a pull request ${state} in it (${merge})`, async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: prJson({ mergeStateStatus: 'DIRTY' }, [FAILING_CI]) };
+      const seen = world(on, gh);
+      on('turn.start', () => ({ turnId: 't1' }));
+      on('turn.complete', () => ({ text: '' }));
+      await start($);
+      await ($ as any).turn.start({ text: 'go', turnId: 't1' });
+      await create($);
+      await clock.advance(1000);
+      gh.pr = prJson({ state, mergeStateStatus: merge }, [RUNNING_CI]);
+      await clock.advance(60_000);
+      await ($ as any).turn.complete({
+        answer: '',
+        durationMs: 1,
+        isAborted: false,
+        turnId: 't1',
+        reason: 'answer',
+      });
+      await clock.advance(1);
+      expect(seen.wakes.join('\n')).not.toContain('has merge conflicts with');
+      // The rest of what the turn held for it is still told.
+      expect(seen.wakes.join('\n')).toContain('CI: Typecheck failed for o/r#128');
+    });
+  }
+
+  test('a release pull request’s conflicts do not wake it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const release = {
+      headRefName: 'oakum/version-packages',
+      headRepository: { nameWithOwner: 'o/r' },
+    };
+    const seen = world(on, { pr: prJson({ mergeStateStatus: 'DIRTY', ...release }, [RUNNING_CI]) });
+    await start($);
+    await create($);
+    await clock.advance(60_000);
+    expect(seen.wakes).toEqual([]);
+  });
+
   test('wakes it once for conflicts, though its checks are failing', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const seen = world(on, { pr: prJson({ mergeStateStatus: 'DIRTY' }, [FAILING_CI]) });

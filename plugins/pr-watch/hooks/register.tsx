@@ -75,7 +75,9 @@ import {
   verdictOf,
   noticeOf,
   heldWith,
+  clearedConflicts,
   isAskable,
+  isConflictsLine,
   isToldReady,
   savedOf,
   entryOf,
@@ -397,7 +399,11 @@ async function releaseOne($: $, id: string): Promise<void> {
     return h ? { ...t, held: t.held.filter((x) => x.id !== id) } : t;
   });
   if (!h) return;
-  await deliver($, { ...h, ready: isStale ? null : h.ready });
+  const all = await read($, watches);
+  const w = all.find((x) => idOf(x) === id);
+  const cleared = w ? clearedConflicts(w) : null;
+  const news = h.news.filter((line) => (w ? line !== cleared : !isConflictsLine(line)));
+  await deliver($, { ...h, news, ready: isStale ? null : h.ready });
 }
 
 // An unknown length that cannot be learned or kept is asked again after the
@@ -1128,7 +1134,7 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, its checks passed as a draft, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. One you opened in this session wakes you once it is ready with nothing still running, to ask the user about its merge. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, its checks passed as a draft, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked, nor for its conflicts. One you opened in this session wakes you once it is ready with nothing still running, to ask the user about its merge. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
     inputSchema: {
       ...PULL_INPUT,
       properties: {
