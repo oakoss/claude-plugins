@@ -1,5 +1,0 @@
----
-review-cycle: minor
----
-
-When the gate refuses a step you did not ask for, its refusal now names the one question the agent should end its reply with, so your "yes" is read exactly. Before, most refusals gave an example and left the agent to word the question, and a question worded differently could leave your yes unread and cost a second ask. Some refusals write the question out (an unrequested pull request, a stack push or submit, a merge of a pull request you did not name or in another repository, a stack's layers); the rest name the step to pass to `mcp__review-cycle__offer`. That tool gains the questions it lacked: `commit`, `finish` (a rebase, merge, cherry-pick or revert), `delete` (a remote branch), `force-push-bare`, `stack-push`, `stack-submit`, `merge-release`, and `release` with a `version` when there is no pull request. The refusal of a merge you asked for once ready, on a pull request in another repository, names that repository in its question and its `--auto` command. Nothing changes in what your messages grant.

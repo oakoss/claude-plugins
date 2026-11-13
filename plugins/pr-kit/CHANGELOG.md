@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.6.1 (2026-11-13)
+
+### Fixed
+
+Merge now offers "push it", from a checkout of the pull request's branch, when that branch is behind the default branch, since ship's update merges the default branch in and pushes; for a stack layer it names ship's `gh stack sync` or `gh stack rebase --no-trunk`, and for any other base it says ship does not merge it. Before, it offered fix-ci or fix-merge-conflicts, neither of which brings a branch up to date. Fix merge conflicts, during a rebase, now tells you how to check the result once the rebase finishes: `git range-diff --creation-factor=100 <upstream> ORIG_HEAD HEAD` compares each commit before and after it was replayed, so you can read every commit that changed or was dropped and confirm it still does what it meant to.
+
+The ship, merge and fix-ci skills ask their questions in the form review-cycle's gate now reads. fix-ci, before its first push, ends on the gate's own push question, where it used to ask "Should I commit and push the fixes?", a yes to which the gate no longer reads. Ship's stack path, before opening pull requests for layers that have none, names those layers and then ends on the gate's own stack question, where it used to ask "Ship those too?", a yes to which the gate no longer reads. The merge skill no longer says a note in parentheses holds a merge: any words beside the question now leave a yes granting nothing, so it tells the agent to keep the question whole and alone on the last line.
+
+Ship now ends its report with review-cycle's merge question, when review-cycle is installed: one question for every pull request the run opened or updated that is not a draft, naming each as `owner/name#n`, such as "Squash-merge oakoss/claude-plugins#344 and oakoss/claude-plugins#345?". A "yes" then merges them. Before, the report only said merging was yours to ask for, so a reply that named no pull request, such as "ok, lets merge them", was refused and had to be asked again with numbers. The full name matters: the report's links make a bare `#344` read as a pull request in an unknown repository.
+
+`ship` leaves the merge question to pr-watch where pr-watch will ask it. With pr-watch installed, pr-watch has Claude ask once a pull request it opened is ready to merge with nothing still running or failed, so ship's own question at the end of its report came first and too early: a yes to it could merge before a reviewer the merge does not wait on had finished. Ship now calls pr-watch's `watches` tool and asks nothing where that says pr-watch will ask, saying it will ask once the pull request is clean. Everywhere else it reports as before: without pr-watch, and where pr-watch will not ask (Wake Claude `off`, a resumed session), it ends with the merge question; a stack still gets its one `stack` question, and a draft none. If you resume the session before the pull request is clean, pr-watch no longer asks: its ready line comes with your next message instead.
+
 ## 0.6.0 (2026-11-09)
 
 ### Added
