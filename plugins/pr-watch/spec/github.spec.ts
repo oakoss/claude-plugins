@@ -114,13 +114,21 @@ const SUMMARY = {
 };
 
 // A comment or review as parsePull reads it, made at 21:`minute`.
-const read = (author: string, minute: number, url: string, did: string, isBot = false) => ({
+const read = (
+  author: string,
+  minute: number,
+  url: string,
+  did: string,
+  isBot = false,
+  isPlan = false,
+) => ({
   author,
   at: `2026-10-03T21:${minute}:00Z`,
   url,
   did,
   isBot,
   isReview: did !== 'commented on',
+  isPlan,
 });
 
 describe('parsePull', () => {
@@ -350,6 +358,40 @@ describe('parsePull', () => {
       read('dan', 30, 'r/3', 'requested changes on'),
       read('erin', 32, 'r/5', 'reviewed', true),
       read('finn', 33, 'r/6', 'reviewed'),
+    ]);
+  });
+
+  test('marks a bot’s comment that opens as a release tool’s plan does', () => {
+    const plan = '<!-- oakum:pr-plan -->\n## Release plan';
+    const bodies: [string, string, string | null][] = [
+      ['oakoss', 'Bot', plan],
+      ['changeset-bot', 'Bot', '###  🦋  Changeset detected\n\nLatest commit: abc'],
+      ['changeset-bot', 'Bot', '###  ⚠️  No Changeset found'],
+      ['oakoss', 'Bot', `Coverage 91%\n${plan}`],
+      ['oakoss', 'Bot', null],
+      ['alice', 'User', plan],
+    ];
+    const body = JSON.parse(
+      prOutput([], {
+        comments: {
+          nodes: bodies.map(([login, __typename, text], i) => ({
+            author: { login, __typename },
+            createdAt: `2026-10-03T21:1${i}:00Z`,
+            url: `u/${i}`,
+            ...(text !== null && { body: text }),
+          })),
+        },
+        reviews: { nodes: [] },
+      }),
+    );
+    body.data.viewer = { login: 'me' };
+    expect(parsePull(JSON.stringify(body)).activity?.map((a) => a.isPlan)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
     ]);
   });
 
@@ -656,6 +698,11 @@ describe('parseTrunk', () => {
   test('asks each check suite for its App', () => {
     for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
       expect(queryOf(args)).toContain('status conclusion app { databaseId }');
+    }
+  });
+  test('asks each comment for its body, merged or not', () => {
+    for (const args of [pullArgs('github.com', 'o/r', 1), pullArgs('github.com', 'o/r', 1, true)]) {
+      expect(queryOf(args)).toMatch(/comments\(last: \d+\) \{ nodes \{ [^\n]*\bbody \}/);
     }
   });
   test('reads the head commit’s oid', () => {

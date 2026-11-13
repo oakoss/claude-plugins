@@ -67,7 +67,7 @@ In `/config`:
 | Wake Claude      | `off`, `checks`, `checks and comments`     | `checks and comments` |
 | Bots wake Claude | `never`, `reviews`, `comments and reviews` | `never`               |
 
-`checks` tells everything above except comments and reviews. `off` tells Claude nothing, at once or with your next message, and leaves the line, its toasts and notifications as they are. The bot setting applies when Wake Claude includes comments: `reviews` lets a review bot's reviews through, such as CodeRabbit or Copilot, but not bot comments such as plans, coverage reports or previews. Changing a setting reports no history: comments heard while they were not told stay quiet, and whatever still lasts when waking is turned back on is told once.
+`checks` tells everything above except comments and reviews. `off` tells Claude nothing, at once or with your next message, and leaves the line, its toasts and notifications as they are. The bot setting applies when Wake Claude includes comments: `reviews` lets a review bot's reviews through, such as CodeRabbit or Copilot, but not bot comments such as plans, coverage reports or previews. `comments and reviews` lets through everything a bot posts except a release tool's plan comment, which asks nothing of anyone: oakum's, and changeset-bot's when it found a changeset. A bot's line names it as one, `@oakoss[bot] commented on …`. Changing a setting reports no history: comments heard while they were not told stay quiet, and whatever still lasts when waking is turned back on is told once.
 
 ## Tools for Claude
 
