@@ -2030,7 +2030,9 @@ async function judgeBash(
   // A gh command beside a commit or push is refused by classify.
   if (cls.kind === 'none') {
     const actions = reading.gh;
-    if (actions.length > 0 && e.agentId) return deny(SUBAGENT);
+    // A call the gate cannot read may be a read: judgeGh refuses it with how
+    // to write it out.
+    if (e.agentId && actions.some((a) => a.kind !== 'unread')) return deny(SUBAGENT);
     // It replays commits as `git rebase` does, so it is watched as history,
     // and alone, so no commit beside it goes unchecked.
     const rewrite = reading.stackRewrite;

@@ -6210,6 +6210,18 @@ describe('the stop-before setting', () => {
     const merge = await bash($, '[ -x /usr/local/bin/gh ] && gh pr merge 5', sub);
     expect(denied(merge, 'subagents do not commit, push, open, merge')).toBe(true);
   });
+  test('a subagent’s gh call the gate cannot read is told how to write it out', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('never stop') } });
+    await say($, 'fix the parser');
+    const sub = { agentId: 'sub-1' };
+    const unread = await bash($, 'gh api "$p" --jq .number', sub);
+    expect(denied(unread, 'built at run time')).toBe(true);
+    expect(denied(unread, 'a read can name `--method GET`')).toBe(true);
+    expect(denied(unread, 'subagents do not')).toBe(false);
+    expect(ran(await bash($, 'gh api repos/o/r/pulls/1', sub))).toBe(true);
+    const beside = await bash($, 'gh api "$p"; gh pr merge 5', sub);
+    expect(denied(beside, 'subagents do not commit, push, open, merge')).toBe(true);
+  });
   test('a GitHub MCP write from a subagent is refused', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') } });
     await say($, 'ship it');
