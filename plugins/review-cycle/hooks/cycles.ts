@@ -23,6 +23,17 @@ export type Side = 'above' | 'below' | 'unknown';
 export type Exit = 'converged' | 'ceiling' | 'own-work' | 'spec' | 'unknown';
 export type Finding = Readonly<{ legs: readonly Leg[]; side: Side; iteration: number | null }>;
 
+// One iteration's clause of the Cost line; a number it does not state is null.
+export type IterationCost = Readonly<{
+  iteration: number;
+  minutes: number | null;
+  legs: number | null;
+  subagentTokens: number | null;
+  codexTokens: number | null;
+  // The clause names legs whose usage was not reported.
+  isPartial: boolean;
+}>;
+
 export type Cycle = Readonly<{
   date: string;
   head: string | null;
@@ -39,6 +50,8 @@ export type Cycle = Readonly<{
   // fixes caused; null when the Convergence line says neither.
   later: number | null;
   selfCaused: number | null;
+  // Absent when the summary has no Cost line or says it was not recorded.
+  cost?: readonly IterationCost[];
 }>;
 
 // A source as the summary names it, `review-cycle:` dropped, matched whole.
@@ -117,6 +130,45 @@ function countOf(value: string | undefined): number | null {
   return /^\s*none\b/.test(value) ? 0 : null;
 }
 
+// A number too large for `isCycle` to read back is unstated, so the cycle
+// is still kept.
+const statedIn = (clause: string, re: RegExp): number | null => {
+  const n = Number(re.exec(clause)?.[1]?.replaceAll(',', ''));
+  return n <= Number.MAX_SAFE_INTEGER ? n : null;
+};
+
+// Opens a number whole, not at the tail of `.5`, `1.5` or `1,234`; a comma
+// after anything but a digit separates amounts.
+const WHOLE = String.raw`(?<![\d.])(?<!\d,)`;
+const AMOUNTS = {
+  minutes: new RegExp(String.raw`${WHOLE}(\d[\d,]*(?:\.\d+)?) min\b`),
+  legs: new RegExp(String.raw`${WHOLE}(\d+) legs?\b`),
+  subagentTokens: new RegExp(String.raw`${WHOLE}(\d[\d,]*) subagent tokens`),
+  codexTokens: new RegExp(String.raw`${WHOLE}(\d[\d,]*) Codex tokens`, 'i'),
+};
+// Usage a clause says it lacks: `not reported: <legs>`, or a count given as
+// unavailable.
+const LACKS = /not reported:\s*(?!none\b)\S|\bunavailable\b/;
+
+// The Cost line's `iteration N: …` clauses, however they are joined.
+function costOf(line: string | undefined): IterationCost[] | undefined {
+  if (line === undefined) return undefined;
+  const out: IterationCost[] = [];
+  for (const clause of line.split(/(?=\biteration \d+:)/)) {
+    const n = /^iteration (\d+):/.exec(clause)?.[1];
+    if (n === undefined || Number(n) < 1 || !Number.isSafeInteger(Number(n))) continue;
+    out.push({
+      iteration: Number(n),
+      minutes: statedIn(clause, AMOUNTS.minutes),
+      legs: statedIn(clause, AMOUNTS.legs),
+      subagentTokens: statedIn(clause, AMOUNTS.subagentTokens),
+      codexTokens: statedIn(clause, AMOUNTS.codexTokens),
+      isPartial: LACKS.test(clause),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 // Reads a summary block as the review skill's Phase 9 template writes it; a
 // field it cannot find reads as null or unknown rather than failing.
 export function cycleOf(text: string, date: string, head: string | null): Cycle {
@@ -145,6 +197,7 @@ export function cycleOf(text: string, date: string, head: string | null): Cycle 
   const read = isRead ? counts.filter((c) => c !== null) : [];
   const later = isRead ? read.reduce((s, [, of]) => s + of, 0) : null;
   const selfCaused = isRead ? read.reduce((s, [caused]) => s + caused, 0) : null;
+  const cost = costOf(fieldOf(text, 'Cost'));
   return {
     date,
     head,
@@ -157,6 +210,7 @@ export function cycleOf(text: string, date: string, head: string | null): Cycle 
     deferred: bulletsUnder(text, 'Findings deferred'),
     later,
     selfCaused,
+    ...(cost && { cost }),
   };
 }
 
@@ -185,6 +239,23 @@ const isFinding = (x: unknown): x is Finding => {
   );
 };
 
+const isAmount = (x: unknown) =>
+  x === null || (typeof x === 'number' && Number.isFinite(x) && x >= 0);
+
+const isIterationCost = (x: unknown): x is IterationCost => {
+  if (typeof x !== 'object' || x === null) return false;
+  const c = x as IterationCost;
+  return (
+    isCount(c.iteration) &&
+    c.iteration >= 1 &&
+    isAmount(c.minutes) &&
+    isCountOrNull(c.legs) &&
+    isCountOrNull(c.subagentTokens) &&
+    isCountOrNull(c.codexTokens) &&
+    typeof c.isPartial === 'boolean'
+  );
+};
+
 const isCycle = (x: unknown): x is Cycle => {
   if (typeof x !== 'object' || x === null) return false;
   const c = x as Cycle;
@@ -203,7 +274,9 @@ const isCycle = (x: unknown): x is Cycle => {
     isCountOrNull(c.later) &&
     isCountOrNull(c.selfCaused) &&
     (c.later === null) === (c.selfCaused === null) &&
-    (c.selfCaused ?? 0) <= (c.later ?? 0)
+    (c.selfCaused ?? 0) <= (c.later ?? 0) &&
+    (c.cost === undefined ||
+      (Array.isArray(c.cost) && c.cost.length > 0 && c.cost.every((i) => isIterationCost(i))))
   );
 };
 
@@ -265,7 +338,43 @@ export type Rollup = {
   later: number;
   selfCaused: number;
   byLeg: Partial<Record<Leg, LegTotals>>;
+  // Over the cycles whose Cost line was read; `partial` counts those that say
+  // some usage is missing, so their token totals run low. `legs` counts leg
+  // runs, a leg once for each iteration it ran in.
+  cost: { cycles: number; partial: number } & Spent<number>;
+  // The newest cycles, oldest first: the commit each reviewed, what it cost
+  // and what it found.
+  recent: readonly Recent[];
 };
+
+type Spent<T> = { minutes: T; legs: T; subagentTokens: T; codexTokens: T };
+
+export type Recent = Pick<Cycle, 'date' | 'head' | 'tier' | 'iterations'> & {
+  fixed: number | null;
+  deferred: number | null;
+  // An amount no iteration states is null, not zero.
+  cost: (Spent<number | null> & { isPartial: boolean }) | null;
+};
+
+// Few, since the status tool is read several times a cycle.
+export const RECENT = 5;
+
+const tenths = (n: number) => Math.round(n * 10) / 10;
+
+function spentOf(cost: readonly IterationCost[]): Spent<number | null> & { isPartial: boolean } {
+  const total = (pick: (i: IterationCost) => number | null) => {
+    const stated = cost.map((i) => pick(i)).filter((n) => n !== null);
+    return stated.length === 0 ? null : stated.reduce((s, n) => s + n, 0);
+  };
+  const minutes = total((i) => i.minutes);
+  return {
+    minutes: minutes === null ? null : tenths(minutes),
+    legs: total((i) => i.legs),
+    subagentTokens: total((i) => i.subagentTokens),
+    codexTokens: total((i) => i.codexTokens),
+    isPartial: cost.some((i) => i.isPartial),
+  };
+}
 
 // Totals over the kept cycles. A finding two legs raised counts once in the
 // totals, and once for each leg in `byLeg`.
@@ -284,6 +393,16 @@ export function rollupOf(cycles: readonly Cycle[]): Rollup {
     later: 0,
     selfCaused: 0,
     byLeg: {},
+    cost: { cycles: 0, partial: 0, minutes: 0, legs: 0, subagentTokens: 0, codexTokens: 0 },
+    recent: cycles.slice(-RECENT).map((c) => ({
+      date: c.date,
+      head: c.head,
+      tier: c.tier,
+      iterations: c.iterations,
+      fixed: c.fixedCount,
+      deferred: c.deferredCount,
+      cost: c.cost ? spentOf(c.cost) : null,
+    })),
   };
   const counted = cycles.filter((c) => c.iterations !== null);
   if (counted.length > 0) {
@@ -297,6 +416,15 @@ export function rollupOf(cycles: readonly Cycle[]): Rollup {
     r.deferredCount += c.deferredCount ?? 0;
     r.later += c.later ?? 0;
     r.selfCaused += c.selfCaused ?? 0;
+    if (c.cost) {
+      const spent = spentOf(c.cost);
+      r.cost.cycles++;
+      if (spent.isPartial) r.cost.partial++;
+      r.cost.minutes = tenths(r.cost.minutes + (spent.minutes ?? 0));
+      r.cost.legs += spent.legs ?? 0;
+      r.cost.subagentTokens += spent.subagentTokens ?? 0;
+      r.cost.codexTokens += spent.codexTokens ?? 0;
+    }
     for (const [list, key] of [
       [c.fixed, 'fixed'],
       [c.deferred, 'deferred'],

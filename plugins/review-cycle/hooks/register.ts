@@ -797,7 +797,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'status',
       description:
-        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, and how many later findings the cycles' own fixes caused. Read-only.",
+        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, how many later findings the cycles' own fixes caused, what the cycles that stated a cost spent (minutes, leg runs, subagent tokens, Codex tokens), and the newest cycles one by one with their commit, cost and findings. Read-only.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
