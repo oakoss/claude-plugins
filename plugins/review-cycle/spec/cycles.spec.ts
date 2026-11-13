@@ -6,6 +6,7 @@ import {
   isSummary,
   KEPT,
   readCycles,
+  RECENT,
   recordCycle,
   rollupOf,
   type Cycle,
@@ -174,6 +175,103 @@ describe('cycleOf', () => {
   });
 });
 
+const costOf = (line: string) => cycleOf(`Iterations: 1 (converged)\n${line}`, 'd', null).cost;
+
+const clause = (text: string) => costOf(`Cost: iteration 1: ${text}`)?.[0];
+
+const costed = (head: string, cost: string) =>
+  cycleOf(
+    `Tier: full\nIterations: 1 (converged)\nFindings fixed inline: 2\nFindings deferred: 1\nCost: ${cost}`,
+    '2026-11-12',
+    head,
+  );
+
+describe('the Cost line', () => {
+  const one = {
+    iteration: 1,
+    minutes: 12,
+    legs: 5,
+    subagentTokens: 253_086,
+    codexTokens: 1_812_691,
+    isPartial: false,
+  };
+
+  test.each([
+    [
+      'the template’s commas',
+      'Cost: iteration 1: 12 min wall-clock, 5 legs, 253086 subagent tokens, 1812691 Codex tokens, iteration 2: 3 min wall-clock, 1 leg, 36458 subagent tokens',
+    ],
+    [
+      'a semicolon and thousands separators',
+      'Cost: iteration 1: 12 min wall-clock, 5 legs, 253,086 subagent tokens, 1,812,691 Codex tokens; iteration 2: 3 min wall-clock, 1 leg, 36,458 subagent tokens',
+    ],
+  ])('reads each iteration’s clause, joined by %s', (_, line) => {
+    expect(costOf(line)).toEqual([
+      one,
+      { ...one, iteration: 2, minutes: 3, legs: 1, subagentTokens: 36_458, codexTokens: null },
+    ]);
+  });
+
+  test('reads a number a clause leaves out as null, and names a partial clause', () => {
+    expect(
+      costOf(
+        'Cost: iteration 1: 8.5 min wall-clock, 2 legs, 78474 subagent tokens, not reported: codex',
+      ),
+    ).toEqual([
+      {
+        iteration: 1,
+        minutes: 8.5,
+        legs: 2,
+        subagentTokens: 78_474,
+        codexTokens: null,
+        isPartial: true,
+      },
+    ]);
+  });
+
+  test.each([
+    ['Codex tokens unavailable (no session id)', true],
+    ['2 legs, not reported: codex', true],
+    ['2 legs, not reported: none', false],
+    ['2 legs, 10 subagent tokens', false],
+  ])('reads %j as missing usage: %s', (text, isPartial) => {
+    expect(clause(text)?.isPartial).toBe(isPartial);
+  });
+
+  test.each([
+    ['.5 min wall-clock', { minutes: null }],
+    ['1,234.5 min wall-clock', { minutes: 1234.5 }],
+    ['1.5 subagent tokens', { subagentTokens: null }],
+    ['1 leg, 500 Codex tokens', { subagentTokens: null, codexTokens: 500 }],
+    ['20 codex tokens', { codexTokens: 20 }],
+    [
+      '2 min wall-clock,2 legs,500 subagent tokens,800 Codex tokens',
+      { minutes: 2, legs: 2, subagentTokens: 500, codexTokens: 800 },
+    ],
+    ['1,234 subagent tokens', { subagentTokens: 1234 }],
+    [
+      '99999999999999999999 subagent tokens, 7 Codex tokens',
+      { subagentTokens: null, codexTokens: 7 },
+    ],
+  ])('reads %j whole or not at all', (text, read) => {
+    expect(clause(text)).toMatchObject(read);
+  });
+
+  test('skips a clause whose iteration number is too large to keep', () => {
+    expect(costOf('Cost: iteration 99999999999999999999: 2 min wall-clock')).toBeUndefined();
+  });
+
+  test.each([
+    ['no Cost line', 'Tier: full'],
+    ['not recorded', 'Cost: not recorded (the legs reported no usage)'],
+    ['no iteration clause', 'Cost: 12 min wall-clock, 5 legs'],
+    ['iteration 0', 'Cost: iteration 0: 12 min wall-clock'],
+  ])('keeps no cost for %s', (_, line) => {
+    expect(costOf(line)).toBeUndefined();
+    expect(cycleOf(`Iterations: 1 (converged)\n${line}`, 'd', null)).not.toHaveProperty('cost');
+  });
+});
+
 test('a block is a summary when it has an Iterations line', () => {
   expect([isSummary(BLOCK), isSummary('Iterations:'), isSummary('Tier: full')]).toEqual([
     true,
@@ -269,6 +367,54 @@ describe('rollupOf', () => {
   test('has no mean with no counted iterations', () => {
     expect(rollupOf([]).meanIterations).toBeNull();
   });
+
+  test('totals what the costed cycles spent, and counts the partial ones', () => {
+    const r = rollupOf([
+      costed(
+        'a1',
+        'iteration 1: 12 min wall-clock, 5 legs, 1000 subagent tokens, 9000 Codex tokens, iteration 2: 3.5 min wall-clock, 1 leg, 200 subagent tokens',
+      ),
+      costed(
+        'b2',
+        'iteration 1: 0.1 min wall-clock, 2 legs, 300 subagent tokens, iteration 2: 0.2 min wall-clock, 1 leg, not reported: codex',
+      ),
+      costed('c3', 'not recorded (no usage reported)'),
+    ]);
+    expect(r.recent.map((c) => c.cost?.minutes)).toEqual([15.5, 0.3, undefined]);
+    expect(r.recent.map((c) => c.cost?.isPartial)).toEqual([false, true, undefined]);
+    expect(r.cost).toEqual({
+      cycles: 2,
+      partial: 1,
+      minutes: 15.8,
+      legs: 9,
+      subagentTokens: 1500,
+      codexTokens: 9000,
+    });
+  });
+  test('lists the newest cycles with their commit, cost and findings, oldest first', () => {
+    const r = rollupOf([
+      costed('a1', 'iteration 1: 12 min wall-clock, 5 legs, 1000 subagent tokens'),
+      costed('b2', 'not recorded (no usage reported)'),
+    ]);
+    const row = { date: '2026-11-12', tier: 'full', iterations: 1, fixed: 2, deferred: 1 };
+    expect(r.recent).toEqual([
+      {
+        ...row,
+        head: 'a1',
+        cost: { minutes: 12, legs: 5, subagentTokens: 1000, codexTokens: null, isPartial: false },
+      },
+      { ...row, head: 'b2', cost: null },
+    ]);
+  });
+  test('totals the largest token count it keeps without rounding it', () => {
+    const r = rollupOf([costed('a1', 'iteration 1: 9007199254740991 subagent tokens')]);
+    expect(r.recent[0]?.cost?.subagentTokens).toBe(Number.MAX_SAFE_INTEGER);
+  });
+  test(`lists at most the newest ${RECENT}`, () => {
+    const many = Array.from({ length: RECENT + 2 }, (_, i) => costed(`h${i}`, 'not recorded'));
+    const heads = rollupOf(many).recent.map((c) => c.head);
+    expect([heads.length, heads[0], heads.at(-1)]).toEqual([RECENT, 'h2', `h${RECENT + 1}`]);
+  });
 });
 
 function memoryStore(): Store {
@@ -314,6 +460,29 @@ describe('the cycle store', () => {
     expect(await iterationsIn(s)).toEqual([]);
   });
   const finding = { legs: ['codex'], side: 'above', iteration: 1 };
+  const spent = {
+    iteration: 1,
+    minutes: 2.5,
+    legs: 2,
+    subagentTokens: 10,
+    codexTokens: null,
+    isPartial: false,
+  };
+  test('keeps an entry with a cost, and one written before costs were kept', async () => {
+    const s = memoryStore();
+    await recordCycle(s, '/r/.git', cycle(1), 1, 't');
+    const unstated = { ...spent, iteration: 2, minutes: null, legs: null, subagentTokens: null };
+    await recordCycle(s, '/r/.git', { ...cycle(2), cost: [spent, unstated] }, 2, 't');
+    const kept = await readCycles(s, '/r/.git');
+    expect(kept.map((c) => c.cost)).toEqual([undefined, [spent, unstated]]);
+  });
+  test('keeps a cycle whose Cost line states a number too large to keep', async () => {
+    const s = memoryStore();
+    const block = `${BLOCK}\nCost: iteration 1: 2 min wall-clock, 99999999999999999999 subagent tokens`;
+    await recordCycle(s, '/r/.git', cycleOf(block, 'd', null), 1, 't');
+    const kept = await readCycles(s, '/r/.git');
+    expect(kept.map((c) => c.cost?.[0]?.subagentTokens)).toEqual([null]);
+  });
   test.each([
     ['an unknown exit', { exit: 'gone' }],
     ['an unknown tier', { tier: 'heavy' }],
@@ -332,6 +501,15 @@ describe('the cycle store', () => {
     ['a leg twice', { fixed: [{ ...finding, legs: ['codex', 'codex'] }] }],
     ['an unknown side', { deferred: [{ ...finding, side: 'x' }] }],
     ['an iteration of zero', { fixed: [{ ...finding, iteration: 0 }] }],
+    ['a cost that is no list', { cost: 'cheap' }],
+    ['an empty cost', { cost: [] }],
+    ['one bad clause among good ones', { cost: [spent, { ...spent, iteration: 0 }] }],
+    ['negative legs', { cost: [{ ...spent, legs: -1 }] }],
+    ['fractional Codex tokens', { cost: [{ ...spent, codexTokens: 1.5 }] }],
+    ['a cost clause with no iteration', { cost: [{ ...spent, iteration: 0 }] }],
+    ['negative minutes', { cost: [{ ...spent, minutes: -1 }] }],
+    ['fractional tokens', { cost: [{ ...spent, subagentTokens: 1.5 }] }],
+    ['a partial flag that is no boolean', { cost: [{ ...spent, isPartial: 'yes' }] }],
   ])('leaves out an entry with %s', async (_name, broken) => {
     const s = memoryStore();
     await recordCycle(s, '/r/.git', cycle(1), 1, 't');

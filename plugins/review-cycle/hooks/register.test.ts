@@ -7685,6 +7685,7 @@ describe('the summary tool', () => {
       'Tier: full',
       'Iterations: 2 (converged)',
       "Convergence: iteration 2: 1 of 2 from this cycle's fixes",
+      'Cost: iteration 1: 12 min wall-clock, 5 legs, 253086 subagent tokens, 1812691 Codex tokens, iteration 2: 3 min wall-clock, 1 leg, 36458 subagent tokens',
       'Findings fixed inline: 2',
       '  - a.ts:1 — misses the empty case (code-reviewer, above)',
       '  - a.spec.ts — no test for it (pr-test-analyzer, below)',
@@ -7708,6 +7709,11 @@ describe('the summary tool', () => {
       selfCaused: 1,
     });
     expect(status.cycles.byLeg['pr-test-analyzer'].fixed.below).toBe(1);
+    const spent = { minutes: 15, legs: 6, subagentTokens: 289_544, codexTokens: 1_812_691 };
+    expect(status.cycles.cost).toEqual({ cycles: 1, partial: 0, ...spent });
+    expect(status.cycles.recent).toMatchObject([
+      { tier: 'full', iterations: 2, fixed: 2, deferred: 0, cost: { ...spent, isPartial: false } },
+    ]);
   });
   const FULL = `${BLOCK}\nIterations: 1 (converged)\nConvergence: iteration 1 only\nFindings fixed inline: 0\nFindings deferred: 0`;
   test('keeps two cycles summarized at once as two', async ($, on) => {
