@@ -29,10 +29,19 @@ import {
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
 import { cycleOf, isSummary, readCycles, recordCycle, rollupOf } from './cycles';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
-import { closingOf, grantOf, isReply, mandateAfter, stepsNamed, type Mandate } from './exact';
+import {
+  besideOf,
+  closingOf,
+  grantOf,
+  isReply,
+  mandateAfter,
+  stepsNamed,
+  type Mandate,
+} from './exact';
 import {
   askThem,
   ASKED_FOR,
+  besideNote,
   judgeGh,
   notAsked,
   parsePullRequest,
@@ -1219,6 +1228,8 @@ async function onPromptSubmit(
       reading.grant,
     );
     if (ended !== null) e = { ...e, context: [...(e.context ?? []), ended] };
+    const beside = besideOf(typed, state.lastAnswer);
+    if (beside.length > 0) e = { ...e, context: [...(e.context ?? []), besideNote(beside)] };
     // A prompt queued into a running turn neither ends a review-pr run nor
     // replaces that turn's starting tree. Updated in place: nudgeReview tells
     // a new message from this one by identity.

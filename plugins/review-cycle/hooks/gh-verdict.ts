@@ -124,6 +124,13 @@ const STEP_NAME: Record<HoldStep, string> = {
   comment: 'a comment on GitHub',
 };
 
+// For a message that asks for steps beside other work (`besideOf`): what the
+// agent does about a request the gate did not grant.
+export function besideNote(steps: readonly HoldStep[]): string {
+  const named = steps.map((s) => STEP_NAME[s]).join(' and ');
+  return `review-cycle: this message seems to ask for ${named} beside other work, which the gate reads as no request, so it granted nothing. If the user asked for it, do the other work, then end your reply with the question mcp__review-cycle__offer gives for it, or for the first of them when no one question covers them all, on a line of its own, and run a step only once they answer; do not try it first. If they were only talking about it, carry on.`;
+}
+
 // What held the steps, so the agent can tell the user.
 function heldWhy(held: HoldReason): string {
   const step = STEP_NAME[held.step];

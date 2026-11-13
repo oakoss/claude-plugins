@@ -413,6 +413,26 @@ export function holdOf(prompt: string, previousAnswer = ''): Hold {
   return lowest([...declined, ...(offer === null ? asked : stepsOf(offer))], 'declined');
 }
 
+// The steps of a request the gate reads that sits beside other words, joined
+// by "and" or "then", in a message that as a whole grants nothing: "lets file
+// that then merge 358". It grants nothing; the agent is told to ask.
+export function besideOf(prompt: string, previousAnswer = ''): HoldStep[] {
+  const text = spoken(prompt);
+  if (text.length > 300 || holds(text) || asksAny(grantOf(prompt, previousAnswer))) return [];
+  const named = new Set<HoldStep>();
+  for (const cut of text.matchAll(JOIN)) {
+    for (const side of [text.slice(0, cut.index), text.slice(cut.index + cut[0].length)]) {
+      const all = parts(side, previousAnswer);
+      if (all === null) continue;
+      const grant = granting(all);
+      // No question the offer tool writes asks for a merge or a release once ready.
+      if (grant.autoMerge || grant.readyRelease) continue;
+      for (const step of stepsOf(grant)) named.add(step);
+    }
+  }
+  return HOLD_STEPS.filter((step) => named.has(step));
+}
+
 // Typed into a running turn, a message that holds or takes back replaces that
 // turn's consent.
 export function dropsGrant(prompt: string, previousAnswer = ''): boolean {
