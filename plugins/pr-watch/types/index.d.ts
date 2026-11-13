@@ -114,6 +114,8 @@ export type Watch = {
   number: number;
   url: string;
   push?: { branch: string; pushedAt: number };
+  // Claude opened it in this session, so it asks about its merge once ready.
+  isOwn?: boolean;
   pull?: Pull;
   error?: string;
   checkedAt: number;
@@ -144,6 +146,8 @@ export type Held = {
   url: string;
   news: string[];
   ready: string | null;
+  // `ready` tells Claude to ask about the merge, so it wakes Claude rather than waiting.
+  isAsk?: boolean;
   // News of nothing wrong, which no asked wake covers and no resume tells again.
   clean?: string[];
   // A release tool's version pull request, whose merge is the release.

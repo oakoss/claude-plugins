@@ -838,7 +838,7 @@ export function toastOf(
 
 // Something Claude is told of once, for as long as it lasts. A passed or clean
 // one is news Claude cannot act on, so it never wakes Claude.
-type Condition = { key: string; text: string; isPassed?: true; isClean?: true };
+type Condition = { key: string; text: string; isPassed?: true; isClean?: true; isAsk?: true };
 
 type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
 
@@ -871,6 +871,21 @@ export const isDraftPassed = (pull: Pull, verdict: Verdict) =>
   checksPassed(pull);
 
 const draftKey = (watch: Who, pull: Pull) => keyOf(watch, 'draft passed', pull.headOid);
+
+// Ready with nothing still running, so the merge can be asked about: told once
+// per head commit.
+const askKey = (watch: Who, pull: Pull) => keyOf(watch, 'ask', pull.headOid);
+
+// GitHub calls a pull request ready with a check it does not require failed.
+const isSound = (pull: Pull) =>
+  !isFailing(pull) &&
+  !(pull.appRuns ?? []).some((a) => a.status === 'done' && !PASSED.has(a.conclusion ?? ''));
+
+export const isAskable = (pull: Pull) => stillRunning(pull).length === 0 && isSound(pull);
+
+// pr-watch does not know whether review-cycle's offer tool exists.
+export const askOf = (name: string) =>
+  `${name} is ready to merge and nothing is still running on it. If nothing is left to do on it, no review thread unanswered and no fix unpushed, ask the user whether to merge it: end your reply with the question review-cycle's mcp__review-cycle__offer tool gives for its merge, when it exists, on a line of its own. Do not merge it unasked.`;
 
 export const isToldReady = (watch: Who & Pick<Watch, 'told'>) =>
   (watch.told ?? []).includes(keyOf(watch, 'ready'));
@@ -991,6 +1006,10 @@ function conditionsOf(
       ? `GitHub reports ${name}, the release pull request, ready to merge.${note} Merging it is the release: leave it for the user to ask.`
       : `GitHub reports ${name} ready to merge.${note}`;
     found.push({ key: keyOf(watch, 'ready'), text });
+    const isKnown = pull.headOid !== undefined && !isReleasePull(pull);
+    if (isAskable(pull) && isKnown) {
+      found.push({ key: askKey(watch, pull), text: askOf(name), isAsk: true });
+    }
   }
   if (verdict.kind === 'merged-passed' && !isEarly) {
     const text = watch.push
@@ -1055,11 +1074,14 @@ export type Memory = Pick<Watch, 'told' | 'heard'>;
 // merge can leave it out, and so can one whose merge would need asking; `passed`
 // is news for the next prompt, never a wake, unless the watch tool asked for
 // one; `clean` waits for the next prompt even then: a reviewer's check that
-// passed, a review that found nothing. `text` is all of it, for a tool's answer.
+// passed, a review that found nothing. `ask` tells Claude to ask about the
+// merge, where it opened the pull request and ready does not already wake it.
+// `text` is all of it but `ask`, for a tool's answer.
 export type Wake = {
   text: string | null;
   news: string[];
   ready: string | null;
+  ask: string | null;
   passed: string[];
   clean: string[];
   told: string[];
@@ -1070,10 +1092,13 @@ export function heldWith(was: Held, next: Held): Held {
   const news = [...new Set([...was.news, ...next.news])];
   const clean = [...new Set([...(was.clean ?? []), ...(next.clean ?? [])])];
   const isRelease = next.isRelease === true || was.isRelease === true;
+  const { isAsk: _, ...rest } = next;
+  const isAsk = (next.ready === null ? was.isAsk : next.isAsk) === true;
   return {
-    ...next,
+    ...rest,
     news,
     ready: next.ready ?? was.ready,
+    ...(isAsk && { isAsk }),
     ...(clean.length > 0 && { clean }),
     ...(isRelease && { isRelease }),
   };
@@ -1196,10 +1221,12 @@ export function wakeOf(
   const clean: string[] = [];
   const kept: string[] = [];
   let ready: string | null = null;
+  let ask: string | null = null;
   for (const c of conditionsOf(watch, pull, verdict, name, isEarly)) {
     const isQuiet = isOwnMerge && c.key === keyOf(watch, 'passed');
     const isNew = !told.includes(c.key) && !isQuiet;
     if (isNew && c.key === keyOf(watch, 'ready')) ready = c.text;
+    else if (isNew && c.isAsk) ask = c.text;
     else if (isNew && c.isPassed) passed.push(c.text);
     else if (isNew && c.isClean) clean.push(c.text);
     else if (isNew) news.push(c.text);
@@ -1212,6 +1239,12 @@ export function wakeOf(
       const key = keyOf(watch, what);
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }
+  }
+  // Asked once per head commit, whatever GitHub recomputes or re-runs, unless a
+  // check failed since.
+  if (pull.headOid !== undefined && isSound(pull)) {
+    const key = askKey(watch, pull);
+    if (told.includes(key) && !kept.includes(key)) kept.push(key);
   }
   // A re-run on the same commit is no news of a draft's passing, unless it failed.
   const isRerun = pull.state === 'OPEN' && pull.isDraft && pull.headOid !== undefined;
@@ -1235,7 +1268,7 @@ export function wakeOf(
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
   const all = [...news, ...passed, ...clean];
   const text = all.length === 0 && ready === null ? null : noticeOf(all, ready, watch.url);
-  return { text, news, ready, passed, clean, told: kept, heard };
+  return { text, news, ready, ask, passed, clean, told: kept, heard };
 }
 
 // What the person's next prompt carries of the news held back from waking

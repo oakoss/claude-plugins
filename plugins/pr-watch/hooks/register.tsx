@@ -75,6 +75,7 @@ import {
   verdictOf,
   noticeOf,
   heldWith,
+  isAskable,
   isToldReady,
   savedOf,
   entryOf,
@@ -203,7 +204,8 @@ async function deliver($: $, h: Held): Promise<void> {
   let { ready } = h;
   if (ready !== null) {
     const asked = await read($, wakeAsked);
-    if (asked.includes(h.id) || (!h.isRelease && (await isMergeUnasked($)))) {
+    const isWaking = h.isAsk === true || asked.includes(h.id);
+    if (isWaking || (!h.isRelease && (await isMergeUnasked($)))) {
       await forgetReady($, h.id).catch((error) =>
         $.ui.toast(`pr-watch could not clear ${h.label}'s kept ready line: ${errorText(error)}`),
       );
@@ -292,11 +294,13 @@ async function suggest($: $): Promise<void> {
 // The ready line stands while GitHub still has the pull request open and the
 // watch is still watched and its latest read found it ready. The saved watch is
 // read after GitHub, so a read during it counts.
-async function isStillReady($: $, id: string, url: string, timeoutMs: number): Promise<boolean> {
-  const isStillOpen = await isOpen($, url, timeoutMs);
+// An ask stands only while nothing runs or has failed on it, too.
+async function isStillReady($: $, h: Held, timeoutMs: number): Promise<boolean> {
+  const isStillOpen = await isOpen($, h.url, timeoutMs);
   const all = await read($, watches);
-  const w = all.find((x) => idOf(x) === id);
-  return isStillOpen && w !== undefined && isToldReady(w);
+  const w = all.find((x) => idOf(x) === h.id);
+  if (!isStillOpen || w === undefined || !isToldReady(w)) return false;
+  return h.isAsk !== true || (w.pull !== undefined && isAskable(w.pull));
 }
 
 // The kept news a person's prompt carries to Claude, taken in one write so two
@@ -327,7 +331,7 @@ async function quietContext(
   try {
     const current = await Promise.all(
       taken.map(async (q) =>
-        q.ready === null || (await isStillReady($, q.id, q.url, PROMPT_VIEW_TIMEOUT_MS))
+        q.ready === null || (await isStillReady($, q, PROMPT_VIEW_TIMEOUT_MS))
           ? q
           : { ...q, ready: null },
       ),
@@ -382,7 +386,7 @@ async function releaseOne($: $, id: string): Promise<void> {
   const { held } = await read($, turn);
   const seen = held.find((x) => x.id === id);
   if (!seen) return;
-  const isStale = seen.ready !== null && !(await isStillReady($, id, seen.url, VIEW_TIMEOUT_MS));
+  const isStale = seen.ready !== null && !(await isStillReady($, seen, VIEW_TIMEOUT_MS));
   // Taken only now: a reload during the read leaves it held, news held for it
   // meanwhile joins this notice, and a turn started meanwhile keeps it.
   let h: Held | undefined;
@@ -677,21 +681,30 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       // A tool's caller is told in its answer, whatever /config says.
       news = kept || config.isAwake ? givenUpOf(next) : null;
     }
-    if (news && isSaved) {
-      if (kept) kept.news = news;
-      else if (isGivenUp || !woke) wake($, news, labelOf(next));
-      else {
-        const { news: lines, ready, passed, clean } = woke;
+    const ask = config.isAwake ? (woke?.ask ?? null) : null;
+    if ((news || ask) && isSaved) {
+      if (kept || isGivenUp || !woke) {
+        if (kept && news) kept.news = news;
+        else if (news) wake($, news, labelOf(next));
+      } else {
+        const { news: lines, passed, clean } = woke;
         const isRelease = next.pull !== undefined && isReleasePull(next.pull);
-        const h = { id: idOf(next), label: labelOf(next), url: next.url, isRelease };
+        const at = { id: idOf(next), label: labelOf(next), url: next.url, isRelease };
+        // Claude asks about a merge it would need asking for, of a pull request
+        // it opened. The ask travels as the ready line it stands in for, so a
+        // turn's end checks it is still ready and it replaces one held earlier.
+        const isAsk =
+          ask !== null && next.isOwn === true && !judged?.isWakeAsked && !(await isMergeUnasked($));
+        const h = isAsk ? { ...at, isAsk } : at;
+        const ready = isAsk ? ask : woke.ready;
         if (judged?.isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
         else {
           await tell($, { ...h, news: lines, ready });
-          await keep($, { ...h, news: passed, ready: null });
+          await keep($, { ...at, news: passed, ready: null });
         }
         // Told once whatever comes of it, so one that cannot be kept wakes Claude.
-        if (clean.length > 0 && !(await keep($, { ...h, news: [], ready: null, clean }))) {
-          await tell($, { ...h, news: clean, ready: null });
+        if (clean.length > 0 && !(await keep($, { ...at, news: [], ready: null, clean }))) {
+          await tell($, { ...at, news: clean, ready: null });
         }
       }
     }
@@ -1100,7 +1113,7 @@ const TOOLS = [
   {
     name: 'watch',
     description:
-      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, its checks passed as a draft, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
+      "Watches a GitHub pull request in pr-watch and answers in one line, saying why when a read failed or waits. Its line above the prompt follows its checks, and pr-watch tells you in this conversation, as /config allows, when a check fails, it has conflicts or requested changes, or someone comments or reviews. That it turned ready to merge, its checks passed as a draft, or its merge's checks passed, comes with the user's next message, unless you pass wake or review-cycle lets you merge unasked; a release pull request, whose merge is the release, never wakes you unasked. One you opened in this session wakes you once it is ready with nothing still running, to ask the user about its merge. Pull requests you open with gh pr create, or merge with gh pr merge and a number, URL or branch, are watched already: call this for one of them only to pass wake. Call it for any other you are waiting on, instead of polling gh pr checks or sleeping.",
     inputSchema: {
       ...PULL_INPUT,
       properties: {
@@ -1247,7 +1260,7 @@ export const register: Register = (on, options) => {
         for (const t of opened) {
           if (ids.has(idOf(t))) continue;
           ids.add(idOf(t));
-          added.push({ ...t, checkedAt: 0 });
+          added.push({ ...t, checkedAt: 0, isOwn: true });
         }
         return [...all, ...added];
       });
