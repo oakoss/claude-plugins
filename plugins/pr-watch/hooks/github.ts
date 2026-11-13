@@ -366,7 +366,7 @@ const isBot = (author: any) => author?.__typename === 'Bot';
 const PLAN = /^(?:<!-- oakum:pr-plan -->|###\s+🦋\s+Changeset detected)/;
 
 // Pullfrog's comment as it starts a review, deleted once the review is posted.
-const STARTING = /^[^\n]{0,80}Leaping into action\.{3}\s*$/;
+const STARTING = /^[^\n]{0,80}Leaping into action\.{3}\s*(?:<!-- PULLFROG_DIVIDER[\s\S]*)?$/;
 
 // A count of 0 inline comments is no test: Pullfrog posts findings in the body alone.
 const CLEAN = /^>\s*✅\s+No new issues found/;

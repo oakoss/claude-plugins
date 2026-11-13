@@ -358,6 +358,8 @@ describe('parsePull', () => {
   test('marks a bot’s comment that is a release tool’s plan or a reviewer’s start', () => {
     const plan = '<!-- oakum:pr-plan -->\n## Release plan';
     const start = 'New pull request. Leaping into action...';
+    const footer =
+      '\n\n<!-- PULLFROG_DIVIDER_DO_NOT_REMOVE_PLZ -->\n<sup><a href="https://pullfrog.com">Pullfrog</a></sup>';
     const bodies: [string, string, string | null][] = [
       ['oakoss', 'Bot', plan],
       ['changeset-bot', 'Bot', '###  🦋  Changeset detected\n\nLatest commit: abc'],
@@ -370,6 +372,8 @@ describe('parsePull', () => {
       ['alice', 'User', start],
       ['pullfrog', 'Bot', `1 finding: the parser drops state\n${start}`],
       ['pullfrog', 'Bot', `${'A long report on one line. '.repeat(3)}${start}`],
+      ['pullfrog', 'Bot', `${start}${footer}`],
+      ['pullfrog', 'Bot', `${start}\n\n1 finding: the parser drops state${footer}`],
     ];
     const body = JSON.parse(
       prOutput([], {
@@ -396,6 +400,8 @@ describe('parsePull', () => {
       false,
       false,
       false,
+      false,
+      true,
       false,
     ]);
   });

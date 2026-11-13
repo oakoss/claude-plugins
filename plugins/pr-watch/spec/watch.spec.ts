@@ -1244,7 +1244,7 @@ describe('wakeOf', () => {
     );
   });
 
-  test('hears a release plan comment without telling it, whatever the setting', () => {
+  test('tells no notice, whatever the setting, until its comment is edited into something else', () => {
     const first = after(pull([]));
     const plan = { ...said('oakum', minute(1), 'commented on', true), isNotice: true };
     const p = pull([], { activity: [plan, said('alice', minute(2))] });
@@ -1252,7 +1252,14 @@ describe('wakeOf', () => {
     const woke = wakeOf(pr, p, verdictAt(p), first, { tells });
     expect(woke.text).toContain('@alice commented on');
     expect(woke.text).not.toContain('@oakum');
-    expect(woke.heard?.keys).toEqual(['https://x/oakum', 'https://x/alice']);
+    expect(woke.heard?.keys).toEqual(['https://x/alice']);
+    expect(wakeOf(pr, p, verdictAt(p), woke, { tells }).text).toBeNull();
+    const edited = pull([], { activity: [{ ...plan, isNotice: false }, said('alice', minute(2))] });
+    const answer = wakeOf(pr, edited, verdictAt(edited), woke, { tells });
+    expect(answer.news).toEqual(['@oakum[bot] commented on o/r#128: https://x/oakum']);
+    expect(wakeOf(pr, edited, verdictAt(edited), answer, { tells }).text).toBeNull();
+    // Bots not asked for: the edit is heard without a word.
+    expect(wakeOf(pr, edited, verdictAt(edited), woke).text).toBeNull();
   });
 
   test('holds a bot’s review that found nothing for the next prompt, with no reply tool', () => {

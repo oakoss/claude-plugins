@@ -1122,7 +1122,9 @@ function hearOf(
   tells: (a: Activity) => boolean,
 ): { heard: Watch['heard']; lines: string[]; clean: string[] } {
   if (pull.activity === null) return { heard, lines: [], clean: [] };
-  const keys = pull.activity.map(heardKey);
+  // A notice is not heard, so its comment is told once edited into something else,
+  // as Pullfrog's start comment is outside its review mode.
+  const keys = pull.activity.flatMap((a) => (a.isNotice ? [] : [heardKey(a)]));
   if (heard === undefined) {
     return { heard: { since: pull.activityAt, keys }, lines: [], clean: [] };
   }

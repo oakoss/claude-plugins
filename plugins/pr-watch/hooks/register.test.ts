@@ -2239,7 +2239,7 @@ describe('telling Claude', () => {
         author: frog,
         createdAt: '2026-10-03T22:02:00Z',
         url: 'c/start',
-        body: 'New pull request. Leaping into action...',
+        body: 'New pull request. Leaping into action...\n\n<!-- PULLFROG_DIVIDER_DO_NOT_REMOVE_PLZ -->\n<sup>Pullfrog</sup>',
       };
       const review = {
         author: frog,
