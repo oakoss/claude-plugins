@@ -18,6 +18,8 @@ import {
   needsTrunk,
   isCleared,
   askOf,
+  clearedConflicts,
+  isConflictsLine,
   isRefused,
   isUnreadable,
   isQuotaLow,
@@ -1000,6 +1002,42 @@ describe('wakeOf', () => {
     expect(first.text).toContain('A reviewer requested changes on o/r#128.');
     expect(first.text).toContain('CI: Lint failed for o/r#128: https://x/Lint');
     expect(after(p, first).text).toBeNull();
+  });
+
+  test('says nothing of a release pull request’s conflicts, which its tool rebuilds away', () => {
+    const release = { branch: 'oakum/version-packages', repo: 'o/r' };
+    expect(after(pull([green()], { merge: 'DIRTY', head: release })).text).toBeNull();
+    const other = { branch: 'feat/x', repo: 'o/r' };
+    expect(after(pull([green()], { merge: 'DIRTY', head: other })).text).toContain('conflicts');
+  });
+
+  test('names the conflicts line of a pull request no longer told of them', () => {
+    const base = { ...pr, host: 'github.com', checkedAt: 0 };
+    // The watch as saved after each read in turn.
+    const reads = (...merges: string[]) => {
+      let last: Memory = {};
+      let p = pull([]);
+      for (const merge of merges) {
+        p = pull([], { merge });
+        last = after(p, last);
+      }
+      return { ...base, pull: p, told: last.told };
+    };
+    const dirty = after(pull([], { merge: 'DIRTY' }));
+    expect(dirty.news).toEqual(['o/r#128 has merge conflicts with main.']);
+    expect(clearedConflicts(reads('DIRTY', 'CLEAN'))).toBe(dirty.news[0]);
+    expect(clearedConflicts(reads('DIRTY', 'BLOCKED'))).toBe(dirty.news[0]);
+    // A recompute after they cleared does not bring the line back.
+    expect(clearedConflicts(reads('DIRTY', 'CLEAN', 'UNKNOWN'))).toBe(dirty.news[0]);
+    // Still there, or GitHub is recomputing while they are: the line stands.
+    expect(clearedConflicts(reads('DIRTY'))).toBeNull();
+    expect(clearedConflicts(reads('DIRTY', 'UNKNOWN'))).toBeNull();
+    expect(clearedConflicts(base)).toBeNull();
+    const pushed = { ...reads('DIRTY', 'CLEAN'), push: { branch: 'feat/x', pushedAt: 0 } };
+    expect(clearedConflicts(pushed)).toBeNull();
+    expect(isConflictsLine(dirty.news[0]!)).toBe(true);
+    expect(isConflictsLine('@alice commented on o/r#128: https://x/alice')).toBe(false);
+    expect(isConflictsLine('CI: Lint failed for o/r#128: https://x/Lint')).toBe(false);
   });
 
   test('keeps conflicts told while GitHub recomputes the merge state', () => {
