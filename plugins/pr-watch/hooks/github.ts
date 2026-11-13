@@ -41,7 +41,7 @@ const pullQuery = (isMerged: boolean) => `query($o: String!, $r: String!, $n: In
         : `commits(last: 1) { nodes { commit { oid ${suites('isRequired(pullRequestNumber: $n)')} } } }`
     }
     comments(last: 10) { nodes { author { login __typename } createdAt url body } }
-    reviews(last: 10) { nodes { author { login __typename } submittedAt state url } }
+    reviews(last: 10) { nodes { author { login __typename } submittedAt state url body } }
   } }
 }`;
 
@@ -365,6 +365,12 @@ const isBot = (author: any) => author?.__typename === 'Bot';
 // it stays news.
 const PLAN = /^(?:<!-- oakum:pr-plan -->|###\s+🦋\s+Changeset detected)/;
 
+// Pullfrog's comment as it starts a review, deleted once the review is posted.
+const STARTING = /^[^\n]{0,80}Leaping into action\.{3}\s*(?:<!-- PULLFROG_DIVIDER[\s\S]*)?$/;
+
+// A count of 0 inline comments is no test: Pullfrog posts findings in the body alone.
+const CLEAN = /^>\s*✅\s+No new issues found/;
+
 const REVIEWED: Record<string, string> = {
   APPROVED: 'approved',
   CHANGES_REQUESTED: 'requested changes on',
@@ -384,9 +390,18 @@ function activityOf(pr: any, viewer: string | null): Activity[] | null {
     if (author === null || author === viewer || !isTime(c.createdAt)) continue;
     const url = str(c.url) ?? '';
     const bot = isBot(c.author);
-    const isPlan = bot && PLAN.test(str(c.body) ?? '');
-    const did = 'commented on';
-    found.push({ author, at: c.createdAt, url, did, isBot: bot, isReview: false, isPlan });
+    const text = str(c.body) ?? '';
+    const isNotice = bot && (PLAN.test(text) || STARTING.test(text));
+    found.push({
+      author,
+      at: c.createdAt,
+      url,
+      did: 'commented on',
+      isBot: bot,
+      isReview: false,
+      isNotice,
+      isClean: false,
+    });
   }
   for (const r of list(pr.reviews?.nodes)) {
     const author = str(r?.author?.login);
@@ -394,7 +409,17 @@ function activityOf(pr: any, viewer: string | null): Activity[] | null {
     if (author === null || author === viewer || !did || !isTime(r.submittedAt)) continue;
     const url = str(r.url) ?? '';
     const bot = isBot(r.author);
-    found.push({ author, at: r.submittedAt, url, did, isBot: bot, isReview: true, isPlan: false });
+    const isClean = bot && r.state === 'COMMENTED' && CLEAN.test(str(r.body) ?? '');
+    found.push({
+      author,
+      at: r.submittedAt,
+      url,
+      did,
+      isBot: bot,
+      isReview: true,
+      isNotice: false,
+      isClean,
+    });
   }
   return found.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }

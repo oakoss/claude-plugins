@@ -101,8 +101,8 @@ const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, { isTurning: fal
 const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
 // Watches whose ready line and passed checks wake Claude, as it asked.
 const wakeAsked = atom({ plugin: 'pr-watch', key: 'wakeAsked' } as const, []);
-// A ready pull request Claude would need asking to merge, and passed checks,
-// wait for the person's next prompt rather than waking Claude.
+// A ready pull request Claude would need asking to merge, passed checks and
+// news of nothing wrong wait for the person's next prompt rather than waking Claude.
 const quiet = atom({ plugin: 'pr-watch', key: 'quiet' } as const, []);
 // The session id whose saved watches were restored; a resume starts it over.
 const restored = atom({ plugin: 'pr-watch', key: 'restored' } as const, null);
@@ -243,7 +243,7 @@ async function isMergeUnasked($: $): Promise<boolean> {
 
 // Whether the news is kept; a failure is said, so the caller can send it instead.
 async function keep($: $, h: Held): Promise<boolean> {
-  if (h.news.length === 0 && h.ready === null) return true;
+  if (h.news.length === 0 && h.ready === null && !h.clean?.length) return true;
   try {
     await update($, quiet, (all) => {
       const was = all.find((x) => x.id === h.id);
@@ -268,7 +268,7 @@ async function forgetReady($: $, id: string): Promise<void> {
   await update($, quiet, (all) =>
     all.flatMap((x) => {
       if (x.id !== id) return [x];
-      return x.news.length > 0 ? [{ ...x, ready: null }] : [];
+      return x.news.length > 0 || x.clean?.length ? [{ ...x, ready: null }] : [];
     }),
   );
 }
@@ -681,13 +681,17 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
       if (kept) kept.news = news;
       else if (isGivenUp || !woke) wake($, news, labelOf(next));
       else {
-        const { news: lines, ready, passed } = woke;
+        const { news: lines, ready, passed, clean } = woke;
         const isRelease = next.pull !== undefined && isReleasePull(next.pull);
         const h = { id: idOf(next), label: labelOf(next), url: next.url, isRelease };
         if (judged?.isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
         else {
           await tell($, { ...h, news: lines, ready });
           await keep($, { ...h, news: passed, ready: null });
+        }
+        // Told once whatever comes of it, so one that cannot be kept wakes Claude.
+        if (clean.length > 0 && !(await keep($, { ...h, news: [], ready: null, clean }))) {
+          await tell($, { ...h, news: clean, ready: null });
         }
       }
     }

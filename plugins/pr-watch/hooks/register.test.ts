@@ -2224,6 +2224,150 @@ describe('telling Claude', () => {
     );
   }
 
+  test(
+    'a bot’s start notice says nothing, and its review that found nothing waits for the next prompt',
+    { options: { botComments: 'comments and reviews' } },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: commentedJson([]) };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      const frog = { login: 'pullfrog', __typename: 'Bot' };
+      const starting = {
+        author: frog,
+        createdAt: '2026-10-03T22:02:00Z',
+        url: 'c/start',
+        body: 'New pull request. Leaping into action...\n\n<!-- PULLFROG_DIVIDER_DO_NOT_REMOVE_PLZ -->\n<sup>Pullfrog</sup>',
+      };
+      const review = {
+        author: frog,
+        submittedAt: '2026-10-03T22:04:00Z',
+        state: 'COMMENTED',
+        url: 'r/clean',
+        body: '> ✅ No new issues found.\n\n**Reviewed changes**',
+      };
+      gh.pr = commentedJson([starting]);
+      await clock.advance(20_000);
+      gh.pr = commentedJson([], [review]);
+      await clock.advance(20_000);
+      expect(seen.wakes).toEqual([]);
+      await $.prompt.submit(person('next'));
+      expect(seen.contexts[0]).toEqual([
+        'pr-watch, since your last turn: @pullfrog[bot] reviewed o/r#128 and found no issues: r/clean',
+      ]);
+      gh.pr = commentedJson([], [review, { ...review, url: 'r/found', body: '> 1 finding.' }]);
+      await clock.advance(20_000);
+      expect(seen.wakes).toHaveLength(1);
+      expect(seen.wakes[0]).toContain('@pullfrog[bot] reviewed o/r#128: r/found');
+    },
+  );
+
+  const CLEAN_REVIEW = {
+    author: { login: 'pullfrog', __typename: 'Bot' },
+    submittedAt: '2026-10-03T22:04:00Z',
+    state: 'COMMENTED',
+    url: 'r/clean',
+    body: '> ✅ No new issues found.',
+  };
+  const bots = { botComments: 'reviews' };
+
+  test(
+    'a review that found nothing does not wake it where the watch tool asked for a wake',
+    { options: bots },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const view = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+      const gh: Gh = { pr: commentedJson([]), view, stopBefore: {} };
+      const seen = world(on, gh);
+      await start($);
+      expect(await tool($, 'watch', { pull: '128', wake: true })).toContain('o/r#128');
+      await clock.advance(1000);
+      gh.pr = commentedJson([], [CLEAN_REVIEW]);
+      await clock.advance(20_000);
+      expect(seen.wakes).toEqual([]);
+      await $.prompt.submit(person('next'));
+      expect(seen.contexts[0]?.[0]).toContain(
+        '@pullfrog[bot] reviewed o/r#128 and found no issues',
+      );
+    },
+  );
+
+  test(
+    'a kept review that found nothing outlasts a wake for the ready line',
+    { options: bots },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const view = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
+      const gh: Gh = { pr: commentedJson([]), view, stopBefore: {} };
+      const seen = world(on, gh);
+      await start($);
+      await tool($, 'watch', { pull: '128', wake: true });
+      await clock.advance(1000);
+      gh.pr = commentedJson([], [CLEAN_REVIEW]);
+      await clock.advance(20_000);
+      gh.pr = commentedJson([], [CLEAN_REVIEW], [PASSED_CI]);
+      await clock.advance(70_000);
+      expect(seen.wakes).toHaveLength(1);
+      expect(seen.wakes[0]).toContain('ready to merge');
+      await $.prompt.submit(person('next'));
+      expect(seen.contexts[0]?.[0]).toContain('found no issues');
+    },
+  );
+
+  test(
+    'a review that found nothing wakes it when it cannot be kept',
+    { options: bots },
+    async ($, on) => {
+      const clock = mock.clock(on, { now: T0 });
+      const gh: Gh = { pr: commentedJson([]), quietFails: false };
+      const seen = world(on, gh);
+      await start($);
+      await create($);
+      await clock.advance(1000);
+      gh.quietFails = true;
+      gh.pr = commentedJson([], [CLEAN_REVIEW]);
+      await clock.advance(20_000);
+      expect(seen.wakes).toHaveLength(1);
+      expect(seen.wakes[0]).toContain('@pullfrog[bot] reviewed o/r#128 and found no issues');
+    },
+  );
+
+  test('a reviewer’s check that passed waits for the next prompt', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const conclusion = 'SUCCESS';
+    const app: any = {
+      status: 'COMPLETED',
+      conclusion,
+      app: { databaseId: 7 },
+      workflowRun: null,
+      checkRuns: {
+        nodes: [
+          {
+            name: 'pullfrog',
+            status: 'COMPLETED',
+            conclusion,
+            isRequired: false,
+            detailsUrl: 'https://pullfrog.com/run/1',
+            startedAt: '2026-10-03T22:00:00Z',
+            completedAt: '2026-10-03T22:04:00Z',
+          },
+        ],
+      },
+    };
+    const gh: Gh = { pr: commentedJson([], [], [RUNNING_CI, app]) };
+    const seen = world(on, gh);
+    await start($);
+    await create($);
+    await clock.advance(1000);
+    expect(seen.wakes).toEqual([]);
+    await $.prompt.submit(person('next'));
+    expect(seen.contexts[0]).toEqual([
+      'pr-watch, since your last turn: pullfrog, not required to merge, finished (success) for o/r#128: https://pullfrog.com/run/1',
+    ]);
+  });
+
   test('wakes it for a comment from someone else, not for the viewer’s own', async ($, on) => {
     const clock = mock.clock(on, { now: T0 });
     const own = { author: { login: 'me' }, createdAt: '2026-10-03T22:02:00Z', url: 'c/1' };
