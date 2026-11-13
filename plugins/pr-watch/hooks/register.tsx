@@ -100,6 +100,8 @@ const clock = atom({ plugin: 'pr-watch', key: 'now' } as const, 0);
 const turn = atom({ plugin: 'pr-watch', key: 'turn' } as const, { isTurning: false, held: [] });
 // Merges Claude ran, whose passed checks are no news to it.
 const ownMerges = atom({ plugin: 'pr-watch', key: 'ownMerges' } as const, []);
+// Pull requests Claude opened, whose merge it asks about once ready.
+const ownPulls = atom({ plugin: 'pr-watch', key: 'ownPulls' } as const, []);
 // Watches whose ready line and passed checks wake Claude, as it asked.
 const wakeAsked = atom({ plugin: 'pr-watch', key: 'wakeAsked' } as const, []);
 // A ready pull request Claude would need asking to merge, passed checks and
@@ -693,8 +695,8 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         // Claude asks about a merge it would need asking for, of a pull request
         // it opened. The ask travels as the ready line it stands in for, so a
         // turn's end checks it is still ready and it replaces one held earlier.
-        const isAsk =
-          ask !== null && next.isOwn === true && !judged?.isWakeAsked && !(await isMergeUnasked($));
+        const own = ask === null ? [] : await read($, ownPulls);
+        const isAsk = own.includes(at.id) && !judged?.isWakeAsked && !(await isMergeUnasked($));
         const h = isAsk ? { ...at, isAsk } : at;
         const ready = isAsk ? ask : woke.ready;
         if (judged?.isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
@@ -1254,13 +1256,16 @@ export const register: Register = (on, options) => {
     const created = r.isError ? null : createdPull(e.command, stdout);
     const opened = [...(created ? [created] : []), ...submitted];
     if (opened.length > 0) {
+      // First, so no read of one finds it ready before it counts as Claude's.
+      const own = opened.map((t) => idOf(t));
+      await update($, ownPulls, (ids) => [...new Set([...ids, ...own])]);
       await update($, watches, (all) => {
         const ids = new Set(all.map((w) => idOf(w)));
         const added: Watch[] = [];
         for (const t of opened) {
           if (ids.has(idOf(t))) continue;
           ids.add(idOf(t));
-          added.push({ ...t, checkedAt: 0, isOwn: true });
+          added.push({ ...t, checkedAt: 0 });
         }
         return [...all, ...added];
       });

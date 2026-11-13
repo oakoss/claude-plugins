@@ -2204,6 +2204,23 @@ describe('asking about a merge', () => {
     expect(seen.wakes[0]).not.toContain(ASK);
   });
 
+  test('asks of a pull request watched before Claude opened it', async ($, on) => {
+    const clock = mock.clock(on, { now: T0 });
+    const gh: Gh = {
+      pr: headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED' }),
+      view: OPEN,
+      stopBefore: {},
+    };
+    const seen = world(on, gh);
+    await start($);
+    await tool($, 'watch', { pull: '128' });
+    await create($);
+    gh.pr = headJson('a1');
+    await clock.advance(120_000);
+    expect(seen.wakes).toHaveLength(1);
+    expect(seen.wakes[0]).toContain(ASK);
+  });
+
   test('asks nothing where review-cycle lets Claude merge unasked', async ($, on) => {
     const gh: Gh = { pr: headJson('a1'), view: OPEN, stopBefore: { user: 'release' } };
     const { seen } = await readyIn($, on, gh);

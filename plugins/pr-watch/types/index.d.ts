@@ -114,8 +114,6 @@ export type Watch = {
   number: number;
   url: string;
   push?: { branch: string; pushedAt: number };
-  // Claude opened it in this session, so it asks about its merge once ready.
-  isOwn?: boolean;
   pull?: Pull;
   error?: string;
   checkedAt: number;
@@ -167,6 +165,9 @@ declare module 'claude-code' {
       turn: { isTurning: boolean; held: Held[] };
       // Watch ids, kept apart from the watch so a read in flight cannot drop one.
       ownMerges: string[];
+      // Ids of the pull requests Claude opened in this session; kept apart for
+      // the same reason.
+      ownPulls: string[];
       // Watch ids whose ready line and passed checks wake Claude, as the watch
       // tool was asked; kept apart for the same reason.
       wakeAsked: string[];
