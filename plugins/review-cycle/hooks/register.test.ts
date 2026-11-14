@@ -7007,7 +7007,7 @@ describe('the Codex command log', () => {
 });
 
 describe('the leg time budget', () => {
-  test('a leg past its budget asks the session to stop it, and is capped, not dropped', async ($, on) => {
+  test('a leg past its budget is named to the session in one line, and is capped, not dropped', async ($, on) => {
     const w = fakeWorld(on);
     const id = await legUnderWay($);
     expect(w.timers?.map((t) => t.ms)).toEqual([30 * 60_000]);
@@ -7015,8 +7015,9 @@ describe('the leg time budget', () => {
     await settle();
     const asked = (w.prompts ?? []).filter((p) => p.includes('past its 30-minute budget'));
     expect(asked).toHaveLength(1);
-    expect(asked[0]).toContain(`(agent ${id})`);
-    expect(asked[0]).toContain('TaskStop');
+    expect(asked[0]).toBe(
+      `review-cycle: reviewer leg review-cycle:code-reviewer (agent ${id}) has run past its 30-minute budget.`,
+    );
     await finishLeg($, id, true);
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
     expect(status.cappedReviews).toEqual([
@@ -7946,6 +7947,14 @@ describe('the reply tools', () => {
         },
       ],
     });
+  });
+
+  test('threads given no pr names the key it takes', async ($, on) => {
+    fakeWorld(on);
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__threads', pull: '109' })) as {
+      result: string;
+    };
+    expect(r.result).toBe('review-cycle: threads takes pr, a pull request number such as "109"');
   });
 
   test('under ask, a reply refuses with the offer question, and a yes to it posts and resolves', async ($, on) => {

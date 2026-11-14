@@ -923,7 +923,9 @@ async function onThreads(
 ): Promise<Output<ThreadsHook>> {
   const pr = (e as { pr?: unknown }).pr;
   const m = PULL_NUMBER.exec(typeof pr === 'string' || typeof pr === 'number' ? String(pr) : '');
-  if (m === null) return { result: 'review-cycle: threads takes a pull request number, "109"' };
+  if (m === null) {
+    return { result: 'review-cycle: threads takes pr, a pull request number such as "109"' };
+  }
   const pull = Number(m[1]);
   const read = await ghRead(
     $,
@@ -1468,7 +1470,8 @@ function overBudget($: $, agentId: string, leg: Leg): void {
   leg.capped = true;
   const minutes = LEG_BUDGET_MS / 60_000;
   state.capped.push(`${leg.type} (agent ${agentId}): still running after ${minutes} minutes`);
-  const text = `review-cycle: reviewer leg ${leg.type} (agent ${agentId}) has run past its ${minutes}-minute budget. Stop it with the TaskStop tool, continue the cycle without it, and list it under "Reviewers capped (over budget)" in the summary.`;
+  // The user sees the prompt whole; what to do with it is in both review skills.
+  const text = `review-cycle: reviewer leg ${leg.type} (agent ${agentId}) has run past its ${minutes}-minute budget.`;
   Promise.resolve()
     .then(() => $.prompt.submit({ text }))
     .then(
