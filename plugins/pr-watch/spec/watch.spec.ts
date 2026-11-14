@@ -943,6 +943,11 @@ describe('wakeOf', () => {
     const at = headed;
     const first = after(at());
     expect(first.ask).toBe(askOf('o/r#128'));
+    // The offer tool's keys are spelled out: a caller may not have its schema.
+    expect(first.ask).toContain('(step "merge", pulls ["o/r#128"])');
+    const layer = at({ base: 'feat/127', stack: { number: 236, trunk: 'main', layers: [128] } });
+    expect(after(layer).ask).toBe(askOf('o/r#128', 'stack'));
+    expect(after(layer).ask).toContain('(step "stack", pulls ["o/r#128"])');
     expect(first.ready).toContain('ready to merge');
     expect(first.text).not.toContain('ask the user');
     expect(after(at(), first).ask).toBeNull();

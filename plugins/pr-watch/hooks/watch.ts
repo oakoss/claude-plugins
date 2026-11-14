@@ -898,8 +898,9 @@ const isSound = (pull: Pull) =>
 export const isAskable = (pull: Pull) => stillRunning(pull).length === 0 && isSound(pull);
 
 // pr-watch does not know whether review-cycle's offer tool exists.
-export const askOf = (name: string) =>
-  `${name} is ready to merge and nothing is still running on it. If nothing is left to do on it, no review thread unanswered and no fix unpushed, ask the user whether to merge it: end your reply with the question review-cycle's mcp__review-cycle__offer tool gives for its merge, when it exists, on a line of its own. Do not merge it unasked.`;
+// A stack's layer merges with the layers below it, so its question is the stack's.
+export const askOf = (name: string, step: 'merge' | 'stack' = 'merge') =>
+  `${name} is ready to merge and nothing is still running on it. If nothing is left to do on it, no review thread unanswered and no fix unpushed, ask the user whether to merge it: end your reply with the question review-cycle's mcp__review-cycle__offer tool gives for its merge (step "${step}", pulls ["${name}"]), when it exists, on a line of its own. Do not merge it unasked.`;
 
 export const isToldReady = (watch: Who & Pick<Watch, 'told'>) =>
   (watch.told ?? []).includes(keyOf(watch, 'ready'));
@@ -1022,7 +1023,8 @@ function conditionsOf(
     found.push({ key: keyOf(watch, 'ready'), text });
     const isKnown = pull.headOid !== undefined && !isReleasePull(pull);
     if (isAskable(pull) && isKnown) {
-      found.push({ key: askKey(watch, pull), text: askOf(name), isAsk: true });
+      const text = askOf(name, pull.stack ? 'stack' : 'merge');
+      found.push({ key: askKey(watch, pull), text, isAsk: true });
     }
   }
   if (verdict.kind === 'merged-passed' && !isEarly) {
