@@ -1,0 +1,7 @@
+---
+review-cycle: patch
+---
+
+A release by hand takes one yes. Tagging and publishing three versions by hand took seven answers: each tag push and each release was its own question, a yes to "Release `pr-kit@0.6.1`?" did not cover pushing that tag, the refusal of the tag push sent the agent to the offer tool for a question it did not have, and "Yes, push the tag" was read as a hold. Now a yes, "release it" or "release them" in answer to a question naming versions covers pushing each of those tags and creating the releases, and the offer tool takes `versions`, a list, to ask for several at once: "Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?". "Push the tag" and "yes, push the tag" answer a question about one tag, the offer tool gains that question (`push-tag`), and a tag or default-branch push you did not ask for is refused with the question whose yes names it. When git widens a push to another tag, as with `push.followTags`, the refusal says so and names `--no-follow-tags`.
+
+What a release grant covers is otherwise unchanged: it names the tags it may push, and like any push grant it also lets a push to a branch that is not the default run; the release command itself is still not held to the versions named. Naming a tag, in a release question or in "push the v1 tag", now covers pushing that tag and never deleting it, which it used to allow. A no to a release question holds the release, as before, not your other pushes.

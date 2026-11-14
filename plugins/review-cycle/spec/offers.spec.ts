@@ -89,11 +89,29 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
       'Approve https://github.com/.o/r/pull/5?',
       { approve: true },
     ],
-    [{ step: 'release', version: 'v0.25.0' }, 'Release `v0.25.0`?', { release: true }],
+    [
+      { step: 'release', version: 'v0.25.0' },
+      'Release `v0.25.0`?',
+      { release: true, push: 'push', pushNamed: ['tag:v0.25.0'] },
+    ],
     [
       { step: 'release', version: 'review-cycle@0.27.0' },
       'Release `review-cycle@0.27.0`?',
-      { release: true },
+      { release: true, push: 'push', pushNamed: ['tag:review-cycle@0.27.0'] },
+    ],
+    [
+      { step: 'release', versions: ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'] },
+      'Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?',
+      {
+        release: true,
+        push: 'push',
+        pushNamed: ['tag:pr-kit@0.6.1', 'tag:pr-watch@0.9.0', 'tag:review-cycle@0.39.0'],
+      },
+    ],
+    [
+      { step: 'push-tag', version: 'pr-kit@0.6.1' },
+      'Push the `pr-kit@0.6.1` tag?',
+      { push: 'push', pushNamed: ['tag:pr-kit@0.6.1'] },
     ],
   ])('%j asks %s', (input, asked, grant) => {
     expect(question(input)).toBe(asked);
@@ -141,6 +159,14 @@ describe('an offer with no question', () => {
     [{ step: 'merge-release', pulls: ['1', '2'] }],
     [{ step: 'release', pulls: ['289'], version: 'v1' }],
     [{ step: 'release', version: 'v1`; rm' }],
+    [{ step: 'release', versions: ['v1', 'v1'] }],
+    [{ step: 'release', versions: ['v1', 'v2`'] }],
+    [{ step: 'release', versions: 'v1' }],
+    [{ step: 'release', version: 'v1', versions: ['v2'] }],
+    [{ step: 'release', pulls: ['289'], versions: ['v1'] }],
+    [{ step: 'push-tag' }],
+    [{ step: 'push-tag', versions: ['v1', 'v2'] }],
+    [{ step: 'push-tag', version: '-f' }],
     [null],
   ])('%j', (input) => {
     expect(offerQuestion(input)).toHaveProperty('error');
@@ -178,7 +204,9 @@ describe('an offer with no question', () => {
   ])('%j names the key it does not read, and the ones it does', (input, said) => {
     const error = errorOf(input);
     expect(error).toContain(said);
-    expect(error).toContain('The keys are step, pulls, branch, remote, method, operation, version');
+    expect(error).toContain(
+      'The keys are step, pulls, branch, remote, method, operation, version, versions.',
+    );
     expect(error).toContain(PULLS);
   });
 

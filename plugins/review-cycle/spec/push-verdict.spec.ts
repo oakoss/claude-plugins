@@ -5,6 +5,7 @@ import { NO_GRANT, type PushLevel } from '../hooks/consent';
 import type { PushSpec } from '../hooks/git-args';
 import {
   askingReason,
+  namingQuestion,
   neededFor,
   parseDryRun,
   namesTag,
@@ -93,6 +94,20 @@ describe("what git's dry run says a push updates", () => {
   test.each(cases)('%s', (_name, line, reason) => {
     expect(askingReason(parseDryRun(dry(line)), MAIN)).toBe(reason);
   });
+  // Only a tag and the default branch have a question whose yes names them.
+  test('a reason that names a target has the question a yes names it with', () => {
+    const questions = cases.map(([name, line]) => [
+      name,
+      namingQuestion(askingReason(parseDryRun(dry(line)), MAIN)),
+    ]);
+    expect(questions.filter(([, q]) => q !== null)).toEqual([
+      ['an up-to-date default branch', 'Push to `main`?'],
+      ['the default branch', 'Push to `main`?'],
+      ['a tag', 'Push the `v1` tag?'],
+    ]);
+    expect(namingQuestion(null)).toBeNull();
+    expect(namingQuestion('its dry run named no ref it would update')).toBeNull();
+  });
   test('a remote whose default branch could not be read asks, saying why', () => {
     const refs = parseDryRun(dry('*\tHEAD:refs/heads/fix/x\t[new branch]'));
     const unreadable = new Map<string, DefaultBranch>([[URL, { unreadable: 'fatal: no' }]]);
@@ -119,9 +134,12 @@ function asked(reason: string | null) {
 }
 
 const refTo = (to: string) => [{ flag: ' ', to, url: URL }];
+const gone = (to: string) => [{ flag: '-', to, url: URL }];
 
 const MAIN_WHY = 'it pushes to `main`, the default branch, which the request did not name';
 const TAG_WHY = 'it pushes the tag `v1.2.0`, which the request did not name';
+const ALONG =
+  ' (git may be sending it along with the one named: --no-follow-tags pushes only what the command names)';
 
 describe('what a push the user asked for must name', () => {
   test.each([
@@ -131,9 +149,22 @@ describe('what a push the user asked for must name', () => {
     ['refs/tags/v1.2.0', [], TAG_WHY],
     ['refs/tags/v1.2.0', ['tag:*'], null],
     ['refs/tags/v1.2.0', ['tag:1.2.0'], null],
-    ['refs/tags/v1.2.0', ['tag:v1'], TAG_WHY],
+    // Another tag was named: git may be sending this one along with it.
+    ['refs/tags/v1.2.0', ['tag:v1'], `${TAG_WHY}${ALONG}`],
+    ['refs/tags/v1.2.0', ['main'], TAG_WHY],
   ] as const)('%s named by %j', (to, named, why) => {
     expect(unnamedTarget(refTo(to), MAIN, named, null)?.why ?? null).toBe(why);
+  });
+  test('naming a tag covers pushing it, never deleting it', () => {
+    const tags = ['tag:v1.2.0', 'tag:v1.3.0'];
+    expect(unnamedTarget(gone('refs/tags/v1.2.0'), MAIN, tags, null)).toEqual({
+      why: 'it deletes the tag `v1.2.0`',
+      offer: null,
+    });
+    expect(unnamedTarget(gone('refs/tags/v1.2.0'), MAIN, ['tag:*'], null)?.offer).toBeNull();
+    // A branch that is not the default is covered as under any push grant.
+    expect(unnamedTarget(gone('refs/heads/fix/x'), MAIN, tags, null)).toBeNull();
+    expect(unnamedTarget(refTo('refs/heads/fix/x'), MAIN, tags, null)).toBeNull();
   });
   test('the offer it suggests is one whose yes names the target', () => {
     expect(unnamedTarget(refTo('refs/heads/main'), MAIN, [], null)?.offer).toBe('Push to `main`?');

@@ -100,6 +100,34 @@ function offeredPull(before: string): readonly string[] {
 
 const SHIP: Part = { commit: true, push: 'push', pr: true };
 
+const TICKED = '`[^`\\s]+`';
+const TICKS = String.raw`${TICKED}(?:(?:, | and )${TICKED})*`;
+const ticked = (list: string): string[] =>
+  [...list.matchAll(/`([^`\s]+)`/g)].map((m) => m[1] ?? '');
+
+// A release by hand pushes each version's tag before it creates the release,
+// so a release of named versions covers those tags too.
+const releasing = (versions: readonly string[]): Part =>
+  versions.length === 0
+    ? { release: true }
+    : { release: true, push: 'push', pushNamed: versions.map((v) => `tag:${v}`) };
+
+// The answer's last line, when it stands alone in its paragraph under nothing
+// that leads into it ("If CI passes:"): where a question is read from.
+function standalone(before: string): string | null {
+  const all = before.trimEnd().split(/\r?\n/);
+  const led = /[:,]$/.test((lines(before).at(-2) ?? '').trim());
+  return (all.at(-2) ?? '').trim() !== '' || led ? null : (all.at(-1) ?? '').trim();
+}
+// The versions a release question named, for "release it" and "release them".
+const offeredVersions = (before: string): string[] => {
+  const m = new RegExp(String.raw`^Release (${TICKS})\?$`).exec(standalone(before) ?? '');
+  return m === null ? [] : ticked(m[1] ?? '');
+};
+// The one tag a push question named, for "push the tag".
+const offeredTag = (before: string): string | null =>
+  /^Push the `([^`\s]+)` tag\?$/.exec(standalone(before) ?? '')?.[1] ?? null;
+
 // Where a push goes, named as a branch: main, a name with a slash, or "the x branch".
 const TARGET = String.raw`(?: to (?:the )?(?:origin[ /])?(?:(main|master|${SEGMENT}(?:\/${SEGMENT})+)(?: branch)?|(${BRANCH}) branch))?`;
 // Lowercase, as the gate compares a branch.
@@ -121,7 +149,7 @@ const CLAUSES = whole([
     (m, before) => ({ merge: true, mergeNamed: refsOf(m[1] ?? '', before) }),
   ],
   [String.raw`approve(?: it| ${REF})?`, () => ({ approve: true })],
-  [String.raw`(?:release|publish)${IT}`, () => ({ release: true })],
+  [String.raw`(?:release|publish)${IT}`, (_, before) => releasing(offeredVersions(before))],
 
   [String.raw`push${IT}${TARGET}`, (m) => ({ push: 'push', pushNamed: target(m) })],
   [
@@ -133,6 +161,13 @@ const CLAUSES = whole([
     (m) => ({ push: 'bare', pushNamed: target(m) }),
   ],
   [String.raw`push the ([^\s\`]+) tag`, (m) => ({ push: 'push', pushNamed: [`tag:${m[1]}`] })],
+  [
+    String.raw`push (?:the|that) tag`,
+    (_, before) => {
+      const tag = offeredTag(before);
+      return tag === null ? null : { push: 'push', pushNamed: [`tag:${tag}`] };
+    },
+  ],
   [String.raw`delete the branch`, () => ({ push: 'push' })],
 
   // A plain push, which a stack push does not run on.
@@ -154,7 +189,10 @@ const CLAUSES = whole([
 
   [String.raw`ship (?:them|both)`, () => SHIP],
   [String.raw`push (?:them|both)`, () => ({ push: 'push' })],
-  [String.raw`(?:release|publish) (?:them|both)`, () => ({ release: true })],
+  [
+    String.raw`(?:release|publish) (?:them|both)`,
+    (_, before) => releasing(offeredVersions(before)),
+  ],
   [
     String.raw`merge (?:them|both|all of them)`,
     (m, before) => {
@@ -246,7 +284,9 @@ function parts(text: string, before: string): Part[] | null {
     if (first.autoMerge !== true && first.readyRelease !== true) return [first, second];
     // What follows a standing ask may wait on the same condition, so only a
     // release joins one, as a release once the version pull request is ready.
-    const releases = second.release === true && Object.keys(second).length === 1;
+    // A release's own tag pushes are part of it, and wait with it.
+    const own = new Set(['release', 'push', 'pushNamed']);
+    const releases = second.release === true && Object.keys(second).every((k) => own.has(k));
     return releases ? [first, { readyRelease: true }] : null;
   }
   return null;
@@ -263,7 +303,6 @@ const OFFERED_REPO = String.raw`[A-Za-z\d][\w.-]*\/[A-Za-z\d][\w.-]*`;
 const OFFERED_URL = String.raw`https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/${NUM}`;
 const PULL = String.raw`(?:${OFFERED_REPO}#${NUM}|${OFFERED_URL}|#${NUM})`;
 const PULLS = String.raw`${PULL}(?:(?:, | and )${PULL})*`;
-const TICKED = '`[^`\\s]+`';
 const PUSHED = String.raw`\`(${BRANCH})\` to ${TICKED}`;
 
 // Each question offers.ts writes, and what a yes to it grants (pinned both
@@ -273,7 +312,8 @@ const QUESTIONS = whole([
     String.raw`(?:Merge|Squash-merge|Rebase-merge) (${PULLS})\?`,
     (m) => ({ merge: true, mergeNamed: allIn(m[1] ?? '') }),
   ],
-  [String.raw`Release (?:${PULL}|${TICKED})\?`, () => ({ release: true })],
+  [String.raw`Release ${PULL}\?`, () => ({ release: true })],
+  [String.raw`Release (${TICKS})\?`, (m) => releasing(ticked(m[1] ?? ''))],
   [
     String.raw`Merge and release (${PULL})\?`,
     (m) => ({ merge: true, mergeNamed: allIn(m[1] ?? ''), release: true }),
@@ -313,12 +353,8 @@ const QUESTIONS = whole([
 // What a yes to the answer's last line grants: null unless that line is, whole,
 // a question the offer tool writes.
 export function offered(before: string): Grant | null {
-  const all = before.trimEnd().split(/\r?\n/);
-  const last = (all.at(-1) ?? '').trim();
-  // Alone in its paragraph, under nothing that leads into it ("If CI passes:").
-  if ((all.at(-2) ?? '').trim() !== '' || /[:,]$/.test((lines(before).at(-2) ?? '').trim())) {
-    return null;
-  }
+  const last = standalone(before);
+  if (last === null) return null;
   // offers.ts writes a URL only for a repository `owner/name#n` cannot name.
   const urls = last.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\//g);
   if ([...urls].some((url) => namedShort(url[1] ?? ''))) return null;
@@ -410,7 +446,11 @@ export function holdOf(prompt: string, previousAnswer = ''): Hold {
   const offer = offered(previousAnswer);
   const last = (lines(previousAnswer).at(-1) ?? '').trim();
   const asked = last.endsWith('?') ? stepsNamed(last) : [];
-  return lowest([...declined, ...(offer === null ? asked : stepsOf(offer))], 'declined');
+  // A release question's tag pushes are part of the release: a no to it holds
+  // the release, not every push.
+  const steps =
+    offer === null ? asked : stepsOf(offer.release ? { ...offer, push: 'none' } : offer);
+  return lowest([...declined, ...steps], 'declined');
 }
 
 // The steps of a request the gate reads that sits beside other words, joined

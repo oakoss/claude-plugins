@@ -497,7 +497,7 @@ async function coveredAsks(
 const GH_ASK: { [K in 'merge' | 'approve' | 'release' | 'push']: Offer & { step: K } } = {
   merge: { step: 'merge', pulls: ['116'] },
   approve: { step: 'approve', pull: '116' },
-  release: { step: 'release', version: 'v0.25.0' },
+  release: { step: 'release', versions: ['v0.25.0'] },
   push: { step: 'push', branch: 'fix/x' },
 };
 type GhKind = keyof typeof GH_ASK | 'comment';

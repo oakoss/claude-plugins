@@ -17,6 +17,7 @@ import { holds, type Hold } from './hold';
 import { allows, prUpdateOf, type PrReads, type PrUpdatesInForce } from './pr-updates';
 import {
   askingReason,
+  namingQuestion,
   parseDryRun,
   pushOutcome,
   unasked,
@@ -300,7 +301,9 @@ function pushRefusal(
       if (always === DELETES) {
         return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('delete')}`;
       }
-      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${update}${alone} To push, ${ask('push')}`;
+      const naming = namingQuestion(always);
+      const how = naming === null ? ask('push') : offerThem(naming, shown);
+      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${update}${alone} To push, ${how}`;
     }
     default: {
       const unhandled: never = missing;

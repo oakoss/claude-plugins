@@ -200,8 +200,24 @@ const SAMPLES: Record<OfferStep, readonly [object, Partial<Grant>][]> = {
   ],
   release: [
     [{ pulls: ['343'] }, { release: true }],
-    [{ version: 'review-cycle@0.39.0' }, { release: true }],
+    [
+      { version: 'review-cycle@0.39.0' },
+      { release: true, push: 'push', pushNamed: ['tag:review-cycle@0.39.0'] },
+    ],
+    [
+      { versions: ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'] },
+      {
+        release: true,
+        push: 'push',
+        pushNamed: ['tag:pr-kit@0.6.1', 'tag:pr-watch@0.9.0', 'tag:review-cycle@0.39.0'],
+      },
+    ],
+    [
+      { versions: ['v1.2.0', 'v1.3.0'] },
+      { release: true, push: 'push', pushNamed: ['tag:v1.2.0', 'tag:v1.3.0'] },
+    ],
   ],
+  'push-tag': [[{ version: 'pr-kit@0.6.1' }, { push: 'push', pushNamed: ['tag:pr-kit@0.6.1'] }]],
   'merge-release': [[{ pulls: ['343'] }, { merge: true, mergeNamed: ['343'], release: true }]],
   approve: [[{ pulls: ['12'] }, { approve: true }]],
   comment: [[{ pulls: ['o/r#12'] }, { comment: true }]],
@@ -288,6 +304,77 @@ describe("a yes to the offer tool's question", () => {
   test.each(['looks good', 'yes but wait', 'ok, ship it', 'great', ''])('%s is not', (text) =>
     expect(isReply(text)).toBe(false),
   );
+});
+
+describe('a release by hand', () => {
+  const THREE = 'Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?';
+  const tags = ['tag:pr-kit@0.6.1', 'tag:pr-watch@0.9.0', 'tag:review-cycle@0.39.0'];
+  const all = grant({ release: true, push: 'push', pushNamed: tags });
+  const one = grant({ release: true, push: 'push', pushNamed: ['tag:v0.25.0'] });
+
+  test.each(['yes', 'ok, lets release it', 'yes, lets release them', 'release them', 'publish it'])(
+    '%j to a question naming versions covers each tag and the release',
+    (answer) => {
+      expect(grantOf(answer, `Tags are ready.\n\n${THREE}`)).toEqual(all);
+      expect(grantOf(answer, 'Release `v0.25.0`?')).toEqual(one);
+    },
+  );
+
+  test('a release asked with no versions offered names no tag', () => {
+    const bare = grant({ release: true });
+    expect(grantOf('release it', 'The version pull request is green.')).toEqual(bare);
+    expect(grantOf('release it', 'Release #343?')).toEqual(bare);
+    expect(grantOf('yes', 'Release #343?')).toEqual(bare);
+    expect(grantOf('release them', 'Merge #41 and #42?')).toEqual(bare);
+    // Named in prose, not asked: the question is what a release names.
+    expect(grantOf('release it', 'I tagged `v0.25.0` locally.')).toEqual(bare);
+    // Asked earlier in the answer, or not alone in its paragraph, as for a yes.
+    for (const answer of ['release it', 'release them']) {
+      const earlier = 'Release `v0.25.0`?\n\nThat is done; the version pull request is green.';
+      expect(grantOf(answer, earlier), answer).toEqual(bare);
+      expect(grantOf(answer, 'Summary.\nRelease `v0.25.0`?'), answer).toEqual(bare);
+      expect(grantOf(answer, 'If CI passes:\n\nRelease `v0.25.0`?'), answer).toEqual(bare);
+    }
+  });
+
+  test('a no to a release question holds the release, not every push', () => {
+    expect(holdOf('no', 'Release `v0.25.0`?')).toEqual({ step: 'release', how: 'declined' });
+    expect(holdOf('not yet', `Tags are ready.\n\n${THREE}`)).toEqual({
+      step: 'release',
+      how: 'declined',
+    });
+    expect(holdOf('no', 'Push the `v0.25.0` tag?')).toEqual({ step: 'push', how: 'declined' });
+  });
+
+  test('a release joined to a merge once ready waits with it, tags and all', () => {
+    const standing = grant({ autoMerge: true, readyNamed: ['116'], readyRelease: true });
+    for (const before of ['', 'Release `v1`?', THREE]) {
+      expect(grantOf('merge 116 when ready and release it', before), before).toEqual(standing);
+    }
+  });
+
+  test('"push the tag" is the one tag just asked about', () => {
+    const tag = grant({ push: 'push', pushNamed: ['tag:pr-kit@0.6.1'] });
+    const asked = 'Push the `pr-kit@0.6.1` tag?';
+    for (const answer of ['push the tag', 'Yes, push the tag', 'ok, lets push that tag', 'yes']) {
+      expect(grantOf(answer, asked), answer).toEqual(tag);
+      expect(holdOf(answer, asked), answer).toBeNull();
+    }
+  });
+
+  test.each([
+    ['', 'no question before it'],
+    ['The tag `pr-kit@0.6.1` exists locally.', 'a tag named in prose'],
+    ['Merge #41?', 'a merge question'],
+    [THREE, 'a question naming three versions'],
+    ['Release `pr-kit@0.6.1`?', 'a release question naming one version'],
+    ['Summary.\nPush the `pr-kit@0.6.1` tag?', 'a tag question not alone in its paragraph'],
+    ['Push `fix/x` to `origin`?', 'a branch push question'],
+  ])('"push the tag" after %j grants nothing: %s', (before) => {
+    expect(grantOf('push the tag', before)).toEqual(NO_GRANT);
+    expect(grantOf('yes, push the tag', before)).toEqual(NO_GRANT);
+    expect(holdOf('yes, push the tag', before)).toEqual({ step: 'push', how: 'mentioned' });
+  });
 });
 
 describe('a request beside other work', () => {
