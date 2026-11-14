@@ -373,7 +373,7 @@ describe('ship: what it may do unasked', () => {
         'Ask one question for every pull request the report names as opened or updated that is not a draft',
         'every pull request, no drafts',
       ],
-      ['Pass each as `<nameWithOwner>#<n>`', 'qualified pulls'],
+      ['Pass them as `pulls`, a list, each as `<nameWithOwner>#<n>`', 'the key, qualified pulls'],
     ]);
   });
 
@@ -721,6 +721,17 @@ describe('release-check: reads, never releases', () => {
         'fix goes to the bump file',
       ],
       ["Never edit the release pull request's branch", 'rebuilt branch'],
+    ]);
+  });
+});
+
+describe('merge: the question comes from the offer tool', () => {
+  test('names the key the pull requests go in', () => {
+    expectAnchors(skillText('pr-kit', 'merge'), 'merge question', [
+      [
+        'get the question for the merge, release or stack merge from it, passing the pull requests as `pulls`, a list',
+        'the key',
+      ],
     ]);
   });
 });

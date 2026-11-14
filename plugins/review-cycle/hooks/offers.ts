@@ -120,6 +120,26 @@ export const pushTagQuestion = (tag: string): string => `Push the \`${tag}\` tag
 
 type Checked = { offer: Offer } | { error: string };
 
+// A caller may not have the tool's schema loaded, so a refusal is where it
+// learns the keys: each one for a missing or misplaced pull request names
+// `pulls` and its shape.
+const KEYS = ['step', 'pulls', 'branch', 'remote', 'method', 'operation', 'version'];
+const PULLS = 'pass pulls, a list such as ["316"] or ["owner/name#53"]';
+// What a caller guesses for `pulls`. Not every unknown key: the engine sends
+// its own beside the caller's.
+const GUESSES = [
+  'pr',
+  'prs',
+  'pull',
+  'pullRequest',
+  'pullRequests',
+  'pull_request',
+  'pull_requests',
+  'number',
+  'repo',
+  'repository',
+];
+
 function checked(input: unknown): Checked {
   if (typeof input !== 'object' || input === null) return { error: 'expected an object' };
   const o = input as Record<string, unknown>;
@@ -127,13 +147,21 @@ function checked(input: unknown): Checked {
   if (typeof step !== 'string' || !(OFFER_STEPS as readonly string[]).includes(step)) {
     return { error: `step must be one of ${OFFER_STEPS.join(', ')}` };
   }
+  const unread = GUESSES.filter((key) => Object.hasOwn(o, key));
+  if (unread.length > 0) {
+    return {
+      error: `not read: ${unread.join(', ')}. The keys are ${KEYS.join(', ')}. For a pull request, ${PULLS}`,
+    };
+  }
   const pulls: unknown = o.pulls ?? [];
   if (
     !Array.isArray(pulls) ||
     !pulls.every((p): p is string => typeof p === 'string' && PULL.test(p)) ||
     new Set(pulls).size !== pulls.length
   ) {
-    return { error: 'pulls must be distinct pull request numbers ("316") or "owner/name#53"' };
+    return {
+      error: 'pulls must be a list of distinct pull requests, each "316" or "owner/name#53"',
+    };
   }
   // The reader takes a bare number beside a named repository as unplaced.
   if (new Set(pulls.map((p) => p.includes('#'))).size > 1) {
@@ -158,20 +186,20 @@ function checked(input: unknown): Checked {
   const [pull, ...rest] = pulls;
   const one = (): string | null => (pull !== undefined && rest.length === 0 ? pull : null);
   const lone = one();
-  const onePull = { error: `${step} takes one pull request` };
+  const onePull = { error: `${step} takes one pull request: ${PULLS}` };
   const noBranch = { error: `${step} needs a branch` };
   // Switched on its own name, so each case's `step: s` is checked against the union.
   const s = step as OfferStep;
   switch (s) {
     case 'merge': {
       return pull === undefined
-        ? { error: 'merge needs at least one pull request' }
+        ? { error: `merge needs at least one pull request: ${PULLS}` }
         : { offer: { step: 'merge', pulls: [pull, ...rest], method: method as Method } };
     }
     case 'release': {
       if (typeof version !== 'string') {
         return lone === null
-          ? { error: 'release needs one pull request or a version' }
+          ? { error: `release needs one pull request or a version: ${PULLS}, or version` }
           : { offer: { step: 'release', pull: lone } };
       }
       return pull === undefined

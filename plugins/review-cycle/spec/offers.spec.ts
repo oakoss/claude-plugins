@@ -105,6 +105,11 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
   });
 });
 
+const errorOf = (input: unknown) => {
+  const o = offerQuestion(input);
+  return 'error' in o ? o.error : '';
+};
+
 describe('an offer with no question', () => {
   test.each([
     [{ step: 'deploy' }],
@@ -139,5 +144,57 @@ describe('an offer with no question', () => {
     [null],
   ])('%j', (input) => {
     expect(offerQuestion(input)).toHaveProperty('error');
+  });
+
+  // A caller without the schema learns the key from the refusal.
+  const PULLS = 'pass pulls, a list such as ["316"] or ["owner/name#53"]';
+
+  test.each([
+    [{ step: 'merge' }],
+    [{ step: 'release' }],
+    [{ step: 'approve' }],
+    [{ step: 'comment', pulls: ['3', '4'] }],
+    [{ step: 'merge-release' }],
+    [{ step: 'stack', pulls: ['3', '4'] }],
+  ])('%j says where the pull requests go', (input) => {
+    expect(errorOf(input)).toContain(PULLS);
+  });
+
+  test('a release with neither names both of its keys', () => {
+    expect(errorOf({ step: 'release' })).toBe(
+      `release needs one pull request or a version: ${PULLS}, or version`,
+    );
+  });
+
+  test.each([
+    [{ step: 'merge', pr: 'oakoss/oakum#395' }, 'not read: pr.'],
+    [{ step: 'merge', prs: ['oakoss/oakum#395'] }, 'not read: prs.'],
+    [
+      { step: 'merge', pr: '395', repo: 'oakoss/oakum', pullRequests: ['395'] },
+      'not read: pr, pullRequests, repo.',
+    ],
+    [{ step: 'merge', pulls: ['316'], pull: '316' }, 'not read: pull.'],
+    [{ step: 'merge', number: 316, repository: 'o/n' }, 'not read: number, repository.'],
+  ])('%j names the key it does not read, and the ones it does', (input, said) => {
+    const error = errorOf(input);
+    expect(error).toContain(said);
+    expect(error).toContain('The keys are step, pulls, branch, remote, method, operation, version');
+    expect(error).toContain(PULLS);
+  });
+
+  test('a key the engine sends beside the caller’s is no guess', () => {
+    const sent = {
+      tool: 'mcp__review-cycle__offer',
+      tool_use_id: 't1',
+      step: 'merge',
+      pulls: ['316'],
+    };
+    expect(offerQuestion(sent)).toEqual({ question: 'Merge #316?' });
+  });
+
+  test('a pull request passed as a string is told to pass a list', () => {
+    expect(errorOf({ step: 'merge', pulls: 'oakoss/oakum#395' })).toBe(
+      'pulls must be a list of distinct pull requests, each "316" or "owner/name#53"',
+    );
   });
 });
