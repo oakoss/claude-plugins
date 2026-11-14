@@ -13,7 +13,7 @@ import {
   type ToolCallResult,
 } from 'claude-code';
 
-import type { Kept } from '../types';
+import type { Kept, KeptSpend } from '../types';
 import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
 import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
 import { committingAlias, readCommand, shownCommand, type Classification } from './command';
@@ -138,6 +138,7 @@ import { readRounds, recordRounds, roundsOf } from './rounds';
 import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './settings';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
+import { isSpend, NO_SPEND, spentWith } from './spend';
 import { type LeaseIo, readStack, stackLease } from './stack';
 import { SUMMARY_TOOL, summaryHeader, summaryText } from './summary';
 import { madeByAnother, ownerOf, scratchNamed, sweep } from './sweep';
@@ -219,6 +220,7 @@ type Leg = {
   capped: boolean;
   // A report of it counted, so a later answer without a receipt drops nothing.
   counted: boolean;
+  spend?: KeptSpend;
 };
 
 // Measured 2026-09-19 over 138 legs: a fan-out's slowest leg had a median of
@@ -357,7 +359,7 @@ const held = (): Hold => state.hold?.floor ?? null;
 // remembers is copied here after each change and read back at the start, the
 // latest message's grant included, so a reload mid-step does not ask twice.
 // Bump the shape whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-10' });
+const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-11' });
 let keptText = '';
 let isKeepFailing = false;
 // Nothing is kept until what a reload left has been taken back, so an early
@@ -806,7 +808,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'status',
       description:
-        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, how many later findings the cycles' own fixes caused, what the cycles that stated a cost spent (minutes, leg runs, subagent tokens, Codex tokens), and the newest cycles one by one with their commit, cost and findings. Read-only.",
+        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, how many later findings the cycles' own fixes caused, what the cycles that stated a cost spent (minutes, leg runs, subagent tokens, the legs' steps and token counts, Codex tokens), and the newest cycles one by one with their commit, cost and findings. `legSpend` lists each reviewer leg's model calls this session, by agent id: its steps and the input, cache-write, cache-read and output tokens they used. Read-only.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -2795,6 +2797,9 @@ async function onStatus(
     reviews: state.reviews.length,
     droppedReviews: state.dropped.map((d) => d.text),
     cappedReviews: state.capped,
+    legSpend: [...state.legs].flatMap(([agentId, l]) =>
+      l.spend === undefined ? [] : [{ agentId, type: l.type, ...l.spend }],
+    ),
     reviewerChanges: state.reviewerChanges,
     shellAliases: state.aliasError ?? state.shellAliases.size,
     pushRequested: covers(state.message.grant, 'push'),
@@ -3504,6 +3509,19 @@ export const register: Register = (on, options) => {
   }
   on('prompt.submit', keptPromptSubmit);
   on('agent.spawn', keptAgentSpawn);
+  // A leg's notification reports only its final context; its spend is each
+  // step's usage, summed here.
+  on('turn.step', async function* ($, e, next) {
+    const r = yield* next(e);
+    const leg = e.agentId === undefined ? undefined : state.legs.get(e.agentId);
+    const spent = leg && r.usage && spentWith(leg.spend ?? NO_SPEND, r.usage);
+    // A count off the API's shape would make the kept record one isKept refuses.
+    if (leg && spent && isSpend(spent)) {
+      leg.spend = spent;
+      void keepGate($);
+    }
+    return r;
+  });
   on('turn.complete', keptTurnComplete);
   on('tool.call', { tool: 'Skill' }, keptSkill);
   on('tool.call', { tool: 'Bash' }, keptBash).catch(onBashError);

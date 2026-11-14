@@ -28,11 +28,21 @@ export type IterationCost = Readonly<{
   iteration: number;
   minutes: number | null;
   legs: number | null;
+  // The legs' final context sizes, as their notifications report them.
   subagentTokens: number | null;
   codexTokens: number | null;
+  // The legs' model calls as the status tool's legSpend sums them; absent on
+  // a cycle kept before they were recorded.
+  steps?: number | null;
+  input?: number | null;
+  cacheWrite?: number | null;
+  cacheRead?: number | null;
+  output?: number | null;
   // The clause names legs whose usage was not reported.
   isPartial: boolean;
 }>;
+
+const SPEND_KEYS = ['steps', 'input', 'cacheWrite', 'cacheRead', 'output'] as const;
 
 export type Cycle = Readonly<{
   date: string;
@@ -146,6 +156,20 @@ const AMOUNTS = {
   subagentTokens: new RegExp(String.raw`${WHOLE}(\d[\d,]*) subagent tokens`),
   codexTokens: new RegExp(String.raw`${WHOLE}(\d[\d,]*) Codex tokens`, 'i'),
 };
+// The legs' spend is read only as the template writes it, the five in one
+// run, so a number in a note (`not reported: codex (20 steps)`) is not one.
+const N = String.raw`(\d[\d,]*)`;
+const SPEND = new RegExp(
+  String.raw`${WHOLE}${N} steps?, ${N} input, ${N} cache-write, ${N} cache-read, ${N} output tokens`,
+);
+const counted = (n: string | undefined) => {
+  const v = Number(n?.replaceAll(',', ''));
+  return Number.isSafeInteger(v) ? v : null;
+};
+function spendIn(clause: string) {
+  const m = SPEND.exec(clause);
+  return Object.fromEntries(SPEND_KEYS.map((k, i) => [k, counted(m?.[i + 1])]));
+}
 // Usage a clause says it lacks: `not reported: <legs>`, or a count given as
 // unavailable.
 const LACKS = /not reported:\s*(?!none\b)\S|\bunavailable\b/;
@@ -163,6 +187,7 @@ function costOf(line: string | undefined): IterationCost[] | undefined {
       legs: statedIn(clause, AMOUNTS.legs),
       subagentTokens: statedIn(clause, AMOUNTS.subagentTokens),
       codexTokens: statedIn(clause, AMOUNTS.codexTokens),
+      ...spendIn(clause),
       isPartial: LACKS.test(clause),
     });
   }
@@ -252,6 +277,7 @@ const isIterationCost = (x: unknown): x is IterationCost => {
     isCountOrNull(c.legs) &&
     isCountOrNull(c.subagentTokens) &&
     isCountOrNull(c.codexTokens) &&
+    SPEND_KEYS.every((k) => c[k] === undefined || isCountOrNull(c[k])) &&
     typeof c.isPartial === 'boolean'
   );
 };
@@ -347,7 +373,10 @@ export type Rollup = {
   recent: readonly Recent[];
 };
 
-type Spent<T> = { minutes: T; legs: T; subagentTokens: T; codexTokens: T };
+type Spent<T> = { minutes: T; legs: T; subagentTokens: T; codexTokens: T } & Record<
+  (typeof SPEND_KEYS)[number],
+  T
+>;
 
 export type Recent = Pick<Cycle, 'date' | 'head' | 'tier' | 'iterations'> & {
   fixed: number | null;
@@ -372,6 +401,11 @@ function spentOf(cost: readonly IterationCost[]): Spent<number | null> & { isPar
     legs: total((i) => i.legs),
     subagentTokens: total((i) => i.subagentTokens),
     codexTokens: total((i) => i.codexTokens),
+    steps: total((i) => i.steps ?? null),
+    input: total((i) => i.input ?? null),
+    cacheWrite: total((i) => i.cacheWrite ?? null),
+    cacheRead: total((i) => i.cacheRead ?? null),
+    output: total((i) => i.output ?? null),
     isPartial: cost.some((i) => i.isPartial),
   };
 }
@@ -393,7 +427,15 @@ export function rollupOf(cycles: readonly Cycle[]): Rollup {
     later: 0,
     selfCaused: 0,
     byLeg: {},
-    cost: { cycles: 0, partial: 0, minutes: 0, legs: 0, subagentTokens: 0, codexTokens: 0 },
+    cost: {
+      cycles: 0,
+      partial: 0,
+      minutes: 0,
+      legs: 0,
+      subagentTokens: 0,
+      codexTokens: 0,
+      ...Object.fromEntries(SPEND_KEYS.map((k) => [k, 0])),
+    } as Rollup['cost'],
     recent: cycles.slice(-RECENT).map((c) => ({
       date: c.date,
       head: c.head,
@@ -424,6 +466,7 @@ export function rollupOf(cycles: readonly Cycle[]): Rollup {
       r.cost.legs += spent.legs ?? 0;
       r.cost.subagentTokens += spent.subagentTokens ?? 0;
       r.cost.codexTokens += spent.codexTokens ?? 0;
+      for (const k of SPEND_KEYS) r.cost[k] += spent[k] ?? 0;
     }
     for (const [list, key] of [
       [c.fixed, 'fixed'],

@@ -16,11 +16,20 @@ const leg = (done: boolean, capped = false) => ({
   spawnedAt: 1000,
 });
 
+const SPEND = { steps: 2, input: 4, cacheWrite: 10, cacheRead: 80, output: 6 };
+
 function source(): KeptSource & { message: { unread: null; said: string } } {
   return {
     reviews: [{ type: 'codex', trees: ['t0', 't1'], reviewedPaths: ['a.ts'] }],
     legs: new Map([
-      ['running', { ...leg(false), timer: { cancel: () => null } }],
+      [
+        'running',
+        {
+          ...leg(false),
+          spend: SPEND,
+          timer: { cancel: () => null },
+        },
+      ],
       ['finished', { ...leg(true), timer: null }],
     ]),
     message: {
@@ -64,7 +73,7 @@ describe('keptOf', () => {
   test('drops each leg timer and the message fields a reload starts over', () => {
     const k = keptOf(source());
     expect(k.legs).toEqual([
-      ['running', leg(false)],
+      ['running', { ...leg(false), spend: SPEND }],
       ['finished', leg(true)],
     ]);
     expect(Object.keys(k.message).toSorted()).toEqual(
@@ -109,7 +118,7 @@ describe('restoredOf', () => {
     expect(r).toEqual({
       ...s,
       legs: new Map([
-        ['running', { ...leg(false), timer: null }],
+        ['running', { ...leg(false), spend: SPEND, timer: null }],
         ['finished', { ...leg(true), timer: null }],
       ]),
       message: { ...s.message, said: null },
@@ -137,6 +146,8 @@ describe('isKept', () => {
     ['a leg without its id', (k) => (k.legs[0] = [leg(false)])],
     ['a leg with a non-finite spawn time', (k) => (k.legs[0][1].spawnedAt = null)],
     ['a leg flag that is not boolean', (k) => (k.legs[0][1].counted = 'no')],
+    ['a leg spend with a negative count', (k) => (k.legs[0][1].spend.output = -1)],
+    ['a leg spend missing a count', (k) => delete k.legs[0][1].spend.steps],
     ['a message tree that is a number', (k) => (k.message.tree = 1)],
     ['a message flag that is missing', (k) => delete k.message.prWindow],
     ['a grant missing a field', (k) => delete k.message.grant.commit],

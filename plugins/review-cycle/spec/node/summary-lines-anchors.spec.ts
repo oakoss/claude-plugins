@@ -48,8 +48,9 @@ test("the review skill records each round's cost as its legs report", () => {
   expect(section(3)).toContain("the time (`date +%s`, the start of the iteration's wall-clock)");
   expect(six).toContain('The cost covers loop iterations only, not Phases 7 and 8.');
   expect(section(9)).toContain(
-    'Cost: <iteration N: W min wall-clock, L legs, T subagent tokens, C Codex tokens',
+    'Cost: <iteration N: W min wall-clock, L legs, T subagent tokens, S steps, I input, CW cache-write, CR cache-read, O output tokens, C Codex tokens',
   );
+  expect(six).toContain("its entry in the status tool's `legSpend`, by agent id");
 });
 
 test('the summary block goes to the summary tool, and the reply ends with the decision', () => {
