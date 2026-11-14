@@ -74,6 +74,7 @@ import {
   tellsOf,
   verdictOf,
   noticeOf,
+  WAKE_RULES,
   heldWith,
   clearedConflicts,
   isAskable,
@@ -220,7 +221,7 @@ async function deliver($: $, h: Held): Promise<void> {
   }
   if (h.news.length === 0 && ready === null) return;
   // A turn that started while the settings were read holds it like any other.
-  if (!(await hold($, { ...h, ready }))) wake($, noticeOf(h.news, ready, h.url), h.label);
+  if (!(await hold($, { ...h, ready }))) wake($, noticeOf(h.news, ready), h.label);
 }
 
 // Settings that cannot be read leave the merge asked, as no review-cycle does.
@@ -1194,6 +1195,13 @@ export const register: Register = (on, options) => {
         releaseHeld($);
       }
     }
+  });
+
+  on('prompt.compose', async ($, e, next) => {
+    const r = await next(e);
+    return {
+      sections: [...r.sections, { id: 'pr-watch:wakes', text: WAKE_RULES, scope: 'session' }],
+    };
   });
 
   on('prompt.submit', async ($, e, next) => {

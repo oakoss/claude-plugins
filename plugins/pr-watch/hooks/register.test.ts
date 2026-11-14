@@ -2068,9 +2068,24 @@ const reviewing = (status: string, conclusion: string | null): any => ({
 
 const running = () => headJson('a1', [RUNNING_CI], { mergeStateStatus: 'BLOCKED' });
 
+test("its rules for the wakes ride in the system prompt's last section", async ($, on) => {
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] }));
+  const { sections } = await $.prompt.compose({
+    model: 'm',
+    promptModel: 'm',
+    surfaces: ['terminal'],
+    tools: [],
+    outputStyle: null,
+    traits: [],
+  });
+  expect(sections.map((s) => s.id)).toEqual(['intro', 'pr-watch:wakes']);
+  expect(sections.at(-1)?.scope).toBe('session');
+  expect(sections.at(-1)?.text).toContain('Never merge it unasked');
+});
+
 describe('asking about a merge', () => {
   const OPEN = JSON.stringify({ url: URL, state: 'OPEN', mergedAt: null });
-  const ASK = 'ask the user whether to merge it';
+  const ASK = 'nothing is still running on it';
 
   test('wakes Claude once to ask, for a pull request it opened, in place of the ready line', async ($, on) => {
     const gh: Gh = { pr: headJson('a1'), view: OPEN, stopBefore: {} };
@@ -2321,7 +2336,7 @@ describe('telling Claude', () => {
     await clock.advance(70_000);
     expect(seen.wakes).toHaveLength(1);
     expect(seen.wakes[0]).toContain('GitHub reports o/r#128 ready to merge.');
-    expect(seen.wakes[0]).toContain('not a request to merge');
+    expect(seen.wakes[0]).toBe('pr-watch: GitHub reports o/r#128 ready to merge.');
     // GitHub recomputing the merge state is not a new ready.
     gh.pr = prJson({ mergeStateStatus: 'UNKNOWN' });
     await clock.advance(70_000);

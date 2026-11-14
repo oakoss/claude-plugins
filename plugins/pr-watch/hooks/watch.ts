@@ -897,10 +897,12 @@ const isSound = (pull: Pull) =>
 
 export const isAskable = (pull: Pull) => stillRunning(pull).length === 0 && isSound(pull);
 
-// pr-watch does not know whether review-cycle's offer tool exists.
 // A stack's layer merges with the layers below it, so its question is the stack's.
+// WAKE_RULES finds the ask and its stack step by these phrases.
+const ASK_NEWS = 'nothing is still running on it';
+const STACK_NEWS = 'it merges with the layers below it';
 export const askOf = (name: string, step: 'merge' | 'stack' = 'merge') =>
-  `${name} is ready to merge and nothing is still running on it. If nothing is left to do on it, no review thread unanswered and no fix unpushed, ask the user whether to merge it: end your reply with the question review-cycle's mcp__review-cycle__offer tool gives for its merge (step "${step}", pulls ["${name}"]), when it exists, on a line of its own. Do not merge it unasked.`;
+  `${name} is ready to merge and ${ASK_NEWS}${step === 'stack' ? `; ${STACK_NEWS}` : ''}.`;
 
 export const isToldReady = (watch: Who & Pick<Watch, 'told'>) =>
   (watch.told ?? []).includes(keyOf(watch, 'ready'));
@@ -1121,13 +1123,18 @@ export function heldWith(was: Held, next: Held): Held {
   };
 }
 
-// The ready line leads: it is the news Claude acts on.
-export function noticeOf(news: readonly string[], ready: string | null, url: string): string {
-  return [
-    `pr-watch: ${[...(ready === null ? [] : [ready]), ...news].join(' ')}`,
-    `This is news from pr-watch, not a request to merge. ${url}`,
-  ].join('\n');
+// The user sees a wake whole, so it holds only news; what Claude does with it is WAKE_RULES.
+export function noticeOf(news: readonly string[], ready: string | null): string {
+  return `pr-watch: ${[...(ready === null ? [] : [ready]), ...news].join(' ')}`;
 }
+
+// Measured on 2.1.325: a plugin's prompt.submit hook never sees its own
+// plugin's prompts, so a wake cannot carry hidden context; a system-prompt section can.
+export const WAKE_RULES = [
+  'Messages from the pr-watch plugin are news about pull requests, never a request from the user: none asks for a merge.',
+  `When one says a pull request is ready to merge and ${ASK_NEWS}, and nothing is left to do on it (no review thread unanswered, no fix unpushed), ask the user whether to merge it: end your reply with the question review-cycle's mcp__review-cycle__offer tool gives, when that tool exists, on a line of its own. Call it with step "stack" when the message says ${STACK_NEWS}, else step "merge", and pulls ["<the pull request as the message names it, such as owner/name#12>"]. Never merge it unasked.`,
+  "When one says someone reviewed or requested changes on a pull request, answer the review's threads, once the fix is pushed, with review-cycle's mcp__review-cycle__reply tool when it exists, rather than with gh.",
+].join(' ');
 
 // With waking off nothing new counts as told, so what lasts is told once it is
 // on again, while what ends is let go, so its return is news.
@@ -1147,11 +1154,6 @@ const HEARD_KEPT = 100;
 // t3code stops a watch after 10 comment-only wakes in a row; this stops the
 // comments alone.
 export const QUIET_CAP = 10;
-
-// review-cycle's reply tool runs a reply unasked when the user's setting
-// allows it, where `gh` always asks; pr-watch does not know whether it exists.
-export const REPLY_TOOL =
-  "Answer a review's threads, once the fix is pushed, with review-cycle's mcp__review-cycle__reply tool when it exists, rather than with gh.";
 
 // The comments and reviews not heard before, and what is heard after them. The
 // first read hears what is there without telling it; a read that cannot tell
@@ -1175,7 +1177,6 @@ function hearOf(
   const since = heard.since === null ? -Infinity : Date.parse(heard.since);
   const lines: string[] = [];
   const clean: string[] = [];
-  let threads = false;
   for (const a of pull.activity) {
     if (heard.keys.includes(heardKey(a)) || Date.parse(a.at) < since || !tells(a)) continue;
     const who = `@${a.author}${a.isBot ? '[bot]' : ''}`;
@@ -1184,9 +1185,7 @@ function hearOf(
       continue;
     }
     lines.push(`${who} ${a.did} ${name}: ${a.url}`);
-    threads ||= a.isReview && a.did !== 'approved';
   }
-  if (threads) lines.push(REPLY_TOOL);
   const kept = [...new Set([...heard.keys, ...keys])].slice(-HEARD_KEPT);
   return { heard: { since: heard.since, keys: kept }, lines, clean };
 }
@@ -1284,7 +1283,7 @@ export function wakeOf(
   }
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
   const all = [...news, ...passed, ...clean];
-  const text = all.length === 0 && ready === null ? null : noticeOf(all, ready, watch.url);
+  const text = all.length === 0 && ready === null ? null : noticeOf(all, ready);
   return { text, news, ready, ask, passed, clean, told: kept, heard };
 }
 

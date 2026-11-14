@@ -46,11 +46,11 @@ import {
   toastOf,
   verdictOf,
   QUIET_CAP,
-  REPLY_TOOL,
   settingsOf,
   tellsOf,
   toldAfter,
   wakeOf,
+  WAKE_RULES,
   heldWith,
   noticeOf,
   contextOf,
@@ -874,11 +874,10 @@ describe('wakeOf', () => {
   // What the next read tells, given what the last one left.
   const after = (p: Pull, last: Memory = {}, w: typeof pr = pr) => wakeOf(w, p, verdictAt(p), last);
 
-  test('says a pull request is ready once, as news rather than a request to merge', () => {
+  test('says a pull request is ready once', () => {
     const p = pull([green()]);
     const first = after(p);
     expect(first.text).toContain('GitHub reports o/r#128 ready to merge.');
-    expect(first.text).toContain('not a request to merge. https://github.com/o/r/pull/128');
     expect(first.text).not.toContain('checks passed');
     expect(first.text).not.toContain('still running');
     expect(after(p, first).text).toBeNull();
@@ -943,11 +942,11 @@ describe('wakeOf', () => {
     const at = headed;
     const first = after(at());
     expect(first.ask).toBe(askOf('o/r#128'));
-    // The offer tool's keys are spelled out: a caller may not have its schema.
-    expect(first.ask).toContain('(step "merge", pulls ["o/r#128"])');
     const layer = at({ base: 'feat/127', stack: { number: 236, trunk: 'main', layers: [128] } });
     expect(after(layer).ask).toBe(askOf('o/r#128', 'stack'));
-    expect(after(layer).ask).toContain('(step "stack", pulls ["o/r#128"])');
+    expect(after(layer).ask).toBe(
+      'o/r#128 is ready to merge and nothing is still running on it; it merges with the layers below it.',
+    );
     expect(first.ready).toContain('ready to merge');
     expect(first.text).not.toContain('ask the user');
     expect(after(at(), first).ask).toBeNull();
@@ -1238,8 +1237,8 @@ describe('wakeOf', () => {
     const woke = wakeOf(pr, ready, verdictAt(ready), {});
     expect(woke.ready).toBe('GitHub reports o/r#128 ready to merge.');
     expect(woke.news).toEqual([]);
-    expect(noticeOf(['@alice commented'], woke.ready, pr.url)).toMatch(
-      /^pr-watch: GitHub reports o\/r#128 ready to merge\. @alice commented\n/,
+    expect(noticeOf(['@alice commented'], woke.ready)).toBe(
+      'pr-watch: GitHub reports o/r#128 ready to merge. @alice commented',
     );
     const held = { id: 'x', label: '#128', url: pr.url, news: ['@alice commented'], ready: null };
     const again = heldWith(held, { ...held, news: ['@alice commented', '@bob commented'] });
@@ -1305,11 +1304,10 @@ describe('wakeOf', () => {
     expect(after(p, woke).text).toBeNull();
   });
 
-  test('a review with threads names the reply tool once; an approval or a comment does not', () => {
+  test('a wake is one line of news; what to do with it is in the rules', () => {
     const quiet = { heard: { since: null, keys: [] } };
-    const running = [ci([job('Test', null)])];
     const reviewed = after(
-      pull(running, {
+      pull([ci([job('Test', null)])], {
         activity: [
           said('pullfrog', minute(1), 'reviewed', true),
           said('carol', minute(2), 'requested changes on'),
@@ -1317,11 +1315,31 @@ describe('wakeOf', () => {
       }),
       quiet,
     );
-    expect(reviewed.text?.split(REPLY_TOOL)).toHaveLength(2);
-    for (const did of ['approved', 'commented on']) {
-      const one = pull(running, { activity: [said('dave', minute(3), did)] });
-      expect(after(one, quiet).text).not.toContain(REPLY_TOOL);
+    expect(reviewed.text).toBe('pr-watch: @carol requested changes on o/r#128: https://x/carol');
+    expect(after(pull([green()])).text).toBe('pr-watch: GitHub reports o/r#128 ready to merge.');
+    expect(askOf('o/r#128')).toBe('o/r#128 is ready to merge and nothing is still running on it.');
+    for (const rule of [
+      'never a request',
+      'mcp__review-cycle__offer',
+      // The offer tool's keys are spelled out: a caller may not have its schema.
+      'step "merge"',
+      'step "stack"',
+      'pulls ["',
+      'mcp__review-cycle__reply',
+      'Never merge it unasked',
+    ]) {
+      expect(WAKE_RULES).toContain(rule);
     }
+    // The rules find each wake by its own words.
+    const ask = 'is ready to merge and nothing is still running on it';
+    const stack = 'it merges with the layers below it';
+    expect(WAKE_RULES).toContain(`says a pull request ${ask}`);
+    expect(WAKE_RULES).toContain(`says ${stack}`);
+    expect(askOf('o/r#1')).toContain(ask);
+    expect(askOf('o/r#1', 'stack')).toContain(ask);
+    expect(askOf('o/r#1', 'stack')).toContain(stack);
+    expect(WAKE_RULES).toContain('requested changes on');
+    expect(reviewed.text).toContain('requested changes on');
   });
 
   test('tells no comment that slides back into the window once a newer one is deleted', () => {
@@ -1377,14 +1395,13 @@ describe('wakeOf', () => {
     expect(woke.clean).toEqual([
       '@pullfrog[bot] reviewed o/r#128 and found no issues: https://x/pullfrog',
     ]);
-    expect(woke.text).not.toContain(REPLY_TOOL);
     expect(woke.heard).not.toHaveProperty('streak');
     expect(wakeOf(pr, p, verdictAt(p), woke, { tells }).text).toBeNull();
     // Bots not asked for: heard, and held nowhere.
     expect(wakeOf(pr, p, verdictAt(p), first).text).toBeNull();
     const both = pull([], { activity: [clean, said('carol', minute(2), 'reviewed')] });
     const mixed = wakeOf(pr, both, verdictAt(both), first, { tells });
-    expect(mixed.news).toEqual(['@carol reviewed o/r#128: https://x/carol', REPLY_TOOL]);
+    expect(mixed.news).toEqual(['@carol reviewed o/r#128: https://x/carol']);
     expect(mixed.clean).toHaveLength(1);
   });
 
