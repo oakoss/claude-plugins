@@ -533,7 +533,7 @@ describe('a refusal that names a step', () => {
     { step: 'merge', pulls: ['116'] },
     { step: 'merge-release', pull: '62' },
     { step: 'approve', pull: '116' },
-    { step: 'release', version: 'v0.25.0' },
+    { step: 'release', versions: ['v0.25.0'] },
     { step: 'push', branch: 'fix/x' },
     { step: 'force-push', branch: 'fix/x' },
     { step: 'force-push-bare', branch: 'fix/x' },

@@ -3780,6 +3780,16 @@ describe('a push the user asked for', () => {
     await say($, 'delete the branch');
     expect(ran(await bash($, 'git push origin --delete fix/x'))).toBe(true);
   });
+  test('a branch delete asked for beside a named tag still deletes', async ($, on) => {
+    fakeWorld(
+      on,
+      pushing({
+        git: remoteSide({ 'origin --delete fix/x': ['-\t:refs/heads/fix/x\t[deleted]'] }),
+      }),
+    );
+    await say($, 'push the v1.2.0 tag and delete the branch');
+    expect(ran(await bash($, 'git push origin --delete fix/x'))).toBe(true);
+  });
   test('"ship them" pushes and opens the pull request', async ($, on) => {
     fakeWorld(on, pushing({}));
     await say($, 'fix the parser');
@@ -4154,6 +4164,7 @@ function stops(stopBefore: string) {
 const REMOTE = '/remote.git';
 const DRY_FLAGS = '--dry-run --porcelain --no-verify --no-quiet --recurse-submodules=no';
 const NEW_BRANCH = '*\tHEAD:refs/heads/fix/x\t[new branch]';
+const tagLine = (v: string) => `*\trefs/tags/${v}:refs/tags/${v}\t[new tag]`;
 const newBranch = (b: string) => `*\trefs/heads/${b}:refs/heads/${b}\t[new branch]`;
 // The remote as the gate's always-ask check sees it: what git's dry run
 // prints for each push, keyed by the words after `push` ('fail' for a dry run
@@ -8294,6 +8305,95 @@ describe('the offer tool', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'gh release create v0.25.0'))).toBe(true);
   });
+  // A release by hand, as on 2026-11-14: three tags at one commit, each pushed
+  // and then released. git sends all three with a push of one (push.followTags).
+  const VERSIONS = ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'];
+  const byHand = (): Partial<World> => {
+    const pushes = remoteSide({
+      'origin pr-kit@0.6.1': VERSIONS.map((v) => tagLine(v)),
+      '--no-follow-tags origin pr-kit@0.6.1': [tagLine('pr-kit@0.6.1')],
+    });
+    const gh = github('main');
+    return pushing({ settings: { local: stops('merge') }, git: (a) => pushes(a) ?? gh(a) });
+  };
+
+  test('one yes to a question naming the versions pushes each tag and creates each release', async ($, on) => {
+    fakeWorld(on, byHand());
+    await say($, 'ok, lets create them by hand');
+    expect(denied(await bash($, 'git push origin pr-kit@0.6.1'), 'so nothing ran')).toBe(true);
+    const question = await offered($, { step: 'release', versions: VERSIONS });
+    expect(question).toBe('Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?');
+    await endTurn($, 'answer', `The tags are ready.\n\n${question}`);
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin pr-kit@0.6.1'))).toBe(true);
+    for (const v of VERSIONS) {
+      expect(ran(await bash($, `gh release create ${v} --verify-tag`)), v).toBe(true);
+    }
+  });
+
+  test('"ok, lets release them" to that question covers the same', async ($, on) => {
+    fakeWorld(on, byHand());
+    await endTurn($, 'answer', await offered($, { step: 'release', versions: VERSIONS }));
+    await say($, 'ok, lets release them');
+    expect(ran(await bash($, 'git push origin pr-kit@0.6.1'))).toBe(true);
+    expect(ran(await bash($, 'gh release create pr-watch@0.9.0'))).toBe(true);
+  });
+
+  test('a yes to one version’s question pushes that tag alone, and releases', async ($, on) => {
+    fakeWorld(on, byHand());
+    await endTurn($, 'answer', await offered($, { step: 'release', version: 'pr-kit@0.6.1' }));
+    await say($, 'yes');
+    const all = await bash($, 'git push origin pr-kit@0.6.1');
+    expect(denied(all, 'it pushes the tag `pr-watch@0.9.0`, which the request did not name')).toBe(
+      true,
+    );
+    expect(denied(all, '--no-follow-tags pushes only what the command names')).toBe(true);
+    expect(ran(await bash($, 'git push --no-follow-tags origin pr-kit@0.6.1'))).toBe(true);
+    expect(ran(await bash($, 'gh release create pr-kit@0.6.1'))).toBe(true);
+  });
+
+  test('a tag push nobody asked for is refused with the tag’s own question, and "yes, push the tag" answers it', async ($, on) => {
+    fakeWorld(on, byHand());
+    await say($, 'fix the parser');
+    const command = 'git push --no-follow-tags origin pr-kit@0.6.1';
+    const refused = await bash($, command);
+    expect(denied(refused, 'The question: Push the `pr-kit@0.6.1` tag?')).toBe(true);
+    expect(denied(refused, 'gives for step push')).toBe(false);
+    const question = await offered($, { step: 'push-tag', version: 'pr-kit@0.6.1' });
+    expect(question).toBe('Push the `pr-kit@0.6.1` tag?');
+    await endTurn($, 'answer', question);
+    await say($, 'Yes, push the tag');
+    expect(ran(await bash($, command))).toBe(true);
+    // The tag alone: its release is still to ask.
+    expect(denied(await bash($, 'gh release create pr-kit@0.6.1'), 'so nothing ran')).toBe(true);
+  });
+
+  test('a push to the default branch nobody asked for is refused with the question that names it', async ($, on) => {
+    const git = remoteSide({
+      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+    });
+    fakeWorld(on, pushing({ settings: { local: stops('merge') }, git }));
+    await say($, 'fix the parser');
+    const refused = await bash($, 'git push origin main');
+    expect(denied(refused, 'The question: Push to `main`?')).toBe(true);
+    expect(denied(refused, 'gives for step push')).toBe(false);
+    await endTurn($, 'answer', 'Done.\n\nPush to `main`?');
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin main'))).toBe(true);
+  });
+
+  test('a yes to a release of versions deletes no tag it named', async ($, on) => {
+    const pushes = remoteSide({
+      'origin --delete pr-kit@0.6.1': ['-\t:refs/tags/pr-kit@0.6.1\t[deleted]'],
+    });
+    const gh = github('main');
+    fakeWorld(on, pushing({ settings: { local: stops('merge') }, git: (a) => pushes(a) ?? gh(a) }));
+    await endTurn($, 'answer', await offered($, { step: 'release', versions: VERSIONS }));
+    await say($, 'yes');
+    const tag = await bash($, 'git push origin --delete pr-kit@0.6.1');
+    expect(denied(tag, 'it deletes the tag `pr-kit@0.6.1`')).toBe(true);
+  });
+
   test('a yes to its bare force-push question lets that push run', async ($, on) => {
     fakeWorld(on, pushing({}));
     await endTurn($, 'answer', await offered($, { step: 'force-push-bare', branch: 'fix/x' }));

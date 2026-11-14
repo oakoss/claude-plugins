@@ -852,7 +852,13 @@ async function onSessionStart(
           version: {
             type: 'string',
             description:
-              'For a release with no pull request: its tag or <package>@<version>, "v0.25.0".',
+              'For a release with no pull request, or push-tag: its tag or <package>@<version>, "v0.25.0".',
+          },
+          versions: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'For a release of several at once, in place of version: one question, whose yes covers pushing each tag and creating each release.',
           },
         },
         required: ['step'],

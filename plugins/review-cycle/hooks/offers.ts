@@ -17,6 +17,7 @@ export const OFFER_STEPS = [
   'stack-push',
   'stack-submit',
   'merge-release',
+  'push-tag',
 ] as const;
 export type OfferStep = (typeof OFFER_STEPS)[number];
 
@@ -40,20 +41,18 @@ function ref(pull: string): string {
   const repo = pull.slice(0, at);
   return namedShort(repo) ? pull : `https://github.com/${repo}/pull/${pull.slice(at + 1)}`;
 }
-function refs(pulls: readonly string[]): string {
-  const named = pulls.map((p) => ref(p));
-  return named.length === 1
-    ? (named[0] ?? '')
-    : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`;
-}
+const listed = (named: readonly string[]): string =>
+  named.length === 1 ? (named[0] ?? '') : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`;
+const refs = (pulls: readonly string[]): string => listed(pulls.map((p) => ref(p)));
 
 type Pushed = { branch: string; remote?: string };
 export type Offer =
   | { step: 'pr' | 'stack-push' | 'stack-submit' }
   | { step: 'merge'; pulls: readonly [string, ...string[]]; method?: Method }
   | { step: 'merge-release' | 'approve' | 'comment'; pull: string }
-  | { step: 'release'; pull: string; version?: never }
-  | { step: 'release'; version: string; pull?: never }
+  | { step: 'release'; pull: string; versions?: never }
+  | { step: 'release'; versions: readonly [string, ...string[]]; pull?: never }
+  | { step: 'push-tag'; tag: string }
   | { step: 'stack'; upTo?: string }
   | ({ step: 'push' | 'force-push' | 'force-push-bare' | 'push-pr' | 'delete' } & Pushed)
   | { step: 'commit'; branch: string }
@@ -67,7 +66,11 @@ export function phraseOffer(o: Offer): string {
       return `${METHODS[o.method ?? 'merge']} ${refs(o.pulls)}?`;
     }
     case 'release': {
-      return 'version' in o ? `Release \`${o.version}\`?` : `Release ${ref(o.pull)}?`;
+      if (o.versions === undefined) return `Release ${ref(o.pull)}?`;
+      return `Release ${listed(o.versions.map((v) => `\`${v}\``))}?`;
+    }
+    case 'push-tag': {
+      return pushTagQuestion(o.tag);
     }
     case 'merge-release': {
       return `Merge and release ${ref(o.pull)}?`;
@@ -123,7 +126,7 @@ type Checked = { offer: Offer } | { error: string };
 // A caller may not have the tool's schema loaded, so a refusal is where it
 // learns the keys: each one for a missing or misplaced pull request names
 // `pulls` and its shape.
-const KEYS = ['step', 'pulls', 'branch', 'remote', 'method', 'operation', 'version'];
+const KEYS = ['step', 'pulls', 'branch', 'remote', 'method', 'operation', 'version', 'versions'];
 const PULLS = 'pass pulls, a list such as ["316"] or ["owner/name#53"]';
 // What a caller guesses for `pulls`. Not every unknown key: the engine sends
 // its own beside the caller's.
@@ -179,10 +182,19 @@ function checked(input: unknown): Checked {
   if (typeof method !== 'string' || !Object.hasOwn(METHODS, method)) {
     return { error: 'method must be merge, squash or rebase' };
   }
-  const version = o.version;
-  if (version !== undefined && (typeof version !== 'string' || !VERSION.test(version))) {
-    return { error: 'version must be a tag or <package>@<version>' };
+  const named: unknown = o.versions ?? (o.version === undefined ? [] : [o.version]);
+  if (
+    (o.versions !== undefined && o.version !== undefined) ||
+    !Array.isArray(named) ||
+    !named.every((v): v is string => typeof v === 'string' && VERSION.test(v)) ||
+    new Set(named).size !== named.length
+  ) {
+    return {
+      error:
+        'pass version, a tag or <package>@<version>, or versions, a list of distinct ones, not both',
+    };
   }
+  const [version, ...others] = named;
   const [pull, ...rest] = pulls;
   const one = (): string | null => (pull !== undefined && rest.length === 0 ? pull : null);
   const lone = one();
@@ -197,14 +209,19 @@ function checked(input: unknown): Checked {
         : { offer: { step: 'merge', pulls: [pull, ...rest], method: method as Method } };
     }
     case 'release': {
-      if (typeof version !== 'string') {
+      if (version === undefined) {
         return lone === null
           ? { error: `release needs one pull request or a version: ${PULLS}, or version` }
           : { offer: { step: 'release', pull: lone } };
       }
       return pull === undefined
-        ? { offer: { step: 'release', version } }
+        ? { offer: { step: 'release', versions: [version, ...others] } }
         : { error: 'release takes a pull request or a version, not both' };
+    }
+    case 'push-tag': {
+      return version === undefined || others.length > 0
+        ? { error: 'push-tag takes one tag: pass version, such as "v0.25.0"' }
+        : { offer: { step: 'push-tag', tag: version } };
     }
     case 'merge-release':
     case 'approve':
