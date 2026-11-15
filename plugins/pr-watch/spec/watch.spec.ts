@@ -1357,6 +1357,9 @@ describe('wakeOf', () => {
       'push the fix without asking first',
       'ask the user before a fourth',
       'is behind its base, bring it up to date',
+      // Its own base, which may not be the default branch ship's update merges.
+      'merging in that base, the branch the message names',
+      'on a conflict, stop and offer /pr-kit:fix-merge-conflicts',
       // A judgment call is asked about; a merged pull request's failure is told.
       'whoever raised it',
       'A finding that is a judgment call',
