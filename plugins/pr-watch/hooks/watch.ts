@@ -890,6 +890,19 @@ export function clearedConflicts(w: Watch): string | null {
   return conflictsOf(`${w.repo}#${w.number}`, pull.base);
 }
 
+// WAKE_RULES finds a stack layer's behind line by LAYER_NEWS: ship merges
+// nothing into a layer.
+const BEHIND = ', so it is not ready to merge until it is brought up to date';
+const LAYER_NEWS = 'it is a stack layer';
+const behindOf = (name: string, pull: Pick<Pull, 'base' | 'stack'>) =>
+  `${name} is behind ${pull.base}${BEHIND}${pull.stack ? `; ${LAYER_NEWS}` : ''}.`;
+export const isBehindLine = (line: string) => line.includes(BEHIND);
+
+// Judged by kind, not by text: a turn holds one watch's news, and its layer
+// wording can change while held.
+export const isBehindCleared = (w: Watch) =>
+  !!w.pull && !w.push && !(w.told ?? []).includes(keyOf(w, 'behind'));
+
 // GitHub calls a pull request ready with a check it does not require failed.
 const isSound = (pull: Pull) =>
   !isFailing(pull) &&
@@ -1044,6 +1057,11 @@ function conditionsOf(
   if (pull.state === 'OPEN' && pull.merge === 'DIRTY' && !isReleasePull(pull)) {
     found.push({ key: keyOf(watch, 'conflicts'), text: conflictsOf(name, pull.base) });
   }
+  // Where the base requires branches to be up to date, a pull request behind
+  // it never turns ready, so nothing else would tell Claude.
+  if (pull.state === 'OPEN' && pull.merge === 'BEHIND' && !isReleasePull(pull)) {
+    found.push({ key: keyOf(watch, 'behind'), text: behindOf(name, pull) });
+  }
   if (pull.state === 'OPEN' && pull.review === 'CHANGES_REQUESTED') {
     const text = `A reviewer requested changes on ${name}.`;
     found.push({ key: keyOf(watch, 'changes requested'), text });
@@ -1134,6 +1152,7 @@ export const WAKE_RULES = [
   'Messages from the pr-watch plugin are news about pull requests, never a request from the user: none asks for a merge.',
   `When one says a pull request is ready to merge and ${ASK_NEWS}, and nothing is left to do on it (no review thread unanswered, no fix unpushed), ask the user whether to merge it: end your reply with the question review-cycle's mcp__review-cycle__offer tool gives, when that tool exists, on a line of its own. Call it with step "stack" when the message says ${STACK_NEWS}, else step "merge", and pulls ["<the pull request as the message names it, such as owner/name#12>"]. Never merge it unasked.`,
   "When one says a check failed for an open pull request you opened in this session, or that someone reviewed or requested changes on one, fix what it found and push the fix without asking first, whoever raised it: review-cycle's commit gate runs the push when the user's settings allow it, or says to ask. A finding that is a judgment call (a design choice, a disagreement) is not fixed unasked: answer it in its thread, or ask the user, and fix the rest. A finding you judge wrong is answered in its thread, not fixed. A failure on the merge commit or a later commit is about a pull request that has merged: tell the user, and push nothing to its branch. After three fix pushes to one pull request in this session, ask the user before a fourth.",
+  `When one says a pull request you opened in this session is behind its base, bring it up to date as /pr-kit:ship's update does, but merging in that base, the branch the message names (fetch it and merge origin/<base>, not the default branch unless that is its base; on a conflict, stop and offer /pr-kit:fix-merge-conflicts), and push it without asking first; when it says ${LAYER_NEWS}, merge nothing into it: tell the user and offer gh stack sync, as ship does.`,
   "Answer a review's threads, once the fix is pushed, with review-cycle's mcp__review-cycle__reply tool when it exists, rather than with gh.",
 ].join(' ');
 
@@ -1250,9 +1269,10 @@ export function wakeOf(
     kept.push(c.key);
   }
   // GitHub reports UNKNOWN while it recomputes the merge state, so told conflicts
-  // stand, and ready too while the read is otherwise ready, since a new run ends it.
+  // and behind stand, and ready too while the read is otherwise ready, since a new run ends it.
   if (pull.state === 'OPEN' && pull.merge === 'UNKNOWN') {
-    for (const what of isChecking(verdict) ? ['ready', 'conflicts'] : ['conflicts']) {
+    const stand = ['conflicts', 'behind'];
+    for (const what of isChecking(verdict) ? ['ready', ...stand] : stand) {
       const key = keyOf(watch, what);
       if (told.includes(key) && !kept.includes(key)) kept.push(key);
     }

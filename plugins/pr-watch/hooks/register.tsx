@@ -78,6 +78,8 @@ import {
   heldWith,
   clearedConflicts,
   isAskable,
+  isBehindCleared,
+  isBehindLine,
   isConflictsLine,
   isToldReady,
   savedOf,
@@ -403,7 +405,11 @@ async function releaseOne($: $, id: string): Promise<void> {
   const all = await read($, watches);
   const w = all.find((x) => idOf(x) === id);
   const cleared = w ? clearedConflicts(w) : null;
-  const news = h.news.filter((line) => (w ? line !== cleared : !isConflictsLine(line)));
+  const behindGone = !w || isBehindCleared(w);
+  const news = h.news.filter(
+    (line) =>
+      !(behindGone && isBehindLine(line)) && (w ? line !== cleared : !isConflictsLine(line)),
+  );
   await deliver($, { ...h, news, ready: isStale ? null : h.ready });
 }
 
