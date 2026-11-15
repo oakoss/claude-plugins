@@ -174,7 +174,7 @@ function fakeWorld(on: any, setup: Partial<World> = {}): World {
     w.keptRead = true;
     if (w.kept === 'unreadable') return { deny: 'store unreadable' };
     if (w.kept === undefined) return { value: { version: 0 } };
-    return { value: { value: { shape: 'gate-10', value: w.kept.record }, version: 1 } };
+    return { value: { value: { shape: 'gate-11', value: w.kept.record }, version: 1 } };
   });
   const filesOf = (ref: string) => w.trees.get(ref) ?? w.commits[ref] ?? {};
   on(
@@ -1955,7 +1955,7 @@ describe('a reload of the module', () => {
     await review($);
     await say($, 'push it');
     await settle();
-    expect(kept?.shape).toBe('gate-10');
+    expect(kept?.shape).toBe('gate-11');
     expect(kept?.value.reviews).toHaveLength(1);
     expect(kept?.value.legs[0]?.[1]).toMatchObject({ done: true, counted: true, spawnedAt: NOW });
     expect(kept?.value.message).toMatchObject({
@@ -7006,6 +7006,75 @@ describe('the Codex command log', () => {
   });
 });
 
+// One model response, its usage as the engine reports it beneath every hook.
+const answered = (usage: Record<string, number> | null): any =>
+  async function* (_$: unknown, e: { turnId: string; index: number }) {
+    yield* [];
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: usage && { ...usage, model: 'claude-opus-5-5' },
+    };
+  };
+async function step($: any, agentId?: string) {
+  const s = $.turn.step({ turnId: 't', index: 0, model: 'm', messageCount: 1, agentId });
+  let r = await s.next();
+  while (!r.done) r = await s.next();
+  return r.value;
+}
+const USAGE = {
+  input_tokens: 2,
+  output_tokens: 300,
+  cache_read_input_tokens: 40_000,
+  cache_creation_input_tokens: 5000,
+};
+
+describe("a leg's spend", () => {
+  test("sums each of a leg's steps, and no one else's", async ($, on) => {
+    fakeWorld(on);
+    on('turn.step', answered(USAGE));
+    const id = await legUnderWay($);
+    await step($, id);
+    await step($, id);
+    await step($);
+    await step($, 'not-a-leg');
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.legSpend).toEqual([
+      {
+        agentId: id,
+        type: 'review-cycle:code-reviewer',
+        steps: 2,
+        input: 4,
+        cacheWrite: 10_000,
+        cacheRead: 80_000,
+        output: 600,
+      },
+    ]);
+  });
+
+  test('a step whose counts are off the API shape counts nothing', async ($, on) => {
+    fakeWorld(on);
+    on('turn.step', answered({ ...USAGE, input_tokens: -5, output_tokens: 1.5 }));
+    const id = await legUnderWay($);
+    await step($, id);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.legSpend).toEqual([]);
+  });
+
+  test('a step with no usage counts nothing, and the response passes through', async ($, on) => {
+    fakeWorld(on);
+    on('turn.step', answered(null));
+    const id = await legUnderWay($);
+    const answer = await step($, id);
+    expect(answer.stopReason).toBe('end_turn');
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.legSpend).toEqual([]);
+  });
+});
+
 describe('the leg time budget', () => {
   test('a leg past its budget is named to the session in one line, and is capped, not dropped', async ($, on) => {
     const w = fakeWorld(on);
@@ -7749,7 +7818,8 @@ describe('the summary tool', () => {
     });
     expect(status.cycles.byLeg['pr-test-analyzer'].fixed.below).toBe(1);
     const spent = { minutes: 15, legs: 6, subagentTokens: 289_544, codexTokens: 1_812_691 };
-    expect(status.cycles.cost).toEqual({ cycles: 1, partial: 0, ...spent });
+    const none = { steps: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+    expect(status.cycles.cost).toEqual({ cycles: 1, partial: 0, ...spent, ...none });
     expect(status.cycles.recent).toMatchObject([
       { tier: 'full', iterations: 2, fixed: 2, deferred: 0, cost: { ...spent, isPartial: false } },
     ]);

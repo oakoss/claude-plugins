@@ -1,6 +1,7 @@
 import type { Kept, KeptLeg } from '../types';
 import { EPIC_ID, isGrant, isPointed, isStrings, UNGRANTED } from './consent';
 import { HOLD_STEPS } from './hold';
+import { isSpend } from './spend';
 
 // A SHA-1 or SHA-256 object name.
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -25,6 +26,7 @@ export function keptOf(s: KeptSource): Kept {
         capped: l.capped,
         counted: l.counted,
         spawnedAt: l.spawnedAt,
+        spend: l.spend,
       } satisfies Record<keyof KeptLeg, unknown>,
     ]),
     message: { tree, nudged, prWindow, grant, pointed } satisfies Record<
@@ -100,6 +102,7 @@ function isLeg(entry: unknown): boolean {
     typeof leg.type === 'string' &&
     (leg.spawnTree === null || typeof leg.spawnTree === 'string') &&
     Number.isFinite(leg.spawnedAt) &&
+    (leg.spend === undefined || isSpend(leg.spend)) &&
     flags(leg, ['counts', 'done', 'capped', 'counted'])
   );
 }

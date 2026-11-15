@@ -15,6 +15,18 @@ export type KeptLeg = {
   capped: boolean;
   counted: boolean;
   spawnedAt: number;
+  // What the leg's model calls cost, summed as they answer; absent on a leg
+  // kept before it was recorded.
+  spend?: KeptSpend;
+};
+
+// Token counts as the API reports them, summed over a leg's steps.
+export type KeptSpend = {
+  steps: number;
+  input: number;
+  cacheWrite: number;
+  cacheRead: number;
+  output: number;
 };
 
 // What the user's latest message granted, as consent.ts's Grant.

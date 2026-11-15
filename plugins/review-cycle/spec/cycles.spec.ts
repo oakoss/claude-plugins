@@ -186,6 +186,8 @@ const costed = (head: string, cost: string) =>
     head,
   );
 
+const UNSPENT = { steps: null, input: null, cacheWrite: null, cacheRead: null, output: null };
+
 describe('the Cost line', () => {
   const one = {
     iteration: 1,
@@ -193,6 +195,7 @@ describe('the Cost line', () => {
     legs: 5,
     subagentTokens: 253_086,
     codexTokens: 1_812_691,
+    ...UNSPENT,
     isPartial: false,
   };
 
@@ -224,9 +227,33 @@ describe('the Cost line', () => {
         legs: 2,
         subagentTokens: 78_474,
         codexTokens: null,
+        ...UNSPENT,
         isPartial: true,
       },
     ]);
+  });
+
+  test("reads the legs' spend, as legSpend sums it", () => {
+    const [cost] =
+      costOf(
+        'Cost: iteration 1: 9 min wall-clock, 4 legs, 77,355 subagent tokens, 85 steps, 152 input, 214,834 cache-write, 4,135,370 cache-read, 45,148 output tokens',
+      ) ?? [];
+    expect(cost).toMatchObject({
+      subagentTokens: 77_355,
+      steps: 85,
+      input: 152,
+      cacheWrite: 214_834,
+      cacheRead: 4_135_370,
+      output: 45_148,
+    });
+  });
+
+  test('reads no spend from a number outside the run of five', () => {
+    const [cost] =
+      costOf(
+        'Cost: iteration 1: 2 legs, 900 subagent tokens, not reported: codex (stopped after 20 steps), review-2 output-checker',
+      ) ?? [];
+    expect(cost).toMatchObject(UNSPENT);
   });
 
   test.each([
@@ -389,6 +416,11 @@ describe('rollupOf', () => {
       legs: 9,
       subagentTokens: 1500,
       codexTokens: 9000,
+      steps: 0,
+      input: 0,
+      cacheWrite: 0,
+      cacheRead: 0,
+      output: 0,
     });
   });
   test('lists the newest cycles with their commit, cost and findings, oldest first', () => {
@@ -401,7 +433,14 @@ describe('rollupOf', () => {
       {
         ...row,
         head: 'a1',
-        cost: { minutes: 12, legs: 5, subagentTokens: 1000, codexTokens: null, isPartial: false },
+        cost: {
+          minutes: 12,
+          legs: 5,
+          subagentTokens: 1000,
+          codexTokens: null,
+          ...UNSPENT,
+          isPartial: false,
+        },
       },
       { ...row, head: 'b2', cost: null },
     ]);
