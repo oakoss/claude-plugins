@@ -260,6 +260,22 @@ test('both skills carry the effort-argument contract', () => {
   ]);
 });
 
+// Measured: `git push -u` adds branch.<name>.remote and .merge; a pushRemote, a
+// changed remote or a remote set to a path redirected a later bare `git push`.
+test("the config comparison ignores only a push's new upstream entries", () => {
+  expectAnchors(readFileSync(REVIEW_SKILL, 'utf8'), 'review', [
+    [
+      'ignoring only `branch.<name>.remote` and `branch.<name>.merge` entries absent from the Phase 3 listing',
+      'a push -u reads as contamination',
+    ],
+    ['or another `branch.*` key such as `pushRemote`, still counts', 'a push redirect hides'],
+    [
+      'when that `remote` names a remote the Phase 3 listing has (`remote.<value>.url`); a URL or path there',
+      'a remote set to a path hides',
+    ],
+  ]);
+});
+
 test('the scan fails instead of passing when enumeration reaches too few files', () => {
   expect(() => listAllAgents(makeTempDir())).toThrow('scan reached only 0');
 });
