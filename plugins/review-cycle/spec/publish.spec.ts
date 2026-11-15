@@ -63,6 +63,8 @@ describe('package publishes are the release step', () => {
     ['oakum release --help --yes', ['release']],
     ['npm publish --tag beta --help', ['release']],
     ['oakum --help release', ['release']],
+    ['echo --yes | xargs oakum release --help', ['release']],
+    ['parallel npm publish -h', ['release']],
   ])('a bare help request is not a release: %s', (command, expected) => {
     expect(kinds(command)).toEqual(expected);
   });

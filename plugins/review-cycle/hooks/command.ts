@@ -20,7 +20,7 @@ import {
   type PushSpec,
 } from './git-args';
 import { apiActions, asking, type GhAction, type GhContext, type Unlookable } from './github';
-import { PUBLISH_TEXT, publishActionsOf } from './publish';
+import { FROM_INPUT, PUBLISH_TEXT, publishActionsOf } from './publish';
 import { bashTouchesGate } from './settings';
 import {
   assignmentName,
@@ -1496,9 +1496,6 @@ function ghAt(
 }
 
 const LEADS = new Set(['!', '{', 'if', 'then', 'else', 'elif', 'do', 'while', 'until']);
-
-// Commands that hand their input to the command they run.
-const FROM_INPUT = new Set(['xargs', 'parallel']);
 
 // As for git, `gh` or a publisher at any word runs unless the first word is a data command:
 // `timeout 60 gh pr create`, `sudo -u bot gh …`. Quoted text is not read, so
