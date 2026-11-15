@@ -13,3 +13,9 @@ test('canonicalizing covers every file type the pre-commit hook rewrites', () =>
   expect(text).toContain("Read the hook config's globs");
   expect(text).toContain('Point a formatter at the changed files it handles, never at a directory');
 });
+
+test('canonicalizing runs each formatter as its own call', () => {
+  expect(skillText('review-cycle', 'review')).toContain(
+    'Run each formatter as its own Bash call, with nothing but a `cd` beside it',
+  );
+});

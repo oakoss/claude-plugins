@@ -72,12 +72,48 @@ function runsScript(st: Statement): boolean {
   return command.text.includes('/') || COMMAND_ONLY.has(nameOf(command));
 }
 
+// Formatters, each with the subcommand that formats when it needs one. A
+// fixer (`biome check --write`, `eslint --fix`) is not one: it can rewrite code.
+const FORMATTERS = new Map<string, string | null>([
+  ['oxfmt', null],
+  ['prettier', null],
+  ['biome', 'format'],
+  ['dprint', 'fmt'],
+]);
+// A formatter by its bare name or its node_modules/.bin path; never a script
+// elsewhere that shares the name.
+function formats(words: readonly Word[]): boolean {
+  const [command, sub] = words;
+  if (command === undefined || command.dynamic) return false;
+  const path = command.text;
+  if (path.includes('/') && !/(^|\/)node_modules\/\.bin\/[^/]+$/.test(path)) return false;
+  const wants = FORMATTERS.get(basename(path));
+  return wants === null || (wants !== undefined && sub?.text === wants);
+}
+
+const isCd = (words: readonly Word[]): boolean => words[0]?.text === 'cd' && words.length <= 2;
+
+const plain = (st: Statement): boolean =>
+  st.inner.length === 0 && !st.group && st.heredocs.length === 0 && !st.writes.some(writesFile);
+
+// A command made only of formatter calls, and `cd`, writing nothing else: the
+// files it changes are the formatter's, which Phase 2 of the review runs.
+function formatsOnly(statements: readonly Statement[], bareWrites: readonly Word[]): boolean {
+  if (bareWrites.some((w) => writesFile(w))) return false;
+  return (
+    statements.every((st) => plain(st)) &&
+    statements.some((st) => formats(st.words)) &&
+    statements.every((st) => isCd(st.words) || formats(st.words))
+  );
+}
+
 // Any word counts, not only the first, so a writer behind `if`, `time`,
 // `env`, `sudo`, `xargs` or a wrapper still counts. A command it cannot read
 // counts.
 export function mayWrite(command: string, aliases: ShellAliases = new Map()): boolean {
   const parsed = parse(command, aliases);
   if ('error' in parsed) return true;
+  if (formatsOnly(parsed.statements, parsed.bareWrites)) return false;
   if (parsed.bareWrites.some(writesFile)) return true;
   const writes = (st: Statement): boolean =>
     st.writes.some(writesFile) || st.words.some(names) || runsScript(st);
