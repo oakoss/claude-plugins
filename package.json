@@ -13,7 +13,7 @@
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^21.2.3",
-    "@oakoss/oakum": "0.8.3",
+    "@oakoss/oakum": "0.11.1",
     "commitlint": "^21.2.3",
     "lefthook": "^2.2.1",
     "markdownlint-cli2": "^0.23.3",
