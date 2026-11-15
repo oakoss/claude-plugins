@@ -130,12 +130,22 @@ describe('do-epic: a job runs to its report', () => {
       ['nothing reviews or gates the job. Stop and say so.', 'no gate stops'],
     ]);
   });
-  test('the plan sees every bead and records itself before anything is built', () => {
+  test('it acts on the tracker the repository shows', () => {
+    expect(section(text, '1. Confirm the job', 'do-epic')).toContain(
+      "**The tracker** is the one the repository shows: tm when it has a `.config/tm.toml`, its items Issues keyed like `CPL-12`; beads when it has a `.beads/` directory and no tm config. Each step below gives both trackers' commands; run only that tracker's. With neither, stop and say so.",
+    );
+  });
+  test('the plan sees every item and records itself before anything is built', () => {
     expectAnchors(section(text, '2. Plan', 'do-epic'), 'do-epic plan', [
       ['--status open,in_progress,blocked --limit 0 --json', 'no 50-bead cutoff'],
       ['bd dep list <ids…> --type blocks --json', 'only blocking dependencies order'],
+      ['tm list parent:<epic> --json', 'tm children'],
+      ['with `type` `blocks` and `direction` `inward`', 'tm blockers'],
+      ['and so is a tm Issue in `triage`', 'triage waits'],
+      ['A tm Issue in `in_review` has shipped: it is not built again', 'shipped Issues stay out'],
+      ['an item it blocks is left out until its pull request merges', 'unmerged blockers hold'],
       [
-        "Done when every bead in scope is in exactly one branch, every branch is a lane or one layer of one stack, and the plan is in the epic's notes.",
+        'Done when every item in scope is in exactly one branch, every branch is a lane or one layer of one stack, and the plan is recorded on the epic.',
         'completion',
       ],
     ]);
@@ -152,7 +162,9 @@ describe('do-epic: a job runs to its report', () => {
         'job end',
       ],
       ['git stash push --include-untracked -m "do-epic <id>: <why>"', 'shelve keeps the work'],
-      ['Every bead that depends on a shelved bead is shelved too', 'dependents shelve'],
+      ['Every item that depends on a shelved item is shelved too', 'dependents shelve'],
+      ['`bd update <id> --claim`, or `tm start <id>`', 'claim on either tracker'],
+      ['tm release <id>\ntm move <id> todo', 'tm shelve gives the Issue back'],
       [
         '**A refusal stops the branch.** When the gate refuses a command, the job does not reshape it',
         'refusals are not reshaped',
@@ -184,8 +196,8 @@ describe('do-epic: a job runs to its report', () => {
   test('the report carries every outcome', () => {
     expectAnchors(section(text, '6. Report', 'do-epic'), 'do-epic report', [
       ['Not shipped:', 'ship failures'],
-      ['Shelved:', 'shelved beads'],
-      ['Left out of scope:', 'out-of-scope beads'],
+      ['Shelved:', 'shelved items'],
+      ['Left out of scope:', 'out-of-scope items'],
       ['Deferred findings and questions:', 'ledger'],
       ['Refusals:', 'refusals'],
       ['Review rounds: <per commit', 'rounds'],
@@ -198,7 +210,7 @@ describe('do-epic: a job runs to its report', () => {
         'user-only steps',
       ],
       ['Do NOT stop to ask mid-run. A question goes in the report.', 'no mid-run asks'],
-      ['Do NOT work on a bead outside the epic', 'epic scope'],
+      ['Do NOT work on an item outside the epic', 'epic scope'],
       ['never `git checkout --` or `git reset --hard`', 'shelved work kept'],
     ]);
   });

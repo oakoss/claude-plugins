@@ -1,6 +1,6 @@
 ---
 name: do-epic
-description: Run a beads epic from one message to reviewable pull requests. Plans the epic's beads into branches, implements and reviews each, ships them as separate pull requests or a github/gh-stack stack, gets CI green, and ends with one report. Use when the user says "do epic <id>" or "run the epic <id>", optionally "as drafts".
+description: Run a beads or tm epic from one message to reviewable pull requests. Plans the epic's items into branches, implements and reviews each, ships them as separate pull requests or a github/gh-stack stack, gets CI green, and ends with one report. Use when the user says "do epic <id>" or "run the epic <id>", optionally "as drafts".
 ---
 
 # Do epic
@@ -18,7 +18,11 @@ Call the `mcp__review-cycle__status` tool. `stopBefore.mandate.epic` must name t
 
 Read two choices from the user's message: the epic id, and whether pull requests open as drafts ("as drafts", "as a draft", "as draft PRs").
 
+**The tracker** is the one the repository shows: tm when it has a `.config/tm.toml`, its items Issues keyed like `CPL-12`; beads when it has a `.beads/` directory and no tm config. Each step below gives both trackers' commands; run only that tracker's. With neither, stop and say so.
+
 ## 2. Plan
+
+beads:
 
 ```bash
 bd show <epic> --json
@@ -26,26 +30,45 @@ bd list --parent <epic> --status open,in_progress,blocked --limit 0 --json
 bd dep list <ids…> --type blocks --json
 ```
 
-List each child that has children of its own the same way, so a branch parent's beads are in the plan too.
-
-**Scope.** Every open bead under the epic whose blockers are closed or are themselves in scope. A bead blocked by work outside the epic is left out and named in the report with its blocker.
-
-**Branches.** A branch is one reviewable unit: what ships and reverts together. A child that is a branch parent (a `task` with children of its own) is one branch with all its children. Any other bead is a branch by itself, unless it and another bead change the same files and make sense only together; then file a branch parent for them and move them under it:
+tm, where `tm list` lists every open child with no cutoff, and an Issue's blockers are the `links` its `tm show` lists with `type` `blocks` and `direction` `inward`:
 
 ```bash
-bd create "<what the branch delivers>" -t task --parent <epic> -l <the beads' plugin: label>
+tm show <epic> --json
+tm list parent:<epic> --json
+tm show <id> --json
+```
+
+List each child that has children of its own the same way, so a branch parent's items are in the plan too.
+
+**Scope.** Every open item under the epic whose blockers are closed or are themselves in scope. An item blocked by work outside the epic is left out and named in the report with its blocker, and so is a tm Issue in `triage`, which waits on evidence before it is built. A tm Issue in `in_review` has shipped: it is not built again, and an item it blocks is left out until its pull request merges, since a branch off the default branch would lack its commits.
+
+**Branches.** A branch is one reviewable unit: what ships and reverts together. A child that is a branch parent (a `task` with children of its own) is one branch with all its children. Any other item is a branch by itself, unless it and another item change the same files and make sense only together; then file a branch parent for them and move them under it:
+
+```bash
+bd create "<what the branch delivers>" -t task --parent <epic> -l <the items' plugin: label>
 bd update <child> --parent <new parent>
 ```
 
-**Order.** Branch B comes after branch A when any bead in B depends on a bead in A. A branch with no order to any other is a lane: its own branch off the default branch and its own pull request. Branches joined by order form a stack: one layer per branch, bottom first, in an order that respects every dependency (ties by priority, then id). A stack is strictly linear, so two branches that both depend on one become consecutive layers above it.
+```bash
+tm create --type task --title "<what the branch delivers>" --parent <epic> --label <the items' plugin: label>
+tm edit <child> --parent <new parent>
+```
 
-**Record the plan** in the epic's notes before building, one line per branch: what it delivers, its lane or stack and layer, its beads, the files it should change, the tests that prove it, and what it comes after.
+**Order.** Branch B comes after branch A when any item in B depends on an item in A. A branch with no order to any other is a lane: its own branch off the default branch and its own pull request. Branches joined by order form a stack: one layer per branch, bottom first, in an order that respects every dependency (ties by priority, then id). A stack is strictly linear, so two branches that both depend on one become consecutive layers above it.
+
+**Record the plan** on the epic before building, one line per branch: what it delivers, its lane or stack and layer, its items, the files it should change, the tests that prove it, and what it comes after. beads keeps it in the epic's notes, tm in a comment on the epic:
 
 ```bash
 bd update <epic> --append-notes "<the plan>"
 ```
 
-Done when every bead in scope is in exactly one branch, every branch is a lane or one layer of one stack, and the plan is in the epic's notes.
+```bash
+tm comment <epic> - <<'EOF'
+<the plan>
+EOF
+```
+
+Done when every item in scope is in exactly one branch, every branch is a lane or one layer of one stack, and the plan is recorded on the epic.
 
 ## 3. Build each branch
 
@@ -60,25 +83,36 @@ git switch -c <type>/<short-description> origin/<default>
 
 For a stack, start the bottom layer the same way, and each layer above from the layer below it (`git switch -c <branch> <layer below>`). The stack itself is made at Ship, from the layers that have commits.
 
-Then, for each bead in the branch:
+Then, for each item in the branch:
 
-1. **Claim it:** `bd update <id> --claim`.
+1. **Claim it:** `bd update <id> --claim`, or `tm start <id>`.
 2. **Implement it** to its description's "Done when", test first where the project has tests, following the project's `AGENTS.md` or `CLAUDE.md`.
 3. **Review and commit:** invoke `/review-cycle:review` via the Skill tool. Under the job it never stops to ask: it commits a clean result, or ends with `Final state: shelved (<why>)`. The commit message ends with `Closes <id>`. Note the commit's entry in the status tool's `rounds` for the report, since the tool keeps only the last ten.
 
-**Shelve** a bead the review shelved, and one whose implementation cannot meet its "Done when" without a decision from the user. The tree is set aside, not lost:
+**Shelve** an item the review shelved, and one whose implementation cannot meet its "Done when" without a decision from the user. The tree is set aside, not lost:
 
 ```bash
 git stash push --include-untracked -m "do-epic <id>: <why>"
+```
+
+Then give the item back with a note saying why:
+
+```bash
 bd unclaim <id>
 bd update <id> --append-notes "Shelved by do-epic: <why>. Work in the stash named do-epic <id>."
 ```
 
-Every bead that depends on a shelved bead is shelved too, with `blocked by shelved <id>` as its reason. A branch left with no commits is deleted once you have switched off it, to the layer below it or the default branch (`git switch <that branch>`, then `git branch -D <branch>`), and a stack continues from the layer below it.
+```bash
+tm release <id>
+tm move <id> todo
+tm comment <id> "Shelved by do-epic: <why>. Work in the stash named do-epic <id>."
+```
 
-**A refusal stops the branch.** When the gate refuses a command, the job does not reshape it: record the refusal's words, shelve the branch's unfinished beads with that reason, and go on to the next branch.
+Every item that depends on a shelved item is shelved too, with `blocked by shelved <id>` as its reason. A branch left with no commits is deleted once you have switched off it, to the layer below it or the default branch (`git switch <that branch>`, then `git branch -D <branch>`), and a stack continues from the layer below it.
 
-Done when every branch has commits for each of its beads, or each bead it lacks is shelved with a reason.
+**A refusal stops the branch.** When the gate refuses a command, the job does not reshape it: record the refusal's words, shelve the branch's unfinished items with that reason, and go on to the next branch.
+
+Done when every branch has commits for each of its items, or each item it lacks is shelved with a reason.
 
 ## 4. Ship
 
@@ -91,7 +125,7 @@ Invoke `/pr-kit:ship` via the Skill tool, with `ship it`, plus `as drafts` when 
 gh stack init <bottom layer> <next layer> <top layer>
 ```
 
-Ship runs the project's checks, closes the beads each pull request finishes, and pushes the task graph. When it stops on a failing check or a refusal, record why under `Not shipped`, with the branch and its beads, which stay open, and go on to the next lane or stack.
+Ship runs the project's checks and updates the items each pull request finishes as its tracker says: beads closes them and pushes the task graph, tm moves them to review. When it stops on a failing check or a refusal, record why under `Not shipped`, with the branch and its items, which stay open, and go on to the next lane or stack.
 
 ## 5. Get CI green
 
@@ -111,7 +145,7 @@ Done when every pull request's checks are green, or fix-ci handed it back and th
 End with the report, then stop. The job is still running; it ends at the user's next message that holds or retracts.
 
 ```text
-Epic <id>: <N> pull requests, <M> beads closed, <K> shelved
+Epic <id>: <N> pull requests, <M> items finished, <K> shelved
 
 <Each lane:>
 #<n> <title> — CI <green | failing: <check> | handed back: <why>>
@@ -131,7 +165,7 @@ Shelved:
   - <id> — <why> (stash: do-epic <id>)
 
 Left out of scope:
-  - <id> — blocked by <blocker outside the epic>
+  - <id> — <blocked by <blocker outside the epic> | blocked by <id> (in review, not merged) | in triage>
 
 Deferred findings and questions:
   - <from the `mcp__review-cycle__ledger` tool for each branch's changed files, dated today>
@@ -147,5 +181,5 @@ Next: <"merge the stack" | "merge #<n>"> when you are ready; the stashes wait fo
 - Do NOT merge, arm auto-merge, mark a draft ready, release, push to the default branch, or force push without a lease. Each is the user's, after the report.
 - Do NOT stop to ask mid-run. A question goes in the report.
 - Do NOT reshape a command the gate refused, or retry it in another form.
-- Do NOT work on a bead outside the epic, or file new work beyond the branch parents the plan needs.
-- Do NOT discard a shelved bead's work: stash it, never `git checkout --` or `git reset --hard`.
+- Do NOT work on an item outside the epic, or file new work beyond the branch parents the plan needs.
+- Do NOT discard a shelved item's work: stash it, never `git checkout --` or `git reset --hard`.
