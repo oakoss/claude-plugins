@@ -158,6 +158,9 @@ function publishAt(
   }
   if (RUNS_SCRIPTS.has(name) && /^(run|run-script)$/.test(command.text)) return 'script';
   if (!publishes(publisher, command.text)) return null;
+  // Only a bare help request after the command is let off, as for gh: any
+  // other word can turn help off or name a release.
+  if (later.length > 0 && later.every((t) => t === '--help' || t === '-h')) return null;
   // `yarn npm publish` is Yarn's, whose dry run the gate does not know.
   const dryRuns = publisher.dryRuns && !(name === 'npm' && underYarn);
   const all = words.slice(at + 1).map((w) => w.text);
