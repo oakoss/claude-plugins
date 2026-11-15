@@ -79,6 +79,9 @@ export const PUBLISH_TEXT = new RegExp(
     .join('|'),
 );
 
+// Commands that hand their input to the command they run.
+export const FROM_INPUT = new Set(['xargs', 'parallel']);
+
 // The package managers whose `run` hands the rest of the words to a script.
 const RUNS_SCRIPTS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 
@@ -158,6 +161,10 @@ function publishAt(
   }
   if (RUNS_SCRIPTS.has(name) && /^(run|run-script)$/.test(command.text)) return 'script';
   if (!publishes(publisher, command.text)) return null;
+  // Only a bare help request after the command is let off, as for gh: any
+  // other word, or one xargs or parallel adds, can turn help off.
+  const fed = words.slice(0, at).some((w) => FROM_INPUT.has(basename(w.text)));
+  if (!fed && later.length > 0 && later.every((t) => t === '--help' || t === '-h')) return null;
   // `yarn npm publish` is Yarn's, whose dry run the gate does not know.
   const dryRuns = publisher.dryRuns && !(name === 'npm' && underYarn);
   const all = words.slice(at + 1).map((w) => w.text);

@@ -56,6 +56,20 @@ describe('package publishes are the release step', () => {
   });
 
   test.each([
+    ['oakum release --help', []],
+    ['pnpm exec oakum release -h', []],
+    ['npm publish --help', []],
+    ['cargo publish -h --help', []],
+    ['oakum release --help --yes', ['release']],
+    ['npm publish --tag beta --help', ['release']],
+    ['oakum --help release', ['release']],
+    ['echo --yes | xargs oakum release --help', ['release']],
+    ['parallel npm publish -h', ['release']],
+  ])('a bare help request is not a release: %s', (command, expected) => {
+    expect(kinds(command)).toEqual(expected);
+  });
+
+  test.each([
     'npm publish --dry-run',
     'npm publish --dry-run=true',
     'pnpm -r publish --dry-run',
