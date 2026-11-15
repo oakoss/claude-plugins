@@ -1327,6 +1327,15 @@ describe('wakeOf', () => {
       'pulls ["',
       'mcp__review-cycle__reply',
       'Never merge it unasked',
+      // A failure or review on its own pull request is fixed unasked, a few rounds at most.
+      'a check failed for an open pull request you opened in this session',
+      'push the fix without asking first',
+      'ask the user before a fourth',
+      // Only checks and bots are fixed unasked; a merged pull request's failure is told.
+      'a bot (a name ending in [bot])',
+      'then ask the user before pushing',
+      'requested changes and no line names that reviewer',
+      'on the merge commit or a later commit',
     ]) {
       expect(WAKE_RULES).toContain(rule);
     }
