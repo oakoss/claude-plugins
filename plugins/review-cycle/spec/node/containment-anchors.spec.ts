@@ -260,8 +260,8 @@ test('both skills carry the effort-argument contract', () => {
   ]);
 });
 
-// Measured: `git push -u` adds branch.<name>.remote and .merge; a pushRemote or a
-// changed remote redirected a later bare `git push`, so only the new pair is ignored.
+// Measured: `git push -u` adds branch.<name>.remote and .merge; a pushRemote, a
+// changed remote or a remote set to a path redirected a later bare `git push`.
 test("the config comparison ignores only a push's new upstream entries", () => {
   expectAnchors(readFileSync(REVIEW_SKILL, 'utf8'), 'review', [
     [
@@ -269,6 +269,10 @@ test("the config comparison ignores only a push's new upstream entries", () => {
       'a push -u reads as contamination',
     ],
     ['or another `branch.*` key such as `pushRemote`, still counts', 'a push redirect hides'],
+    [
+      'when that `remote` names a remote the Phase 3 listing has (`remote.<value>.url`); a URL or path there',
+      'a remote set to a path hides',
+    ],
   ]);
 });
 
