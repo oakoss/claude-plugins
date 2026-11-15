@@ -53,12 +53,16 @@ export function isReviewerType(type?: string): boolean {
   );
 }
 
+// A receipt label as a leg may mark it up: `**execution:**`, `- execution:`.
+const unmarked = (line: string): string =>
+  line.replace(/^[>\-*_\s]+/, '').replace(/^([a-z-]+)[*_]+:/, '$1:');
+
 // The two receipt lines, together, near the top of the report: a heading or a
 // sentence may come first, a receipt buried in the body does not count.
 export function hasReceipt(answer: string): boolean {
   const lines = answer
     .split('\n')
-    .map((l) => l.trim())
+    .map((l) => unmarked(l.trim()))
     .filter(Boolean)
     .slice(0, 6);
   return lines.some(
