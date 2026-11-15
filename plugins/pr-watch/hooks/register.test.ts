@@ -2373,15 +2373,37 @@ describe('telling Claude', () => {
     expect(seen.wakes[1]).toContain('runs/2/job/20');
   });
 
-  for (const [what, after, wakes, last] of [
-    ['tells no conflicts a turn held once a later read shows them cleared', 'BLOCKED', 0, null],
-    ['tells none cleared in the turn though GitHub then recomputes', 'BLOCKED', 0, 'UNKNOWN'],
-    ['tells conflicts a turn held when they are still there at its end', 'DIRTY', 1, null],
-    ['tells conflicts a turn held while GitHub recomputes them', 'DIRTY', 1, 'UNKNOWN'],
+  const HELD = { DIRTY: 'o/r#128 has merge conflicts with', BEHIND: 'o/r#128 is behind' };
+  for (const [what, from, after, wakes, last] of [
+    [
+      'tells no conflicts a turn held once a later read shows them cleared',
+      'DIRTY',
+      'BLOCKED',
+      0,
+      null,
+    ],
+    [
+      'tells none cleared in the turn though GitHub then recomputes',
+      'DIRTY',
+      'BLOCKED',
+      0,
+      'UNKNOWN',
+    ],
+    ['tells conflicts a turn held when they are still there at its end', 'DIRTY', 'DIRTY', 1, null],
+    ['tells conflicts a turn held while GitHub recomputes them', 'DIRTY', 'DIRTY', 1, 'UNKNOWN'],
+    ['tells no behind a turn held once the branch is up to date', 'BEHIND', 'CLEAN', 0, null],
+    [
+      'tells no behind a turn held though GitHub then recomputes',
+      'BEHIND',
+      'BLOCKED',
+      0,
+      'UNKNOWN',
+    ],
+    ['tells behind a turn held when it is still behind at its end', 'BEHIND', 'BEHIND', 1, null],
   ] as const) {
     test(what, async ($, on) => {
       const clock = mock.clock(on, { now: T0 });
-      const gh: Gh = { pr: prJson({ mergeStateStatus: 'DIRTY' }, [RUNNING_CI]) };
+      const gh: Gh = { pr: prJson({ mergeStateStatus: from }, [RUNNING_CI]) };
       const seen = world(on, gh);
       on('turn.start', () => ({ turnId: 't1' }));
       on('turn.complete', () => ({ text: '' }));
@@ -2405,24 +2427,25 @@ describe('telling Claude', () => {
       });
       await clock.advance(1);
       expect(seen.wakes).toHaveLength(wakes);
-      if (wakes) expect(seen.wakes[0]).toContain('o/r#128 has merge conflicts with');
+      if (wakes) expect(seen.wakes[0]).toContain(HELD[from]);
       // Cleared ones that come back are news again.
       gh.pr = prJson({ mergeStateStatus: 'BLOCKED' }, [RUNNING_CI]);
       await clock.advance(60_000);
-      gh.pr = prJson({ mergeStateStatus: 'DIRTY' }, [RUNNING_CI]);
+      gh.pr = prJson({ mergeStateStatus: from }, [RUNNING_CI]);
       await clock.advance(60_000);
       expect(seen.wakes).toHaveLength(wakes + 1);
     });
   }
 
-  for (const [state, merge] of [
-    ['MERGED', 'UNKNOWN'],
-    ['MERGED', 'CLEAN'],
-    ['CLOSED', 'DIRTY'],
+  for (const [from, state, merge] of [
+    ['DIRTY', 'MERGED', 'UNKNOWN'],
+    ['DIRTY', 'MERGED', 'CLEAN'],
+    ['DIRTY', 'CLOSED', 'DIRTY'],
+    ['BEHIND', 'MERGED', 'CLEAN'],
   ] as const) {
-    test(`tells no conflicts a turn held of a pull request ${state} in it (${merge})`, async ($, on) => {
+    test(`tells no ${from} line a turn held of a pull request ${state} in it (${merge})`, async ($, on) => {
       const clock = mock.clock(on, { now: T0 });
-      const gh: Gh = { pr: prJson({ mergeStateStatus: 'DIRTY' }, [FAILING_CI]) };
+      const gh: Gh = { pr: prJson({ mergeStateStatus: from }, [FAILING_CI]) };
       const seen = world(on, gh);
       on('turn.start', () => ({ turnId: 't1' }));
       on('turn.complete', () => ({ text: '' }));
@@ -2440,7 +2463,7 @@ describe('telling Claude', () => {
         reason: 'answer',
       });
       await clock.advance(1);
-      expect(seen.wakes.join('\n')).not.toContain('has merge conflicts with');
+      expect(seen.wakes.join('\n')).not.toContain(HELD[from]);
       // The rest of what the turn held for it is still told.
       expect(seen.wakes.join('\n')).toContain('CI: Typecheck failed for o/r#128');
     });

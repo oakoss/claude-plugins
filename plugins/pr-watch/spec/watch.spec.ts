@@ -990,10 +990,9 @@ describe('wakeOf', () => {
     expect(after(at({ headOid: 'b2' }), asked).ask).toBe(askOf('o/r#128'));
   });
 
-  test('says nothing of running checks, a wait on review, or a branch behind its base', () => {
+  test('says nothing of running checks or a wait on review', () => {
     expect(after(pull([ci([job('Test', null)])])).text).toBeNull();
     expect(after(pull([green()], { merge: 'BLOCKED', review: 'REVIEW_REQUIRED' })).text).toBeNull();
-    expect(after(pull([green()], { merge: 'BEHIND' })).text).toBeNull();
   });
 
   test('says conflicts and requested changes once each, whatever the checks say', () => {
@@ -1006,6 +1005,32 @@ describe('wakeOf', () => {
     expect(first.text).toContain('A reviewer requested changes on o/r#128.');
     expect(first.text).toContain('CI: Lint failed for o/r#128: https://x/Lint');
     expect(after(p, first).text).toBeNull();
+  });
+
+  test('says a pull request is behind its base once while it lasts, and again once it returns', () => {
+    const behind = pull([green()], { merge: 'BEHIND' });
+    const first = after(behind);
+    expect(first.news).toEqual([
+      'o/r#128 is behind main, so it is not ready to merge until it is brought up to date.',
+    ]);
+    expect(after(behind, first).text).toBeNull();
+    // GitHub recomputing the merge state is not news of it again.
+    const recomputing = after(pull([green()], { merge: 'UNKNOWN' }), first);
+    expect(after(behind, recomputing).text).toBeNull();
+    const current = after(pull([green()], { merge: 'CLEAN' }), first);
+    expect(after(behind, current).news).toEqual(first.news);
+    const release = { branch: 'oakum/version-packages', repo: 'o/r' };
+    expect(after(pull([green()], { merge: 'BEHIND', head: release })).news).toEqual([]);
+    expect(after(pull([green()], { state: 'CLOSED', merge: 'BEHIND' })).news).toEqual([]);
+    // A stack layer's line says so: ship merges nothing into a layer.
+    const layer = pull([green()], {
+      merge: 'BEHIND',
+      stack: { number: 236, trunk: 'main', layers: [128] },
+    });
+    expect(after(layer).news).toEqual([
+      'o/r#128 is behind main, so it is not ready to merge until it is brought up to date; it is a stack layer.',
+    ]);
+    expect(WAKE_RULES).toContain('when it says it is a stack layer, merge nothing into it');
   });
 
   test('says nothing of a release pull request’s conflicts, which its tool rebuilds away', () => {
@@ -1331,6 +1356,7 @@ describe('wakeOf', () => {
       'a check failed for an open pull request you opened in this session',
       'push the fix without asking first',
       'ask the user before a fourth',
+      'is behind its base, bring it up to date',
       // A judgment call is asked about; a merged pull request's failure is told.
       'whoever raised it',
       'A finding that is a judgment call',
