@@ -4,6 +4,32 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.40.0 (2026-11-15)
+
+### Added
+
+The review cycle now measures what its reviewer legs spend. The `Cost:` line's subagent tokens were each leg's final context size, as its notification reports it, not its spend: measured on Claude Code 2.1.325, a code-reviewer leg that reported 77,355 tokens made 29 model calls that read 1,601,897 tokens from the prompt cache and generated 16,199 output tokens. review-cycle now sums each leg's per-call usage as the engine reports it, the status tool lists it as `legSpend` by agent id (steps, input, cache-write, cache-read and output tokens), and the summary's `Cost:` line carries those counts beside the old figure, so a change meant to cut review cost can be measured. The counts are kept across a reload, and the cycle totals in the status tool add them up for the cycles that state them.
+
+### Fixed
+
+A push during a review no longer reads as a contaminated target. The review compares the repository's local git config before and after its reviewers run, to catch an identity a leg might leave behind, and `git push -u` adds `branch.<name>.remote` and `branch.<name>.merge` entries, which made the summary name a leg for what was only a push. The comparison now ignores those two entries when they are new and the `remote` names a remote the repository already has. A URL or path there, a changed or removed `branch.*` value, or another `branch.*` key such as `pushRemote`, still counts, since each can send a later push elsewhere, and so do `user.*`, `core.hooksPath` and the rest.
+
+Running a formatter from `node_modules/.bin` no longer draws the note that files changed during a Bash command. The note asks for edits through Edit and Write, where the comment and settings checks run, and it fired whenever a review formatted its changed files by path, which is what the review is told to do. A command made only of those formatter calls (`oxfmt`, `prettier`, `biome format`, `dprint fmt`), with nothing but a `cd` beside it, is no longer measured, and the review now runs each formatter as its own call. A formatter chained with another command run by path, a redirect into a file, and a script elsewhere that shares a formatter's name are still measured.
+
+The offer tool says where the pull requests go. It reads them from `pulls`, a list such as `["316"]` or `["owner/name#53"]`, but its refusal said only "merge needs at least one pull request", and neither pr-watch's wake nor pr-kit's ship skill named the key. An agent that had not loaded the tool's schema guessed `pr`, `prs` and `pullRequests`, got the same refusal each time, and could not ask the merge question, so you had to type "merge 395" yourself. Now every refusal for a missing or misplaced pull request names `pulls` and its shape, a guessed key such as `pr`, `prs` or `repo` is refused by name with the keys the tool does read, pr-watch's wake gives the call (`step "merge", pulls ["owner/name#395"]`, or `step "stack"` for a stack's layer), and the ship and merge skills name the key.
+
+Asking a release or publish command for its help no longer counts as a release. The commit gate refused `oakum release --help` as a release nobody had asked for, so its usage could not be read. A command whose only words after `release` or `publish` are `--help` or `-h` (`oakum release --help`, `npm publish -h`, `cargo publish --help`) now runs, as a bare help request to `gh` already did; any other word beside it keeps it a release.
+
+pr-watch's news wakes are one line. A wake used to show you the news followed by Claude's instructions: how to ask about a merge, "Do not merge it unasked", "This is news from pr-watch, not a request to merge" and the pull request's link again, or a line about review-cycle's reply tool after a review. Now you see only the news, such as "pr-watch: oakoss/tm#186 is ready to merge and nothing is still running on it.", and the instructions live in a section pr-watch adds to Claude's system prompt, which you do not see. Claude Code shows a plugin's prompt whole, and a plugin's own prompt hook never sees the prompts it sends (measured on 2.1.325), so the section is the one place they can go. The message when pr-watch gives up on a pull request after repeated failed reads still says how to watch it again.
+
+review-cycle's prompt about a reviewer leg past its 30-minute budget is one line too: it names the leg, and the review skills already say what to do. The threads tool, given no `pr`, says that is the key it takes.
+
+A reviewer's report counts when its execution receipt is marked up. The commit gate counts a review only when the report opens with `execution:` and `attempted-but-failed:` lines, and it dropped a report that wrote them in bold (`**execution:** none`), so a clean review had to run again before the commit went through. Bold or underscored labels, list items and quoted lines now read as the same receipt; a receipt buried below the top of the report still does not count.
+
+A release by hand takes one yes. Tagging and publishing three versions by hand took seven answers: each tag push and each release was its own question, a yes to "Release `pr-kit@0.6.1`?" did not cover pushing that tag, the refusal of the tag push sent the agent to the offer tool for a question it did not have, and "Yes, push the tag" was read as a hold. Now a yes, "release it" or "release them" in answer to a question naming versions covers pushing each of those tags and creating the releases, and the offer tool takes `versions`, a list, to ask for several at once: "Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?". "Push the tag" and "yes, push the tag" answer a question about one tag, the offer tool gains that question (`push-tag`), and a tag or default-branch push you did not ask for is refused with the question whose yes names it. When git widens a push to another tag, as with `push.followTags`, the refusal says so and names `--no-follow-tags`.
+
+What a release grant covers is otherwise unchanged: it names the tags it may push, and like any push grant it also lets a push to a branch that is not the default run; the release command itself is still not held to the versions named. Naming a tag, in a release question or in "push the v1 tag", now covers pushing that tag and never deleting it, which it used to allow. A no to a release question holds the release, as before, not your other pushes.
+
 ## 0.39.0 (2026-11-13)
 
 ### Added
@@ -1421,4 +1447,4 @@ Security and robustness fixes for issues found by running `/review-cycle:review`
 - Per-project opt-out via `.claude/.no-review-gate` and global kill-switch via `~/.claude/.disable-review-gate`.
 - Embedded comment and fix-vs-defer policies inside the skills, with standalone copies in `reference/policies.md` for optional CLAUDE.md installation.
 
-Generated by oakum 0.8.3.
+Generated by oakum 0.11.1.

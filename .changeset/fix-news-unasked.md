@@ -1,5 +1,0 @@
----
-pr-watch: minor
----
-
-Claude fixes a failed check or a review's findings on its own pull request without asking first. When pr-watch reports a check that failed on an open pull request Claude opened in the session, or a review or a request for changes on one, its system-prompt section now tells Claude to fix what was found and push the fix, whoever raised it. review-cycle's commit gate still decides the push under your settings, stop-before and `prUpdates`: it runs when they allow it, and otherwise names the question to ask you. A finding that is a judgment call, such as a design choice or a disagreement, is answered in its thread or asked about rather than fixed unasked, and one Claude judges wrong is answered in its thread. A failure on a merged pull request's merge commit is told to you with nothing pushed, and after three fix pushes to one pull request in a session Claude asks before a fourth. The merge question is still where you decide. Before, Claude often asked whether to fix, then whether to push, though your settings already allowed both.
