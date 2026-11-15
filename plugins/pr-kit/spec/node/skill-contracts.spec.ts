@@ -132,7 +132,7 @@ describe('do-epic: a job runs to its report', () => {
   });
   test('it acts on the tracker the repository shows', () => {
     expect(section(text, '1. Confirm the job', 'do-epic')).toContain(
-      "**The tracker** is the one the repository shows: tm when it has a `.config/tm.toml`, its items Issues keyed like `CPL-12`; beads when it has a `.beads/` directory. Each step below gives both trackers' commands; run only that tracker's. With neither, stop and say so.",
+      "**The tracker** is the one the repository shows: tm when it has a `.config/tm.toml`, its items Issues keyed like `CPL-12`; beads when it has a `.beads/` directory and no tm config. Each step below gives both trackers' commands; run only that tracker's. With neither, stop and say so.",
     );
   });
   test('the plan sees every item and records itself before anything is built', () => {

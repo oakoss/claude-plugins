@@ -18,7 +18,7 @@ Call the `mcp__review-cycle__status` tool. `stopBefore.mandate.epic` must name t
 
 Read two choices from the user's message: the epic id, and whether pull requests open as drafts ("as drafts", "as a draft", "as draft PRs").
 
-**The tracker** is the one the repository shows: tm when it has a `.config/tm.toml`, its items Issues keyed like `CPL-12`; beads when it has a `.beads/` directory. Each step below gives both trackers' commands; run only that tracker's. With neither, stop and say so.
+**The tracker** is the one the repository shows: tm when it has a `.config/tm.toml`, its items Issues keyed like `CPL-12`; beads when it has a `.beads/` directory and no tm config. Each step below gives both trackers' commands; run only that tracker's. With neither, stop and say so.
 
 ## 2. Plan
 
