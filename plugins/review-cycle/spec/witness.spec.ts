@@ -115,6 +115,18 @@ describe('what counts as a review', () => {
     expect(hasReceipt(buried)).toBe(false);
     expect(hasReceipt('execution: none\nsomething\nattempted-but-failed: none')).toBe(false);
   });
+  test.each([
+    ['bold labels', '**execution:** none\n**attempted-but-failed:** none'],
+    ['bold before the colon', '**execution**: none\n**attempted-but-failed**: none'],
+    ['list items', '- execution: none\n- attempted-but-failed: none'],
+    ['a quote', '> execution: none\n> attempted-but-failed: none'],
+  ])('reads a receipt with %s', (_, report) => {
+    expect(hasReceipt(`${report}\n\n## Findings`)).toBe(true);
+  });
+  test('a marked-up receipt buried in the body still does not count', () => {
+    const buried = `${'finding\n'.repeat(8)}**execution:** none\n**attempted-but-failed:** none`;
+    expect(hasReceipt(buried)).toBe(false);
+  });
 });
 
 test('ignore patterns from the config', () => {
