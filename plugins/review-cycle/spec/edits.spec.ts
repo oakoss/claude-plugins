@@ -62,6 +62,35 @@ describe('mayWrite', () => {
     expect(mayWrite(command)).toBe(false);
   });
 
+  const formatterOnly: [string, string][] = [
+    ['oxfmt', 'node_modules/.bin/oxfmt a.ts b.ts'],
+    ['oxfmt after cd', 'cd /repo && node_modules/.bin/oxfmt a.ts'],
+    ['oxfmt quieted', 'node_modules/.bin/oxfmt a.ts >/dev/null 2>&1'],
+    ['prettier', '../node_modules/.bin/prettier --write a.ts'],
+    ['biome format', 'node_modules/.bin/biome format --write a.ts'],
+    ['dprint fmt', 'node_modules/.bin/dprint fmt a.ts'],
+    ['two formatters', 'node_modules/.bin/oxfmt a.ts && node_modules/.bin/prettier --write b.md'],
+  ];
+  test.each(formatterOnly)('skips a formatter run alone: %s', (_, command) => {
+    expect(mayWrite(command)).toBe(false);
+  });
+
+  const notOnlyFormatting: [string, string][] = [
+    ['sed before oxfmt', "sed -i '' 's/a/b/' a.ts && node_modules/.bin/oxfmt a.ts"],
+    ['a check after oxfmt', 'node_modules/.bin/oxfmt a.ts && node_modules/.bin/vitest run'],
+    ['a redirect into the tree', 'node_modules/.bin/oxfmt a.ts > log.txt'],
+    ['a heredoc beside oxfmt', "cat <<'EOF' > a.ts\nx\nEOF\nnode_modules/.bin/oxfmt a.ts"],
+    ['a substitution', 'node_modules/.bin/oxfmt $(./list.sh)'],
+    ['a subshell', '(cd /repo && node_modules/.bin/oxfmt a.ts)'],
+    ['cd with more words', 'cd /repo x && node_modules/.bin/oxfmt a.ts'],
+    ['a script named like a formatter', './oxfmt a.ts'],
+    ['a biome fixer', 'node_modules/.bin/biome check --write a.ts'],
+    ['an eslint fixer', 'node_modules/.bin/eslint --fix a.ts'],
+  ];
+  test.each(notOnlyFormatting)('measures %s', (_, command) => {
+    expect(mayWrite(command)).toBe(true);
+  });
+
   test('expands aliases first', () => {
     expect(mayWrite('fix a.ts', new Map([['fix', "sed -i ''"]]))).toBe(true);
     expect(mayWrite('fix a.ts')).toBe(false);
