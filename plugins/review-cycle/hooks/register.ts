@@ -4,35 +4,16 @@ import {
   update,
   type Caught,
   type CatchHandler,
-  type EngineInterface,
   type HookFor,
   type MatchedHook,
-  type PromptOrigin,
   type Register,
   type Timer,
   type ToolCallResult,
 } from 'claude-code';
 
-import type { Kept, KeptSpend } from '../types';
-import {
-  covers,
-  liftsHold,
-  NAMED_ELSEWHERE,
-  NO_GRANT,
-  NOTHING_POINTED,
-  UNGRANTED,
-  type Grant,
-} from './consent/consent';
-import {
-  besideOf,
-  closingOf,
-  grantOf,
-  isReply,
-  mandateAfter,
-  stepsNamed,
-  type Mandate,
-} from './consent/exact';
-import { holdAfter, holds, type Hold, type HoldState, type HoldStep } from './consent/hold';
+import { covers, liftsHold, NAMED_ELSEWHERE, UNGRANTED, type Grant } from './consent/consent';
+import { besideOf, mandateAfter } from './consent/exact';
+import { holdAfter, holds } from './consent/hold';
 import {
   configured,
   STRICTEST,
@@ -42,14 +23,7 @@ import {
   withMandate,
   type StopBefore,
 } from './consent/ladder';
-import {
-  countsOf,
-  type MissKind,
-  pruneMisses,
-  readMisses,
-  type RecordedMiss,
-  saveMiss,
-} from './consent/misses';
+import { countsOf, pruneMisses, readMisses, type RecordedMiss, saveMiss } from './consent/misses';
 import { OFFER_STEPS, OPERATIONS, offerQuestion } from './consent/offers';
 import {
   configuredPrUpdates,
@@ -60,7 +34,8 @@ import {
   type PrUpdates,
   type PrUpdatesInForce,
 } from './consent/pr-updates';
-import { consentJoined, consentOf, ownWords, readMessage, type Consent } from './consent/reading';
+import { consentJoined, consentOf, ownWords, readMessage } from './consent/reading';
+import { deny, MAX_MISSES, sameMiss } from './consent/refusal';
 import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './consent/settings';
 import { editsSkipped, mayWrite, measureEdits } from './edits/edits';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './edits/slop';
@@ -84,9 +59,7 @@ import {
   PR_JQ,
   type GhConsent,
   type GhLookups,
-  type MissStep,
   type InForce,
-  type Lookup,
   type Standing,
   type Used,
   NO_STANDING,
@@ -115,7 +88,6 @@ import {
   type Git,
   type Refs,
   type Repo,
-  type Run,
 } from './gate/git';
 import { MCP_GITHUB, mcpAction, shownCall } from './gate/github';
 import {
@@ -145,7 +117,7 @@ import {
   parseRecord,
   type Recording,
 } from './ledger/ledger';
-import { blobsAt, readLedger, recordInto, type Store } from './ledger/ledger-store';
+import { blobsAt, readLedger, recordInto } from './ledger/ledger-store';
 import { codexCommand, configuredEffort, EFFORTS, isEffort } from './review/codex-command';
 import { type CodexTokens, codexTokens, readCodexLog } from './review/codex-log';
 import { cycleOf, isSummary, measuredOf, readCycles, recordCycle, rollupOf } from './review/cycles';
@@ -154,33 +126,44 @@ import { readRounds, recordRounds, roundsOf } from './review/rounds';
 import { isSpend, NO_SPEND, spentWith } from './review/spend';
 import { SUMMARY_TOOL, summaryHeader, summaryText } from './review/summary';
 import { madeByAnother, ownerOf, scratchNamed, sweep } from './review/sweep';
-import {
-  EMPTY_TREE,
-  describeUncovered,
-  hasReceipt,
-  isReviewerType,
-  uncoveredOf,
-  type Review,
-  type Row,
-} from './review/witness';
+import { EMPTY_TREE, hasReceipt, isReviewerType, uncoveredOf, type Row } from './review/witness';
 import { committingAlias, readCommand, shownCommand, type Classification } from './shell/command';
 import type { Finishes } from './shell/git-args';
 import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell/shell';
 import { type LeaseIo, readStack, stackLease } from './shell/stack';
+import {
+  currentText,
+  ensureRoot,
+  ghRead,
+  gitOf,
+  MERGE_LOOKUP_MS,
+  run,
+  STORE_TAG,
+  storeOf,
+  TIMED_OUT,
+  within,
+  type $,
+} from './state/engine';
+import {
+  drop,
+  explain,
+  held,
+  HUMAN,
+  LEG_BUDGET_MS,
+  runningLeg,
+  state,
+  type GateState,
+  type Leg,
+} from './state/gate-state';
 import { entryName } from './state/journal';
 import { isKept, keptOf, offKept, restoredOf, type Restored } from './state/kept';
 import { isReviewSkill, resumed } from './state/resume';
 
-// Every function that calls `$` lives in this file: `claude plugin validate`
-// follows `$` only into functions declared beside the hook, never across an
-// import. The other modules are pure.
-//
 // The gate watches Bash with a function hook, not the classic PreToolUse
 // bridge. While any `tool.call { tool: "Bash" }` hook is loaded, Bash inside an
 // `isolation: "worktree"` subagent is refused (anthropics/claude-code#92533);
 // the bridge avoids that at the cost of a stub script, should it matter.
 
-type $ = EngineInterface;
 type BashHook = MatchedHook<'tool.call', { tool: 'Bash' }>;
 type GithubHook = MatchedHook<'tool.call', { tool: RegExp }>;
 type SkillHook = MatchedHook<'tool.call', { tool: 'Skill' }>;
@@ -213,158 +196,6 @@ type MonitorHook = MatchedHook<'tool.call', { tool: 'Monitor' }>;
 type Input<H> = H extends ($: never, e: infer E, next: never) => unknown ? E : never;
 type NextOf<H> = H extends ($: never, e: never, next: infer N) => unknown ? N : never;
 type Output<H> = H extends (...args: never[]) => infer R ? Awaited<R> : never;
-
-const HUMAN = new Set<PromptOrigin['kind']>(['composer', 'bridge', 'sdk']);
-
-// `spawnTree` is null when the tree could not be read as the leg started; such
-// a leg reviews nothing, but it is still under way until `done`.
-type Leg = {
-  type: string;
-  counts: boolean;
-  spawnTree: string | null;
-  done: boolean;
-  // Fires once the leg outlives its budget; cancelled when it finishes.
-  timer: Timer | null;
-  spawnedAt: number;
-  capped: boolean;
-  // A report of it counted, so a later answer without a receipt drops nothing.
-  counted: boolean;
-  spend?: KeptSpend;
-};
-
-// Measured 2026-09-19 over 138 legs: a fan-out's slowest leg had a median of
-// 16 minutes and the slowest normal leg type 25; runaways ran 60 to 70.
-const LEG_BUDGET_MS = 30 * 60_000;
-
-// What the user's latest message settled: a fresh message replaces it, a
-// prompt queued into the running turn joins it (consentJoined).
-type Message = Consent & {
-  // The working tree when it arrived; null when unreadable.
-  tree: string | null;
-  // Whether the agent was told to review since it arrived.
-  nudged: boolean;
-  // Legs spawned while review-pr runs review a PR worktree, not this tree.
-  prWindow: boolean;
-};
-
-// `key` is its name in the store, once one is chosen.
-type Miss = {
-  message: string;
-  offer: string;
-  steps: HoldStep[];
-  refusal: string;
-  kind: MissKind;
-  saved: boolean;
-  key: string | null;
-};
-
-type GateState = {
-  // undefined until resolved; null when the session is not in a repository.
-  root: Repo | null | undefined;
-  reviews: Review[];
-  legs: Map<string, Leg>;
-  message: Message;
-  // The review reminder the user's next prompt owes the agent, measured from
-  // `since`. Apart from `message`, so a prompt replacing it cannot lose one.
-  owed: { since: string } | null;
-  // How many messages the user has typed, queued ones included.
-  messages: number;
-  lastAnswer: string;
-  // The user's latest message, the answer it replied to, and where it came from.
-  said: { text: string; before: string; origin: PromptOrigin['kind'] | null };
-  // Refusals of a step the user's message or the offer it answered named:
-  // candidate consent misses, kept in this session only.
-  misses: Miss[];
-  // The user's shell aliases, which the Bash tool expands.
-  shellAliases: Map<string, string>;
-  aliasError: string | null;
-  // Whether the agent has been told the aliases could not be read.
-  aliasErrorShown: boolean;
-  aliasesLoaded: boolean;
-  // The session-start read of the user's aliases; its error, or null.
-  ownRead: Promise<string | null> | undefined;
-  // Reviews that ran but could not be recorded, and why: one per leg, since a
-  // leg's later report supersedes its earlier one. `old` predates the latest
-  // recorded review.
-  dropped: { agentId: string; text: string; old: boolean }[];
-  // Legs that outlived their budget this cycle, which the session was asked to stop.
-  capped: string[];
-  // Scratch directories made for review cycles and not yet swept.
-  scratch: string[];
-  // Whether the sweep tool registered; scratch makes nothing without it.
-  sweepServed: boolean;
-  // What reviewers' commands changed in the repository under review.
-  reviewerChanges: string[];
-  // False when the user switched the gate off; the ledger is still served.
-  gateOn: boolean;
-  // From user or managed settings, which alone reach the register options.
-  stopBefore: StopBefore | null;
-  prUpdates: PrUpdates | null;
-  // The user's /config value for the end-of-turn review nudge.
-  nudge: boolean;
-  // The user's /config value for showing a step the setting ran unasked.
-  unaskedNotice: boolean;
-  hold: HoldState;
-  // "do epic <id>" raises the ladder to merge until a hold or decline ends it.
-  mandate: Kept['mandate'];
-  // "merge 46 once CI passes" outlasts its message until used, held or retracted.
-  standing: Standing;
-  // Where in `reviews` the next commit's rounds start counting.
-  roundsFrom: number;
-  // `<git common dir>\t<remote>/<branch>` and the commit this agent last
-  // pushed there, newest last: what gh-stack's leased push may overwrite.
-  pushed: [string, string][];
-  // The review skill's text from when it loads until a commit lands or the
-  // session ends, so a compaction can hand back what its re-attached copy drops.
-  reviewing: string | null;
-  // Finished Codex logs codex_log read since the last summary: path to tokens.
-  codexRead: Map<string, number>;
-};
-
-const state: GateState = {
-  root: undefined,
-  reviews: [],
-  legs: new Map(),
-  // No message yet, so nothing to nudge about.
-  message: {
-    grant: NO_GRANT,
-    tree: null,
-    nudged: true,
-    prWindow: false,
-    unread: null,
-    said: null,
-    pointed: NOTHING_POINTED,
-  },
-  owed: null,
-  messages: 0,
-  lastAnswer: '',
-  said: { text: '', before: '', origin: null },
-  misses: [],
-  shellAliases: new Map(),
-  aliasError: null,
-  aliasErrorShown: false,
-  aliasesLoaded: false,
-  ownRead: undefined,
-  dropped: [],
-  capped: [],
-  scratch: [],
-  sweepServed: false,
-  reviewerChanges: [],
-  gateOn: true,
-  stopBefore: null,
-  prUpdates: null,
-  nudge: true,
-  unaskedNotice: false,
-  hold: null,
-  mandate: null,
-  standing: NO_STANDING,
-  roundsFrom: 0,
-  pushed: [],
-  reviewing: null,
-  codexRead: new Map(),
-};
-
-const held = (): Hold => state.hold?.floor ?? null;
 
 // The gate's memory as the host keeps it: module variables start over when the
 // module reloads (a saved hooks file, a /config change), so what the gate
@@ -399,24 +230,6 @@ function keep($: $): Promise<void> {
 function keepGate($: $): Promise<void> {
   saving = saving.then(() => write($));
   return saving;
-}
-
-// A state call that never answers counts as failed, so one cannot stall every
-// later save or the session's start.
-const STATE_WAIT_MS = 5000;
-
-async function within<T>($: $, call: Promise<T>, what: string): Promise<T> {
-  let timer: Timer | undefined;
-  const late = new Promise<never>((_, reject) => {
-    timer = $.clock.after(STATE_WAIT_MS, () =>
-      reject(new Error(`${what} did not answer within ${STATE_WAIT_MS / 1000} s`)),
-    );
-  });
-  try {
-    return await Promise.race([call, late]);
-  } finally {
-    timer?.cancel();
-  }
 }
 
 async function write($: $): Promise<void> {
@@ -565,72 +378,6 @@ async function recallOrSay($: $): Promise<void> {
   }
 }
 
-// Each kept field matches the gate's own type exactly, so a field added to one
-// and not the other fails the typecheck; the rest start over on a reload.
-type Equal<A, B> =
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- the exact-equality idiom compares two generic signatures
-  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
-type Unkept =
-  | 'root'
-  | 'said'
-  | 'shellAliases'
-  | 'aliasError'
-  | 'aliasErrorShown'
-  | 'aliasesLoaded'
-  | 'ownRead'
-  | 'sweepServed'
-  | 'gateOn'
-  | 'stopBefore'
-  | 'prUpdates'
-  | 'nudge'
-  | 'owed'
-  | 'unaskedNotice'
-  | 'standing'
-  | 'codexRead';
-const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
-const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
-const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
-const _keptHold: Equal<HoldState, Kept['hold']> = true;
-const _keptMandate: Equal<Mandate | null, Kept['mandate']> = true;
-const _keptMiss: Equal<Miss, Kept['misses'][number]> = true;
-const _keptMessage: Equal<Omit<Message, 'unread' | 'said'>, Kept['message']> = true;
-const _keptDropped: Equal<GateState['dropped'][number], Kept['dropped'][number]> = true;
-// recall's Pick<GateState, keyof Restored> annotation is what type-checks the
-// values it assigns; this keeps it from reaching state that is never kept.
-const _restoredKeys: Equal<keyof Restored, keyof Kept> = true;
-
-// Without `cwd`, $.process.run runs in the Bash tool's current directory,
-// which is what a command's own relative paths resolve against.
-async function run(
-  $: $,
-  argv: string[],
-  opts: { cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number } = {},
-): Promise<Run> {
-  // git's messages are matched in English, so its locale is pinned.
-  const env = { LC_ALL: 'C', LANGUAGE: 'C', ...opts.env };
-  return $.process.run(argv, { timeoutMs: 60_000, ...opts, env });
-}
-
-function gitOf($: $): Git {
-  return (argv, opts) => run($, argv, opts);
-}
-
-// Why uncovered content is uncovered, including what the gate itself lost.
-function explain(c: Coverage): string {
-  const parts = [describeUncovered(uncoveredOf(c.rows))];
-  if (c.unread > 0) parts.push(`${c.unread} reviewed tree(s) could not be compared: git failed`);
-  const dropped = state.dropped.filter((d) => !d.old).slice(-3);
-  if (dropped.length > 0) {
-    parts.push(`reviews not counted: ${dropped.map((d) => d.text).join('; ')}`);
-  }
-  return parts.join('; ');
-}
-
-function drop(agentId: string, text: string): void {
-  state.dropped = state.dropped.filter((d) => d.agentId !== agentId);
-  state.dropped.push({ agentId, text, old: false });
-}
-
 // Claude Code writes its shell snapshot only once the session's first Bash
 // command runs, after this hook, so the gate reads the aliases itself, the
 // way the snapshot does, when the session starts. Once per module load: an rc
@@ -710,72 +457,6 @@ function newestSnapshot(
     }
   }
   return best?.name ?? null;
-}
-
-async function ensureRoot($: $): Promise<Repo | null> {
-  if (state.root === undefined) {
-    const repo = await repoAt(gitOf($), null, await $.session.cwd());
-    state.root = repo === 'none' ? null : repo;
-  }
-  return state.root;
-}
-
-// `step` is the step the refusal asks the user to decide, kept as a miss when
-// their message named it.
-function deny(reason: string, step?: MissStep): { deny: string } {
-  if (step !== undefined) noteMiss(reason, step);
-  return { deny: `review-cycle: ${reason}` };
-}
-
-const MAX_MISSES = 20;
-const MISS_TEXT = 300;
-const clip = (s: string) => s.slice(0, MISS_TEXT);
-
-// The question the answer's closing lines end on, which a reply like "yes" answers.
-// Sentences split at a mark before a space, so "Release `v0.25.0`?" stays whole.
-function questionOf(closing: string): string {
-  const sentences = closing.split(/(?<=[.!?])\s+/);
-  return sentences.findLast((s) => s.trim().endsWith('?'))?.trim() ?? '';
-}
-
-function grants(grant: Grant, step: MissStep): boolean {
-  if (step === 'push') return covers(grant, 'push');
-  if (step === 'merge') return grant.merge || grant.autoMerge || grant.mergeStack.length > 0;
-  // A merge the user asked for covers the version pull request too.
-  if (step === 'release') return grant.release || grant.merge || grant.mergeStack.length > 0;
-  if (step === 'comment') return grant.comment;
-  return grant.pr;
-}
-
-// Not a hold step's word: "fix the comment in foo.ts" holds nothing, but a
-// refused comment that message named is still worth keeping.
-const COMMENT_NAMED = /\b(?:comment|reply|replies|respond|post)(?:s|ed|ing)?\b/i;
-
-function noteMiss(refusal: string, step: MissStep): void {
-  const { text, before } = state.said;
-  // The whole closing is kept, so a spec row drafted from it reads as the gate did.
-  // A comment is kept with its offer either way: "ok, do the codex pass"
-  // answers "Should I post `@bot review` on #99?" without naming it.
-  const offer = isReply(text) || step === 'comment' ? closingOf(before) : '';
-  const commented = step === 'comment' && COMMENT_NAMED.test(`${text}\n${questionOf(offer)}`);
-  const steps = [
-    ...new Set([
-      ...stepsNamed(text),
-      ...stepsNamed(questionOf(offer)),
-      ...(commented ? (['comment'] as const) : []),
-    ]),
-  ];
-  // Merging the version pull request is a release, so naming the merge counts.
-  const named = steps.includes(step) || (step === 'release' && steps.includes('merge'));
-  // A message queued while the gate judged may grant what an older one did not.
-  if (!named || grants(grantOf(text, before), step)) return;
-  recordMiss({
-    message: clip(text),
-    offer: clip(offer),
-    steps,
-    refusal: clip(refusal),
-    kind: 'refused',
-  });
 }
 
 async function onSessionStart(
@@ -1560,15 +1241,6 @@ async function onTurnComplete(
 const SWITCHED_BY_USER =
   'review-cycle is switched on and off only by the user, in /config. Ask them; to read a settings file, use the Read tool.';
 
-async function currentText($: $, path: string): Promise<string | null> {
-  return (await $.fs.exists(path)) ? $.fs.read(path) : null;
-}
-
-function runningLeg(agentId: string | undefined): Leg | null {
-  const leg = agentId === undefined ? undefined : state.legs.get(agentId);
-  return leg && !leg.done ? leg : null;
-}
-
 // A reviewer changing the tree it reviews voids its own review and can land in
 // the user's commit; scratch work belongs outside the repository.
 async function containedEdit(
@@ -1954,15 +1626,6 @@ async function onBashEdits(
   return note === null ? result : withNote(result, note);
 }
 
-function recordMiss(miss: Omit<Miss, 'saved' | 'key'>): void {
-  const known = state.misses.find((m) => sameMiss(m, miss));
-  const entry = { ...miss, saved: known?.saved ?? false, key: known?.key ?? null };
-  state.misses = [...state.misses.filter((m) => !sameMiss(m, miss)), entry].slice(-MAX_MISSES);
-}
-
-const sameMiss = (a: Pick<Miss, 'message' | 'refusal'>, b: Pick<Miss, 'message' | 'refusal'>) =>
-  a.message === b.message && a.refusal === b.refusal;
-
 let missesAt = 0;
 // The last write the store refused, while a miss it was for is still unsaved.
 let missesError: string | null = null;
@@ -2290,46 +1953,6 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
       ? `To commit, ${askThem({ step: 'commit', branch: 'fix/x' }, quote(command))}`
       : `To finish the ${finishes}, which commits the resolution, ${askThem({ step: 'finish', branch: 'fix/x', operation: finishes }, quote(command))}`;
   return `${notAsked('commit', ladder, held(), state.message.unread)}${setting}, so nothing ran. ${ask}`;
-}
-
-// How long the user waits on a gh read before the step asks.
-const LOOKUP_MS = [5000];
-// A read confirming a merge the user asked for is tried once more for longer,
-// since GitHub is slow at times and asking them again gains nothing.
-const MERGE_LOOKUP_MS = [5000, 10_000];
-
-// A real host's timeout reads "aborted: still running after 5000ms" (measured
-// on 2.1.319); the test kit's reads "timed out".
-const TIMED_OUT = /timed? ?out|still running after/i;
-
-// What a gh read printed, or why it asks: "looking up <what> failed (…)" or
-// "… printed nothing". `slow` only when every try timed out.
-async function ghRead($: $, args: string[], what: string, schedule = LOOKUP_MS): Promise<Lookup> {
-  let r: Awaited<ReturnType<typeof $.process.run>> | null = null;
-  let failed = '';
-  for (const timeoutMs of schedule) {
-    try {
-      r = await $.process.run(['gh', ...args], { timeoutMs, env: { GH_PROMPT_DISABLED: '1' } });
-      break;
-    } catch (error) {
-      failed = messageOf(error);
-      if (!TIMED_OUT.test(failed)) break;
-    }
-  }
-  if (r === null) {
-    const slow = TIMED_OUT.test(failed);
-    return slow
-      ? { asks: `looking up ${what} failed (${failed})`, slow }
-      : { asks: `looking up ${what} failed (${failed})` };
-  }
-  if (r.exitCode !== 0) {
-    const why = firstLine(r.stderr) || `it ended with no output, exit ${r.exitCode}`;
-    return { asks: `looking up ${what} failed (${why})` };
-  }
-  // A jq path that meets null prints an empty line and exits 0 (gh 2.102.0).
-  const out = r.stdout.trim();
-  if (out === '') return { asks: `looking up ${what} printed nothing` };
-  return { out };
 }
 
 // The gh reads GitHub judging needs, each failing into a reason to ask.
@@ -2702,10 +2325,8 @@ async function recordCommitRounds(
   }
 }
 
-// Orders this session's entries even when the clock does not move between
-// them; the tag keeps another session's entry at the same moment apart.
+// Orders this session's entries even when the clock does not move between them.
 let roundsAt = 0;
-const STORE_TAG = Math.random().toString(36).slice(2, 10);
 
 function judgedCommit(checked: Checked): boolean {
   return checked === 'commit' || typeof checked === 'object';
@@ -3414,15 +3035,6 @@ async function registerLedger($: $): Promise<void> {
   } catch {
     // Without the tools the skill says the ledger was unavailable.
   }
-}
-
-function storeOf($: $): Store {
-  return {
-    get: (key) => $.store.get(key),
-    set: (key, value) => $.store.set(key, value),
-    keys: () => $.store.keys(),
-    delete: (key) => $.store.delete(key),
-  };
 }
 
 async function onLedger(

@@ -1,6 +1,6 @@
 // Reading and recording the findings ledger against the plugin's store. The
 // store and the working tree come in as parameters, so this runs under plain
-// tests; register.ts binds them to `$`.
+// tests; `storeOf` in state/engine.ts binds the store to `$`.
 
 import { firstLine, worktreeTree, type Git } from '../gate/git';
 import {
