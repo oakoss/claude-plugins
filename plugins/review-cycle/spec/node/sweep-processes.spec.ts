@@ -6,7 +6,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { sweep, type Run } from '../../hooks/sweep';
+import { sweep, type Run } from '../../hooks/review/sweep';
 
 // Like $.process.run, a command that cannot start rejects, naming ENOENT.
 const run: Run = (argv) => {

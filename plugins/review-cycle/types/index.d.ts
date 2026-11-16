@@ -75,7 +75,7 @@ export type Kept = {
   capped: string[];
   scratch: string[];
   reviewerChanges: string[];
-  // `HoldState` in hooks/hold.ts.
+  // `HoldState` in hooks/consent/hold.ts.
   hold: Readonly<{
     floor: Readonly<{ step: KeptStep; how: 'mentioned' | 'declined' }>;
   }> | null;

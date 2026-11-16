@@ -1,6 +1,6 @@
 // Codex's default sandbox can write the repository, and a leg once left probe
-// files there. hooks/codex-command.ts runs it under a profile that writes only
-// the scratch directory and tells it so (spec/codex-command.spec.ts); the
+// files there. hooks/review/codex-command.ts runs it under a profile that writes only
+// the scratch directory and tells it so (spec/review/codex-command.spec.ts); the
 // skill keeps what makes that matter to a leg.
 
 import { expect, test } from 'vitest';

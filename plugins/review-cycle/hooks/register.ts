@@ -14,10 +14,6 @@ import {
 } from 'claude-code';
 
 import type { Kept, KeptSpend } from '../types';
-import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
-import { codexCommand, configuredEffort, EFFORTS, isEffort } from './codex-command';
-import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
-import { committingAlias, readCommand, shownCommand, type Classification } from './command';
 import {
   covers,
   liftsHold,
@@ -26,10 +22,7 @@ import {
   NOTHING_POINTED,
   UNGRANTED,
   type Grant,
-} from './consent';
-import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
-import { cycleOf, isSummary, measuredOf, readCycles, recordCycle, rollupOf } from './cycles';
-import { editsSkipped, mayWrite, measureEdits } from './edits';
+} from './consent/consent';
 import {
   besideOf,
   closingOf,
@@ -38,7 +31,47 @@ import {
   mandateAfter,
   stepsNamed,
   type Mandate,
-} from './exact';
+} from './consent/exact';
+import { holdAfter, holds, type Hold, type HoldState, type HoldStep } from './consent/hold';
+import {
+  configured,
+  STRICTEST,
+  effective,
+  stopBeforeOf,
+  where,
+  withMandate,
+  type StopBefore,
+} from './consent/ladder';
+import {
+  countsOf,
+  type MissKind,
+  pruneMisses,
+  readMisses,
+  type RecordedMiss,
+  saveMiss,
+} from './consent/misses';
+import { OFFER_STEPS, OPERATIONS, offerQuestion } from './consent/offers';
+import {
+  configuredPrUpdates,
+  DEFAULT_PR_UPDATES,
+  effectivePrUpdates,
+  OPEN_PULL_FIELDS,
+  prUpdatesOf,
+  type PrUpdates,
+  type PrUpdatesInForce,
+} from './consent/pr-updates';
+import { consentJoined, consentOf, ownWords, readMessage, type Consent } from './consent/reading';
+import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './consent/settings';
+import { editsSkipped, mayWrite, measureEdits } from './edits/edits';
+import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './edits/slop';
+import { added, madeBy, MARK, resolutionOf, type Entry } from './gate/attribution';
+import {
+  containmentReport,
+  insideRepo,
+  repoStateOf,
+  UNREAD,
+  type Capture,
+} from './gate/containment';
 import {
   askThem,
   ASKED_FOR,
@@ -61,7 +94,7 @@ import {
   shownNamed,
   standsFor,
   VERSION_BRANCH,
-} from './gh-verdict';
+} from './gate/gh-verdict';
 import {
   coverageOf,
   firstLine,
@@ -83,67 +116,15 @@ import {
   type Refs,
   type Repo,
   type Run,
-} from './git';
-import type { Finishes } from './git-args';
-import { MCP_GITHUB, mcpAction, shownCall } from './github';
-import { holdAfter, holds, type Hold, type HoldState, type HoldStep } from './hold';
-import { entryName } from './journal';
-import { isKept, keptOf, offKept, restoredOf, type Restored } from './kept';
-import {
-  configured,
-  STRICTEST,
-  effective,
-  stopBeforeOf,
-  where,
-  withMandate,
-  type StopBefore,
-} from './ladder';
-import {
-  KINDS,
-  MAX_LEDGER_BYTES,
-  MAX_READ,
-  MAX_REPOS,
-  MAX_TEXT,
-  parseRecord,
-  type Recording,
-} from './ledger';
-import { blobsAt, readLedger, recordInto, type Store } from './ledger-store';
-import {
-  countsOf,
-  type MissKind,
-  pruneMisses,
-  readMisses,
-  type RecordedMiss,
-  saveMiss,
-} from './misses';
-import { asksUser, nudgeOf, nudgeOn } from './nudge';
-import { OFFER_STEPS, OPERATIONS, offerQuestion } from './offers';
-import {
-  configuredPrUpdates,
-  DEFAULT_PR_UPDATES,
-  effectivePrUpdates,
-  OPEN_PULL_FIELDS,
-  prUpdatesOf,
-  type PrUpdates,
-  type PrUpdatesInForce,
-} from './pr-updates';
+} from './gate/git';
+import { MCP_GITHUB, mcpAction, shownCall } from './gate/github';
 import {
   judgePush,
   stackLayerPushed,
   type PrUpdating,
   type PushConsent,
   type Unasked,
-} from './push-judge';
-import { consentJoined, consentOf, ownWords, readMessage, type Consent } from './reading';
-import { isReviewSkill, resumed } from './resume';
-import { readRounds, recordRounds, roundsOf } from './rounds';
-import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './settings';
-import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell';
-import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
-import { isSpend, NO_SPEND, spentWith } from './spend';
-import { type LeaseIo, readStack, stackLease } from './stack';
-import { SUMMARY_TOOL, summaryHeader, summaryText } from './summary';
-import { madeByAnother, ownerOf, scratchNamed, sweep } from './sweep';
+} from './gate/push-judge';
 import {
   MAX_REPLIES,
   OPEN_THREADS_QUERY,
@@ -154,7 +135,25 @@ import {
   THREAD_QUERY,
   threadFactsOf,
   type ReplyItem,
-} from './threads';
+} from './gate/threads';
+import {
+  KINDS,
+  MAX_LEDGER_BYTES,
+  MAX_READ,
+  MAX_REPOS,
+  MAX_TEXT,
+  parseRecord,
+  type Recording,
+} from './ledger/ledger';
+import { blobsAt, readLedger, recordInto, type Store } from './ledger/ledger-store';
+import { codexCommand, configuredEffort, EFFORTS, isEffort } from './review/codex-command';
+import { type CodexTokens, codexTokens, readCodexLog } from './review/codex-log';
+import { cycleOf, isSummary, measuredOf, readCycles, recordCycle, rollupOf } from './review/cycles';
+import { asksUser, nudgeOf, nudgeOn } from './review/nudge';
+import { readRounds, recordRounds, roundsOf } from './review/rounds';
+import { isSpend, NO_SPEND, spentWith } from './review/spend';
+import { SUMMARY_TOOL, summaryHeader, summaryText } from './review/summary';
+import { madeByAnother, ownerOf, scratchNamed, sweep } from './review/sweep';
 import {
   EMPTY_TREE,
   describeUncovered,
@@ -163,7 +162,14 @@ import {
   uncoveredOf,
   type Review,
   type Row,
-} from './witness';
+} from './review/witness';
+import { committingAlias, readCommand, shownCommand, type Classification } from './shell/command';
+import type { Finishes } from './shell/git-args';
+import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell/shell';
+import { type LeaseIo, readStack, stackLease } from './shell/stack';
+import { entryName } from './state/journal';
+import { isKept, keptOf, offKept, restoredOf, type Restored } from './state/kept';
+import { isReviewSkill, resumed } from './state/resume';
 
 // Every function that calls `$` lives in this file: `claude plugin validate`
 // follows `$` only into functions declared beside the hook, never across an

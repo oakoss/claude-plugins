@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 
 import { expect, test } from 'vitest';
 
-import { codexCommand, containmentOf } from '../../hooks/codex-command';
+import { codexCommand, containmentOf } from '../../hooks/review/codex-command';
 
 const SCRATCH = '/var/folders/x/T/review-cycle.AbC123';
 const COPY = '/p/scripts/copy-tree.sh';

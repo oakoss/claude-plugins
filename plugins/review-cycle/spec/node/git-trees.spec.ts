@@ -5,7 +5,6 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { readCommand } from '../../hooks/command';
 import {
   coverageOf,
   headOf,
@@ -17,8 +16,9 @@ import {
   treeOf,
   worktreeTree,
   type Git,
-} from '../../hooks/git';
-import { CONFIG_PATH, EMPTY_TREE } from '../../hooks/witness';
+} from '../../hooks/gate/git';
+import { CONFIG_PATH, EMPTY_TREE } from '../../hooks/review/witness';
+import { readCommand } from '../../hooks/shell/command';
 
 // Real git in a scratch repository, so the trees and paths the gate compares
 // are git's own. The user's config and global ignore file are kept out, and

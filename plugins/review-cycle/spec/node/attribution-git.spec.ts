@@ -5,8 +5,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { added, madeBy, MARK } from '../../hooks/attribution';
-import { headLog, headLogCount, pushedRefs, remoteRefs, type Git } from '../../hooks/git';
+import { added, madeBy, MARK } from '../../hooks/gate/attribution';
+import { headLog, headLogCount, pushedRefs, remoteRefs, type Git } from '../../hooks/gate/git';
 
 // Real git in scratch repositories, so the reflog messages and formats the
 // gate reads are git's own rather than a fake's. The user's config is kept

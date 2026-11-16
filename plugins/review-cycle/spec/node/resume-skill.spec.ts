@@ -6,7 +6,7 @@ import path from 'node:path';
 import { expect, test } from 'vitest';
 
 import { REPO_ROOT, skillText } from '../../../../tests/skills';
-import { KEPT, RESUMED, resumeText } from '../../hooks/resume';
+import { KEPT, RESUMED, resumeText } from '../../hooks/state/resume';
 
 // The skill as the engine expands it: a base-directory line, then the body.
 const DIR = path.join(REPO_ROOT, 'plugins/review-cycle/skills/review');
