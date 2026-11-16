@@ -649,6 +649,32 @@ export function statusOf(r: unknown) {
   return JSON.parse((r as { result: string }).result);
 }
 
+// One model response, its usage as the engine reports it beneath every hook.
+export const answered = (usage: Record<string, number> | null): any =>
+  async function* (_$: unknown, e: { turnId: string; index: number }) {
+    yield* [];
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: usage && { ...usage, model: 'claude-opus-5-5' },
+    };
+  };
+export async function step($: any, agentId?: string) {
+  const s = $.turn.step({ turnId: 't', index: 0, model: 'm', messageCount: 1, agentId });
+  let r = await s.next();
+  while (!r.done) r = await s.next();
+  return r.value;
+}
+export const USAGE = {
+  input_tokens: 2,
+  output_tokens: 300,
+  cache_read_input_tokens: 40_000,
+  cache_creation_input_tokens: 5000,
+};
+
 export async function reviewerChanges($: any): Promise<string[]> {
   const r = await $.tool.call({ tool: 'mcp__review-cycle__status' });
   return JSON.parse((r as { result: string }).result).reviewerChanges;
