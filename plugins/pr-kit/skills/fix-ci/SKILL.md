@@ -41,7 +41,7 @@ Each round:
 ## Guardrails
 
 - **One failure cause per round.** Minimal, low-risk fixes before any broader change.
-- **Flaky checks:** retry once. If it passes on retry, report it as a flake with evidence rather than "fixing" phantom failures.
+- **Flaky checks:** retry once, only to tell a flake from a real failure; a retry pushes nothing, so it is not a round. A pass on retry fixes nothing: read the failed attempt for what stopped it (a timeout, a runner shutdown, a race, a network call), with `gh run view <run-id> --attempt <n>` for its annotations, where a timeout shows only there, and `gh run view <run-id> --attempt <n> --log-failed` for its step logs, since without `--attempt` both read the newest attempt, the one that passed. Report the flake with that cause, or with "cause unknown" and what you read. A second failure is a real one. Never retry again, add sleeps, raise timeouts or skip the check to turn a flake green.
 - **Failures unrelated to this PR** that are already green on the base branch: merge the base in, then re-review and push, instead of bloating the PR with unrelated fixes. Use the PR's own `baseRefName` rather than assuming `main`:
 
   ```bash
@@ -63,7 +63,7 @@ Rounds:
   1. <check> failed — root cause: <…> — fix: <…> (reviewed via <review-cycle / approved>, pushed)
   2. ...
 
-Flakes: <none / <check> passed on retry>
+Flakes: <none / <check> passed on retry — cause: <what stopped it / unknown, read: <…>>>
 Current checks: <summary>
 Next: <PR URL once green, or what needs a human>
 ```

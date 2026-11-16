@@ -104,6 +104,22 @@ describe('fix-ci: the round cap', () => {
   });
 });
 
+// A timeout shows only in a run's annotations, not in --log-failed, and without
+// --attempt both read the newest attempt (measured on 2026-11-16).
+describe('fix-ci: a flake names its cause', () => {
+  test('a pass on retry is read on the failed attempt, never retried to green', () => {
+    const guardrails = section(skillText('pr-kit', 'fix-ci'), 'Guardrails', 'fix-ci');
+    expect(guardrails).toContain('A pass on retry fixes nothing');
+    expect(guardrails).toContain(
+      '`gh run view <run-id> --attempt <n>` for its annotations, where a timeout shows only there',
+    );
+    expect(guardrails).toContain('`gh run view <run-id> --attempt <n> --log-failed`');
+    expect(guardrails).toContain(
+      'Never retry again, add sleeps, raise timeouts or skip the check to turn a flake green.',
+    );
+  });
+});
+
 // review-cycle's gate reads a yes only to a question its offer tool writes.
 describe('fix-ci: the push question', () => {
   test("asks the offer tool's push question", () => {
