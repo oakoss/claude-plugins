@@ -1,6 +1,5 @@
-// Git reads the gate makes, through a `Git` the hook supplies: `claude plugin
-// validate` follows `$` only into functions declared in register.ts, so the
-// runner is passed in rather than `$`.
+// Git reads the gate makes, through a `Git` the hook supplies (`gitOf` in
+// state/engine.ts), so they run under plain tests.
 
 import {
   CONFIG_PATH,
