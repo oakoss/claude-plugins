@@ -5,7 +5,9 @@ import {
   fakeStore,
   fakeWorld,
   finishLeg,
+  keptRecord,
   legUnderWay,
+  reloadInto,
   statusOf,
   step,
   USAGE,
@@ -338,18 +340,47 @@ describe('the scratch directory', () => {
 const rolloutUsage = (input: number, output: number) =>
   `"type":"token_count","info":{"total_token_usage":{"input_tokens":${input},"cached_input_tokens":${input - 10},"cache_write_input_tokens":0,"output_tokens":${output},"reasoning_output_tokens":1,"total_tokens":${input + output}}`;
 const SESSION = '01a17142-615a-7521-991d-b512b86d3b59';
+const E = String.fromCodePoint(27);
+const [BANNER, ...RUN] = [
+  'OpenAI Codex v0.162.1',
+  `${E}[35m${E}[3mexec${E}[0m${E}[0m`,
+  `${E}[1m/bin/zsh -lc 'pnpm test'${E}[0m in /repo`,
+  `${E}[31m exited 1 in 147ms:${E}[0m`,
+  'failed to load config',
+];
+const LOG = [BANNER, ...RUN].join('\n');
+const SESSION_LOG = [BANNER, `session id: ${SESSION}`, ...RUN].join('\n');
+
+// A log naming SESSION, whose one child session finished with 100 + 5 tokens
+// under <home>/sessions.
+const tokensWith = async ($: any, on: any, env: Record<string, string>, home: string) => {
+  const dir = `${home}/sessions/${sessionDays(SESSION)[0]}`;
+  const child = `${dir}/rollout-2026-10-24T23-12-18-01a17142-6246-7073-970e-3dfdb1c5d68a.jsonl`;
+  const w = fakeWorld(on, {
+    env,
+    files: { '/tmp/codex.out': SESSION_LOG, [dir]: '' },
+    git: (a: string) => {
+      if (a.includes(`"parent_thread_id":"${SESSION}"`)) return { stdout: `${child}\n` };
+      if (a.startsWith('grep -oE') && a.endsWith(child)) {
+        return {
+          stdout: `${rolloutUsage(10, 1)}\n${rolloutUsage(100, 5)}\n"type":"task_complete"\n`,
+        };
+      }
+      return null;
+    },
+  });
+  await $.session.start({ source: 'startup' });
+  const r = (await $.tool.call({
+    tool: 'mcp__review-cycle__codex_log',
+    path: '/tmp/codex.out',
+  })) as {
+    result: string;
+  };
+  const search = w.calls.find((c) => c.argv[1] === '-rlF');
+  return { tokens: JSON.parse(r.result).tokens, search, dir, w };
+};
 
 describe('the Codex command log', () => {
-  const E = String.fromCodePoint(27);
-  const [BANNER, ...RUN] = [
-    'OpenAI Codex v0.162.1',
-    `${E}[35m${E}[3mexec${E}[0m${E}[0m`,
-    `${E}[1m/bin/zsh -lc 'pnpm test'${E}[0m in /repo`,
-    `${E}[31m exited 1 in 147ms:${E}[0m`,
-    'failed to load config',
-  ];
-  const LOG = [BANNER, ...RUN].join('\n');
-  const SESSION_LOG = [BANNER, `session id: ${SESSION}`, ...RUN].join('\n');
   test('codex_log lists the commands in a Codex output file', async ($, on) => {
     fakeWorld(on, { files: { '/tmp/codex.out': LOG } });
     await ($ as any).session.start({ source: 'startup' });
@@ -374,34 +405,6 @@ describe('the Codex command log', () => {
       tokens: { sessionId: null, unavailable: 'the log names no session id' },
     });
   });
-  // A log naming SESSION, whose one child session finished with 100 + 5 tokens
-  // under <home>/sessions.
-  const tokensWith = async ($: any, on: any, env: Record<string, string>, home: string) => {
-    const dir = `${home}/sessions/${sessionDays(SESSION)[0]}`;
-    const child = `${dir}/rollout-2026-10-24T23-12-18-01a17142-6246-7073-970e-3dfdb1c5d68a.jsonl`;
-    const w = fakeWorld(on, {
-      env,
-      files: { '/tmp/codex.out': SESSION_LOG, [dir]: '' },
-      git: (a: string) => {
-        if (a.includes(`"parent_thread_id":"${SESSION}"`)) return { stdout: `${child}\n` };
-        if (a.startsWith('grep -oE') && a.endsWith(child)) {
-          return {
-            stdout: `${rolloutUsage(10, 1)}\n${rolloutUsage(100, 5)}\n"type":"task_complete"\n`,
-          };
-        }
-        return null;
-      },
-    });
-    await $.session.start({ source: 'startup' });
-    const r = (await $.tool.call({
-      tool: 'mcp__review-cycle__codex_log',
-      path: '/tmp/codex.out',
-    })) as {
-      result: string;
-    };
-    const search = w.calls.find((c) => c.argv[1] === '-rlF');
-    return { tokens: JSON.parse(r.result).tokens, search, dir, w };
-  };
   test("codex_log sums the token totals of the review's sessions under CODEX_HOME", async ($, on) => {
     const { tokens, search, dir } = await tokensWith($, on, { CODEX_HOME: '/codex' }, '/codex');
     expect(tokens).toEqual({
@@ -487,6 +490,41 @@ describe('the Codex command log', () => {
       path: 'codex.out',
     } as any)) as { result: string };
     expect(relative.result).toContain('must be an absolute path');
+  });
+});
+
+const commandFor = async ($: any, over: Record<string, unknown> = {}) =>
+  (
+    (await $.tool.call({
+      tool: 'mcp__review-cycle__codex_command',
+      tier: 'full',
+      pass: 'review',
+      brief: 'Review the parser change.',
+      checks: '',
+      ...over,
+    })) as { result: string }
+  ).result;
+
+describe('the Codex command', () => {
+  test('after a reload, it writes to the scratch directory the transcript names', async ($, on) => {
+    fakeWorld(on, { messages: [scratchAnswer('/tmp/review-cycle.old111')] });
+    reloadInto(on, keptRecord({}));
+    await ($ as any).session.start({ source: 'startup' });
+    expect(JSON.parse(await commandFor($)).command).toContain('/tmp/review-cycle.old111');
+  });
+  test('with no scratch directory anywhere, it builds none and says to make one', async ($, on) => {
+    fakeWorld(on);
+    await ($ as any).session.start({ source: 'startup' });
+    expect(await commandFor($)).toContain(
+      'review-cycle codex_command: no scratch directory. Call mcp__review-cycle__scratch first',
+    );
+  });
+  test('a tier it does not know builds none', async ($, on) => {
+    fakeWorld(on, { messages: [scratchAnswer('/tmp/review-cycle.old111')] });
+    await ($ as any).session.start({ source: 'startup' });
+    expect(await commandFor($, { tier: 'heavy' })).toBe(
+      'review-cycle codex_command: tier, pass, brief or checks is missing or invalid.',
+    );
   });
 });
 
@@ -620,6 +658,17 @@ describe('the summary tool', () => {
     await Promise.all([summarize($, FULL), summarize($, FULL)]);
     const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
     expect(status.cycles.cost.steps).toBe(1);
+  });
+  test('counts the Codex tokens codex_log read, once', async ($, on) => {
+    fakeStore(on);
+    const { tokens } = await tokensWith($, on, { CODEX_HOME: '/codex' }, '/codex');
+    expect(tokens.total).toBe(105);
+    await summarize($, FULL);
+    const first = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(first.cycles.recent.at(-1).cost).toMatchObject({ codexTokens: 105 });
+    await summarize($, FULL);
+    const second = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(second.cycles.cost.codexTokens).toBe(105);
   });
   test('keeps no block without an Iterations line, and counts a partly read one as incomplete', async ($, on) => {
     const store = fakeStore(on);
