@@ -1,13 +1,11 @@
 import type { Caught, CatchHandler, HookFor, MatchedHook, Register, Timer } from 'claude-code';
 
-import { covers, liftsHold, NAMED_ELSEWHERE, UNGRANTED, type Grant } from './consent/consent';
-import { besideOf, mandateAfter } from './consent/exact';
-import { holdAfter } from './consent/hold';
+import { covers, UNGRANTED, type Grant } from './consent/consent';
 import { stopBeforeOf, where } from './consent/ladder';
 import { countsOf } from './consent/misses';
-import { OFFER_STEPS, OPERATIONS, offerQuestion } from './consent/offers';
+import { OFFER_STEPS, OPERATIONS } from './consent/offers';
 import { OPEN_PULL_FIELDS, prUpdatesOf } from './consent/pr-updates';
-import { consentJoined, consentOf, ownWords, readMessage } from './consent/reading';
+import { onOffer, onPromptSubmit } from './consent/prompt';
 import { deny, MAX_MISSES } from './consent/refusal';
 import { marketplaceOf } from './consent/settings';
 import {
@@ -32,23 +30,15 @@ import { containmentReport, repoStateOf, UNREAD, type Capture } from './gate/con
 import {
   askThem,
   ASKED_FOR,
-  besideNote,
   judgeGh,
   notAsked,
-  parsePullRequest,
   permitted,
-  PR_FIELDS,
-  PR_JQ,
   type GhConsent,
-  type GhLookups,
   type InForce,
-  type Standing,
   type Used,
   NO_STANDING,
   RELEASE_ASK,
-  shownNamed,
   standsFor,
-  VERSION_BRANCH,
 } from './gate/gh-verdict';
 import {
   coverageOf,
@@ -70,7 +60,14 @@ import {
   type Repo,
 } from './gate/git';
 import { MCP_GITHUB, mcpAction, shownCall } from './gate/github';
-import { ladderOf, overtaken, prUpdatesInForce, SUBAGENT } from './gate/judge';
+import {
+  ghLookups,
+  ladderOf,
+  leaseIoOf,
+  overtaken,
+  prUpdatesInForce,
+  SUBAGENT,
+} from './gate/judge';
 import {
   judgePush,
   stackLayerPushed,
@@ -83,7 +80,7 @@ import { onLedger, onLedgerRecord, registerLedger } from './ledger/tools';
 import { onCodexCommand, onCodexLog, registerCodexLog } from './review/codex-io';
 import { readCycles, rollupOf } from './review/cycles';
 import { onAgentSpawn, onTurnComplete } from './review/legs';
-import { nudgeWanted, reminderFor } from './review/nudge-io';
+import { nudgeWanted } from './review/nudge-io';
 import { readRounds, recordRounds, roundsOf } from './review/rounds';
 import { onScratch, onSweep, registerScratch } from './review/scratch';
 import { onCompact, onReviewSkill, onSkill, onSubagentSkill } from './review/skills';
@@ -94,9 +91,7 @@ import { EMPTY_TREE, uncoveredOf, type Row } from './review/witness';
 import { loadShellAliases, readOwnAliases } from './shell/aliases-io';
 import { committingAlias, readCommand, shownCommand, type Classification } from './shell/command';
 import type { Finishes } from './shell/git-args';
-import { type LeaseIo, readStack, stackLease } from './shell/stack';
 import {
-  currentText,
   ensureRoot,
   ghRead,
   gitOf,
@@ -110,7 +105,7 @@ import {
   type NextOf,
   type Output,
 } from './state/engine';
-import { explain, held, HUMAN, runningLeg, state } from './state/gate-state';
+import { explain, held, runningLeg, state } from './state/gate-state';
 import { clearOffGate, keep, keepGate, keptMisses, recallOnce } from './state/keep';
 
 // The gate watches Bash with a function hook, not the classic PreToolUse
@@ -121,7 +116,6 @@ import { clearOffGate, keep, keepGate, keptMisses, recallOnce } from './state/ke
 type GithubHook = MatchedHook<'tool.call', { tool: RegExp }>;
 type StatusHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__status' }>;
 type MissesHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__misses' }>;
-type OfferHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__offer' }>;
 type ConfigHook = MatchedHook<
   'config.set',
   {
@@ -314,103 +308,6 @@ async function onSessionStart(
   return next(e);
 }
 
-function onOffer(_$: $, e: Input<OfferHook>, _next: NextOf<OfferHook>): Output<OfferHook> {
-  const offer = offerQuestion(e);
-  if ('error' in offer) return { result: `review-cycle: no question: ${offer.error}` };
-  return { result: `End your answer with this line, word for word: ${offer.question}` };
-}
-
-async function onPromptSubmit(
-  $: $,
-  e: Input<HookFor<'prompt.submit'>>,
-  next: NextOf<HookFor<'prompt.submit'>>,
-): Promise<Output<HookFor<'prompt.submit'>>> {
-  await recallOnce($);
-  if (HUMAN.has(e.origin.kind)) {
-    state.messages++;
-    const typed = ownWords(e.text);
-    const reading = readMessage(typed, state.lastAnswer);
-    state.said = { text: typed, before: state.lastAnswer, origin: e.origin.kind };
-    // What a held message asks for still runs: "push it; don't open a PR yet".
-    state.hold = holdAfter(state.hold, liftsHold(reading.grant, state.hold), reading.hold);
-    state.mandate = mandateAfter(state.mandate, typed, state.lastAnswer);
-    const ended = reading.ends ? endedNote(state.standing) : null;
-    state.standing = await standingAfter(
-      $,
-      reading.ends ? NO_STANDING : state.standing,
-      reading.grant,
-    );
-    if (ended !== null) e = { ...e, context: [...(e.context ?? []), ended] };
-    const beside = besideOf(typed, state.lastAnswer);
-    if (beside.length > 0) e = { ...e, context: [...(e.context ?? []), besideNote(beside)] };
-    // A prompt queued into a running turn neither ends a review-pr run nor
-    // replaces that turn's starting tree. Updated in place: nudgeReview tells
-    // a new message from this one by identity.
-    if (e.turnId !== undefined) {
-      Object.assign(state.message, consentJoined(state.message, reading));
-      // An owed reminder already covers this turn's changes.
-      state.message.nudged = state.owed !== null;
-    } else {
-      let tree: string | null = null;
-      try {
-        const root = await ensureRoot($);
-        if (root !== null) tree = await worktreeTree(gitOf($), root.top);
-      } catch {
-        // No starting tree means no nudge this message; the commit gate still holds.
-      }
-      // Read after the awaits, so a reminder armed meanwhile rides on this prompt.
-      const owed = state.owed;
-      const reviews = e.command?.name === 'review-cycle:review';
-      // A slash command may never reach the agent, so the reminder waits for
-      // the next message; typing the review skill is the review itself.
-      const waits = owed !== null && e.command !== undefined && !reviews;
-      state.message = { ...consentOf(reading), tree, nudged: waits || reviews, prWindow: false };
-      if (owed === null || waits) return next(e);
-      const reminder = reviews ? null : await reminderFor($, owed.since, tree);
-      const r = await next(
-        reminder === null ? e : { ...e, context: [...(e.context ?? []), reminder] },
-      );
-      // Consumed once the prompt is accepted, and only if nothing has since
-      // replaced or retired it: a refused or failed prompt leaves it owed.
-      if (!('drop' in r && r.drop !== undefined) && state.owed === owed) state.owed = null;
-      return r;
-    }
-  }
-  return next(e);
-}
-
-// The standing asks after a message: a merge once ready of the pull requests it
-// named, and of the version pull request. An unnamed one binds to what its own
-// message pointed at, so it ends with that message.
-async function standingAfter($: $, prior: Standing, grant: Grant): Promise<Standing> {
-  const named = grant.readyNamed.filter((n) => n !== NAMED_ELSEWHERE);
-  const bound = grant.readyRelease ? await releaseOf($) : null;
-  const release = bound ?? prior.release;
-  // A main condition binds to this message's own asks, not to earlier ones.
-  const releasing = grant.readyRelease && release !== null;
-  const waits = grant.readyMain ? [...named, ...(releasing ? [RELEASE_ASK] : [])] : [];
-  return {
-    ready: [...new Set([...prior.ready, ...named])],
-    release,
-    main: [...new Set([...prior.main, ...waits])],
-  };
-}
-
-// The version pull request a standing release covers: the open one, or the
-// first opened after the newest. Null when GitHub cannot say.
-async function releaseOf($: $): Promise<Standing['release']> {
-  const r = await ghLookups($).versionPulls();
-  if (r.asks !== undefined) return null;
-  const pulls = r.out
-    .trim()
-    .split(/\s+/)
-    .map((x) => /^(\d+):(\w+)$/.exec(x))
-    .filter((m) => m !== null);
-  const open = pulls.find((m) => m[2] === 'OPEN');
-  if (open?.[1] !== undefined) return { pr: open[1] };
-  return { after: Math.max(0, ...pulls.map((m) => Number(m[1]))) };
-}
-
 // What a merge that ran under a standing ask fulfils ends that ask.
 function spend(used: Used | undefined): void {
   if (used === undefined) return;
@@ -420,15 +317,6 @@ function spend(used: Used | undefined): void {
     release: used.release ? null : state.standing.release,
     main: state.standing.main.filter((n) => !done.has(n)),
   };
-}
-
-function endedNote(s: Standing): string | null {
-  if (!standsFor(s)) return null;
-  const which = [
-    ...s.ready.map((n) => shownNamed(n)),
-    ...(s.release === null ? [] : ["oakum's version pull request"]),
-  ].join(' and ');
-  return `review-cycle: this message ended the user's standing ask to merge ${which} once ready. Ask them before merging it.`;
 }
 
 function pointedNow(): readonly string[] {
@@ -768,197 +656,6 @@ function commitRefusal(command: string, ladder: InForce, finishes: Finishes | nu
       ? `To commit, ${askThem({ step: 'commit', branch: 'fix/x' }, quote(command))}`
       : `To finish the ${finishes}, which commits the resolution, ${askThem({ step: 'finish', branch: 'fix/x', operation: finishes }, quote(command))}`;
   return `${notAsked('commit', ladder, held(), state.message.unread)}${setting}, so nothing ran. ${ask}`;
-}
-
-// The gh reads GitHub judging needs, each failing into a reason to ask.
-function ghLookups($: $): GhLookups {
-  return {
-    ladder: () => ladderOf($),
-    mergeTarget: (lookup) =>
-      ghRead(
-        $,
-        [
-          'pr',
-          'view',
-          ...lookup,
-          '--json',
-          'url,state,mergeStateStatus',
-          '--jq',
-          String.raw`"\(.url) \(.state) \(.mergeStateStatus)"`,
-        ],
-        'the pull request it merges',
-        MERGE_LOOKUP_MS,
-      ),
-    repoUrl: () =>
-      ghRead(
-        $,
-        ['repo', 'view', '--json', 'url', '--jq', '.url'],
-        'the current repository',
-        MERGE_LOOKUP_MS,
-      ),
-    branch: async () => {
-      try {
-        const r = await $.process.run(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], {
-          timeoutMs: 5000,
-        });
-        if (r.exitCode === 0) return { out: r.stdout };
-        // --quiet leaves a detached HEAD exit 1 with nothing on stderr.
-        const why = r.stderr.trim().split('\n')[0] ?? '';
-        if (r.exitCode === 1 && why === '') return { out: '' };
-        return { asks: `reading the current branch printed \`${why}\` (exit ${r.exitCode})` };
-      } catch (error) {
-        return { asks: `reading the current branch failed (${messageOf(error)})` };
-      }
-    },
-    // GitHub's rollup counts check runs and commit statuses alike, unpaged.
-    mainChecks: () =>
-      ghRead(
-        $,
-        [
-          'api',
-          'graphql',
-          '-F',
-          'owner={owner}',
-          '-F',
-          'name={repo}',
-          '-f',
-          'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){defaultBranchRef{name target{... on Commit{statusCheckRollup{state}}}}}}',
-          '--jq',
-          String.raw`"\(.data.repository.defaultBranchRef.name) \(.data.repository.defaultBranchRef.target.statusCheckRollup.state // "NONE")"`,
-        ],
-        "the default branch's checks",
-        MERGE_LOOKUP_MS,
-      ),
-    versionPulls: () =>
-      ghRead(
-        $,
-        [
-          'pr',
-          'list',
-          '--head',
-          VERSION_BRANCH,
-          '--state',
-          'all',
-          '--limit',
-          '50',
-          '--json',
-          'number,state,isCrossRepository',
-          '--jq',
-          String.raw`[.[] | select(.isCrossRepository | not) | "\(.number):\(.state)"] | if length == 0 then "none" else join(" ") end`,
-        ],
-        "oakum's version pull requests",
-        MERGE_LOOKUP_MS,
-      ),
-    pullRequest: async (lookup, what) => {
-      const args = ['pr', 'view', ...lookup, '--json', PR_FIELDS, '--jq', PR_JQ];
-      const r = await ghRead($, args, what);
-      if (r.asks === undefined) return parsePullRequest(r.out, what);
-      return r.slow ? { asks: r.asks, slow: true } : { asks: r.asks };
-    },
-    defaultBranch: (repo) =>
-      ghRead(
-        $,
-        [
-          'repo',
-          'view',
-          ...(repo === null ? [] : [repo]),
-          '--json',
-          'defaultBranchRef',
-          '--jq',
-          '.defaultBranchRef.name',
-        ],
-        'the default branch',
-      ),
-    stack: (n) => readStack(n, (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS)),
-    stackLease: (step, remote) => stackLeaseOf($, step, remote),
-  };
-}
-
-// How long the remote may take to list its branches before the push asks.
-const LS_REMOTE_MS = 15_000;
-
-async function stackLeaseOf(
-  $: $,
-  step: 'push' | 'sync' | 'submit',
-  remote: string | null,
-): Promise<{ ok: true } | { asks: string }> {
-  const root = await ensureRoot($);
-  if (root === null) return { asks: 'the gate cannot find the repository' };
-  return stackLease(step, remote, leaseIoOf($, root));
-}
-
-// The clone, its remotes and GitHub as gh-stack's lease boundary reads them.
-function leaseIoOf($: $, root: Repo): LeaseIo {
-  const git = async (args: string[], timeoutMs = 10_000) => {
-    try {
-      const r = await run($, ['git', ...args], {
-        cwd: root.top,
-        env: { GIT_TERMINAL_PROMPT: '0' },
-        timeoutMs,
-      });
-      return { code: r.exitCode, out: r.stdout, why: firstLine(r.stderr) || `exit ${r.exitCode}` };
-    } catch (error) {
-      return { code: -1, out: '', why: messageOf(error) };
-    }
-  };
-  const prefix = `${root.common}\t`;
-  const pushed = new Map(
-    state.pushed
-      .filter(([k]) => k.startsWith(prefix))
-      .map(([k, id]) => [k.slice(prefix.length), id]),
-  );
-  return {
-    catalog: async () => {
-      try {
-        return await within(
-          $,
-          currentText($, `${root.common}/gh-stack`),
-          'reading the stack catalog',
-        );
-      } catch (error) {
-        return { asks: `gh-stack's catalog could not be read (${messageOf(error)})` };
-      }
-    },
-    branch: async () => {
-      const r = await git(['symbolic-ref', '--quiet', '--short', 'HEAD']);
-      return r.code === 0 ? r.out.trim() : { asks: 'HEAD is on no branch' };
-    },
-    config: async (key) => {
-      const r = await git(['config', '--get', key]);
-      // git config exits 1 for a key that is not set.
-      if (r.code === 1) return null;
-      if (r.code !== 0) return { asks: `reading ${key} failed (${r.why})` };
-      return r.out.trim() === '' ? null : r.out.trim();
-    },
-    urls: async (name) => {
-      const fetch = await git(['remote', 'get-url', '--all', name]);
-      const push = await git(['remote', 'get-url', '--push', '--all', name]);
-      if (fetch.code !== 0 || push.code !== 0) {
-        return {
-          asks: `reading ${name}'s URLs failed (${fetch.code === 0 ? push.why : fetch.why})`,
-        };
-      }
-      return { fetch: fetch.out, push: push.out };
-    },
-    remotes: async () => {
-      const r = await git(['remote']);
-      return r.code === 0
-        ? r.out.split(/\s+/).filter(Boolean)
-        : { asks: `listing remotes failed (${r.why})` };
-    },
-    heads: async (name) => {
-      const r = await git(['ls-remote', '--heads', name], LS_REMOTE_MS);
-      return r.code === 0 ? r.out : { asks: `listing ${name}'s branches failed (${r.why})` };
-    },
-    defaultBranch: () =>
-      ghRead(
-        $,
-        ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
-        'the default branch',
-      ),
-    ghApi: (args, what) => ghRead($, ['api', ...args], what, MERGE_LOOKUP_MS),
-    pushed,
-  };
 }
 
 // `finishes`: a `--continue` of that history command.

@@ -27,7 +27,7 @@ type StackLookup = (n: number) => StackRead | { asks: string; slow?: true };
 const VERSION_PR = 'false https://github.com/o/r/pull/62 oakum/version-packages';
 
 // GitHub as the lookups see it, recording each lookup made. The pull request
-// lookup answers what gh prints, read as register.ts reads it.
+// lookup answers what gh prints, read as judge.ts reads it.
 function world(
   stopBefore: StopBefore,
   answers: Partial<

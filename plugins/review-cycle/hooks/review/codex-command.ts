@@ -1,6 +1,6 @@
 // The command a review cycle's Codex leg runs: its scope, its reasoning
 // effort, the read-only permission profile, and the brief as one config
-// override. Pure: register.ts reads the config file and the scratch path.
+// override. Pure: codex-io.ts reads the config file and the scratch path.
 
 // Ascending. The API rejects any other value, and Codex does not check a `-c`
 // value before the call.

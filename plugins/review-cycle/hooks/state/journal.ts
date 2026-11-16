@@ -1,6 +1,6 @@
 // A bounded log in the plugin's store: each entry under its own key, ordered by
 // when it was recorded, so no write reads and rewrites another's and one that
-// stalls or lands late loses nothing. Pure; register.ts binds the store.
+// stalls or lands late loses nothing. Pure; `storeOf` in state/engine.ts binds the store.
 
 import type { Store } from '../ledger/ledger-store';
 

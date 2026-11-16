@@ -1,6 +1,6 @@
 // How many review rounds each commit took, kept per repository so a change to
-// the review loop can be measured by rounds to converge. Pure; register.ts
-// binds the store.
+// the review loop can be measured by rounds to converge. Pure; `storeOf`
+// in state/engine.ts binds the store.
 
 import { hashOf } from '../ledger/ledger';
 import type { Store } from '../ledger/ledger-store';

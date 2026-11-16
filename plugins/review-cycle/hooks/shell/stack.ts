@@ -1,5 +1,5 @@
 // github/gh-stack: what `gh stack merge <n>` merges, and when its own leased
-// pushes may run. register.ts passes in the reads.
+// pushes may run. gate/judge.ts passes in the reads.
 
 import type { Lookup } from '../gate/gh-verdict';
 
