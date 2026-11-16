@@ -76,11 +76,8 @@ import {
   noticeOf,
   WAKE_RULES,
   heldWith,
-  clearedConflicts,
+  heldNewsOf,
   isAskable,
-  isBehindCleared,
-  isBehindLine,
-  isConflictsLine,
   isToldReady,
   savedOf,
   entryOf,
@@ -403,12 +400,9 @@ async function releaseOne($: $, id: string): Promise<void> {
   });
   if (!h) return;
   const all = await read($, watches);
-  const w = all.find((x) => idOf(x) === id);
-  const cleared = w ? clearedConflicts(w) : null;
-  const behindGone = !w || isBehindCleared(w);
-  const news = h.news.filter(
-    (line) =>
-      !(behindGone && isBehindLine(line)) && (w ? line !== cleared : !isConflictsLine(line)),
+  const news = heldNewsOf(
+    h,
+    all.find((x) => idOf(x) === id),
   );
   await deliver($, { ...h, news, ready: isStale ? null : h.ready });
 }
@@ -702,7 +696,7 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         if (kept && news) kept.news = news;
         else if (news) wake($, news, labelOf(next));
       } else {
-        const { news: lines, passed, clean } = woke;
+        const { news: lines, kinds, passed, clean } = woke;
         const isRelease = next.pull !== undefined && isReleasePull(next.pull);
         const at = { id: idOf(next), label: labelOf(next), url: next.url, isRelease };
         // Claude asks about a merge it would need asking for, of a pull request
@@ -712,9 +706,9 @@ async function refresh($: $, target: Watch, now: number, kept?: Kept): Promise<v
         const isAsk = own.includes(at.id) && !judged?.isWakeAsked && !(await isMergeUnasked($));
         const h = isAsk ? { ...at, isAsk } : at;
         const ready = isAsk ? ask : woke.ready;
-        if (judged?.isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], ready });
+        if (judged?.isWakeAsked) await tell($, { ...h, news: [...lines, ...passed], kinds, ready });
         else {
-          await tell($, { ...h, news: lines, ready });
+          await tell($, { ...h, news: lines, kinds, ready });
           await keep($, { ...at, news: passed, ready: null });
         }
         // Told once whatever comes of it, so one that cannot be kept wakes Claude.

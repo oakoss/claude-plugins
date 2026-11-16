@@ -1,5 +1,16 @@
 // What the band says about a pull request, and when to look again. Pure.
-import type { Activity, Commit, Held, Job, Pull, Runs, Stack, Watch, Workflow } from '../types';
+import type {
+  Activity,
+  Commit,
+  Held,
+  Job,
+  NewsKind,
+  Pull,
+  Runs,
+  Stack,
+  Watch,
+  Workflow,
+} from '../types';
 import { failed, PASSED, type Quota } from './github';
 
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?';
@@ -838,7 +849,14 @@ export function toastOf(
 
 // Something Claude is told of once, for as long as it lasts. A passed or clean
 // one is news Claude cannot act on, so it never wakes Claude.
-type Condition = { key: string; text: string; isPassed?: true; isClean?: true; isAsk?: true };
+type Condition = {
+  key: string;
+  text: string;
+  isPassed?: true;
+  isClean?: true;
+  isAsk?: true;
+  kind?: NewsKind;
+};
 
 type Who = Pick<Watch, 'repo' | 'number' | 'push'>;
 
@@ -876,10 +894,7 @@ const draftKey = (watch: Who, pull: Pull) => keyOf(watch, 'draft passed', pull.h
 // per head commit.
 const askKey = (watch: Who, pull: Pull) => keyOf(watch, 'ask', pull.headOid);
 
-const CONFLICTS = ' has merge conflicts with ';
-const conflictsOf = (name: string, base: string) => `${name}${CONFLICTS}${base}.`;
-// For a held line whose watch is gone, merged or closed: no base is left to rebuild it from.
-export const isConflictsLine = (line: string) => line.includes(CONFLICTS);
+const conflictsOf = (name: string, base: string) => `${name} has merge conflicts with ${base}.`;
 
 // The conflicts line a turn may hold for a pull request whose conflicts have
 // cleared. Judged by the told key, as a held ready line is, so that GitHub
@@ -896,12 +911,23 @@ const BEHIND = ', so it is not ready to merge until it is brought up to date';
 const LAYER_NEWS = 'it is a stack layer';
 const behindOf = (name: string, pull: Pick<Pull, 'base' | 'stack'>) =>
   `${name} is behind ${pull.base}${BEHIND}${pull.stack ? `; ${LAYER_NEWS}` : ''}.`;
-export const isBehindLine = (line: string) => line.includes(BEHIND);
 
 // Judged by kind, not by text: a turn holds one watch's news, and its layer
 // wording can change while held.
-export const isBehindCleared = (w: Watch) =>
+const isBehindCleared = (w: Watch) =>
   !!w.pull && !w.push && !(w.told ?? []).includes(keyOf(w, 'behind'));
+
+// A conflicts line goes only when the current base rebuilds it, so a held line
+// naming an old base is still told.
+export function heldNewsOf(h: Pick<Held, 'news' | 'kinds'>, w?: Watch): string[] {
+  const cleared = w ? clearedConflicts(w) : null;
+  return h.news.filter((line) => {
+    const kind = h.kinds?.[line];
+    if (kind === 'behind') return w !== undefined && !isBehindCleared(w);
+    if (kind === 'conflicts') return w !== undefined && line !== cleared;
+    return true;
+  });
+}
 
 // GitHub calls a pull request ready with a check it does not require failed.
 const isSound = (pull: Pull) =>
@@ -1055,12 +1081,13 @@ function conditionsOf(
   // A release tool rebuilds its pull request on the next push to the base
   // branch, so its conflicts leave Claude nothing to do.
   if (pull.state === 'OPEN' && pull.merge === 'DIRTY' && !isReleasePull(pull)) {
-    found.push({ key: keyOf(watch, 'conflicts'), text: conflictsOf(name, pull.base) });
+    const text = conflictsOf(name, pull.base);
+    found.push({ key: keyOf(watch, 'conflicts'), text, kind: 'conflicts' });
   }
   // Where the base requires branches to be up to date, a pull request behind
   // it never turns ready, so nothing else would tell Claude.
   if (pull.state === 'OPEN' && pull.merge === 'BEHIND' && !isReleasePull(pull)) {
-    found.push({ key: keyOf(watch, 'behind'), text: behindOf(name, pull) });
+    found.push({ key: keyOf(watch, 'behind'), text: behindOf(name, pull), kind: 'behind' });
   }
   if (pull.state === 'OPEN' && pull.review === 'CHANGES_REQUESTED') {
     const text = `A reviewer requested changes on ${name}.`;
@@ -1117,6 +1144,7 @@ export type Memory = Pick<Watch, 'told' | 'heard'>;
 export type Wake = {
   text: string | null;
   news: string[];
+  kinds: Record<string, NewsKind>;
   ready: string | null;
   ask: string | null;
   passed: string[];
@@ -1127,6 +1155,7 @@ export type Wake = {
 
 export function heldWith(was: Held, next: Held): Held {
   const news = [...new Set([...was.news, ...next.news])];
+  const kinds = { ...was.kinds, ...next.kinds };
   const clean = [...new Set([...(was.clean ?? []), ...(next.clean ?? [])])];
   const isRelease = next.isRelease === true || was.isRelease === true;
   const { isAsk: _, ...rest } = next;
@@ -1135,6 +1164,7 @@ export function heldWith(was: Held, next: Held): Held {
     ...rest,
     news,
     ready: next.ready ?? was.ready,
+    ...(Object.keys(kinds).length > 0 && { kinds }),
     ...(isAsk && { isAsk }),
     ...(clean.length > 0 && { clean }),
     ...(isRelease && { isRelease }),
@@ -1253,6 +1283,7 @@ export function wakeOf(
     : `${watch.repo}#${watch.number}`;
   const told = last.told ?? [];
   const news: string[] = [];
+  const kinds: Record<string, NewsKind> = {};
   const passed: string[] = [];
   const clean: string[] = [];
   const kept: string[] = [];
@@ -1265,7 +1296,10 @@ export function wakeOf(
     else if (isNew && c.isAsk) ask = c.text;
     else if (isNew && c.isPassed) passed.push(c.text);
     else if (isNew && c.isClean) clean.push(c.text);
-    else if (isNew) news.push(c.text);
+    else if (isNew) {
+      news.push(c.text);
+      if (c.kind) kinds[c.text] = c.kind;
+    }
     kept.push(c.key);
   }
   // GitHub reports UNKNOWN while it recomputes the merge state, so told conflicts
@@ -1305,7 +1339,7 @@ export function wakeOf(
   const heard = next && { since: next.since, keys: next.keys, ...(streak > 0 && { streak }) };
   const all = [...news, ...passed, ...clean];
   const text = all.length === 0 && ready === null ? null : noticeOf(all, ready);
-  return { text, news, ready, ask, passed, clean, told: kept, heard };
+  return { text, news, kinds, ready, ask, passed, clean, told: kept, heard };
 }
 
 // What the person's next prompt carries of the news held back from waking
