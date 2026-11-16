@@ -2911,6 +2911,12 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'gh stack merge 3 --yes'))).toBe(true);
     await say($, 'merge up to #2');
     expect(denied(await bash($, 'gh stack merge 3 --yes'), 'merges #2, #3 together')).toBe(true);
+    await endTurn($, 'answer', 'Both layers are green.\n\nMerge up to #3?');
+    await say($, 'Ok, lets merge them');
+    expect(ran(await bash($, 'gh stack merge 3 --yes'))).toBe(true);
+    await endTurn($, 'answer', 'Merge up to #3?\n\nOr hold off.');
+    await say($, 'merge it');
+    expect(denied(await bash($, 'gh stack merge 3 --yes'), 'merges #2, #3 together')).toBe(true);
   });
   test('a merge asked for covers the version pull request, looked up or not', async ($, on) => {
     const w = fakeWorld(on, {

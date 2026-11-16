@@ -183,6 +183,18 @@ describe('the pull request a merge names', () => {
     expect(grantOf('merge them', 'Merge #41, #42 and #43?').mergeNamed).toEqual(['41', '42', '43']);
     expect(grantOf('merge them', '#41 is green.')).toEqual(NO_GRANT);
   });
+  test('"merge them" or "merge it" answering a stack question merges that stack', () => {
+    const upTo = 'Both layers are green.\n\nMerge up to oakoss/oakum#402?';
+    expect(grantOf('Ok, lets merge them', upTo).mergeStack).toEqual(['upto:oakoss/oakum#402']);
+    expect(grantOf('merge it', upTo).mergeStack).toEqual(['upto:oakoss/oakum#402']);
+    expect(grantOf('merge all of them', 'Merge up to #42?').mergeStack).toEqual(['upto:42']);
+    expect(grantOf('merge them', 'Merge the stack?').mergeStack).toEqual(['stack']);
+    expect(grantOf('merge both', 'Merge up to #42?')).toEqual(NO_GRANT);
+    expect(grantOf('merge them', 'The stack is green.\nMerge up to #42? Or wait?')).toEqual(
+      NO_GRANT,
+    );
+    expect(grantOf('merge it', 'Merge up to #42?\n\nOr hold off.').mergeStack).toEqual([]);
+  });
 });
 
 const SAMPLES: Record<OfferStep, readonly [object, Partial<Grant>][]> = {

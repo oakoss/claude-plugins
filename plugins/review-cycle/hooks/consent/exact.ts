@@ -98,6 +98,13 @@ function offeredPull(before: string): readonly string[] {
   return named.length > 1 ? [NAMED_ELSEWHERE] : named;
 }
 
+// A stack question's merge, which "merge it" and "merge them" answer as a yes
+// does. "Merge both" is left out: the question does not say how many layers.
+function offeredStack(before: string): Part | null {
+  const stack = offered(before)?.mergeStack ?? [];
+  return stack.length > 0 ? { mergeStack: [...stack] } : null;
+}
+
 const SHIP: Part = { commit: true, push: 'push', pr: true };
 
 const TICKED = '`[^`\\s]+`';
@@ -143,7 +150,10 @@ const CLAUSES = whole([
   [String.raw`push${IT}(?: to origin)?`, () => ({ push: 'push' })],
   [String.raw`ship${IT}`, () => SHIP],
   [String.raw`(?:open|create|make) (?:a|the) (?:pr|pull request)`, () => ({ pr: true })],
-  [String.raw`merge${IT}`, (_, before) => ({ merge: true, mergeNamed: offeredPull(before) })],
+  [
+    String.raw`merge${IT}`,
+    (_, before) => offeredStack(before) ?? { merge: true, mergeNamed: offeredPull(before) },
+  ],
   [
     String.raw`merge (${REFS})`,
     (m, before) => ({ merge: true, mergeNamed: refsOf(m[1] ?? '', before) }),
@@ -196,6 +206,8 @@ const CLAUSES = whole([
   [
     String.raw`merge (?:them|both|all of them)`,
     (m, before) => {
+      const stack = /both$/i.test(m[0]) ? null : offeredStack(before);
+      if (stack !== null) return stack;
       const picked = offeredPulls(before);
       const enough = /both$/i.test(m[0]) ? picked.length === 2 : picked.length > 1;
       return enough ? { merge: true, mergeNamed: picked } : null;
