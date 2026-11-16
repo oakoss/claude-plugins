@@ -1,6 +1,6 @@
 // A change to the kept record's types needs a new shape tag, or a reload into
 // the new code takes back a record the old code wrote. On a failure here, bump
-// the tag in register.ts and pin both new values.
+// the tag in hooks/state/keep.ts and pin both new values.
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ test('the kept record changes its shape tag whenever its types change', () => {
     .join('\n')
     .replaceAll(/\s+/g, ' ')
     .trim();
-  const shape = /shape: '(gate-\d+)'/.exec(read('hooks/register.ts'))?.[1];
+  const shape = /shape: '(gate-\d+)'/.exec(read('hooks/state/keep.ts'))?.[1];
   expect({
     shape,
     contract: createHash('sha256').update(contract).digest('hex').slice(0, 16),

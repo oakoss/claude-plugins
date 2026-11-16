@@ -1,14 +1,11 @@
-import {
-  atom,
-  read,
-  update,
-  type Caught,
-  type CatchHandler,
-  type HookFor,
-  type MatchedHook,
-  type Register,
-  type Timer,
-  type ToolCallResult,
+import type {
+  Caught,
+  CatchHandler,
+  HookFor,
+  MatchedHook,
+  Register,
+  Timer,
+  ToolCallResult,
 } from 'claude-code';
 
 import { covers, liftsHold, NAMED_ELSEWHERE, UNGRANTED, type Grant } from './consent/consent';
@@ -23,7 +20,7 @@ import {
   withMandate,
   type StopBefore,
 } from './consent/ladder';
-import { countsOf, pruneMisses, readMisses, type RecordedMiss, saveMiss } from './consent/misses';
+import { countsOf } from './consent/misses';
 import { OFFER_STEPS, OPERATIONS, offerQuestion } from './consent/offers';
 import {
   configuredPrUpdates,
@@ -35,7 +32,7 @@ import {
   type PrUpdatesInForce,
 } from './consent/pr-updates';
 import { consentJoined, consentOf, ownWords, readMessage } from './consent/reading';
-import { deny, MAX_MISSES, sameMiss } from './consent/refusal';
+import { deny, MAX_MISSES } from './consent/refusal';
 import { applyEdit, isJsonPath, marketplaceOf, namesSwitch, touchesGate } from './consent/settings';
 import { editsSkipped, mayWrite, measureEdits } from './edits/edits';
 import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './edits/slop';
@@ -108,28 +105,20 @@ import {
   threadFactsOf,
   type ReplyItem,
 } from './gate/threads';
-import {
-  KINDS,
-  MAX_LEDGER_BYTES,
-  MAX_READ,
-  MAX_REPOS,
-  MAX_TEXT,
-  parseRecord,
-  type Recording,
-} from './ledger/ledger';
-import { blobsAt, readLedger, recordInto } from './ledger/ledger-store';
+import { onLedger, onLedgerRecord, registerLedger } from './ledger/tools';
 import { codexCommand, configuredEffort, EFFORTS, isEffort } from './review/codex-command';
 import { type CodexTokens, codexTokens, readCodexLog } from './review/codex-log';
 import { cycleOf, isSummary, measuredOf, readCycles, recordCycle, rollupOf } from './review/cycles';
+import { overBudget } from './review/legs';
 import { asksUser, nudgeOf, nudgeOn } from './review/nudge';
 import { readRounds, recordRounds, roundsOf } from './review/rounds';
 import { isSpend, NO_SPEND, spentWith } from './review/spend';
 import { SUMMARY_TOOL, summaryHeader, summaryText } from './review/summary';
 import { madeByAnother, ownerOf, scratchNamed, sweep } from './review/sweep';
 import { EMPTY_TREE, hasReceipt, isReviewerType, uncoveredOf, type Row } from './review/witness';
+import { loadShellAliases, readOwnAliases } from './shell/aliases-io';
 import { committingAlias, readCommand, shownCommand, type Classification } from './shell/command';
 import type { Finishes } from './shell/git-args';
-import { aliasScript, aliasShell, parseShellAliases, readAliases } from './shell/shell';
 import { type LeaseIo, readStack, stackLease } from './shell/stack';
 import {
   currentText,
@@ -143,6 +132,9 @@ import {
   TIMED_OUT,
   within,
   type $,
+  type Input,
+  type NextOf,
+  type Output,
 } from './state/engine';
 import {
   drop,
@@ -152,11 +144,9 @@ import {
   LEG_BUDGET_MS,
   runningLeg,
   state,
-  type GateState,
   type Leg,
 } from './state/gate-state';
-import { entryName } from './state/journal';
-import { isKept, keptOf, offKept, restoredOf, type Restored } from './state/kept';
+import { clearOffGate, keep, keepGate, keptMisses, recallOnce } from './state/keep';
 import { isReviewSkill, resumed } from './state/resume';
 
 // The gate watches Bash with a function hook, not the classic PreToolUse
@@ -168,8 +158,6 @@ type BashHook = MatchedHook<'tool.call', { tool: 'Bash' }>;
 type GithubHook = MatchedHook<'tool.call', { tool: RegExp }>;
 type SkillHook = MatchedHook<'tool.call', { tool: 'Skill' }>;
 type StatusHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__status' }>;
-type LedgerHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger' }>;
-type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_record' }>;
 type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch' }>;
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type CodexLogHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__codex_log' }>;
@@ -193,70 +181,8 @@ type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
 type WriteHook = MatchedHook<'tool.call', { tool: 'Write' }>;
 type NotebookHook = MatchedHook<'tool.call', { tool: 'NotebookEdit' }>;
 type MonitorHook = MatchedHook<'tool.call', { tool: 'Monitor' }>;
-type Input<H> = H extends ($: never, e: infer E, next: never) => unknown ? E : never;
-type NextOf<H> = H extends ($: never, e: never, next: infer N) => unknown ? N : never;
-type Output<H> = H extends (...args: never[]) => infer R ? Awaited<R> : never;
 
-// The gate's memory as the host keeps it: module variables start over when the
-// module reloads (a saved hooks file, a /config change), so what the gate
-// remembers is copied here after each change and read back at the start, the
-// latest message's grant included, so a reload mid-step does not ask twice.
-// Bump the shape whenever Kept changes, so a reload into new code starts fresh.
-const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, { shape: 'gate-11' });
-let keptText = '';
-let isKeepFailing = false;
-// Nothing is kept until what a reload left has been taken back, so an early
-// save cannot overwrite it.
-let isRecalled = false;
-// Once per load, at the session start or the first message, whichever comes
-// first: a message read before the take-back would be overwritten by it.
-let recalling: Promise<void> | null = null;
-const recallOnce = ($: $): Promise<void> =>
-  (recalling ??= recallOrSay($).then(() => {
-    isRecalled = true;
-  }));
-let saving: Promise<void> = Promise.resolve();
-let saves = 0;
 let ticker: Timer | undefined;
-
-// One write at a time, each taking what the gate holds as it runs, so an older
-// copy never lands after a newer one. Never throws: the gate's decisions do not
-// wait on it.
-function keep($: $): Promise<void> {
-  void flushMisses($);
-  return keepGate($);
-}
-
-function keepGate($: $): Promise<void> {
-  saving = saving.then(() => write($));
-  return saving;
-}
-
-async function write($: $): Promise<void> {
-  if (!isRecalled) return;
-  try {
-    const kept = keptOf(state);
-    const text = JSON.stringify(kept);
-    if (text === keptText) return;
-    // A save that timed out is not cancelled, and `update` retries it; once a
-    // newer save has started, it writes back what is stored rather than its own.
-    const save = ++saves;
-    await within(
-      $,
-      update($, gate, (stored) => (save === saves ? kept : stored)),
-      'saving the gate',
-    );
-    keptText = text;
-    isKeepFailing = false;
-  } catch (error) {
-    if (!isKeepFailing) {
-      $.ui.toast(
-        `review-cycle could not keep its record for a reload, so one would forget its reviews or bring back an earlier message's grant: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    isKeepFailing = true;
-  }
-}
 
 // The hooks that change what the gate remembers keep it once they have answered.
 type Args<F extends (...args: never[]) => unknown> = Parameters<F>;
@@ -341,124 +267,6 @@ async function keptGithubTool(
   }
 }
 
-// After a reload, the gate takes back what it remembered, and each leg still
-// running gets the rest of its budget. A record it cannot read is set aside
-// whole: nothing is taken back from it, so no part of an old record mixes with
-// a fresh start.
-async function recall($: $): Promise<void> {
-  const kept = await within($, read($, gate), 'reading the gate');
-  if (kept !== null) {
-    if (!isKept(kept)) {
-      $.ui.toast(
-        'review-cycle could not read the reviews it kept, so it starts this load with none',
-      );
-    } else {
-      const now = await $.clock.now();
-      const restored: Pick<GateState, keyof Restored> = restoredOf(kept);
-      Object.assign(state, restored);
-      for (const [id, leg] of state.legs) {
-        if (leg.done || leg.capped) continue;
-        const left = Math.max(0, LEG_BUDGET_MS - (now - leg.spawnedAt));
-        leg.timer = $.clock.after(left, () => overBudget($, id, leg));
-      }
-      keptText = JSON.stringify(kept);
-    }
-  }
-}
-
-// A take-back that fails is not tried again: by then the session may have moved
-// on, and an older record taken back late would undo it. It starts fresh.
-async function recallOrSay($: $): Promise<void> {
-  try {
-    await recall($);
-  } catch (error) {
-    $.ui.toast(
-      `review-cycle could not take back its reviews after a reload, so it starts this load with none: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
-// Claude Code writes its shell snapshot only once the session's first Bash
-// command runs, after this hook, so the gate reads the aliases itself, the
-// way the snapshot does, when the session starts. Once per module load: an rc
-// file that hangs costs the timeout once, then the snapshot is read instead.
-async function readOwnAliases($: $): Promise<string | null> {
-  try {
-    const tag = Math.random().toString(36).slice(2);
-    const home = await $.env.get('HOME');
-    if (!home) return 'HOME is not set';
-    const shell = aliasShell(await $.env.get('CLAUDE_CODE_SHELL'), await $.env.get('SHELL'));
-    const rc = `${home}/${shell.rc}`;
-    const script = aliasScript((await $.fs.exists(rc)) ? rc : null, tag);
-    // The environment and time limit Claude Code gives its own snapshot: an rc
-    // file can branch on them.
-    const env = { CLAUDECODE: '1', SHELL: shell.path, GIT_EDITOR: 'true' };
-    const argv = [shell.path, '-c', '-l', script];
-    const r = await $.process.run(argv, { stdin: '', timeoutMs: 10_000, env });
-    if (r.exitCode !== 0) {
-      return `the shell exited ${r.exitCode}: ${firstLine(r.stderr) || 'no output'}`;
-    }
-    const aliases = readAliases(r.stdout, tag);
-    if (aliases === null) return 'the shell stopped before printing its aliases';
-    state.shellAliases = aliases;
-    state.aliasesLoaded = true;
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-}
-
-// Failing both reads leaves the aliases unknown, not empty: the snapshot is
-// retried on the next Bash call, and the first unchecked command says so.
-async function loadShellAliases($: $): Promise<void> {
-  if (state.aliasesLoaded) return;
-  state.ownRead ??= readOwnAliases($);
-  const own = await state.ownRead;
-  if (state.aliasesLoaded) return;
-  try {
-    const home = await $.env.get('HOME');
-    const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? (home ? `${home}/.claude` : null);
-    if (!config) throw new Error('neither CLAUDE_CONFIG_DIR nor HOME is set');
-    const shell = basenameOf((await $.env.get('SHELL')) ?? '');
-    const dir = `${config}/shell-snapshots`;
-    const newest = newestSnapshot(await $.fs.list(dir), shell);
-    if (newest === null) throw new Error(`no shell snapshot in ${dir} yet`);
-    state.shellAliases = parseShellAliases(await $.fs.read(`${dir}/${newest}`), true);
-    state.aliasError = null;
-    state.aliasesLoaded = true;
-  } catch (error) {
-    // Another Bash call's read may have succeeded while this one waited.
-    if (state.aliasesLoaded) return;
-    const snapshot = error instanceof Error ? error.message : String(error);
-    state.aliasError = `reading them from the shell failed (${own}); ${snapshot}`;
-  }
-}
-
-function basenameOf(p: string): string {
-  return p.slice(p.lastIndexOf('/') + 1);
-}
-
-// Snapshot files are named snapshot-<shell>-<milliseconds>-<id>.sh.
-function newestSnapshot(
-  entries: readonly { name: string; kind: string }[],
-  shell: string,
-): string | null {
-  let best: { name: string; at: number; same: boolean } | null = null;
-  for (const e of entries) {
-    const m = /^snapshot-([\w-]+?)-(\d+)-[\w-]+\.sh$/.exec(e.name);
-    if (e.kind !== 'file' || !m) continue;
-    const candidate = { name: e.name, at: Number(m[2]), same: m[1] === shell };
-    if (
-      best === null ||
-      (candidate.same && !best.same) ||
-      (candidate.same === best.same && candidate.at > best.at)
-    ) {
-      best = candidate;
-    }
-  }
-  return best?.name ?? null;
-}
-
 async function onSessionStart(
   $: $,
   e: Input<HookFor<'session.start'>>,
@@ -471,20 +279,7 @@ async function onSessionStart(
   // A new session owes no reminder for an old one's turns.
   state.owed = null;
   if (!state.gateOn) {
-    // Switched off, the gate watches nothing, so what only watching kept true
-    // goes; a completed review stays true of the tree it saw.
-    try {
-      const kept = await within($, read($, gate), 'reading the gate');
-      await within(
-        $,
-        update($, gate, () => (isKept(kept) ? offKept(kept) : null)),
-        'clearing the gate',
-      );
-    } catch (error) {
-      $.ui.toast(
-        `review-cycle could not clear what it was watching, so switching it back on may bring back a stale question or hold: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await clearOffGate($);
     return next(e);
   }
   await recallOnce($);
@@ -1157,32 +952,6 @@ async function onAgentSpawn(
   return r;
 }
 
-// The orchestrator waits on notifications, and a leg that keeps working sends
-// none, so the gate keeps the clock and asks the session to stop the leg.
-function overBudget($: $, agentId: string, leg: Leg): void {
-  if (leg.done || leg.capped) return;
-  leg.capped = true;
-  const minutes = LEG_BUDGET_MS / 60_000;
-  state.capped.push(`${leg.type} (agent ${agentId}): still running after ${minutes} minutes`);
-  // The user sees the prompt whole; what to do with it is in both review skills.
-  const text = `review-cycle: reviewer leg ${leg.type} (agent ${agentId}) has run past its ${minutes}-minute budget.`;
-  Promise.resolve()
-    .then(() => $.prompt.submit({ text }))
-    .then(
-      (r) => {
-        if (r.drop !== undefined)
-          state.capped.push(
-            `${leg.type} (agent ${agentId}): the request to stop it was refused (${r.drop})`,
-          );
-      },
-      (error: unknown) => {
-        state.capped.push(
-          `${leg.type} (agent ${agentId}): the request to stop it failed (${error instanceof Error ? error.message : String(error)})`,
-        );
-      },
-    );
-}
-
 // A leg's completion is the review event: the tree it saw is the working tree
 // now. Nothing edited after this moment is reviewed until a leg sees it.
 async function onTurnComplete(
@@ -1624,62 +1393,6 @@ async function onBashEdits(
     () => next(e),
   );
   return note === null ? result : withNote(result, note);
-}
-
-let missesAt = 0;
-// The last write the store refused, while a miss it was for is still unsaved.
-let missesError: string | null = null;
-let missesSaving: Promise<void> = Promise.resolve();
-
-function flushMisses($: $): Promise<void> {
-  missesSaving = missesSaving.then(() => saveMisses($));
-  return missesSaving;
-}
-
-// Never throws: a miss the store does not take stays unsaved for the next
-// flush, and a reload keeps it with the gate. It is written only once the gate
-// has kept its key, so a late or repeated write, or one a reload repeats,
-// replaces the entry rather than adding one.
-async function saveMisses($: $): Promise<void> {
-  let wrote = false;
-  for (const miss of state.misses.filter((m) => !m.saved)) {
-    try {
-      const now = await $.clock.now();
-      let { key } = miss;
-      if (key === null) {
-        missesAt = Math.max(now, missesAt + 1);
-        const named = entryName(missesAt, STORE_TAG);
-        key = named;
-        state.misses = state.misses.map((m) => (sameMiss(m, miss) ? { ...m, key: named } : m));
-      }
-      if (!keptText.includes(JSON.stringify(key))) {
-        await within($, keepGate($), 'saving the gate');
-        if (!keptText.includes(JSON.stringify(key))) {
-          throw new Error('the gate could not keep its record, so the miss waits to be written');
-        }
-      }
-      const recorded: RecordedMiss = {
-        message: miss.message,
-        offer: miss.offer,
-        steps: miss.steps,
-        refusal: miss.refusal,
-        kind: miss.kind,
-        date: new Date(now).toISOString().slice(0, 10),
-        repo: state.root?.top ?? null,
-      };
-      await within($, saveMiss(storeOf($), key, recorded), 'recording a consent miss');
-      state.misses = state.misses.map((m) => (sameMiss(m, miss) ? { ...m, saved: true } : m));
-      wrote = true;
-    } catch (error) {
-      missesError = messageOf(error);
-    }
-  }
-  if (!state.misses.some((m) => !m.saved)) missesError = null;
-  if (wrote) {
-    void keep($);
-    // Untimed and apart from the writes: a prune that fails or stalls loses no miss.
-    pruneMisses(storeOf($)).catch(() => null);
-  }
 }
 
 // The consent a GitHub call is judged against.
@@ -2884,33 +2597,6 @@ async function onMisses(
   };
 }
 
-// What the store holds once this session's unsaved misses are tried, waiting
-// at most one STATE_WAIT_MS on them; `unsaved` counts those it still lacks.
-async function keptMisses($: $): Promise<{
-  recorded: RecordedMiss[] | null;
-  unsaved: number;
-  error: string | null;
-}> {
-  let flushError: string | null = null;
-  try {
-    await within(
-      $,
-      flushMisses($),
-      "saving consent misses (the gate's save comes first, then the store's)",
-    );
-  } catch (error) {
-    flushError = messageOf(error);
-  }
-  const unsaved = state.misses.filter((m) => !m.saved).length;
-  const error = unsaved > 0 ? (missesError ?? flushError) : null;
-  try {
-    const recorded = await within($, readMisses(storeOf($)), 'reading consent misses');
-    return { recorded, unsaved, error };
-  } catch (readError) {
-    return { recorded: null, unsaved, error: messageOf(readError) };
-  }
-}
-
 async function onCodexLog(
   $: $,
   e: Input<CodexLogHook>,
@@ -2952,169 +2638,6 @@ async function onCodexLog(
     return { result: JSON.stringify({ commands, tokens }, null, 2) };
   } catch (error) {
     return { result: `review-cycle codex_log: could not read ${path}: ${messageOf(error)}` };
-  }
-}
-
-// The ledger gates nothing, so its tools are served whether or not the gate is on.
-async function registerLedger($: $): Promise<void> {
-  try {
-    await $.tool.register({
-      name: 'ledger',
-      description: `Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, \`date\` (when a cycle last settled it), \`changed\` (whether its file differs from what the last cycle to carry it reviewed; null when the working tree could not be read), and \`stale\` (settled more than 90 days ago); unless \`changed\` is false it also has \`blob\` and \`current\`, short ids for \`git diff <blob> <current>\`. Entries come ranked, in an answer of at most ${MAX_READ} characters unless its first entry and the answer's header together are longer: first every stale entry, query or not, since it is open again, then those holding the most \`query\` words, then the newest. \`reopened\` counts the stale entries, \`matched\` the rest, and \`next\`, when present, is the \`offset\` that reads on. \`unreadable\` counts stored entries this version cannot read; the next record drops them. Read-only.`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          paths: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Only the entries for these repository-relative paths.',
-          },
-          query: {
-            type: 'string',
-            description:
-              'Only the entries whose finding or reason holds any of these words (three characters or more), plus every stale one, ranked first.',
-          },
-          offset: { type: 'integer', minimum: 0, description: 'Where to start: a `next` value.' },
-        },
-      },
-    });
-    await $.tool.register({
-      name: 'ledger_record',
-      description: `Records what a review cycle settled without fixing into this repository's findings ledger. \`entries\` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at ${MAX_TEXT} characters, and the same finding at the same path replaces its entry. \`keep\` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. \`move\` does the same for an entry whose code moved to another file, giving it that path and a new id; it needs no \`keep\`. \`resolve\` removes entries by id. The ledger keeps the newest entries that fit in ${MAX_LEDGER_BYTES / 1024} KiB per repository, and ledgers for the ${MAX_REPOS} most recently recorded repositories.`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          entries: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                path: { type: 'string', description: 'Repository-relative path.' },
-                line: { type: ['integer', 'null'], minimum: 1 },
-                kind: { type: 'string', enum: [...KINDS] },
-                finding: { type: 'string' },
-                reason: {
-                  type: 'string',
-                  description:
-                    'Why it was not fixed: the deferral criterion, the measurement or documentation that rebutted it, or why it was left alone.',
-                },
-                source: { type: 'string', description: 'The reviewer that raised it.' },
-              },
-              required: ['path', 'kind', 'finding', 'reason', 'source'],
-            },
-          },
-          resolve: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Ids of entries to remove.',
-          },
-          keep: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Ids of carried entries settled again unchanged.',
-          },
-          move: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string', description: 'The carried entry to move.' },
-                path: {
-                  type: 'string',
-                  description: 'Repository-relative path of the file its code moved to.',
-                },
-                line: { type: ['integer', 'null'], minimum: 1 },
-              },
-              required: ['id', 'path'],
-            },
-            description: 'Carried entries whose code moved to another file, still settled.',
-          },
-        },
-      },
-    });
-  } catch {
-    // Without the tools the skill says the ledger was unavailable.
-  }
-}
-
-async function onLedger(
-  $: $,
-  e: Input<LedgerHook>,
-  _next: NextOf<LedgerHook>,
-): Promise<Output<LedgerHook>> {
-  const { paths, query, offset } = e as { paths?: unknown; query?: unknown; offset?: unknown };
-  if (paths !== undefined && !(Array.isArray(paths) && paths.every((p) => typeof p === 'string'))) {
-    return {
-      result: 'review-cycle ledger: `paths` must be an array of repository-relative paths.',
-    };
-  }
-  if (query !== undefined && typeof query !== 'string') {
-    return { result: 'review-cycle ledger: `query` must be a string.' };
-  }
-  if (offset !== undefined && !(Number.isInteger(offset) && (offset as number) >= 0)) {
-    return { result: 'review-cycle ledger: `offset` must be a whole number, 0 or more.' };
-  }
-  try {
-    const root = await ensureRoot($);
-    if (!root) return { result: 'review-cycle ledger: not in a git repository.' };
-    const blobs = (ps: string[]) => blobsAt(gitOf($), root.top, ps);
-    const read = { paths, query, offset: offset as number | undefined };
-    const status = await readLedger(storeOf($), blobs, root.common, read, await $.clock.now());
-    return { result: JSON.stringify(status) };
-  } catch (error) {
-    return {
-      result: `review-cycle ledger: could not be read: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-}
-
-// Records run one at a time: each reads the ledger, merges, and writes it
-// back. A record waits for the one before it for at most this long and then
-// refuses, so a store call that never settles cannot hang every later record,
-// nor finish late over one that ran past it. Well under the hook's 10-second
-// budget, which the sleep spends: a wait that reached it would lose the
-// refusal to the engine's own answer.
-const RECORD_WAIT_MS = 5000;
-let recording: Promise<unknown> = Promise.resolve();
-
-async function onLedgerRecord(
-  $: $,
-  e: Input<RecordHook>,
-  _next: NextOf<RecordHook>,
-): Promise<Output<RecordHook>> {
-  const rec = parseRecord(e);
-  if ('error' in rec) return { result: `review-cycle ledger: nothing recorded: ${rec.error}` };
-  const before = recording;
-  const ready = Promise.race([
-    before.then(
-      () => true,
-      () => true,
-    ),
-    $.clock.sleep(RECORD_WAIT_MS).then(() => false),
-  ]);
-  const task = ready.then((go) =>
-    go
-      ? recordNow($, rec)
-      : {
-          result: `review-cycle ledger: nothing recorded: an earlier record has not finished after ${RECORD_WAIT_MS / 1000} seconds`,
-        },
-  );
-  recording = Promise.allSettled([before, task]);
-  return task;
-}
-
-async function recordNow($: $, rec: Recording): Promise<Output<RecordHook>> {
-  try {
-    const root = await ensureRoot($);
-    if (!root) return { result: 'review-cycle ledger: not in a git repository; nothing recorded.' };
-    const blobs = (ps: string[]) => blobsAt(gitOf($), root.top, ps);
-    return {
-      result: await recordInto(storeOf($), blobs, root.common, rec, await $.clock.now()),
-    };
-  } catch (error) {
-    return {
-      result: `review-cycle ledger: nothing recorded: ${error instanceof Error ? error.message : String(error)}`,
-    };
   }
 }
 

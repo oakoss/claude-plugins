@@ -304,12 +304,20 @@ export default defineConfig({
     {
       // Specs under a plugin's spec/node/ also reach the shared helpers in the
       // repository's tests/.
-      files: ['**/*.test.ts', 'plugins/*/spec/node/**/*.ts'],
+      files: ['**/*.test.ts', 'plugins/*/hooks/fixtures.ts', 'plugins/*/spec/node/**/*.ts'],
       rules: {
         'no-console': 'off',
         'import/no-relative-parent-imports': 'off',
         'typescript/no-non-null-assertion': 'off',
         'typescript/require-await': 'off',
+      },
+    },
+    {
+      // Checking each engine-test callback against the kit's overloads took
+      // tsgolint to 5 GB per file (measured on oxlint 1.88.0), past a CI runner's memory.
+      files: ['**/*.test.ts'],
+      rules: {
+        'typescript/no-misused-promises': ['error', { checksVoidReturn: false }],
       },
     },
   ],
