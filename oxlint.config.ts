@@ -304,7 +304,7 @@ export default defineConfig({
     {
       // Specs under a plugin's spec/node/ also reach the shared helpers in the
       // repository's tests/.
-      files: ['**/*.test.ts', 'plugins/*/spec/node/**/*.ts'],
+      files: ['**/*.test.ts', 'plugins/*/hooks/fixtures.ts', 'plugins/*/spec/node/**/*.ts'],
       rules: {
         'no-console': 'off',
         'import/no-relative-parent-imports': 'off',

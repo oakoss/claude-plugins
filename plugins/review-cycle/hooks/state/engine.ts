@@ -6,6 +6,9 @@ import type { Store } from '../ledger/ledger-store';
 import { state } from './gate-state';
 
 export type $ = EngineInterface;
+export type Input<H> = H extends ($: never, e: infer E, next: never) => unknown ? E : never;
+export type NextOf<H> = H extends ($: never, e: never, next: infer N) => unknown ? N : never;
+export type Output<H> = H extends (...args: never[]) => infer R ? Awaited<R> : never;
 
 // A state call that never answers counts as failed, so one cannot stall every
 // later save or the session's start.
