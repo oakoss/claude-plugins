@@ -684,6 +684,10 @@ export function stops(stopBefore: string) {
   return { pluginConfigs: { 'review-cycle': { options: { stopBefore } } } };
 }
 
+export const updating = (prUpdates: string) => ({
+  pluginConfigs: { 'review-cycle': { options: { prUpdates } } },
+});
+
 export const REMOTE = '/remote.git';
 export const DRY_FLAGS = '--dry-run --porcelain --no-verify --no-quiet --recurse-submodules=no';
 export const NEW_BRANCH = '*\tHEAD:refs/heads/fix/x\t[new branch]';
