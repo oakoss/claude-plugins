@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing';
 
-import { sessionDays } from './codex-log';
+import { sessionDays } from './review/codex-log';
 
 // A scripted git: trees are maps of path to content, the working tree is
 // `world.work`, and HEAD points at a commit whose tree is `world.commits[head]`.

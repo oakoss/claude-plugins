@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { readCommand } from '../hooks/command';
 import { register } from '../hooks/register';
+import { readCommand } from '../hooks/shell/command';
 
 // The test kit cannot load a plugin with options set, so the switch is
 // exercised here by calling register with a recording `on`.

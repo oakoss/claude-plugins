@@ -4,7 +4,7 @@
 
 import { expect, test } from 'vitest';
 
-import { cycleOf } from '../../hooks/cycles';
+import { cycleOf } from '../../hooks/review/cycles';
 import { phase, skillText } from './agents';
 
 function section(n: number): string {

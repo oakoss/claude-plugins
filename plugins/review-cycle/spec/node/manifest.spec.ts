@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { expect, test } from 'vitest';
 
-import { DEFAULT_STOP, RUNGS } from '../../hooks/ladder';
+import { DEFAULT_STOP, RUNGS } from '../../hooks/consent/ladder';
 import { REPO_ROOT } from './agents';
 
 test("the manifest's picker offers exactly the rungs, defaulting to push", () => {

@@ -1,4 +1,4 @@
-// The effort rule lives in hooks/codex-command.ts (spec/codex-command.spec.ts);
+// The effort rule lives in hooks/review/codex-command.ts (spec/review/codex-command.spec.ts);
 // each place that launches Codex must take its command from the tool, or it
 // runs at whatever effort and permissions the model writes by hand.
 
