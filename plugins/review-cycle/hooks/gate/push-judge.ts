@@ -1,6 +1,6 @@
 // Whether a git push may run, and the refusal when it may not. What it needs
 // from git comes through a `Git` runner and the setting through `ladderOf`,
-// which register.ts passes in.
+// which bash.ts passes in.
 
 import { covers, type Grant, type UnreadOffer } from '../consent/consent';
 import { holds, type Hold } from '../consent/hold';
