@@ -312,6 +312,14 @@ export default defineConfig({
         'typescript/require-await': 'off',
       },
     },
+    {
+      // Checking each engine-test callback against the kit's overloads took
+      // tsgolint to 5 GB per file (measured on oxlint 1.88.0), past a CI runner's memory.
+      files: ['**/*.test.ts'],
+      rules: {
+        'typescript/no-misused-promises': ['error', { checksVoidReturn: false }],
+      },
+    },
   ],
   options: {
     maxWarnings: 0,
