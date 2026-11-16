@@ -2,7 +2,7 @@
 // into one.
 
 import type { Finishes } from './git-args';
-import type { HoldStep } from './hold';
+import type { HoldState, HoldStep } from './hold';
 
 // How far the user's message lets a push go; each level covers those before
 // it.
@@ -132,9 +132,10 @@ export function combine(a: Grant, b: Grant): Grant {
   });
 }
 
-// Whether a message asks for a step on the way out: a push, a pull request, a
-// merge or a release. An approval or a reply asks for none of them.
-export function liftsHold(grant: Grant): boolean {
+// Whether a message lifts the hold in force: it asks for a push, a pull
+// request, a merge or a release, or for a reply when only replies are held.
+// An approval asks for none of them.
+export function liftsHold(grant: Grant, held: HoldState): boolean {
   return (
     covers(grant, 'push') ||
     grant.pr ||
@@ -142,7 +143,8 @@ export function liftsHold(grant: Grant): boolean {
     grant.autoMerge ||
     grant.readyRelease ||
     grant.release ||
-    grant.mergeStack.length > 0
+    grant.mergeStack.length > 0 ||
+    (grant.comment && held?.floor.step === 'comment')
   );
 }
 

@@ -58,6 +58,7 @@ import {
   NO_STANDING,
   RELEASE_ASK,
   shownNamed,
+  standsFor,
   VERSION_BRANCH,
 } from './gh-verdict';
 import {
@@ -1227,9 +1228,7 @@ async function onPromptSubmit(
     const reading = readMessage(typed, state.lastAnswer);
     state.said = { text: typed, before: state.lastAnswer, origin: e.origin.kind };
     // What a held message asks for still runs: "push it; don't open a PR yet".
-    // Asking for a reply lifts a hold of replies alone.
-    const repliesHeld = reading.grant.comment && state.hold?.floor.step === 'comment';
-    state.hold = holdAfter(state.hold, liftsHold(reading.grant) || repliesHeld, reading.hold);
+    state.hold = holdAfter(state.hold, liftsHold(reading.grant, state.hold), reading.hold);
     state.mandate = mandateAfter(state.mandate, typed, state.lastAnswer);
     const ended = reading.ends ? endedNote(state.standing) : null;
     state.standing = await standingAfter(
@@ -1758,9 +1757,6 @@ async function standingAfter($: $, prior: Standing, grant: Grant): Promise<Stand
   };
 }
 
-const standsFor = (s: Pick<Standing, 'ready' | 'release'>): boolean =>
-  s.ready.length > 0 || s.release !== null;
-
 // The version pull request a standing release covers: the open one, or the
 // first opened after the newest. Null when GitHub cannot say.
 async function releaseOf($: $): Promise<Standing['release']> {
@@ -1812,17 +1808,7 @@ async function onGithubTool(
   if (e.agentId) return deny(SUBAGENT);
   const message = state.messages;
   const shown = shownCall(e.tool, e);
-  const c = ghConsent(state.message.grant);
-  const gh = await judgeGh(
-    shown,
-    [action],
-    c.grant,
-    c.held,
-    ghLookups($),
-    c.unread,
-    c.pointed,
-    c.standing,
-  );
+  const gh = await judgeGh(shown, [action], ghConsent(state.message.grant), ghLookups($));
   if ('deny' in gh) return deny(gh.deny, gh.step);
   const stale = overtaken(message, next.signal, 'call');
   if (stale !== null) return stale;
@@ -2063,17 +2049,7 @@ async function judgeBash(
         '`gh stack rebase` and `gh stack sync` rewrite commits, so the gate checks them only as their own command. Run it alone.',
       );
     }
-    const c = ghConsent(granted);
-    const gh = await judgeGh(
-      quote(e.command),
-      actions,
-      c.grant,
-      c.held,
-      ghLookups($),
-      c.unread,
-      c.pointed,
-      c.standing,
-    );
+    const gh = await judgeGh(quote(e.command), actions, ghConsent(granted), ghLookups($));
     if ('deny' in gh) return deny(gh.deny, gh.step);
     // Only a merge that succeeded ends a standing ask, and a filter's status hides that.
     const standing = gh.used !== undefined && (gh.used.ready.length > 0 || gh.used.release);
@@ -2096,7 +2072,7 @@ async function judgeBash(
       }
     }
     const checked = rewrite === 'alone' ? 'history' : 'unchecked';
-    const ran = await watch($, await ensureRoot($), e, next, checked, c.grant, since, gh.ran);
+    const ran = await watch($, await ensureRoot($), e, next, checked, granted, since, gh.ran);
     if (ran.deny === undefined && ran.isError !== true) spend(gh.used);
     const notes = gh.notes ?? [];
     const r =

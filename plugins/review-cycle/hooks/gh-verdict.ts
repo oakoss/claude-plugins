@@ -569,6 +569,9 @@ export type Standing = Readonly<{
 export const RELEASE_ASK = 'release';
 export const NO_STANDING: Standing = Object.freeze({ ready: [], release: null, main: [] });
 
+export const standsFor = (s: Pick<Standing, 'ready' | 'release'>): boolean =>
+  s.ready.length > 0 || s.release !== null;
+
 // What the GitHub writes in a call may run, or the refusal of the first one
 // that may not. A comment is off the ladder: it needs the user's request. A
 // requested pull request lets no push through GitHub's API, which no review
@@ -576,14 +579,10 @@ export const NO_STANDING: Standing = Object.freeze({ ready: [], release: null, m
 export async function judgeGh(
   shown: string,
   actions: readonly GhAction[],
-  asked: Grant,
-  held: Hold,
+  consent: GhConsent,
   given: GhLookups,
-  unread: UnreadOffer | null = null,
-  // The pull request numbers the conversation pointed a merge at.
-  pointed: readonly string[] = [],
-  standing: Standing = NO_STANDING,
 ): Promise<GhVerdict> {
+  const { grant: asked, held, unread, pointed, standing } = consent;
   const lookups = pullRequestOnce(given);
   const ran: Unasked[] = [];
   const notes: string[] = [];
@@ -709,8 +708,8 @@ export async function judgeGh(
         let readyRelease = false;
         // The standing ask that covers the merge, when one does.
         let byStanding: string | null = null;
-        const standingAsks = standing.ready.length > 0 || standing.release !== null;
-        if ((granted.merge || granted.autoMerge || granted.readyRelease || standingAsks) && !free) {
+        const isAsked = granted.merge || granted.autoMerge || granted.readyRelease;
+        if ((isAsked || standsFor(standing)) && !free) {
           const t = await targetOf(lookups, action.lookup);
           if ('asks' in t) {
             const named = [...nowNamed, ...readyNamed].map((n) => shownNamed(n)).join(', ');
@@ -1056,6 +1055,7 @@ export type GhConsent = Readonly<{
   grant: Grant;
   held: Hold;
   unread: UnreadOffer | null;
+  // The pull request numbers the conversation pointed a merge at.
   pointed: readonly string[];
   standing: Standing;
 }>;
