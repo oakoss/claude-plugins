@@ -68,7 +68,7 @@ export type Cycle = Readonly<{
 }>;
 
 export type Measured = Readonly<
-  { legs: number; codexTokens: number | null } & Record<(typeof SPEND_KEYS)[number], number>
+  { codexTokens: number | null } & Record<(typeof SPEND_KEYS)[number], number>
 >;
 
 // A source as the summary names it, `review-cycle:` dropped, matched whole.
@@ -325,7 +325,6 @@ export function measuredOf(
   const sum = (k: (typeof SPEND_KEYS)[number]) => legs.reduce((s, l) => s + (l?.[k] ?? 0), 0);
   return {
     measured: {
-      legs: legs.length,
       codexTokens: codex.length === 0 ? null : codex.reduce((s, n) => s + n, 0),
       ...(Object.fromEntries(SPEND_KEYS.map((k) => [k, sum(k)])) as LegSpend),
     },
@@ -335,7 +334,7 @@ export function measuredOf(
 const isMeasured = (x: unknown): x is Measured => {
   if (typeof x !== 'object' || x === null) return false;
   const m = x as Measured;
-  return isCount(m.legs) && isCountOrNull(m.codexTokens) && SPEND_KEYS.every((k) => isCount(m[k]));
+  return isCountOrNull(m.codexTokens) && SPEND_KEYS.every((k) => isCount(m[k]));
 };
 
 // Enough cycles to compare a change to the loop before and after.

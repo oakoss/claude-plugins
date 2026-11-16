@@ -484,7 +484,6 @@ describe("the gate's own count", () => {
   test('sums the legs, a leg with no spend counting as one that spent nothing seen', () => {
     expect(measuredOf([legSpend, legSpend, null], [100, 250])).toEqual({
       measured: {
-        legs: 3,
         codexTokens: 350,
         steps: 6,
         input: 12,
@@ -555,7 +554,7 @@ describe('the cycle store', () => {
     const legSpend = { steps: 3, input: 6, cacheWrite: 40, cacheRead: 500, output: 70 };
     const { measured } = measuredOf([legSpend, null], [900]);
     await recordCycle(s, '/r/.git', { ...cycle(1), cost: [spent], measured }, 1, 't');
-    const bad = { ...measured, legs: -1 } as Cycle['measured'];
+    const bad = { ...measured, steps: -1 } as Cycle['measured'];
     await recordCycle(s, '/r/.git', { ...cycle(2), cost: [spent], measured: bad }, 2, 't');
     const kept = await readCycles(s, '/r/.git');
     expect(kept.map((c) => c.measured)).toEqual([measured]);
