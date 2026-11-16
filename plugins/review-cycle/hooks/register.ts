@@ -78,11 +78,9 @@ import {
   pushedRefs,
   remoteRefs,
   repoAt,
-  reviewablePaths,
   snapshotOf,
   treeOf,
   worktreeTree,
-  type Coverage,
   type Git,
   type Refs,
   type Repo,
@@ -109,14 +107,15 @@ import {
 import { onLedger, onLedgerRecord, registerLedger } from './ledger/tools';
 import { onCodexCommand, onCodexLog, registerCodexLog } from './review/codex-io';
 import { readCycles, rollupOf } from './review/cycles';
-import { overBudget } from './review/legs';
-import { asksUser, nudgeOf, nudgeOn } from './review/nudge';
+import { onAgentSpawn, onTurnComplete } from './review/legs';
+import { nudgeWanted, reminderFor } from './review/nudge-io';
 import { readRounds, recordRounds, roundsOf } from './review/rounds';
-import { onScratch, onSweep, registerScratch, reviewPr } from './review/scratch';
+import { onScratch, onSweep, registerScratch } from './review/scratch';
+import { onCompact, onReviewSkill, onSkill, onSubagentSkill } from './review/skills';
 import { isSpend, NO_SPEND, spentWith } from './review/spend';
 import { SUMMARY_TOOL, summaryHeader } from './review/summary';
 import { onSummary, registerSummary } from './review/summary-io';
-import { EMPTY_TREE, hasReceipt, isReviewerType, uncoveredOf, type Row } from './review/witness';
+import { EMPTY_TREE, uncoveredOf, type Row } from './review/witness';
 import { loadShellAliases, readOwnAliases } from './shell/aliases-io';
 import { committingAlias, readCommand, shownCommand, type Classification } from './shell/command';
 import type { Finishes } from './shell/git-args';
@@ -137,18 +136,8 @@ import {
   type NextOf,
   type Output,
 } from './state/engine';
-import {
-  drop,
-  explain,
-  held,
-  HUMAN,
-  LEG_BUDGET_MS,
-  runningLeg,
-  state,
-  type Leg,
-} from './state/gate-state';
+import { explain, held, HUMAN, runningLeg, state } from './state/gate-state';
 import { clearOffGate, keep, keepGate, keptMisses, recallOnce } from './state/keep';
-import { isReviewSkill, resumed } from './state/resume';
 
 // The gate watches Bash with a function hook, not the classic PreToolUse
 // bridge. While any `tool.call { tool: "Bash" }` hook is loaded, Bash inside an
@@ -156,7 +145,6 @@ import { isReviewSkill, resumed } from './state/resume';
 // the bridge avoids that at the cost of a stub script, should it matter.
 
 type GithubHook = MatchedHook<'tool.call', { tool: RegExp }>;
-type SkillHook = MatchedHook<'tool.call', { tool: 'Skill' }>;
 type StatusHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__status' }>;
 type MissesHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__misses' }>;
 type OfferHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__offer' }>;
@@ -751,246 +739,6 @@ async function onPromptSubmit(
       if (!('drop' in r && r.drop !== undefined) && state.owed === owed) state.owed = null;
       return r;
     }
-  }
-  return next(e);
-}
-
-// What changed between two trees that no reviewer has seen, or null when
-// nothing did. Throws when git cannot say, so a failure never reads as clean.
-async function unreviewedSince(
-  $: $,
-  top: string,
-  since: string,
-  tree: string,
-): Promise<Coverage | null> {
-  const paths = await reviewablePaths(gitOf($), top, since, tree);
-  if (paths === null) throw new Error('git could not list what changed');
-  const c = await coverageOf(gitOf($), top, await headOf(gitOf($), top), tree, state.reviews);
-  if (c === null) throw new Error('git could not compare the tree with the reviewed ones');
-  const touched = new Set(paths);
-  const rows = c.rows.filter((row) => touched.has(row.path));
-  return uncoveredOf(rows).length === 0 ? null : { ...c, rows };
-}
-
-// Built when the prompt is sent, so a review, an edit or the nudge turned off
-// since the turn ended counts. When git cannot check, the reminder says so.
-async function reminderFor($: $, since: string, tree: string | null): Promise<string | null> {
-  if (!(await nudgeWanted($))) return null;
-  try {
-    const root = state.root;
-    if (!root || tree === null) throw new Error('the working tree could not be read');
-    const c = await unreviewedSince($, root.top, since, tree);
-    if (c === null) return null;
-    return `review-cycle: your last turn left changes no reviewer has seen (${explain(c)}). Invoke /review-cycle:review via the Skill tool before anything else, then carry on with this message. Skip it only if this message says not to review, or answers a question you asked that must come first.`;
-  } catch (error) {
-    return `review-cycle: could not check whether your last turn's changes were reviewed (${messageOf(error)}). Invoke /review-cycle:review via the Skill tool before anything else, unless this message says not to review.`;
-  }
-}
-
-// The nudge as the settings set it. A file that cannot be read sets nothing,
-// so the others decide: the nudge only prompts a review.
-async function nudgeWanted($: $): Promise<boolean> {
-  const set: Partial<Record<'project' | 'local', boolean | null>> = {};
-  for (const source of ['project', 'local'] as const) {
-    let settings: { pluginConfigs?: unknown } | null;
-    try {
-      settings = await $.settings.read({ source });
-    } catch {
-      continue;
-    }
-    set[source] = nudgeOf(settings?.pluginConfigs);
-  }
-  return nudgeOn(state.nudge, set.project ?? null, set.local ?? null);
-}
-
-// The agent reviews on the user's next prompt rather than asking whether to.
-// Once per user message, and not while a review is under way.
-async function nudgeReview($: $, e: Input<HookFor<'turn.complete'>>): Promise<void> {
-  const message = state.message;
-  if (message.nudged || e.reason !== 'answer' || asksUser(e.answer)) return;
-  const root = state.root;
-  const since = message.tree;
-  if (!root || since === null) return;
-  const pending = [...state.legs].filter(([, leg]) => leg.counts && !leg.done);
-  if (pending.length > 0) {
-    // A leg that ended without a turn.complete would otherwise hold this off for good.
-    const agents = await $.agent.list();
-    const live = new Set(agents.filter((a) => a.status === 'running').map((a) => a.id));
-    for (const [id, leg] of pending) if (!live.has(id)) leg.done = true;
-    if (pending.some(([, leg]) => !leg.done)) return;
-  }
-  // Checked from where the reminder will measure, an older one's tree if owed.
-  const owedAtStart = state.owed;
-  const from = owedAtStart?.since ?? since;
-  try {
-    const tree = await worktreeTree(gitOf($), root.top);
-    if (tree === since) return;
-    if ((await unreviewedSince($, root.top, from, tree)) === null) return;
-  } catch {
-    // A turn git cannot check still owes a reminder, which the next prompt
-    // rebuilds or reports as unchecked.
-  }
-  if (!(await nudgeWanted($))) return;
-  // A prompt that arrived meanwhile started from a tree holding these changes,
-  // so the reminder is still owed and the next prompt carries it, unless that
-  // prompt reviewed them or settled what was owed when this check began.
-  if (state.message !== message && (state.message.nudged || state.owed !== owedAtStart)) return;
-  if (state.message === message) message.nudged = true;
-  // An older reminder still owed measures from further back, so it stays.
-  state.owed ??= { since };
-}
-
-function onSkill($: $, e: Input<SkillHook>, next: NextOf<SkillHook>): ReturnType<SkillHook> {
-  if (!e.agentId && e.skill === 'review-cycle:review-pr') state.message.prWindow = true;
-  if (!e.agentId && e.skill === 'review-cycle:review') {
-    state.message.prWindow = false;
-    // A review already under way needs no reminder to start one.
-    state.message.nudged = true;
-    state.owed = null;
-  }
-  return next(e);
-}
-
-// Review skill calls a subagent has running. `skill.prompt` names no loop but
-// fires inside its Skill call (measured on 2.1.308), and a subagent's review
-// is not the main conversation's.
-let subagentSkills = 0;
-
-async function onSubagentSkill(
-  _$: $,
-  e: Input<SkillHook>,
-  next: NextOf<SkillHook>,
-): Promise<Output<SkillHook>> {
-  if (!e.agentId || !isReviewSkill(e.skill)) return next(e);
-  subagentSkills += 1;
-  try {
-    return await next(e);
-  } finally {
-    subagentSkills -= 1;
-  }
-}
-
-async function onReviewSkill(
-  $: $,
-  e: Input<HookFor<'skill.prompt'>>,
-  next: NextOf<HookFor<'skill.prompt'>>,
-): Promise<Output<HookFor<'skill.prompt'>>> {
-  const r = await next(e);
-  if (e.pluginName === 'review-cycle' && subagentSkills === 0) {
-    // The text the model reads, which is what the engine re-attaches and cuts.
-    state.reviewing = r.text;
-    reviewPr.open = e.skill === 'review-cycle:review-pr';
-    void keep($);
-  }
-  return r;
-}
-
-async function onCompact(
-  _$: $,
-  e: Input<HookFor<'session.compact'>>,
-  next: NextOf<HookFor<'session.compact'>>,
-): Promise<Output<HookFor<'session.compact'>>> {
-  const r = await next(e);
-  if (e.agentId !== undefined || r.messages === undefined) return r;
-  const messages = resumed(r.messages, state.reviewing, (text) => ({
-    role: 'user' as const,
-    text,
-    toolUses: [],
-  }));
-  return { ...r, messages };
-}
-
-async function onAgentSpawn(
-  $: $,
-  e: Input<HookFor<'agent.spawn'>>,
-  next: NextOf<HookFor<'agent.spawn'>>,
-): Promise<Output<HookFor<'agent.spawn'>>> {
-  let isLeg = false;
-  let spawnTree: string | null = null;
-  let why = 'the working tree could not be read when it started';
-  try {
-    const root = await ensureRoot($);
-    const inRoot =
-      !e.cwd || (root !== null && (e.cwd === root.top || e.cwd.startsWith(`${root.top}/`)));
-    isLeg = root !== null && !e.parentAgentId && isReviewerType(e.subagentType) && inRoot;
-    // Captured before the leg starts, so it is the tree the leg is given.
-    if (isLeg && root !== null) spawnTree = await worktreeTree(gitOf($), root.top);
-  } catch (error) {
-    isLeg = isReviewerType(e.subagentType) && !e.parentAgentId;
-    why = `${why} (${error instanceof Error ? error.message : String(error)})`;
-  }
-  const r = await next(e);
-  if (isLeg && 'agentId' in r && r.agentId) {
-    if (spawnTree === null) drop(r.agentId, `${e.subagentType}: ${why}`);
-    const counts = !state.message.prWindow;
-    const leg: Leg = {
-      type: e.subagentType,
-      counts,
-      spawnTree,
-      done: false,
-      timer: null,
-      capped: false,
-      counted: false,
-      spawnedAt: await $.clock.now(),
-    };
-    state.legs.set(r.agentId, leg);
-    const id = r.agentId;
-    leg.timer = $.clock.after(LEG_BUDGET_MS, () => overBudget($, id, leg));
-  }
-  return r;
-}
-
-// A leg's completion is the review event: the tree it saw is the working tree
-// now. Nothing edited after this moment is reviewed until a leg sees it.
-async function onTurnComplete(
-  $: $,
-  e: Input<HookFor<'turn.complete'>>,
-  next: NextOf<HookFor<'turn.complete'>>,
-): Promise<Output<HookFor<'turn.complete'>>> {
-  if (!e.agentId) {
-    state.lastAnswer = e.answer;
-    const r = await next(e);
-    try {
-      await nudgeReview($, e);
-    } catch {
-      // A missed nudge leaves the commit gate to refuse the unreviewed commit.
-    }
-    return r;
-  }
-  const leg = state.legs.get(e.agentId);
-  if (leg) {
-    leg.done = true;
-    leg.timer?.cancel();
-  }
-  const root = state.root;
-  if (!leg?.counts || leg.spawnTree === null || !root) return next(e);
-  // A capped leg is already reported as capped, not as a dropped review.
-  if (leg.capped && (e.isAborted || e.reason !== 'answer')) return next(e);
-  const reported = !e.isAborted && e.reason === 'answer' && hasReceipt(e.answer);
-  if (leg.counted && !reported) return next(e);
-  if (e.isAborted || e.reason !== 'answer') {
-    drop(e.agentId, `${leg.type}: it did not finish (${e.isAborted ? 'aborted' : e.reason})`);
-    return next(e);
-  }
-  if (!hasReceipt(e.answer)) {
-    drop(e.agentId, `${leg.type}: its report did not open with the execution receipt`);
-    return next(e);
-  }
-  try {
-    const tree = await worktreeTree(gitOf($), root.top);
-    const head = await headOf(gitOf($), root.top);
-    const reviewedPaths = await reviewablePaths(gitOf($), root.top, head, tree);
-    if (reviewedPaths === null) throw new Error('the paths it reviewed could not be listed');
-    state.reviews.push({ type: leg.type, trees: [leg.spawnTree, tree], reviewedPaths });
-    leg.counted = true;
-    // Refusals explain the current state; other legs' older failures stay in
-    // the status tool, and this leg's own are superseded.
-    const agentId = e.agentId;
-    state.dropped = state.dropped
-      .filter((d) => d.agentId !== agentId)
-      .map((d) => ({ ...d, old: true }));
-  } catch (error) {
-    drop(e.agentId, `${leg.type}: ${error instanceof Error ? error.message : String(error)}`);
   }
   return next(e);
 }
