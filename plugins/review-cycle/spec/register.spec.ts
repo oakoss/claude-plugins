@@ -113,6 +113,7 @@ describe('the findings ledger with the gate off', () => {
       'scratch',
       'sweep',
       'codex_log',
+      'codex_command',
       'summary',
     ]);
     expect(runs).toEqual([]);

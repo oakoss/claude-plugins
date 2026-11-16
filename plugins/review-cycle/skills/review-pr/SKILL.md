@@ -106,29 +106,11 @@ Every brief, Codex's included, also asks for three things: when findings share a
 
 **The review scope is the merge-base diff**: `git diff <REMOTE>/<baseRefName>...HEAD` (three dots), matching what GitHub shows as the PR diff. A two-dot diff against the base *tip* would also show the inverse of everything merged since the PR branched, and reviewers would flag files the PR never touched.
 
-For the Codex flag, **reshape the brief**: the `-c` value is parsed as TOML and passes through one layer of shell quoting, so flatten it to a single line of plain prose with no double quotes, backslashes, backticks, or dollar signs — apostrophes are fine. Name files and identifiers bare.
+For Codex, **write the brief as one line of plain prose**: `mcp__review-cycle__codex_command` refuses a brief or checks holding a double quote, backslash, backtick, dollar sign or line break, naming which; rewrite and ask again. Apostrophes are fine. Name files and identifiers bare.
 
 In a single conversation turn, invoke ALL of the following:
 
-1. **Codex review (background)** — only when Phase 1 recorded `eligible`:
-
-   ```bash
-   # full tier:
-   cd <WT> && FORCE_COLOR=1 codex review --base "<REMOTE>/<baseRefName>" -c "developer_instructions=\"<brief>\""
-   # explicit effort argument: append -c model_reasoning_effort="<validated literal>" on
-   # either tier, raising included, and skip the tier logic below.
-   # light tier: append -c model_reasoning_effort="low" — but only when that is actually
-   # lower than the configured value; check the root table of ~/.codex/config.toml first:
-   #   awk '/^[[:space:]]*\[/{exit} /^[[:space:]]*model_reasoning_effort/{print}' ~/.codex/config.toml 2>/dev/null
-   # The ladder is none < minimal < low < medium < high < xhigh < max. Append the override
-   # when the configured effort is above low OR nothing is configured; pass NO override at
-   # all (not the value none) when it is already low, minimal, or none — the tier
-   # adjustment lowers, never raises; only the explicit effort argument outranks it.
-   # Emit only exact-match literals from that ladder, never an unvalidated value.
-   # Record low, inherited, or <level> (explicit) in the report draft at spawn time.
-   ```
-
-   Spawn via `Bash` with `run_in_background: true`; save the shell ID. The remote-tracking ref works as the base from a detached worktree, and `developer_instructions` is additive — Codex still discovers the repo's `AGENTS.md` (both verified on v0.147.0). Unrecognized `-c` keys are ignored without error, so a Codex that drops the key runs unbriefed instead of breaking; never add `--strict-config` to this invocation.
+1. **Codex review (background)** — only when Phase 1 recorded `eligible`. Get its command from `mcp__review-cycle__codex_command` with `base: "<REMOTE>/<baseRefName>"`, `dir: "<WT>"`, `modules: "<ROOT>"`, the `tier`, `pass: "review"`, the explicit `effort` when one was parsed, the `brief`, and the `checks` the legs run in their copy (`""` for none). It runs Codex in `<WT>` under the same read-only profile as the working-tree review, writing only `<SCRATCH>`. Run the `command` it returns as given via `Bash` with `run_in_background: true`, save the shell ID, and record the `effort` it returns in the report draft at spawn time. When the tool is missing, or answers that there is no scratch directory, skip the leg and record it as `skipped (codex_command unavailable)` or `skipped (no scratch directory)`. The remote-tracking ref works as the base from a detached worktree, and Codex still discovers the repo's `AGENTS.md` (both verified on v0.147.0).
 
 2. **Review subagents (parallel, background, no `name:`)** — all pointed at the worktree, all told they are report-only. Light tier spawns `review-cycle:code-reviewer` alone. Full tier dispatches conditionally:
 

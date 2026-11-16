@@ -192,42 +192,11 @@ If either differs at Phase 4's re-take, name the leg in the summary. Compare the
 
 In a single conversation turn, invoke ALL of the following:
 
-1. **Codex review (background)**, only when Phase 1 recorded the leg as `eligible`. Run the CLI directly, not the `/codex:review` slash command, with the subagents' scope: `--uncommitted`, or `--base <ref>` when the user gave a base. The scope flags reject a prompt argument, so the brief rides a config override: `-c "developer_instructions=\"<brief>\""`.
+1. **Codex review (background)**, only when Phase 1 recorded the leg as `eligible`. Get its command from the `mcp__review-cycle__codex_command` tool, after `mcp__review-cycle__scratch`: pass `base` when the user gave one, the `tier`, `pass: "review"`, the explicit `effort` when one was parsed, the `brief` (falsifiable question included, step 2), and as `checks` the commands Phase 2 ran, a JavaScript tool by path (`node_modules/.bin/<tool>`), or `""` for none. The tool picks the effort for the tier, runs Codex under a profile that reads everything, writes only the scratch directory and has no network, and appends the sentence telling Codex so.
 
-   **Reshape the brief for the flag**, falsifiable question included (step 2): the value is parsed as TOML through one layer of shell quoting, so flatten it into one line of plain prose with no double quotes, backslashes, backticks, or dollar signs (apostrophes are fine). Name files and identifiers bare; keep the changed-file list, comma-separated.
+   **Write the brief as one line of plain prose**: the tool refuses a brief or checks holding a double quote, backslash, backtick, dollar sign or line break, naming which, since they break the command's quoting; rewrite and ask again. Apostrophes are fine. Name files and identifiers bare; keep the changed-file list, comma-separated.
 
-   **Keep the repository read-only for Codex.** In a trusted project its sandbox is `workspace-write`, which can write the repository. Three more overrides run it under a permission profile that reads everything, writes only `<SCRATCH>`, and has no network. Write the absolute scratch path itself into the filesystem table and the brief on every Codex launch this cycle; when `mcp__review-cycle__scratch` failed, run `mktemp -d` once and use the path it prints. Then pass the filesystem table as one `-c` value, since a dotted key splits on the dot in the scratch path. The brief says so in this sentence: *The repository is read-only for this review, by design: write only inside <SCRATCH>, making your own directory there with mktemp -d <SCRATCH>/codex.XXXXXX and pointing TMPDIR at it. A command that writes inside the repository fails with Operation not permitted, and you have no network; neither is a defect in the change nor a reason to request wider permissions. Run tests and builds in a copy you make with ${CLAUDE_PLUGIN_ROOT}/scripts/copy-tree.sh <PROJECT_ROOT> <your directory>/tree, using the project's own checks: <the commands Phase 2 ran, a JavaScript tool by path as node_modules/.bin/<tool>, since a package-manager script tries an install first; with none, end at tree>. A tool mise wraps, such as cargo, runs as the shell finds it; when its wrapper fails, report that rather than reach the tool another way.*
-
-   **An explicit effort argument wins over the tier**: append `-c model_reasoning_effort="<that literal>"` on either tier. Without one, the **full** tier passes no override (the user's `~/.codex/config.toml` decides), and the **light** tier lowers the effort only when that would actually lower it. Read the configured value from the root table only, since a `[profiles.*]` key is not what runs:
-
-   ```bash
-   awk '/^[[:space:]]*\[/{exit} /^[[:space:]]*model_reasoning_effort/{print}' ~/.codex/config.toml 2>/dev/null
-   ```
-
-   The effort scale, ascending, is `none` < `minimal` < `low` < `medium` < `high` < `xhigh` < `max`; the API rejects anything else, and Codex does not validate `-c` values before the call, so emit only a literal from that set. Without an explicit argument, on the light tier, append `-c model_reasoning_effort="low"` when the configured effort is above `low` or nothing is configured; when it is already `low`, `minimal`, or `none`, **pass no override**: the tier never raises effort.
-
-   Record the effort actually passed (`low`, `inherited`, or `<level> (explicit)`) in the summary draft at the spawn.
-
-   Assemble the invocation from these parts:
-
-   ```bash
-   # full tier, working-tree scope (re-derive the root in this call — shell values
-   # don't survive between Bash calls):
-   cd "$(git rev-parse --show-toplevel)" && FORCE_COLOR=1 codex review --uncommitted -c 'default_permissions="review-cycle"' -c 'permissions.review-cycle.filesystem={":root"="read", ":workspace_roots"="read", "<SCRATCH>"="write"}' -c 'permissions.review-cycle.network.enabled=false' -c "developer_instructions=\"<brief>\""
-   # base scope: swap --uncommitted for --base <ref>
-   # light tier: append -c model_reasoning_effort="low"
-   # explicit effort argument: append -c model_reasoning_effort="<validated literal>" on either tier
-   ```
-
-   ```js
-   Bash({
-     command: "<the invocation assembled above>",
-     description: "Codex review",
-     run_in_background: true
-   })
-   ```
-
-   `developer_instructions` is additive: Codex still reads the repo's `AGENTS.md`. Never add `--strict-config`: an unrecognized key then fails the leg instead of degrading to an unbriefed review. Tier on effort, never on a model name. Save the shell ID; you read its output when notified.
+   Run the `command` it returns as given, with `Bash` and `run_in_background: true`, and record the `effort` it returns (`low`, `inherited`, or `<level> (explicit)`) in the summary draft at the spawn. When the tool is missing, or answers that there is no scratch directory, skip the leg and record it as `skipped (codex_command unavailable)` or `skipped (no scratch directory)`. Codex still reads the repo's `AGENTS.md`. Save the shell ID; you read its output when notified.
 
 2. **Bundled review subagents (parallel)** — spawn each applicable agent via the `Agent` tool, which runs it in the background, in the same single message as the codex invocation. Dispatch by the tier decided in Phase 1 — on the **light** tier, spawn `review-cycle:code-reviewer`, plus spec conformance in iteration 1 (below), and nothing else. On the **full** tier, conditional dispatch:
 
@@ -340,7 +309,7 @@ Then decide. The loop converges on an iteration that applies **no** fixes: every
 - NO inline fixes applied and none held at the ceiling (everything clean or correctly deferred) → exit loop, converged.
 - Fixes applied AND iteration count < ceiling → GOTO Phase 3, scoped by what the fixes were:
   - at least one **substantive** fix → re-run Codex (when its leg is eligible) plus the subagents whose domain the substantive fixes touched, `code-reviewer` always among them when importers were named; a spec defect fix's domain is spec conformance, scoped to the requirement it addressed. A Codex leg that failed gets exactly one retry across the whole cycle. Report the union across iterations, and let any failure stick: `failed (iteration 1: <error>; recovered iteration 3)`, not a bare `participated`.
-  - only **mechanical** and **verified message** fixes → a confirmation pass: `review-cycle:code-reviewer` alone, scoped to the fixes' delta, asked whether the fixes are correct and the change is ready to commit, reporting only findings at its threshold; this is what lets the fixed content count as seen. When a fix carries a claim local verification could not reach (the valve), add the Codex leg at the explicit effort argument when one was given, otherwise by Phase 3's light-tier rule on any tier: `low`, or no override when the configured effort is already `low`, `minimal`, or `none`. Grade its findings by Phase 4's labels before any fix is applied: a `static-analysis-only` pass contributes questions, not fixes. Name the claim in the summary if no leg could settle it.
+  - only **mechanical** and **verified message** fixes → a confirmation pass: `review-cycle:code-reviewer` alone, scoped to the fixes' delta, asked whether the fixes are correct and the change is ready to commit, reporting only findings at its threshold; this is what lets the fixed content count as seen. When a fix carries a claim local verification could not reach (the valve), add the Codex leg, its command from `mcp__review-cycle__codex_command` with `pass: "confirmation"`, which runs it at the explicit effort when one was given and otherwise lowers it as the light tier does. Grade its findings by Phase 4's labels before any fix is applied: a `static-analysis-only` pass contributes questions, not fixes. Name the claim in the summary if no leg could settle it.
 - Findings held at the ceiling (Phase 5) → exit loop **held**. Their iteration covers every path; Phase 10 asks what to do with them.
 
 ### Phase 7: Post-loop pass (maintainability + cleanup)
