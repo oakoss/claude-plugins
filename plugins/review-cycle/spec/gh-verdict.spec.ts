@@ -8,6 +8,7 @@ import {
   judgeGh,
   NO_STANDING,
   parsePullRequest,
+  type GhConsent,
   type GhLookups,
   type MissStep,
   type InForce,
@@ -115,7 +116,16 @@ async function judge(
   held: Hold = null,
   pointed: readonly string[] = [],
 ) {
-  return judgeGh('the call', actions, granted, held, w.lookups, null, pointed);
+  return judgeGh('the call', actions, consent(granted, held, pointed), w.lookups);
+}
+
+function consent(
+  grant: Grant,
+  held: Hold = null,
+  pointed: readonly string[] = [],
+  standing: Standing = NO_STANDING,
+): GhConsent {
+  return { grant, held, unread: null, pointed, standing };
 }
 
 describe('GitHub writes on the ladder', () => {
@@ -1016,7 +1026,7 @@ describe('a merge', () => {
       const merge62: GhAction = { kind: 'merge', admin: false, auto: true, lookup: ['62'] };
       const merge63: GhAction = { ...merge62, lookup: ['63'] };
       const run = (a: GhAction, w: ReturnType<typeof world>, s: Standing) =>
-        judgeGh('the call', [a], grant(), null, w.lookups, null, [], s);
+        judgeGh('the call', [a], consent(grant(), null, [], s), w.lookups);
       expect(await run(merge62, world('push', at('62')), bound)).toEqual({
         ran: [],
         used: { ready: [], release: true },
@@ -1356,12 +1366,8 @@ describe('a merge', () => {
         const r = await judgeGh(
           'the call',
           [auto],
-          NO_GRANT,
-          null,
+          consent(NO_GRANT, null, [], ask),
           linesmith().lookups,
-          null,
-          [],
-          ask,
         );
         expect(r).toMatchObject({ ran: [], used: { ready: ['linesmith#53'] } });
       });
@@ -1372,12 +1378,8 @@ describe('a merge', () => {
         const r = await judgeGh(
           'the call',
           [there(53, 'oakoss/linesmith')],
-          asked('merge it'),
-          null,
+          consent(asked('merge it'), null, ['53'], ask),
           w.lookups,
-          null,
-          ['53'],
-          ask,
         );
         expect(r).toMatchObject({
           deny: expect.stringContaining('only once the pull request is ready'),
@@ -1392,7 +1394,7 @@ describe('a merge', () => {
         });
         const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
         const ask = standing({ ready: ['linesmith#53'], main: ['linesmith#53'] });
-        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, null, [], ask);
+        const r = await judgeGh('the call', [auto], consent(NO_GRANT, null, [], ask), w.lookups);
         expect(r).toMatchObject({
           deny: expect.stringContaining('once the default branch is done'),
         });
@@ -1406,7 +1408,7 @@ describe('a merge', () => {
         });
         const auto = { ...there(53, 'oakoss/linesmith'), auto: true };
         const ask = standing({ ready: ['linesmith#53'], main: ['53'] });
-        const r = await judgeGh('the call', [auto], NO_GRANT, null, w.lookups, null, [], ask);
+        const r = await judgeGh('the call', [auto], consent(NO_GRANT, null, [], ask), w.lookups);
         expect(r).toMatchObject({ ran: [] });
       });
 
@@ -1982,7 +1984,7 @@ function standing(s: Partial<Standing>): Standing {
 }
 
 async function judged(w: ReturnType<typeof world>, g: Grant, s: Standing, auto = false) {
-  return judgeGh('the call', [merge(auto)], g, null, w.lookups, null, [], s);
+  return judgeGh('the call', [merge(auto)], consent(g, null, [], s), w.lookups);
 }
 
 // oakum's version pull request as #`pr`, ready to merge.

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
+import { liftsHold, NO_GRANT, type Grant } from '../hooks/consent';
 import {
   holdAfter,
   holds,
@@ -11,6 +12,24 @@ import {
 
 const mentioned = (step: HoldStep): HoldReason => ({ step, how: 'mentioned' });
 const declined = (step: HoldStep): HoldReason => ({ step, how: 'declined' });
+
+const asks = (part: Partial<Grant>): Grant => ({ ...NO_GRANT, ...part });
+const held = (step: HoldStep): HoldState => ({ floor: declined(step) });
+
+describe('liftsHold', () => {
+  test('a request on the way out lifts any hold', () => {
+    expect(liftsHold(asks({ pr: true }), held('merge'))).toBe(true);
+    expect(liftsHold(asks({ release: true }), held('comment'))).toBe(true);
+  });
+  test('a reply lifts a hold of replies alone', () => {
+    expect(liftsHold(asks({ comment: true }), held('comment'))).toBe(true);
+    expect(liftsHold(asks({ comment: true }), held('push'))).toBe(false);
+    expect(liftsHold(asks({ comment: true }), null)).toBe(false);
+  });
+  test('an approval lifts nothing', () => {
+    expect(liftsHold(asks({ approve: true }), held('comment'))).toBe(false);
+  });
+});
 
 describe('holds', () => {
   const STEPS = ['commit', 'push', 'pr', 'merge', 'approve', 'release', 'comment'] as const;
