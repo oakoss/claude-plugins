@@ -39,18 +39,16 @@ test("the review skill records each round's cost as its legs report", () => {
   expect(six).toContain("**Record each iteration's cost as its legs report.**");
   expect(six).toContain("the difference from Phase 3's is the iteration's wall-clock");
   expect(six).toContain('so keep only its latest');
-  expect(six).toContain('Name every leg whose usage was not reported');
-  expect(six).toContain('Codex runs the review in a child session of the `session id`');
-  expect(six).toContain(
-    'read its `total` from the `tokens` of the `mcp__review-cycle__codex_log` answer, or the `unavailable` reason',
-  );
-  expect(six).toContain('report it apart from the subagents');
+  expect(six).toContain('name them as not reported');
+  // The summary tool counts spend from these reads (cycles.ts measuredOf), so
+  // a Codex log left unread is a Codex leg left out of the cost.
+  expect(six).toContain("so read every Codex leg's log with that tool once it finishes");
   expect(section(3)).toContain("the time (`date +%s`, the start of the iteration's wall-clock)");
-  expect(six).toContain('The cost covers loop iterations only, not Phases 7 and 8.');
+  expect(six).toContain('The minutes and legs cover loop iterations only, not Phases 7 and 8.');
   expect(section(9)).toContain(
-    'Cost: <iteration N: W min wall-clock, L legs, T subagent tokens, S steps, I input, CW cache-write, CR cache-read, O output tokens, C Codex tokens',
+    'Cost: <iteration N: W min wall-clock, L legs, T subagent tokens[, not reported: <legs>]>',
   );
-  expect(six).toContain("its entry in the status tool's `legSpend`, by agent id");
+  expect(six).not.toContain('sum the iteration');
 });
 
 test('the summary block goes to the summary tool, and the reply ends with the decision', () => {

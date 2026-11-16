@@ -302,7 +302,7 @@ Verify cheaply before deciding whether the fixes need another fan-out:
 
 **Count the findings this cycle's fixes caused.** From iteration 2, attribute each finding to this cycle's fixes when it cites a line inside `git diff <iteration 1's spawnTree> <spawnTree>` or says one of those fixes is wrong, otherwise to the original work. Record `iteration N: X of Y from this cycle's fixes`, and the pass type for a confirmation pass. When most of a non-confirmation iteration's findings came from this cycle's fixes, the loop is generating its own work: hold them as at the ceiling, one showing a fix is wrong included, so Phase 10 offers the structural fix or a cut before more patches.
 
-**Record each iteration's cost as its legs report.** Take the time again (`date +%s`); the difference from Phase 3's is the iteration's wall-clock. A subagent can notify more than once with its running usage (`subagent_tokens`, `duration_ms`), so keep only its latest; `subagent_tokens` is the size of its final context, not what it spent. What it spent is its entry in the status tool's `legSpend`, by agent id: sum the iteration's legs' `steps`, `input`, `cacheWrite`, `cacheRead` and `output`. A leg with no entry spent nothing the gate saw; name it as not reported. Capped and Codex legs report no notification usage. Codex runs the review in a child session of the `session id` its output prints; once it finishes, read its `total` from the `tokens` of the `mcp__review-cycle__codex_log` answer, or the `unavailable` reason, and report it apart from the subagents' tokens, since it counts cached input. Name every leg whose usage was not reported. The cost covers loop iterations only, not Phases 7 and 8.
+**Record each iteration's cost as its legs report.** Take the time again (`date +%s`); the difference from Phase 3's is the iteration's wall-clock. A subagent can notify more than once with its running usage (`subagent_tokens`, `duration_ms`), so keep only its latest; `subagent_tokens` is the size of its final context, not what it spent. What the legs spent the summary tool counts itself, from the gate's record of each finished reviewer leg and of each finished Codex log `mcp__review-cycle__codex_log` read, so read every Codex leg's log with that tool once it finishes. Capped legs report no notification usage; name them as not reported. The minutes and legs cover loop iterations only, not Phases 7 and 8.
 
 Then decide. The loop converges on an iteration that applies **no** fixes: every fix is content no reviewer has seen, and the commit gate refuses it until one does.
 
@@ -385,7 +385,7 @@ Reviewers capped (over budget): none | <each `cappedReviews` entry from the stat
 Churn: none | <file[:hunks] in every fixing iteration's set (N of N fixing iterations)>
 Growth: none | <+A -D from this cycle's fixes>
 Convergence: iteration 1 only | <iteration N: X of Y from this cycle's fixes[ (confirmation pass)]>, ...
-Cost: <iteration N: W min wall-clock, L legs, T subagent tokens, S steps, I input, CW cache-write, CR cache-read, O output tokens, C Codex tokens[, not reported: <legs>]>, ... | not recorded (<reason>)
+Cost: <iteration N: W min wall-clock, L legs, T subagent tokens[, not reported: <legs>]>, ... | not recorded (<reason>)
 Scratch swept: <N processes ended, directory removed> | <errors> | not swept (<reason>)
 Findings fixed inline: X
   - file:line — issue (source, above | below, iteration N)

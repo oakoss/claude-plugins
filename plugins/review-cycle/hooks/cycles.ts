@@ -62,7 +62,14 @@ export type Cycle = Readonly<{
   selfCaused: number | null;
   // Absent when the summary has no Cost line or says it was not recorded.
   cost?: readonly IterationCost[];
+  // The gate's own count, every phase included: its reviewer legs, and the
+  // Codex logs codex_log read.
+  measured?: Measured;
 }>;
+
+export type Measured = Readonly<
+  { codexTokens: number | null } & Record<(typeof SPEND_KEYS)[number], number>
+>;
 
 // A source as the summary names it, `review-cycle:` dropped, matched whole.
 const ALIASES: readonly (readonly [RegExp, Leg])[] = [
@@ -302,8 +309,32 @@ const isCycle = (x: unknown): x is Cycle => {
     (c.later === null) === (c.selfCaused === null) &&
     (c.selfCaused ?? 0) <= (c.later ?? 0) &&
     (c.cost === undefined ||
-      (Array.isArray(c.cost) && c.cost.length > 0 && c.cost.every((i) => isIterationCost(i))))
+      (Array.isArray(c.cost) && c.cost.length > 0 && c.cost.every((i) => isIterationCost(i)))) &&
+    (c.measured === undefined || isMeasured(c.measured))
   );
+};
+
+type LegSpend = Readonly<Record<(typeof SPEND_KEYS)[number], number>>;
+
+// A leg with no spend recorded counts as a leg that spent nothing seen.
+export function measuredOf(
+  legs: readonly (LegSpend | null)[],
+  codex: readonly number[],
+): { measured?: Measured } {
+  if (legs.length === 0 && codex.length === 0) return {};
+  const sum = (k: (typeof SPEND_KEYS)[number]) => legs.reduce((s, l) => s + (l?.[k] ?? 0), 0);
+  return {
+    measured: {
+      codexTokens: codex.length === 0 ? null : codex.reduce((s, n) => s + n, 0),
+      ...(Object.fromEntries(SPEND_KEYS.map((k) => [k, sum(k)])) as LegSpend),
+    },
+  };
+}
+
+const isMeasured = (x: unknown): x is Measured => {
+  if (typeof x !== 'object' || x === null) return false;
+  const m = x as Measured;
+  return isCountOrNull(m.codexTokens) && SPEND_KEYS.every((k) => isCount(m[k]));
 };
 
 // Enough cycles to compare a change to the loop before and after.
@@ -390,7 +421,20 @@ export const RECENT = 5;
 
 const tenths = (n: number) => Math.round(n * 10) / 10;
 
-function spentOf(cost: readonly IterationCost[]): Spent<number | null> & { isPartial: boolean } {
+function spentOf(
+  cost: readonly IterationCost[],
+  measured?: Measured,
+): Spent<number | null> & { isPartial: boolean } {
+  const stated = statedOf(cost);
+  if (measured === undefined) return stated;
+  return {
+    ...stated,
+    codexTokens: measured.codexTokens ?? stated.codexTokens,
+    ...Object.fromEntries(SPEND_KEYS.map((k) => [k, measured[k]])),
+  };
+}
+
+function statedOf(cost: readonly IterationCost[]): Spent<number | null> & { isPartial: boolean } {
   const total = (pick: (i: IterationCost) => number | null) => {
     const stated = cost.map((i) => pick(i)).filter((n) => n !== null);
     return stated.length === 0 ? null : stated.reduce((s, n) => s + n, 0);
@@ -443,7 +487,7 @@ export function rollupOf(cycles: readonly Cycle[]): Rollup {
       iterations: c.iterations,
       fixed: c.fixedCount,
       deferred: c.deferredCount,
-      cost: c.cost ? spentOf(c.cost) : null,
+      cost: c.cost || c.measured ? spentOf(c.cost ?? [], c.measured) : null,
     })),
   };
   const counted = cycles.filter((c) => c.iterations !== null);
@@ -458,8 +502,8 @@ export function rollupOf(cycles: readonly Cycle[]): Rollup {
     r.deferredCount += c.deferredCount ?? 0;
     r.later += c.later ?? 0;
     r.selfCaused += c.selfCaused ?? 0;
-    if (c.cost) {
-      const spent = spentOf(c.cost);
+    if (c.cost || c.measured) {
+      const spent = spentOf(c.cost ?? [], c.measured);
       r.cost.cycles++;
       if (spent.isPartial) r.cost.partial++;
       r.cost.minutes = tenths(r.cost.minutes + (spent.minutes ?? 0));
