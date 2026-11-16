@@ -229,7 +229,10 @@ test("each skill's Codex brief steers it, and asks it for no receipt", () => {
         'tell Codex to join verification commands with &&, never ; or a newline',
         'Codex is not steered away from chains that hide failures',
       ],
-      ['FORCE_COLOR=1 codex review', 'Codex logs lose the color its markers are read by'],
+      [
+        'Run the `command` it returns as given',
+        'Codex runs a hand-built command, which can drop the color its markers are read by',
+      ],
       ['attempted-but-failed:', 'brief omits line two'],
       ['never attempted it', 'brief omits the unattempted-check clause'],
     ]);

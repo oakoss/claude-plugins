@@ -15,6 +15,7 @@ import {
 
 import type { Kept, KeptSpend } from '../types';
 import { added, madeBy, MARK, resolutionOf, type Entry } from './attribution';
+import { codexCommand, configuredEffort, EFFORTS, isEffort } from './codex-command';
 import { type CodexTokens, codexTokens, readCodexLog } from './codex-log';
 import { committingAlias, readCommand, shownCommand, type Classification } from './command';
 import {
@@ -183,6 +184,7 @@ type RecordHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__ledger_re
 type ScratchHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__scratch' }>;
 type SweepHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__sweep' }>;
 type CodexLogHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__codex_log' }>;
+type CodexCommandHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__codex_command' }>;
 type MissesHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__misses' }>;
 type OfferHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__offer' }>;
 type ThreadsHook = MatchedHook<'tool.call', { tool: 'mcp__review-cycle__threads' }>;
@@ -3044,6 +3046,120 @@ async function registerCodexLog($: $): Promise<void> {
   } catch {
     // Without it, the skill grades the Codex leg from its verdict.
   }
+  try {
+    await $.tool.register({
+      name: 'codex_command',
+      description:
+        "Builds the command a review cycle's Codex leg runs, to launch with Bash in the background: its scope, its reasoning effort for the tier and pass, the read-only permission profile writing only to this cycle's scratch directory (call mcp__review-cycle__scratch first), and the brief as Codex's developer instructions, with the sentence telling Codex where it may write appended. Answers with `command` and `effort`, the label for the summary, or with why it built none: a brief or checks holding a double quote, backslash, backtick, dollar sign or line break, which break the command's quoting, are refused, never rewritten.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          base: {
+            type: 'string',
+            description: 'The ref to review against; leave out for the uncommitted working tree.',
+          },
+          tier: { type: 'string', enum: ['full', 'light'] },
+          pass: {
+            type: 'string',
+            enum: ['review', 'confirmation'],
+            description:
+              'confirmation for a pass that only checks fixes, which runs at low effort.',
+          },
+          effort: {
+            type: 'string',
+            enum: [...EFFORTS],
+            description: 'An effort the user gave explicitly; it wins on any tier.',
+          },
+          brief: {
+            type: 'string',
+            description:
+              'The brief as one line of plain prose: intent, changed files, settled findings and the question to settle first.',
+          },
+          checks: {
+            type: 'string',
+            description:
+              "The project's own checks as the leg runs them in its copy, a JavaScript tool by path (node_modules/.bin/<tool>); empty for none.",
+          },
+          dir: {
+            type: 'string',
+            description:
+              "Absolute path of the checkout Codex reviews when it is not the repository root, such as a pull request's worktree.",
+          },
+          modules: {
+            type: 'string',
+            description:
+              'Absolute path of the checkout whose node_modules the copy borrows, when `dir` has none.',
+          },
+        },
+        required: ['tier', 'pass', 'brief', 'checks'],
+      },
+    });
+  } catch {
+    // Without it, the skill assembles the command as written.
+  }
+}
+
+async function onCodexCommand(
+  $: $,
+  e: Input<CodexCommandHook>,
+  _next: NextOf<CodexCommandHook>,
+): Promise<Output<CodexCommandHook>> {
+  const { base, tier, pass, effort, brief, checks, dir, modules } = e as Record<string, unknown>;
+  // A reload or a resume empties state.scratch; the transcript still names the
+  // directory the cycle's legs were given.
+  let scratch = state.scratch.at(-1);
+  if (scratch === undefined) {
+    const earlier = await scratchFromTranscript($);
+    scratch = earlier.dirs.at(-1);
+  }
+  if (scratch === undefined) {
+    return {
+      result:
+        'review-cycle codex_command: no scratch directory. Call mcp__review-cycle__scratch first; when it makes none, skip the Codex leg and record it as `skipped (no scratch directory)`.',
+    };
+  }
+  if (
+    (tier !== 'full' && tier !== 'light') ||
+    (pass !== 'review' && pass !== 'confirmation') ||
+    typeof brief !== 'string' ||
+    typeof checks !== 'string' ||
+    (base !== undefined && typeof base !== 'string') ||
+    (dir !== undefined && typeof dir !== 'string') ||
+    (modules !== undefined && typeof modules !== 'string') ||
+    (effort !== undefined && !isEffort(effort))
+  ) {
+    return {
+      result: 'review-cycle codex_command: tier, pass, brief or checks is missing or invalid.',
+    };
+  }
+  const codexHome = (await $.env.get('CODEX_HOME')) ?? '';
+  const userHome = (await $.env.get('HOME')) ?? '';
+  const home = codexHome !== '' ? codexHome : userHome !== '' ? `${userHome}/.codex` : null;
+  let toml: string | null = null;
+  try {
+    if (home !== null && (await $.fs.exists(`${home}/config.toml`))) {
+      toml = await $.fs.read(`${home}/config.toml`);
+    }
+  } catch {
+    // An unreadable config counts as no effort configured.
+  }
+  const built = codexCommand(
+    {
+      scope: base === undefined ? { uncommitted: true } : { base },
+      tier,
+      pass,
+      effort: effort ?? null,
+      brief,
+      checks,
+      ...(dir !== undefined && { dir }),
+      ...(modules !== undefined && { modules }),
+    },
+    scratch,
+    `${$.plugin.root}/scripts/copy-tree.sh`,
+    configuredEffort(toml),
+  );
+  if ('refused' in built) return { result: `review-cycle codex_command: ${built.refused}` };
+  return { result: JSON.stringify(built, null, 2) };
 }
 
 async function registerSummary($: $): Promise<void> {
@@ -3468,6 +3584,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__review-cycle__scratch' }, keptScratch);
   on('tool.call', { tool: 'mcp__review-cycle__sweep' }, keptSweep);
   on('tool.call', { tool: 'mcp__review-cycle__codex_log' }, onCodexLog);
+  on('tool.call', { tool: 'mcp__review-cycle__codex_command' }, onCodexCommand);
   on('tool.call', { tool: SUMMARY_TOOL }, onSummary);
   on('ui.render', { component: 'ToolUse' }, (_$, e, next) =>
     e.props.tool === SUMMARY_TOOL

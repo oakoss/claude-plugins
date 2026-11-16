@@ -1,32 +1,28 @@
-// The Codex effort rules live in Phase 3 and are applied again by Phase 6's
-// confirmation pass; a size prune once dropped each place's guard.
+// The effort rule lives in hooks/codex-command.ts (spec/codex-command.spec.ts);
+// each place that launches Codex must take its command from the tool, or it
+// runs at whatever effort and permissions the model writes by hand.
 
 import { expect, test } from 'vitest';
 
-import { skillText } from './agents';
+import { phase, skillText } from './agents';
 
-const text = skillText('review-cycle', 'review');
-
-function phase(n: number): string {
-  const start = text.indexOf(`### Phase ${n}:`);
-  const end = text.indexOf(`### Phase ${n + 1}:`);
-  if (start === -1 || end === -1) throw new Error(`no Phase ${n} section`);
-  return text.slice(start, end);
-}
-
-test('the light tier lowers effort only without an explicit one, and never raises it', () => {
-  const three = phase(3);
-  expect(three).toContain('**An explicit effort argument wins over the tier**');
-  expect(three).toContain(
-    'Without an explicit argument, on the light tier, append `-c model_reasoning_effort="low"`',
+test('both review skills and the confirmation pass take the command from the tool', () => {
+  const review = skillText('review-cycle', 'review');
+  expect(phase(review, 3, 'Fan-out').join('\n')).toContain(
+    'Get its command from the `mcp__review-cycle__codex_command` tool',
   );
-  expect(three).toContain('when it is already `low`, `minimal`, or `none`, **pass no override**');
+  expect(phase(review, 6, 'Verify fixes (self-check), then loop check').join('\n')).toContain(
+    'its command from `mcp__review-cycle__codex_command` with `pass: "confirmation"`',
+  );
+  expect(skillText('review-cycle', 'review-pr')).toContain(
+    'Get its command from `mcp__review-cycle__codex_command`',
+  );
 });
 
-test("the confirmation pass's Codex leg keeps both guards", () => {
-  const six = phase(6);
-  expect(six).toContain('at the explicit effort argument when one was given');
-  expect(six).toContain(
-    'or no override when the configured effort is already `low`, `minimal`, or `none`',
-  );
+test('neither skill keeps a hand-assembly recipe beside the tool', () => {
+  for (const skill of ['review', 'review-pr']) {
+    const text = skillText('review-cycle', skill);
+    expect(text, skill).not.toContain('model_reasoning_effort');
+    expect(text, skill).not.toContain('developer_instructions=');
+  }
 });
