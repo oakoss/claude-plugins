@@ -649,6 +649,11 @@ export function statusOf(r: unknown) {
   return JSON.parse((r as { result: string }).result);
 }
 
+export async function reviewerChanges($: any): Promise<string[]> {
+  const r = await $.tool.call({ tool: 'mcp__review-cycle__status' });
+  return JSON.parse((r as { result: string }).result).reviewerChanges;
+}
+
 export function stops(stopBefore: string) {
   return { pluginConfigs: { 'review-cycle': { options: { stopBefore } } } };
 }
