@@ -5,6 +5,7 @@ import {
   isIncomplete,
   isSummary,
   KEPT,
+  measuredOf,
   readCycles,
   RECENT,
   recordCycle,
@@ -478,6 +479,40 @@ const iterationsIn = async (s: Store) => {
   return kept.map((c) => c.iterations);
 };
 
+describe("the gate's own count", () => {
+  const legSpend = { steps: 3, input: 6, cacheWrite: 40, cacheRead: 500, output: 70 };
+  test('sums the legs, a leg with no spend counting as one that spent nothing seen', () => {
+    expect(measuredOf([legSpend, legSpend, null], [100, 250])).toEqual({
+      measured: {
+        legs: 3,
+        codexTokens: 350,
+        steps: 6,
+        input: 12,
+        cacheWrite: 80,
+        cacheRead: 1000,
+        output: 140,
+      },
+    });
+  });
+  test('says nothing of Codex when no log was read, and nothing at all with neither', () => {
+    expect(measuredOf([legSpend], []).measured?.codexTokens).toBeNull();
+    expect(measuredOf([], [])).toEqual({});
+  });
+  test('counts a cycle whose summary states no cost', () => {
+    const { measured } = measuredOf([legSpend], []);
+    const r = rollupOf([{ ...cycleOf(BLOCK, 'd', null), cost: undefined, measured }]);
+    expect(r.cost).toMatchObject({ cycles: 1, steps: 3, minutes: 0 });
+    expect(r.recent[0]?.cost).toMatchObject({ steps: 3, minutes: null });
+  });
+  test('stands for the spend and Codex tokens the summary states', () => {
+    const block = `${BLOCK}\nCost: iteration 1: 3 min wall-clock, 2 legs, 50 subagent tokens, 1 steps, 1 input, 1 cache-write, 1 cache-read, 1 output tokens`;
+    const stated = cycleOf(block, 'd', null);
+    const { measured } = measuredOf([legSpend], [900]);
+    const cost = rollupOf([{ ...stated, measured }]).recent[0]?.cost;
+    expect(cost).toMatchObject({ minutes: 3, legs: 2, steps: 3, cacheRead: 500, codexTokens: 900 });
+  });
+});
+
 describe('the cycle store', () => {
   test('keeps cycles per repository, oldest first', async () => {
     const s = memoryStore();
@@ -514,6 +549,16 @@ describe('the cycle store', () => {
     await recordCycle(s, '/r/.git', { ...cycle(2), cost: [spent, unstated] }, 2, 't');
     const kept = await readCycles(s, '/r/.git');
     expect(kept.map((c) => c.cost)).toEqual([undefined, [spent, unstated]]);
+  });
+  test("keeps the gate's own count beside the stated cost, and drops a malformed one", async () => {
+    const s = memoryStore();
+    const legSpend = { steps: 3, input: 6, cacheWrite: 40, cacheRead: 500, output: 70 };
+    const { measured } = measuredOf([legSpend, null], [900]);
+    await recordCycle(s, '/r/.git', { ...cycle(1), cost: [spent], measured }, 1, 't');
+    const bad = { ...measured, legs: -1 } as Cycle['measured'];
+    await recordCycle(s, '/r/.git', { ...cycle(2), cost: [spent], measured: bad }, 2, 't');
+    const kept = await readCycles(s, '/r/.git');
+    expect(kept.map((c) => c.measured)).toEqual([measured]);
   });
   test('keeps a cycle whose Cost line states a number too large to keep', async () => {
     const s = memoryStore();

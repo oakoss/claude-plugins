@@ -7832,6 +7832,42 @@ describe('the summary tool', () => {
     await Promise.all([summarize($, FULL), summarize($, FULL)]);
     expect(cycleKeys(store)).toHaveLength(2);
   });
+  test("counts the finished legs' own spend, and leaves the next cycle only its own", async ($, on) => {
+    fakeStore(on);
+    fakeWorld(on);
+    on('turn.step', answered(USAGE));
+    await ($ as any).session.start({ source: 'startup' });
+    const id = await legUnderWay($);
+    await step($, id);
+    await finishLeg($, id, false);
+    const costed = `${FULL}\nCost: iteration 1: 2 min wall-clock, 1 leg`;
+    await summarize($, costed);
+    const first = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(first.cycles.recent.at(-1).cost).toMatchObject({
+      minutes: 2,
+      legs: 1,
+      steps: 1,
+      input: 2,
+      cacheRead: 40_000,
+      codexTokens: null,
+    });
+    expect(first.legSpend).toEqual([]);
+    await summarize($, costed);
+    const second = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(second.cycles.recent.at(-1).cost).toMatchObject({ minutes: 2, steps: null });
+  });
+  test('counts a finished leg once when two summaries run together', async ($, on) => {
+    fakeStore(on);
+    fakeWorld(on);
+    on('turn.step', answered(USAGE));
+    await ($ as any).session.start({ source: 'startup' });
+    const id = await legUnderWay($);
+    await step($, id);
+    await finishLeg($, id, false);
+    await Promise.all([summarize($, FULL), summarize($, FULL)]);
+    const status = statusOf(await $.tool.call({ tool: 'mcp__review-cycle__status' }));
+    expect(status.cycles.cost.steps).toBe(1);
+  });
   test('keeps no block without an Iterations line, and counts a partly read one as incomplete', async ($, on) => {
     const store = fakeStore(on);
     fakeWorld(on);

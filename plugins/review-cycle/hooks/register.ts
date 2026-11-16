@@ -28,7 +28,7 @@ import {
   type Grant,
 } from './consent';
 import { containmentReport, insideRepo, repoStateOf, UNREAD, type Capture } from './containment';
-import { cycleOf, isSummary, readCycles, recordCycle, rollupOf } from './cycles';
+import { cycleOf, isSummary, measuredOf, readCycles, recordCycle, rollupOf } from './cycles';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
 import {
   besideOf,
@@ -311,6 +311,8 @@ type GateState = {
   // The review skill's text from when it loads until a commit lands or the
   // session ends, so a compaction can hand back what its re-attached copy drops.
   reviewing: string | null;
+  // Finished Codex logs codex_log read since the last summary: path to tokens.
+  codexRead: Map<string, number>;
 };
 
 const state: GateState = {
@@ -353,6 +355,7 @@ const state: GateState = {
   roundsFrom: 0,
   pushed: [],
   reviewing: null,
+  codexRead: new Map(),
 };
 
 const held = (): Hold => state.hold?.floor ?? null;
@@ -576,7 +579,8 @@ type Unkept =
   | 'nudge'
   | 'owed'
   | 'unaskedNotice'
-  | 'standing';
+  | 'standing'
+  | 'codexRead';
 const _keptFields: Equal<Exclude<keyof GateState, Unkept>, keyof Kept> = true;
 const _keptLeg: Equal<Omit<Leg, 'timer'>, Kept['legs'][number][1]> = true;
 const _keptReview: Equal<Review, Kept['reviews'][number]> = true;
@@ -811,7 +815,7 @@ async function onSessionStart(
     await $.tool.register({
       name: 'status',
       description:
-        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, how many later findings the cycles' own fixes caused, what the cycles that stated a cost spent (minutes, leg runs, subagent tokens, the legs' steps and token counts, Codex tokens), and the newest cycles one by one with their commit, cost and findings. `legSpend` lists each reviewer leg's model calls this session, by agent id: its steps and the input, cache-write, cache-read and output tokens they used. Read-only.",
+        "review-cycle's view of the working tree: which changed paths a reviewer has seen, which were edited after the last review or never reviewed, and whether a push or a pull request may run now: asked for in the user's latest message, or below their stop-before setting. `rounds` counts the trees reviewed for each recent commit, confirmation passes included; `cycles` totals the review cycles whose summaries this repository kept: their loop iterations, how they ended, the findings fixed and deferred by leg and by side of Phase 6's bar, how many later findings the cycles' own fixes caused, what the cycles that stated a cost spent (minutes, leg runs, subagent tokens, the legs' steps and token counts, Codex tokens), and the newest cycles one by one with their commit, cost and findings. `legSpend` lists each reviewer leg's model calls since the last kept summary, by agent id: its steps and the input, cache-write, cache-read and output tokens they used. Read-only.",
       inputSchema: { type: 'object', properties: {} },
     });
   } catch {
@@ -3212,7 +3216,24 @@ async function recordSummary($: $, text: string): Promise<string | null> {
     () => null,
   );
   const cycle = cycleOf(text, new Date(now).toISOString().slice(0, 10), head);
-  await recordCycle(storeOf($), root.common, cycle, at, STORE_TAG);
+  // Taken with no await between, so a summary running beside this one cannot
+  // count the same legs, and put back if the cycle is not kept.
+  const finished = [...state.legs].filter(([, l]) => l.counts && l.done);
+  const codex = [...state.codexRead];
+  for (const [id] of finished) state.legs.delete(id);
+  state.codexRead.clear();
+  const measured = measuredOf(
+    finished.map(([, l]) => l.spend ?? null),
+    codex.map(([, n]) => n),
+  );
+  try {
+    await recordCycle(storeOf($), root.common, { ...cycle, ...measured }, at, STORE_TAG);
+  } catch (error) {
+    for (const [id, leg] of finished) state.legs.set(id, leg);
+    for (const [path, n] of codex) state.codexRead.set(path, n);
+    throw error;
+  }
+  void keep($);
   return null;
 }
 
@@ -3300,6 +3321,7 @@ async function onCodexLog(
     } catch (error) {
       tokens = { sessionId, unavailable: messageOf(error) };
     }
+    if (tokens.total !== undefined) state.codexRead.set(path, tokens.total);
     return { result: JSON.stringify({ commands, tokens }, null, 2) };
   } catch (error) {
     return { result: `review-cycle codex_log: could not read ${path}: ${messageOf(error)}` };
