@@ -4,6 +4,14 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.41.0 (2026-11-16)
+
+### Added
+
+The Codex leg's command now comes from a tool, `mcp__review-cycle__codex_command`, instead of being assembled by hand from instructions written out in three places. The tool picks the reasoning effort for the tier and pass from the root table of your `~/.codex/config.toml` (an explicit `effort <level>` still wins, and the light tier and confirmation passes still only ever lower it), runs Codex under the read-only permission profile that writes only the cycle's scratch directory, and appends the sentence telling Codex where it may write. A brief holding a double quote, backslash, backtick, dollar sign or line break is refused, naming which, rather than passed on to break the command's quoting. `/review-cycle:review-pr` now runs its Codex leg under that same read-only profile, in the pull request's worktree; before, it ran with Codex's default sandbox, which can write wherever you can.
+
+A review's cost is now counted by the gate rather than typed into the summary. The summary tool takes the spend of every reviewer leg that finished since the previous summary from the gate's own record, and the token totals of every finished Codex log `mcp__review-cycle__codex_log` read, and keeps them with the cycle; the status tool's `cycles.cost` and `recent` use them. The review skill no longer adds up each round's spend by hand, and the `Cost:` line drops its spend and Codex fields. No Codex token count had ever reached the stats before: the line asked for one, and none was typed. The counts include every phase, the maintainability and confirmation passes too, where the line's minutes and legs cover the fix loop alone.
+
 ## 0.40.0 (2026-11-15)
 
 ### Added
