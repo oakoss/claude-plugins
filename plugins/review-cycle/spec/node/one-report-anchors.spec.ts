@@ -1,7 +1,7 @@
 // A reviewer that ends its turn while its own background runs go on sends an
 // interim answer, and each one wakes the orchestrator as a finished review:
 // measured 2026-10-11, one pr-test-analyzer leg sent about 15 before its report.
-// Waiting instead runs into the leg's 30-minute budget (register.ts
+// Waiting instead runs into the leg's 30-minute budget (state/gate-state.ts
 // LEG_BUDGET_MS), so the paragraph must carry that and how to wait.
 
 import { readFileSync } from 'node:fs';

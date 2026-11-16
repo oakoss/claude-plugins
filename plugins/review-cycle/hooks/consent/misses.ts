@@ -1,7 +1,7 @@
 // The gate's consent misses, kept across sessions and repositories so their
 // rate shows which requests fall outside what the reader reads. One
 // list per user: the plugin's store is one file, and the reader is one for
-// every repository. Pure; register.ts binds the store.
+// every repository. Pure; `storeOf` in state/engine.ts binds the store.
 
 import type { Store } from '../ledger/ledger-store';
 import { prune, readJournal, writeEntry } from '../state/journal';

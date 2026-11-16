@@ -7,7 +7,7 @@ import { isSpend } from '../review/spend';
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 // The gate's state as keptOf reads it. Leg and message fields are copied by
-// name; the rest pass through, held to Kept by register.ts's Equal checks.
+// name; the rest pass through, held to Kept by gate-state.ts's Equal checks.
 export type KeptSource = Omit<Kept, 'legs'> & {
   legs: ReadonlyMap<string, KeptLeg & { timer: unknown }>;
 };

@@ -1,5 +1,5 @@
 // Replies to a pull request's review threads, and resolving them, decided
-// per thread. Pure: register.ts reads GitHub, asks this, then writes.
+// per thread. Pure: reply.ts reads GitHub, asks this, then writes.
 
 import { allows, type PrUpdates } from '../consent/pr-updates';
 

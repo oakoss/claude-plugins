@@ -1,6 +1,6 @@
 // Whether the GitHub writes in a call may run on the stop-before ladder, and
 // the refusals when they may not. Pure: what it needs from gh or the settings
-// comes through `GhLookups`, which register.ts builds.
+// comes through `GhLookups`, which judge.ts builds.
 
 import {
   covers,

@@ -2,7 +2,7 @@
 // change to the loop can be measured: how many iterations it ran, how it ended,
 // which legs' findings it fixed or deferred, in which iteration and on which
 // side of Phase 6's bar, and how many later findings its own fixes caused.
-// Pure; register.ts binds the store.
+// Pure; `storeOf` in state/engine.ts binds the store.
 
 import { hashOf } from '../ledger/ledger';
 import type { Store } from '../ledger/ledger-store';
