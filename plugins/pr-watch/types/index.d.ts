@@ -138,11 +138,17 @@ export type Watch = {
   heard?: { since: string | null; keys: string[]; streak?: number };
 };
 
+// News that a later read can show has ended while a turn held it.
+export type NewsKind = 'conflicts' | 'behind';
+
 export type Held = {
   id: string;
   label: string;
   url: string;
   news: string[];
+  // The kind of each line in `news` that has one, by its text; a line saved
+  // without one is delivered as it stands.
+  kinds?: Record<string, NewsKind>;
   ready: string | null;
   // `ready` tells Claude to ask about the merge, so it wakes Claude rather than waiting.
   isAsk?: boolean;

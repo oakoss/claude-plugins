@@ -19,7 +19,7 @@ import {
   isCleared,
   askOf,
   clearedConflicts,
-  isConflictsLine,
+  heldNewsOf,
   isRefused,
   isUnreadable,
   isQuotaLow,
@@ -1064,9 +1064,49 @@ describe('wakeOf', () => {
     expect(clearedConflicts(base)).toBeNull();
     const pushed = { ...reads('DIRTY', 'CLEAN'), push: { branch: 'feat/x', pushedAt: 0 } };
     expect(clearedConflicts(pushed)).toBeNull();
-    expect(isConflictsLine(dirty.news[0]!)).toBe(true);
-    expect(isConflictsLine('@alice commented on o/r#128: https://x/alice')).toBe(false);
-    expect(isConflictsLine('CI: Lint failed for o/r#128: https://x/Lint')).toBe(false);
+  });
+
+  describe('the news a turn held, at its end', () => {
+    const base = { ...pr, host: 'github.com', checkedAt: 0 };
+    const reads = (...merges: string[]) => {
+      let last: Memory = {};
+      let p = pull([]);
+      for (const merge of merges) {
+        p = pull([], { merge });
+        last = after(p, last);
+      }
+      return { ...base, pull: p, told: last.told };
+    };
+    const comment = '@alice commented on o/r#128: https://x/alice';
+    const held = (merge: string) => {
+      const w = after(pull([], { merge }));
+      return { news: [...w.news, comment], kinds: w.kinds };
+    };
+
+    test('each line keeps the kind it was made with', () => {
+      expect(Object.values(held('DIRTY').kinds)).toEqual(['conflicts']);
+      expect(Object.values(held('BEHIND').kinds)).toEqual(['behind']);
+      expect(after(pull([], { merge: 'CLEAN' })).kinds).toEqual({});
+    });
+    test('drops conflicts and behind once a read shows them ended, and keeps the rest', () => {
+      expect(heldNewsOf(held('DIRTY'), reads('DIRTY', 'CLEAN'))).toEqual([comment]);
+      expect(heldNewsOf(held('BEHIND'), reads('BEHIND', 'CLEAN'))).toEqual([comment]);
+      expect(heldNewsOf(held('DIRTY'), reads('DIRTY'))).toEqual(held('DIRTY').news);
+      expect(heldNewsOf(held('BEHIND'), reads('BEHIND'))).toEqual(held('BEHIND').news);
+    });
+    test('drops conflicts and behind of a watch gone, and keeps the rest', () => {
+      expect(heldNewsOf(held('DIRTY'))).toEqual([comment]);
+      expect(heldNewsOf(held('BEHIND'))).toEqual([comment]);
+    });
+    test('keeps a conflicts line that names a base other than the current one', () => {
+      const old = 'o/r#128 has merge conflicts with develop.';
+      const h = { news: [old], kinds: { [old]: 'conflicts' as const } };
+      expect(heldNewsOf(h, reads('DIRTY', 'CLEAN'))).toEqual([old]);
+    });
+    test('delivers a line saved without its kind as it stands', () => {
+      const lines = held('DIRTY').news;
+      expect(heldNewsOf({ news: lines })).toEqual(lines);
+    });
   });
 
   test('keeps conflicts told while GitHub recomputes the merge state', () => {
@@ -1143,6 +1183,7 @@ describe('wakeOf', () => {
     expect(early).toEqual({
       text: null,
       news: [],
+      kinds: {},
       ready: null,
       ask: null,
       passed: [],
@@ -1529,6 +1570,7 @@ describe('wakeOf', () => {
     expect(after(p)).toEqual({
       text: null,
       news: [],
+      kinds: {},
       ready: null,
       ask: null,
       passed: [],
