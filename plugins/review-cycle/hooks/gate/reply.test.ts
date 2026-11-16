@@ -48,6 +48,32 @@ async function replied($: any, input: Record<string, unknown>): Promise<string> 
   return r.result;
 }
 
+// Holds the first gh call with an argument matching `arg` until `release`;
+// `reached` settles once that call is held. Register it before fakeWorld.
+function holdFirst(on: any, arg: RegExp) {
+  let release!: () => void;
+  let reach!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const reached = new Promise<void>((r) => {
+    reach = r;
+  });
+  let held = false;
+  on('process.run', { argv: arg }, async ($$: unknown, e: unknown, next: any) => {
+    if (held) return next(e);
+    held = true;
+    reach();
+    await gate;
+    return next(e);
+  });
+  return { release, reached };
+}
+const THREAD_READ = /^query=query\(/;
+const POST = /^query=mutation\(\$id:ID!,\$body/;
+const OVERTAKEN =
+  'the user sent a new message while the gate was checking this reply, so it did not run. Act on their message.';
+
 const FIXED = { thread: 'PRRT_1', body: 'Fixed in a5f6f70.', commit: 'a5f6f70', resolve: true };
 const posts = (w: World) =>
   w.calls.filter((c) => c.argv.join(' ').includes('addPullRequestReviewThreadReply')).length;
@@ -400,6 +426,56 @@ describe('the reply tools', () => {
       '"outcome":"skipped"',
     );
     expect([posts(w), resolves(w)]).toEqual([0, 1]);
+  });
+
+  test('a second call on a thread another call is replying to skips it, so one reply posts', async ($, on) => {
+    const hold = holdFirst(on, THREAD_READ);
+    const w = fakeWorld(on, { settings: { local: updating('push and reply') }, git: github109() });
+    await say($, 'fix the review findings');
+    const first = replied($, { replies: [FIXED] });
+    await hold.reached;
+    const second = await replied($, { replies: [FIXED] });
+    hold.release();
+    expect(second).toContain('"outcome":"skipped","why":"another call is replying to it"');
+    expect(await first).toContain('"outcome":"replied"');
+    expect(posts(w)).toBe(1);
+  });
+
+  test('a message sent while a reply reads its threads posts none of them', async ($, on) => {
+    const hold = holdFirst(on, THREAD_READ);
+    const w = fakeWorld(on, { settings: { local: updating('push and reply') }, git: github109() });
+    await say($, 'fix the review findings');
+    const r = replied($, { replies: [FIXED, { ...FIXED, thread: 'PRRT_2' }] });
+    await hold.reached;
+    await queue($, 'also fix the tests');
+    hold.release();
+    expect(JSON.parse(await r).outcomes).toEqual([
+      { thread: 'PRRT_1', outcome: 'not posted', why: OVERTAKEN },
+      { thread: 'PRRT_2', outcome: 'not posted', why: OVERTAKEN },
+    ]);
+    expect(posts(w)).toBe(0);
+  });
+
+  test('a message sent between the reply and the resolve leaves the thread open', async ($, on) => {
+    const hold = holdFirst(on, POST);
+    const w = fakeWorld(on, {
+      settings: { local: updating('push, reply and resolve') },
+      git: github109(),
+    });
+    await say($, 'fix the review findings');
+    const r = replied($, { replies: [FIXED] });
+    await hold.reached;
+    await queue($, 'also fix the tests');
+    hold.release();
+    expect(JSON.parse(await r).outcomes).toEqual([
+      {
+        thread: 'PRRT_1',
+        outcome: 'replied, not resolved',
+        url: 'https://github.com/o/r/pull/109#discussion_r1',
+        why: OVERTAKEN,
+      },
+    ]);
+    expect([posts(w), resolves(w)]).toEqual([1, 0]);
   });
 
   test('a preview posts nothing, and an unpushed commit or too many threads refuses', async ($, on) => {

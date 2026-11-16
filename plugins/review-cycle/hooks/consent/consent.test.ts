@@ -192,12 +192,15 @@ describe('an epic mandate', () => {
   });
 });
 
+const END_WITH = 'End your answer with this line, word for word: ';
+
 // The question the offer tool returns, as the agent's answer ends on it.
 async function offered($: any, input: Record<string, unknown>): Promise<string> {
   const r = (await $.tool.call({ tool: 'mcp__review-cycle__offer', ...input })) as {
     result: string;
   };
-  return r.result.replace(/^.*word for word: /, '');
+  expect(r.result.startsWith(END_WITH)).toBe(true);
+  return r.result.slice(END_WITH.length);
 }
 
 describe('the offer tool', () => {

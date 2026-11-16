@@ -1403,6 +1403,32 @@ describe('a push the user asked for', () => {
       [`${'c'.repeat(12)}..${'e'.repeat(12)}`, 1],
     ]);
   });
+  test('a judged commit after the last one finished records its own entry', async ($, on) => {
+    fakeStore(on);
+    const w = fakeWorld(on, {
+      commits: {
+        ['c'.repeat(40)]: { 'a.ts': 'zero' },
+        ['d'.repeat(40)]: { 'a.ts': 'one' },
+        ['e'.repeat(40)]: { 'a.ts': 'two' },
+      },
+      shell(this: World, command: string) {
+        this.head = (command.endsWith(' a') ? 'd' : 'e').repeat(40);
+      },
+    });
+    await review($);
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git commit -am a'))).toBe(true);
+    w.work = { 'a.ts': 'two' };
+    await review($);
+    await say($, 'commit it');
+    expect(ran(await bash($, 'git commit -am b'))).toBe(true);
+    const r = (await $.tool.call({ tool: 'mcp__review-cycle__status' })) as any;
+    const { rounds } = JSON.parse(r.result);
+    expect(rounds.map((x: { commit: string; rounds: number }) => [x.commit, x.rounds])).toEqual([
+      ['d'.repeat(12), 1],
+      ['e'.repeat(12), 1],
+    ]);
+  });
   test('a rounds record the store cannot take is named, and the commit still runs', async ($, on) => {
     fakeStore(on, { refuse: 'disk full' });
     fakeWorld(on, {
