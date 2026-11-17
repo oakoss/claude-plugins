@@ -3,6 +3,7 @@
 // whatever it holds, so it is not read.
 
 import type { GhAction } from '../gate/github';
+import { programName } from './programs';
 import type { Word } from './shell';
 
 // Options that take a value before the command, from each tool's `--help`
@@ -109,7 +110,7 @@ function cargoCluster(cluster: string): boolean {
   return false;
 }
 
-const basename = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+const basename = programName;
 
 // The publish each word starts, by its index: a publisher at any word runs
 // (`timeout 60 npm publish`, `npx oakum release`). The words after `npm run`

@@ -21,6 +21,7 @@ import {
   type CommitSpec,
   type PushSpec,
 } from './git-args';
+import { programName, SHELLS, takesCode } from './programs';
 import { FROM_INPUT, PUBLISH_TEXT, publishActionsOf } from './publish';
 import {
   assignmentName,
@@ -40,40 +41,20 @@ function readsConfig(args: Word[]): boolean {
 }
 
 export const BUILTIN_RUNNERS: ReadonlySet<string> = new Set(['.', 'eval', 'source']);
-// Commands that run their arguments, or their standard input, as code.
-export const INTERPRETERS: ReadonlySet<string> = new Set([
-  'bash',
-  'sh',
-  'zsh',
-  'dash',
-  'ksh',
-  'fish',
-  'eval',
+// Commands that run their arguments, or their standard input, as code:
+// programs.ts's, and these, which run another program.
+const ALSO_RUNS = new Set([
   'source',
   '.',
-  'python',
-  'python3',
-  'node',
-  'deno',
-  'bun',
-  'tsx',
-  'ts-node',
-  'lua',
-  'perl',
-  'ruby',
-  'php',
   'find',
-  'parallel',
-  'watch',
-  'script',
   'expect',
-  'osascript',
   'uv',
   'mise',
   'nix-shell',
   'sudo',
   'doas',
 ]);
+export const interprets = (name: string): boolean => takesCode(name) || ALSO_RUNS.has(name);
 export const KEYWORDS: ReadonlySet<string> = new Set([
   '!',
   '{',
@@ -148,8 +129,6 @@ const DATA = new Set([
 ]);
 // A committing verb as a word of its own, as in `$GIT commit`, not `commit-gate`.
 const WORD_VERB = /(^|[\s'"`])(commit|push|merge|cherry-pick|revert|am|pull|rebase)([\s'"`]|$)/;
-// Shells that run the script on their standard input when given no script.
-const STDIN_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish']);
 // Git commands that write commits or push other than commit and push
 // themselves; none is needed for everyday work, so none is judged.
 const REFUSED = new Set([
@@ -225,9 +204,7 @@ type Kind =
   // `always` refusals stand whatever the command's text mentions.
   | { kind: 'refuse'; reason: string; always?: boolean };
 
-export function basename(p: string): string {
-  return p.slice(p.lastIndexOf('/') + 1);
-}
+export const basename = programName;
 
 // Git's global options before the subcommand. Only `-C` and `-c` are kept;
 // options that point git at a different repository are refused. A `-C` built
@@ -446,19 +423,19 @@ function runsCode(
       }
       continue;
     }
-    if (!INTERPRETERS.has(name)) continue;
+    if (!interprets(name)) continue;
     // Builtins run code only as the command itself: `fd x .` searches `.`.
     if (i > 0 && BUILTIN_RUNNERS.has(name)) continue;
     // A shell with no script reads one from its standard input: a pipe or
     // heredoc anywhere in the command can feed it.
     const scriptless =
-      STDIN_SHELLS.has(name) &&
+      SHELLS.has(name) &&
       words.slice(i + 1).every((x) => x.text.startsWith('-') && x.text !== '-c');
     // A shell's `-c` script is a command like any other; judge it as one.
     const c = words.findIndex((x, j) => j > i && x.text === '-c');
     const script = c === -1 ? undefined : words[c + 1];
     if (
-      STDIN_SHELLS.has(name) &&
+      SHELLS.has(name) &&
       script &&
       !script.dynamic &&
       classify(script.text, aliases).kind !== 'none'
