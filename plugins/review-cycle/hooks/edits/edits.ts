@@ -6,7 +6,8 @@
 // commands worth measuring, so a false yes costs time, not accuracy.
 
 import { messageOf } from '../gate/git';
-import { basename, BUILTIN_RUNNERS, every, INTERPRETERS, KEYWORDS } from '../shell/command';
+import { basename, BUILTIN_RUNNERS, every, interprets, KEYWORDS } from '../shell/command';
+import { programName } from '../shell/programs';
 import {
   assignmentName,
   parse,
@@ -31,7 +32,6 @@ const WRITERS = new Set([
   'patch',
   'xargs',
 ]);
-const PYTHON = /^python[0-9.]*$/;
 // Wrappers that run the command after them, besides the reserved words.
 const WRAPPERS = new Set(['time', 'env', 'exec', 'command', 'nohup', 'nice']);
 // The paths a note lists before it counts the rest.
@@ -40,7 +40,7 @@ const SHOWN = 10;
 // A redirect whose target the shell computes may land anywhere.
 const writesFile = (w: Word): boolean => w.dynamic || !w.text.startsWith('/dev/');
 
-const nameOf = (w: Word): string => basename(w.text).replace(/\.exe$/i, '');
+const nameOf = (w: Word): string => programName(w.text);
 
 // Runners and writers whose names are also ordinary words and paths
 // (`git add .`, `rg expect`, `pnpm run watch`, `pnpm install`): they count
@@ -51,6 +51,10 @@ const COMMAND_ONLY = new Set([
   'expect',
   'watch',
   'script',
+  'screen',
+  'tmux',
+  'su',
+  'flock',
   'sudo',
   'doas',
   'uv',
@@ -61,7 +65,7 @@ const COMMAND_ONLY = new Set([
 function names(w: Word): boolean {
   const name = nameOf(w);
   if (COMMAND_ONLY.has(name)) return false;
-  return INTERPRETERS.has(name) || WRITERS.has(name) || PYTHON.test(name);
+  return interprets(name) || WRITERS.has(name);
 }
 
 const beforeCommand = (w: Word): boolean =>

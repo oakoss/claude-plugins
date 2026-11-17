@@ -6,6 +6,7 @@
 // loosens it without passing through `config.set`. Any JSON file counts,
 // because a settings file can be passed with `--settings` under any name.
 
+import { programName, runsLanguage, SHELL_RUNNERS, SHELLS } from '../shell/programs';
 import {
   assignmentName,
   parse,
@@ -106,33 +107,10 @@ const WRITERS = new Set([
 ]);
 // Commands that edit a file in place when given `-i` or `--in-place`.
 const IN_PLACE = new Set(['sed', 'perl', 'ruby']);
-// Interpreters, whose writes are in code this reader does not follow.
-const INTERPRETERS = /^(python[0-9.]*|node|bun|deno|tsx|ts-node|lua|osascript)$/;
-// Shells, and commands that hand an argument to one, run a command line this
-// reader does not parse.
-const SHELLS = new Set([
-  'bash',
-  'sh',
-  'zsh',
-  'dash',
-  'ksh',
-  'fish',
-  'su',
-  'eval',
-  'watch',
-  'parallel',
-  'flock',
-  'script',
-  'tmux',
-  'screen',
-]);
 // `claude` as installed, or run through npx and the like as its package.
 const CLAUDE = /^claude(-code)?(@[^/]*)?$/;
 // Discarding output writes nothing anyone reads.
 const writesFile = (w: Word): boolean => w.text !== '/dev/null';
-
-const basename = (text: string): string =>
-  text.slice(text.lastIndexOf('/') + 1).replace(/\.exe$/i, '');
 
 // The text check's test, with what writes and what runs `claude plugin` read
 // from the parsed command: quoted prose that mentions a writer, a redirect or
@@ -169,7 +147,9 @@ function touchesGateAs(
 // `claude -p` acts on also run a shell.
 function runsShell(st: Statement): boolean {
   const n = names(st);
-  if (n.some((name) => SHELLS.has(name))) return true;
+  // Shells, and programs that hand an argument to one, run a command line this
+  // reader does not parse.
+  if (n.some((name) => SHELLS.has(name) || SHELL_RUNNERS.has(name))) return true;
   const has = (flag: RegExp): boolean => st.words.some((w) => flag.test(w.text));
   if (n.includes('sudo') && has(/^(-[a-zA-Z]*[si][a-zA-Z]*|--shell|--login)$/)) return true;
   if (n.includes('env') && has(/^(-[a-zA-Z]*S|--split-string)/)) return true;
@@ -191,7 +171,7 @@ function flatten(list: Statement[]): Statement[] {
 }
 
 function names(st: Statement): string[] {
-  return st.words.map((w) => basename(w.text));
+  return st.words.map((w) => programName(w.text));
 }
 
 // `claude [options] plugin[s] [marketplace] disable|uninstall|remove|rm` that
@@ -240,9 +220,10 @@ function writes(st: Statement): boolean {
   // `claude` runs none of its arguments: the `install` in `claude plugin
   // install` is a subcommand, not the program that writes files.
   const command = st.words.find((w) => assignmentName(w) === null);
-  if (command !== undefined && CLAUDE.test(basename(command.text))) return false;
+  if (command !== undefined && CLAUDE.test(programName(command.text))) return false;
   const n = names(st);
-  if (n.some((name) => WRITERS.has(name) || INTERPRETERS.test(name))) return true;
+  // A language's writes are in code this reader does not follow.
+  if (n.some((name) => WRITERS.has(name) || runsLanguage(name))) return true;
   const inPlace = st.words.some((w) => /^(-[a-zA-Z0-9]*i|--in-place)/.test(w.text));
   return inPlace && n.some((name) => IN_PLACE.has(name));
 }
