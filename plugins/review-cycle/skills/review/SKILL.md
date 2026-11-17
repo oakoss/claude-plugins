@@ -11,7 +11,7 @@ Automated multi-agent review cycle on uncommitted changes. Invoke it with `/revi
 
 ## Embedded policies
 
-These three policies apply throughout this cycle; `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` holds standalone copies for use outside it.
+These policies apply throughout this cycle; `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` holds standalone copies, and the comment policy this cycle falls back to.
 
 ### Evidence policy
 
@@ -32,32 +32,7 @@ Withdrawing is not a way to be quiet. A leg that could not build and therefore w
 
 ### Comment policy
 
-Comments are useful when they add value. Keep them clean and minimal.
-
-A good comment:
-
-- Is accurate (matches the code; remove if stale)
-- Earns its place: without it, the next reader would get something wrong, or have to run or search something to learn it
-- Is concise (one or two lines unless documenting a complex invariant)
-- States a rule once, beside the code that enforces it; elsewhere, names that code instead of restating the rule
-
-Avoid:
-
-- Restating what the code does
-- Section markers like `// ===== HELPERS =====`
-- Hedge words, apologies, "obviously", "basically", "just"
-- "Note:" / "Important:" prefixes when surrounding text already conveys importance
-- TODOs without ticket references
-- Cross-references that belong in the PR description ("added for X", "used by Y")
-- Comments narrating change history ("previously", "no longer", "as it did before the refactor") — state the current invariant; the story belongs in the commit message
-- Multi-line comments on trivial code
-- AI-flavored phrasings ("Here we...", "Let's...", "This...")
-- Labels on test cases or inputs that already read clearly
-- Narrating the assertion or call on the next line
-- Summarizing a function short enough to read
-- Facts the code holds and will change (counts, lists presented as complete, "above", a measurement's ticket): point at the list or file; a measured version or number stays
-
-If a comment is not clearly worth keeping, delete it. A review pass must never make a comment longer.
+Comments follow the project's own rules: its `AGENTS.md` or `CLAUDE.md`, and its linter. For what they leave unsaid, read the comment policy in `${CLAUDE_PLUGIN_ROOT}/reference/policies.md` before writing or cleaning a comment. Either way, a review pass never makes a comment longer.
 
 ### Fix-vs-defer policy
 

@@ -92,7 +92,7 @@ Hooks here are hooks modules: TypeScript that Claude Code runs itself, named in 
 ## Skill conventions
 
 - Set `disable-model-invocation: true` only for skills that bypass a safety gate (e.g. marking state as reviewed without reviewing it) or perform meta-setup the user should explicitly initiate (e.g. writing global config). Local side effects like editing files don't qualify on their own — Claude already edits files freely, and the relevant boundary (commit, push, send) should be enforced by a hook, not by hiding the skill. When disabled, the skill is reachable only via `/<plugin>:<skill>` or a hook's `additionalContext` directive.
-- Embed any load-bearing policies (comment rules, deferral criteria, etc.) directly in the skill body. The skill should be self-contained.
+- Embed load-bearing workflow policies (deferral criteria, evidence) directly in the skill body, so the skill is self-contained. Comment and style rules are the project's own: a skill follows them, and reads a plugin's fallback from `reference/` only for what they leave unsaid.
 - If a policy could also apply outside the skill, provide a standalone snippet in `reference/` that users can copy into their `CLAUDE.md`.
 - Keep skill bodies under ~500 lines. Move detailed reference material to supporting files in the skill directory.
 - When a skill's prose tells the model to invoke another skill, write it as *invoke `/plugin:skill` via the Skill tool* — naming the tool fires more reliably than a bare slash command in prose. Never instruct model-invocation of a `disable-model-invocation: true` skill.

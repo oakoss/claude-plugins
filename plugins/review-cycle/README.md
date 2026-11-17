@@ -284,7 +284,7 @@ When a turn ends with changes no reviewer has seen, your next message carries a 
 
 ### Add the policies to your global CLAUDE.md
 
-The skills embed the comment, fix-vs-defer, and evidence policies, so the cycle itself works without setup. But if you want the same policies active outside the cycle (when Claude is implementing code or addressing a single PR comment), copy the snippets from `reference/policies.md` into `~/.claude/CLAUDE.md`.
+The skills embed the fix-vs-defer and evidence policies, and review comments by your project's own rules (its `AGENTS.md` or `CLAUDE.md`, and its linter), with the comment policy in `reference/policies.md` covering what they leave unsaid, so the cycle itself works without setup. But if you want the same policies active outside the cycle (when Claude is implementing code or addressing a single PR comment), copy the snippets from `reference/policies.md` into `~/.claude/CLAUDE.md`.
 
 ### Per-project config: `.claude/review-cycle.json`
 

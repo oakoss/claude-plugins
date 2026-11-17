@@ -1,5 +1,5 @@
-// The comment policy is restated in the skill, the cleanup agent and the
-// snippet users copy, and a trim of any one would go unnoticed.
+// The comment policy is the fallback in the snippet users copy and the
+// cleanup agent, and a trim of either would go unnoticed.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -16,7 +16,19 @@ const SHORT = 'Summarizing a function short enough to read';
 
 const read = (file: string) => readFileSync(file, 'utf8');
 
-test('the skill deletes a comment not clearly worth keeping, and keeps no churn-prone facts', () => {
+test("the skill follows the project's comment rules and falls back to policies.md", () => {
+  const text = skillText('review-cycle', 'review');
+  expect(text).toContain(
+    "Comments follow the project's own rules: its `AGENTS.md` or `CLAUDE.md`, and its linter.",
+  );
+  expect(text).toContain(
+    'For what they leave unsaid, read the comment policy in `$' +
+      '{CLAUDE_PLUGIN_ROOT}/reference/policies.md` before writing or cleaning a comment.',
+  );
+  expect(text).toContain('a review pass never makes a comment longer');
+});
+
+test('the fallback policy deletes a comment not clearly worth keeping, and keeps no churn-prone facts', () => {
   const anchors: Anchor[] = [
     [EARNS, 'the test a comment must pass'],
     [ONCE, 'a rule is stated once'],
@@ -28,7 +40,6 @@ test('the skill deletes a comment not clearly worth keeping, and keeps no churn-
     [SHORT, 'short-function summaries'],
     ['If a comment is not clearly worth keeping, delete it.', 'delete by default'],
   ];
-  expectAnchors(skillText('review-cycle', 'review'), 'review skill', anchors);
   expectAnchors(
     read(path.join(REPO_ROOT, 'plugins/review-cycle/reference/policies.md')),
     'policies.md',
@@ -38,6 +49,7 @@ test('the skill deletes a comment not clearly worth keeping, and keeps no churn-
 
 test('the cleanup agent applies the same test and rewrites churn-prone facts', () => {
   expectAnchors(read(path.join(AGENTS_DIR, 'cleanup.md')), 'cleanup agent', [
+    ["The project's own comment rules come first", "the project's rules win"],
     [EARNS, 'the test a comment must pass'],
     [ONCE, 'a rule is stated once'],
     [CHURN, 'facts the code holds and will change'],
