@@ -4,6 +4,18 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.43.0 (2026-11-17)
+
+### Added
+
+After `/review-cycle:review` commits, it now fixes the deferred findings whose fix is a sentence or a test, below the bar and pre-existing ones included, and commits them as one follow-up commit on the same branch once a confirmation review of those fixes is clean. If that review faults any follow-up fix, the whole follow-up is dropped and its findings listed, never patched again. Once the follow-up is pushed, an open pull request's Known issues are rewritten to match. The reply then lists what it fixed and what it left, each with its reason, and asks one question: whether to file any of the left ones. You no longer have to ask which findings to address. Nothing is filed without your yes; findings held at the round limit are left alone, and a cycle that stopped before committing ends as before.
+
+### Fixed
+
+`/review-cycle:review` now reviews and cleans comments by your project's own rules first, from its `AGENTS.md` or `CLAUDE.md` and its linter. review-cycle's comment policy becomes the fallback for what those rules leave unsaid: the review skill reads it from `reference/policies.md` instead of carrying it inline, and where your rules differ from it, yours win, in the review and in its cleanup pass. A project whose comment rules match review-cycle's sees no change. The review skill loads about 1,200 characters less on every review.
+
+`/review-cycle:init` no longer offers to append review-cycle's comment policy to your `CLAUDE.md`; it offers only the fix-vs-defer and evidence policies, which are about how the agent works. Comment and style rules belong to each project, and the `comment-check` plugin flags comment slop as files are written. A comment policy init added before stays where it is.
+
 ## 0.42.0 (2026-11-17)
 
 ### Added

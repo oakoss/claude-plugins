@@ -11,7 +11,7 @@
     {
       "name": "review-cycle",
       "description": "Automated multi-agent code review cycle that spawns reviewers in parallel (plus Codex when available), applies fixes per CLAUDE.md policy, admits a commit only when a reviewer saw exactly what it records, and asks before a push, pull request, merge or release you did not request, unless you let it go further.",
-      "version": "0.42.0",
+      "version": "0.43.0",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
@@ -75,7 +75,7 @@
     {
       "name": "comment-check",
       "description": "Flags comment slop in each file the agent writes, right after the Edit or Write, and tells it to fix the comments before it carries on.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Oak OSS",
         "email": "hello@oakoss.dev",
