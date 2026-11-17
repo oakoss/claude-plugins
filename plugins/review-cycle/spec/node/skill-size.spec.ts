@@ -7,6 +7,6 @@ import { skillText } from './agents';
 
 test('the review skill stays within its budget', () => {
   const text = skillText('review-cycle', 'review');
-  expect(text.length).toBeLessThanOrEqual(62_000);
+  expect(text.length).toBeLessThanOrEqual(58_000);
   expect(text.split('\n').length).toBeLessThanOrEqual(500);
 });
