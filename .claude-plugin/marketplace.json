@@ -71,6 +71,20 @@
       "source": "./plugins/session",
       "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/session",
       "keywords": ["session", "title", "git", "branch", "mod", "resume"]
+    },
+    {
+      "name": "comment-check",
+      "description": "Flags comment slop in each file the agent writes, right after the Edit or Write, and tells it to fix the comments before it carries on.",
+      "version": "0.0.0",
+      "author": {
+        "name": "Oak OSS",
+        "email": "hello@oakoss.dev",
+        "url": "https://github.com/oakoss"
+      },
+      "category": "development",
+      "source": "./plugins/comment-check",
+      "homepage": "https://github.com/oakoss/claude-plugins/tree/main/plugins/comment-check",
+      "keywords": ["comments", "lint", "edit", "write", "mod", "code-quality"]
     }
   ]
 }

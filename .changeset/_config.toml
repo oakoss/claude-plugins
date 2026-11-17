@@ -63,3 +63,13 @@ key = "version"
 path = "/.claude-plugin/marketplace.json"
 format = "json"
 key = "plugins.{name=session}.version"
+
+[[packages.comment-check.extra-files]]
+path = ".claude-plugin/plugin.json"
+format = "json"
+key = "version"
+
+[[packages.comment-check.extra-files]]
+path = "/.claude-plugin/marketplace.json"
+format = "json"
+key = "plugins.{name=comment-check}.version"

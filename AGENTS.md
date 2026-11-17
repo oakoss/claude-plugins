@@ -28,7 +28,7 @@ Issue references go in the commit footer: `Closes CPL-n` when the commit finishe
 
 Four facts about an Issue live in four places: labels say what it touches and what it does to a release, a parent says which branch it rides, a `blocks` link says what comes first, and priority says how urgent it is. The scheme follows oakum's `docs/contributing/task-tracking.md`, with one label more because this repository ships several plugins.
 
-- **Labels are `<dimension>:<value>`.** Every Issue carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, `plugin:session`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every Issue but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label when filing (`tm create --type task --title … --label plugin:review-cycle --label bump:patch`), and re-label when a decision changes the bump. Labels carried over from beads (`beads-type:`, `beads-status:`) are history.
+- **Labels are `<dimension>:<value>`.** Every Issue carries one `plugin:` label: `plugin:review-cycle`, `plugin:pr-kit`, `plugin:pr-watch`, `plugin:session`, `plugin:comment-check`, or `plugin:repo` for scripts, tests and CI outside a plugin. Every Issue but an epic or a branch parent also carries one `bump:` label for the bump file it will need: `bump:patch`, `bump:minor`, `bump:major` or `bump:none`. An `area:` label is optional: `area:gate`, `area:consent`, `area:containment`, `area:reviewers`, `area:tests`, `area:perf`, `area:ci`. Label when filing (`tm create --type task --title … --label plugin:review-cycle --label bump:patch`), and re-label when a decision changes the bump. Labels carried over from beads (`beads-type:`, `beads-status:`) are history.
 - **A parent is a branch or a finding set.** A branch that carries several Issues gets a parent of type `task`, and `tm list parent:<key>` is its checklist. `epic` is for a finding set or a rollout.
 - **A new finding joins the unclaimed parent whose branch already edits its file**; find it with `tm search <path>`, which reads descriptions too. When that branch is in flight, name the parent in the new Issue's description instead.
 - **An Issue that claims a cost or a saving says whether it was measured, and how.** An inferred cost is triaged as a question to measure first: `cpl-dkrr` was filed to cut a cost, and measuring showed the cost was elsewhere, so it closed unbuilt.
@@ -143,7 +143,7 @@ To have every session in this repository run the working tree's plugins, set `CL
 
 ```toml
 [env]
-CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
+CLAUDE_CODE_PLUGIN_DIRS = "{{config_root}}/plugins/comment-check:{{config_root}}/plugins/pr-kit:{{config_root}}/plugins/pr-watch:{{config_root}}/plugins/review-cycle:{{config_root}}/plugins/session"
 ```
 
 The working tree's copies load beside the released installs, not instead of them: `claude plugin list` shows each plugin twice, once installed as `<name>@oakoss` and once as a session-only `<name>@inline`, so two review-cycle commit gates run and the released one can refuse what the working tree's allows. Switch the released copies off for this checkout in the gitignored `.claude/settings.local.json`:
@@ -151,6 +151,7 @@ The working tree's copies load beside the released installs, not instead of them
 ```json
 {
   "enabledPlugins": {
+    "comment-check@oakoss": false,
     "pr-kit@oakoss": false,
     "pr-watch@oakoss": false,
     "review-cycle@oakoss": false,
