@@ -181,10 +181,11 @@ describe('comment slop', () => {
   test('git runs in the C locale, whose messages the scan matches', async ($, on) => {
     const w = fakeWorld(on);
     await write($);
-    expect(w.envs[0]).toMatchObject({ LC_ALL: 'C', LANGUAGE: 'C' });
+    const git = w.calls.findIndex((c) => c.startsWith('git '));
+    expect(w.envs[git]).toMatchObject({ LC_ALL: 'C', LANGUAGE: 'C' });
   });
   test('a git that fails says the scan was skipped, naming why', async ($, on) => {
-    fakeWorld(on, { git: () => ({ exitCode: 128, stderr: 'fatal: injected\nmore' }) });
+    fakeWorld(on, { git: () => ({ exitCode: 128, stderr: '\n  fatal: injected\nmore\n' }) });
     expect(contextOf(await write($)).join('\n')).toContain(
       'comment-check: git failed (fatal: injected); comment-slop scan skipped.',
     );
