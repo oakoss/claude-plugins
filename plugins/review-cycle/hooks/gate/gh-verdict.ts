@@ -16,10 +16,15 @@ import { type MergeSet, mergeSet, type readStack } from '../shell/stack';
 import type { GhAction, PushRef, Unlookable } from './github';
 import {
   askingReason,
+  coveredRefusal,
+  offerThem,
   pushOutcome,
+  refusedTail,
+  unnamedTail,
   unnamedTarget,
   type DefaultBranch,
   type DryRunRef,
+  type Needs,
   type Unnamed,
 } from './push-verdict';
 
@@ -103,12 +108,6 @@ export function permitted(granted: Grant, ladder: Ladder, held: Hold): Allowed {
 // Names the step for the agent to fill in; `sample` is that step with stand-in names.
 export function askThem(sample: Offer, shown: string): string {
   return `stop and end your reply with the question mcp__review-cycle__offer gives for step ${sample.step}, word for word and alone in its last paragraph, such as "${phraseOffer(sample)}", then end your turn; their answer decides. Without that tool, ask in the example's form, naming the real pull request, branch or version. The command: ${shown}`;
-}
-
-// exact.ts `offered` reads a question only as the answer's whole last
-// paragraph, so a yes to it grants nothing when it shares a line.
-export function offerThem(question: string, shown: string): string {
-  return `stop and end your reply with this question alone in its last paragraph, without quotation marks, then end your turn; their answer decides. The question: ${question} The command: ${shown}`;
 }
 
 const askFor = (offer: Offer, shown: string): string => offerThem(phraseOffer(offer), shown);
@@ -477,13 +476,15 @@ async function coveredAsks(
   lookups: GhLookups,
   ref: PushRef,
   named: readonly string[],
-): Promise<{ unnamed: Unnamed } | { asks: string } | { unchecked: string } | null> {
+): Promise<Needs | null> {
   if ('asks' in ref && ref.tag !== undefined) {
     const flag = ref.deletes ? '-' : ' ';
     const tag: DryRunRef = { flag, to: `refs/tags/${ref.tag}`, url: '' };
     return judged(unnamedTarget([tag], new Map(), named, null));
   }
-  if ('asks' in ref && (ref.toDefault || ref.unknown)) return { asks: ref.asks };
+  if ('asks' in ref && (ref.toDefault || ref.unknown)) {
+    return { change: { why: ref.asks, fix: WRITE_OUT } };
+  }
   if ('asks' in ref && ref.branch !== undefined) {
     const { name, repo, deletes } = ref.branch;
     const r = read(await lookups.defaultBranch(repo), 'the default branch');
@@ -492,13 +493,20 @@ async function coveredAsks(
     const to: DryRunRef = { flag: deletes ? '-' : '+', to: `refs/heads/${name}`, url };
     const u = unnamedTarget([to], defaults, named, null);
     if (u !== null) return { unnamed: u };
-    return r.asks === undefined ? null : { unchecked: r.asks };
+    return r.asks === undefined ? null : unchecked(r.asks);
   }
   const t = await branchOf(lookups, ref);
   if ('defaults' in t) return judged(unnamedTarget([t.ref], t.defaults, named, null));
   const u = t.ref === undefined ? null : unnamedTarget([t.ref], new Map(), named, null);
-  return u === null ? { unchecked: t.asks } : { unnamed: u };
+  return u === null ? unchecked(t.asks) : { unnamed: u };
 }
+
+const WRITE_OUT =
+  'Write the branch and repository out in the call, and the push is judged by where it goes.';
+
+const unchecked = (why: string): Needs => ({
+  note: `review-cycle ran the push the user asked for without checking where it goes: ${why}. If it may have reached the default branch or a tag they did not name, tell them.`,
+});
 
 // Each kind's sample is typed to that kind's step.
 const GH_ASK: { [K in 'merge' | 'approve' | 'release' | 'push']: Offer & { step: K } } = {
@@ -528,25 +536,6 @@ function ghRefusal(
   const resolves = thread === 'resolve' ? ` ${RESOLVE_TOOL}` : '';
   const ask = kind === 'comment' ? askComment(shown) : askThem(GH_ASK[kind], shown);
   return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed}${resolves} ${then ?? `To go ahead, ${ask}`}`;
-}
-
-// How a refused GitHub push asks: as it asks once the user's request covers
-// it, so a yes is not refused again; null for the plain push question.
-function pushThen(
-  c: Awaited<ReturnType<typeof coveredAsks>>,
-  always: string | null,
-  shown: string,
-): string | null {
-  if (c === null || 'unchecked' in c) return null;
-  if ('asks' in c) {
-    const why = c.asks === always ? '' : `: ${c.asks}`;
-    return `No answer lets it run as written${why}. Write the branch and repository out in the call, and the push is judged by where it goes.`;
-  }
-  const { why, offer } = c.unnamed;
-  if (offer === null) {
-    return `Even asked for, ${why}, and the gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`;
-  }
-  return `To push there, ${offerThem(offer, shown)}`;
 }
 
 // The thread actions of a refused call: replies alone, which the reply tool
@@ -665,23 +654,11 @@ export async function judgeGh(
         if (covers(granted, needed)) {
           const c = await coveredAsks(lookups, ref, granted.pushNamed);
           if (c === null) break;
-          if ('unchecked' in c) {
-            notes.push(
-              `review-cycle ran the push the user asked for without checking where it goes: ${c.unchecked}. If it may have reached the default branch or a tag they did not name, tell them.`,
-            );
+          if ('note' in c) {
+            notes.push(c.note);
             break;
           }
-          const asked = "the user's latest message asks for a push, but";
-          if ('asks' in c) {
-            return {
-              deny: `${asked} ${c.asks}, so nothing ran. Write the branch and repository out in the call, and the push is judged by where it goes.`,
-            };
-          }
-          const then =
-            c.unnamed.offer === null
-              ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
-              : `To push there, ${offerThem(c.unnamed.offer, shown)}`;
-          return { deny: `${asked} ${c.unnamed.why}, so nothing ran. ${then}` };
+          return { deny: coveredRefusal(c, shown) };
         }
         const outcome = await pushOutcome(needed, may.push, () => pushAsks(lookups, ref));
         if (outcome.kind === 'unasked' && may.push) ran.push({ step: 'push', ladder });
@@ -692,7 +669,9 @@ export async function judgeGh(
             step: 'push',
           };
         }
-        const then = pushThen(await coveredAsks(lookups, ref, []), outcome.always, shown);
+        // Asked as the push asks once covered, so a yes is not refused again.
+        const c = await coveredAsks(lookups, ref, []);
+        const then = c === null || 'note' in c ? null : refusedTail(c, shown, outcome.always);
         return refuse('push', outcome.always, null, then);
       }
       case 'merge': {
@@ -968,12 +947,8 @@ export async function judgeGh(
             const refs = branches.map((b) => ({ flag: ' ', to: `refs/heads/${b}`, url: '' }));
             const u = unnamedTarget(refs, defaults, granted.pushNamed, null);
             if (u !== null) {
-              const then =
-                u.offer === null
-                  ? `Give the user the command to run themselves. The command: ${shown}`
-                  : `To push there, ${offerThem(u.offer, shown)}`;
               return {
-                deny: `\`gh stack link\` pushes the branches it names, and ${u.why}, so nothing ran. ${then}`,
+                deny: `\`gh stack link\` pushes the branches it names, and ${u.why}, so nothing ran. ${unnamedTail(u, shown)}`,
                 ...(!may.push && { step: 'push' as const }),
               };
             }

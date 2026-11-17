@@ -9,7 +9,6 @@ import type { PushSpec } from '../shell/git-args';
 import { anonymized, layerOf, parseCatalog, remoteOf, type LeaseIo } from '../shell/stack';
 import {
   askThem,
-  offerThem,
   notAsked,
   permitted,
   type InForce,
@@ -18,14 +17,17 @@ import {
 import { firstLine, type Git } from './git';
 import {
   askingReason,
+  coveredRefusal,
   parseDryRun,
   pushOutcome,
+  refusedTail,
   unasked,
   unnamedTarget,
+  type Blocker,
   type DefaultBranch,
   type DryRunRef,
   type Needed,
-  type Unnamed,
+  type Needs,
 } from './push-verdict';
 
 // A push a requested pull request needs (`forPr`) runs unasked, not noted;
@@ -131,12 +133,7 @@ async function readPushTargets(
   return { refs, defaults, failed };
 }
 
-// What a push still needs once the user's request covers it: a change to the
-// command, since no answer covers one whose targets a step before it can
-// change; their naming of the default branch or tag it pushes; or a word to
-// the agent that its targets went unread.
-type Needs = { change: { why: string; fix: string } } | { unnamed: Unnamed } | { note: string };
-
+// No answer covers a push whose targets a step before it can change.
 async function pushNeeds(
   git: Git,
   top: string,
@@ -201,10 +198,7 @@ export async function judgePush(
     const c = await pushNeeds(git, top, commits, spec, granted.pushNamed);
     if (c === null) return { ran: null };
     if ('note' in c) return { ran: null, note: c.note };
-    const { shown } = consent();
-    const asked = "the user's latest message asks for a push, but";
-    if ('change' in c) return { deny: `${asked} ${c.change.why}, so nothing ran. ${c.change.fix}` };
-    return { deny: unnamedRefusal(shown, commits, c.unnamed) };
+    return { deny: coveredRefusal(c, consent().shown, aloneOf(commits)) };
   }
   const ladder = await ladderOf();
   const forPr = granted.pr && !holds(consent().held, 'push');
@@ -299,10 +293,10 @@ function pushRefusal(
   ladder: InForce,
   always: string | null,
   unmet: { why: string } | null = null,
-  needs: Exclude<Needs, { note: string }> | null = null,
+  needs: Blocker | null = null,
 ): string {
   const { held, unread, shown } = consent();
-  const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
+  const alone = aloneOf(commits);
   const update =
     unmet === null
       ? ''
@@ -320,20 +314,15 @@ function pushRefusal(
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
       const refused = `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}`;
-      if (needs !== null && 'change' in needs) {
-        const { why, fix } = needs.change;
-        return `${refused}${alone} No answer lets it run as written: ${why}. ${fix}`;
-      }
-      const u = needs?.unnamed ?? null;
-      const offer = u?.offer ?? null;
-      if (u !== null && offer === null) {
-        return `${refused}${alone} Even asked for, ${u.why}, and the gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`;
+      // No answer covers it, so no question is asked, a delete's included.
+      if (needs !== null && ('change' in needs || needs.unnamed.offer === null)) {
+        return `${refused}${alone} ${refusedTail(needs, shown, always)}`;
       }
       if (always === DELETES) {
         return `${refused}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('delete')}`;
       }
-      const how = offer === null ? ask('push') : offerThem(offer, shown);
-      return `${refused}${update}${alone} To push, ${how}`;
+      const how = needs === null ? `To push, ${ask('push')}` : refusedTail(needs, shown, always);
+      return `${refused}${update}${alone} ${how}`;
     }
     default: {
       const unhandled: never = missing;
@@ -342,15 +331,8 @@ function pushRefusal(
   }
 }
 
-// A push the user asked for, to a target their request did not name.
-function unnamedRefusal(shown: string, commits: boolean, u: Unnamed): string {
-  const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
-  const then =
-    u.offer === null
-      ? `The gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`
-      : `To push there, ${offerThem(u.offer, shown)}`;
-  return `the user's latest message asks for a push, but ${u.why}, so nothing ran.${alone} ${then}`;
-}
+const aloneOf = (commits: boolean) =>
+  commits ? ' To commit without pushing, run the commit on its own.' : '';
 
 // The unmerged stack layer a `git push` updates, when this clone tracks a
 // gh-stack stack. A catalog or dry run it cannot read leaves the push to the

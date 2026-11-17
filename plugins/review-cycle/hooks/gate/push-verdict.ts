@@ -124,6 +124,51 @@ export function unnamedTarget(
   return null;
 }
 
+// exact.ts `offered` reads a question only as the answer's whole last
+// paragraph, so a yes to it grants nothing when it shares a line.
+export function offerThem(question: string, shown: string): string {
+  return `stop and end your reply with this question alone in its last paragraph, without quotation marks, then end your turn; their answer decides. The question: ${question} The command: ${shown}`;
+}
+
+// What a push still needs once the user's request covers it, on either path:
+// a change to the command, since no answer covers it as written; their naming
+// of the default branch or tag it pushes; or a note to the agent that its
+// target went unchecked.
+export type Needs =
+  | { change: { why: string; fix: string } }
+  | { unnamed: Unnamed }
+  | { note: string };
+export type Blocker = Exclude<Needs, { note: string }>;
+
+const HAND_OVER = 'Give them the command to run themselves, and say why it is needed.';
+
+export function unnamedTail({ offer }: Unnamed, shown: string): string {
+  if (offer !== null) return `To push there, ${offerThem(offer, shown)}`;
+  return `The gate never does that for the user. ${HAND_OVER} The command: ${shown}`;
+}
+
+// The refusal of a push the user asked for that still needs something.
+export function coveredRefusal(b: Blocker, shown: string, alone = ''): string {
+  const asked = "the user's latest message asks for a push, but";
+  if ('change' in b) return `${asked} ${b.change.why}, so nothing ran. ${b.change.fix}`;
+  return `${asked} ${b.unnamed.why}, so nothing ran.${alone} ${unnamedTail(b.unnamed, shown)}`;
+}
+
+// How a push refused for want of a request asks: as it asks once covered, so
+// a yes is not refused again. `always`, the reason the refusal already gave,
+// is not repeated.
+export function refusedTail(b: Blocker, shown: string, always: string | null): string {
+  if ('change' in b) {
+    const { why, fix } = b.change;
+    return `No answer lets it run as written${why === always ? '' : `: ${why}`}. ${fix}`;
+  }
+  const { why, offer } = b.unnamed;
+  if (offer === null) {
+    return `Even asked for, ${why}, and the gate never does that for the user. ${HAND_OVER} The command: ${shown}`;
+  }
+  return unnamedTail(b.unnamed, shown);
+}
+
 // The level the push needs and the grant falls short of; null when covered.
 export function unasked(spec: PushSpec, grant: Grant): Needed | null {
   const needed = neededFor(spec);
