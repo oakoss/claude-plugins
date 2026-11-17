@@ -68,7 +68,7 @@ export type Pull = {
   isRequiredPending: boolean;
   // The required checks from GitHub Apps that finished without passing.
   // `app` is the App's id, which tells apart two Apps naming a check alike.
-  failedApps: { app: number | null; name: string; url: string }[];
+  failedApps: { app: number | null; name: string; url: string; stale?: true }[];
   // The checks from GitHub Apps the merge does not wait on, such as an AI
   // reviewer's, once started; `took` is how long a finished one ran, in ms.
   // Unset in a pull saved before it was read.

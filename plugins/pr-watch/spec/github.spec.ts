@@ -629,6 +629,9 @@ describe('parseTrunk', () => {
     expect(parsePull(prOutput([app('COMPLETED', 'FAILURE')])).failedApps).toEqual([
       { app: null, name: 'Vercel', url: '' },
     ]);
+    expect(parsePull(prOutput([app('COMPLETED', 'STALE')])).failedApps).toEqual([
+      { app: null, name: 'Vercel', url: '', stale: true },
+    ]);
     expect(parsePull(prOutput([app('COMPLETED', 'SUCCESS')])).failedApps).toEqual([]);
     expect(parsePull(prOutput([app('IN_PROGRESS', null)])).failedApps).toEqual([]);
     expect(parsePull(prOutput([app('COMPLETED', 'FAILURE', false)])).failedApps).toEqual([]);

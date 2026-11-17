@@ -264,7 +264,15 @@ export type Checks = Pick<
 > & { appRuns: AppRun[] };
 
 export const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
-const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
+// STALE is a run GitHub gave up on, unfinished: it needs a re-run as a failure does.
+const FAILED = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'CANCELLED',
+  'STALE',
+  'STARTUP_FAILURE',
+  'ACTION_REQUIRED',
+]);
 export const failed = (conclusion: string | null) => FAILED.has(conclusion ?? '');
 
 // A check run that started before another; one not yet started is the newest.
@@ -320,7 +328,14 @@ function checksOf(suites: any): Checks {
   if ([...apps.values()].some(({ run }) => run.status !== 'COMPLETED')) isRequiredPending = true;
   const failedApps = [...apps.values()].flatMap(({ app, name, run }) =>
     run.status === 'COMPLETED' && !PASSED.has(str(run.conclusion) ?? '')
-      ? [{ app, name, url: str(run.detailsUrl) ?? '' }]
+      ? [
+          {
+            app,
+            name,
+            url: str(run.detailsUrl) ?? '',
+            ...(run.conclusion === 'STALE' && { stale: true as const }),
+          },
+        ]
       : [],
   );
   const appRuns = [...optional.values()].flatMap(({ app, name, run }): AppRun[] => {

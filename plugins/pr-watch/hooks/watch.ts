@@ -465,7 +465,8 @@ export function errorLine(text: string): string {
   return line.replace(/^gh: /, '') || 'no message';
 }
 
-// `cancelled`: what failed was cancelled, as a run is when a newer one replaces it.
+// `cancelled`: what failed was cancelled, as a run is when a newer one replaces
+// it; `stale`: GitHub gave up on it unfinished.
 export type Verdict =
   | { kind: 'running'; gate: Workflow }
   | {
@@ -475,6 +476,7 @@ export type Verdict =
       job: string | null;
       url: string;
       cancelled?: true;
+      stale?: true;
     }
   | { kind: 'ready' }
   | { kind: 'blocked'; reason: string }
@@ -487,6 +489,7 @@ export type Verdict =
       job: string | null;
       url: string;
       cancelled?: true;
+      stale?: true;
     }
   | { kind: 'merged-passed' }
   | { kind: 'merged-waiting' }
@@ -522,14 +525,17 @@ const failing = (w: Workflow, job: string | null, url: string, how: string | nul
   job,
   url,
   ...(how === 'CANCELLED' && { cancelled: true }),
+  ...(how === 'STALE' && { stale: true }),
 });
 
-// The failed job to name: one that failed over one GitHub cancelled beside it,
-// as fail-fast cancels a matrix's other jobs, then one not required, as a
-// summary job fails on the others.
+// The failed job to name: one that failed over one that went stale or that
+// GitHub cancelled beside it, as fail-fast cancels a matrix's other jobs, then
+// one not required, as a summary job fails on the others.
+const rank = (j: Job) => (j.conclusion === 'CANCELLED' ? 2 : j.conclusion === 'STALE' ? 1 : 0);
+
 function shownJob(bad: readonly Job[]): Job | undefined {
-  const real = bad.filter((j) => j.conclusion !== 'CANCELLED');
-  const pool = real.length > 0 ? real : bad;
+  const best = Math.min(...bad.map((j) => rank(j)));
+  const pool = bad.filter((j) => rank(j) === best);
   return pool.find((j) => !j.isRequired) ?? pool[0];
 }
 
@@ -544,8 +550,13 @@ function failure(runs: Gated): Verdict | null {
   return w ? failing(w, null, w.url, w.conclusion) : null;
 }
 
-const failedText = (v: { workflow: string; job: string | null; cancelled?: true }) => {
-  const how = v.cancelled ? 'cancelled' : 'failed';
+const failedText = (v: {
+  workflow: string;
+  job: string | null;
+  cancelled?: true;
+  stale?: true;
+}) => {
+  const how = v.cancelled ? 'cancelled' : v.stale ? 'stale' : 'failed';
   return v.job === null ? `${v.workflow} ${how}` : `${v.workflow}: ${v.job} ${how}`;
 };
 
@@ -697,6 +708,9 @@ export function verdictOf(
   const runs = runsVerdict(pull, estimates, host);
   if (runs) return runs;
   if (pull.isDraft) return { kind: 'waiting', reason: 'draft' };
+  // A required App check holds the merge as blocked: name it, not "blocked".
+  const app = pull.failedApps[0];
+  if (app) return { kind: 'blocked', reason: `${app.name} ${app.stale ? 'stale' : 'failed'}` };
   const blocker = blockerOf(pull);
   if (blocker !== null) return { kind: 'blocked', reason: blocker };
   if (['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(pull.merge)) {
@@ -1096,7 +1110,8 @@ function conditionsOf(
   if (pull.state === 'OPEN') {
     for (const app of pull.failedApps) {
       const link = app.url ? `: ${app.url}` : '';
-      const text = `${app.name}, a required check, failed for ${name}${link}`;
+      const how = app.stale ? 'went stale' : 'failed';
+      const text = `${app.name}, a required check, ${how} for ${name}${link}`;
       const what = JSON.stringify([app.app, app.name, 'failed']);
       found.push({ key: keyOf(watch, what, pull.headOid), text });
     }
@@ -1119,14 +1134,18 @@ function conditionsOf(
     if (bad.length === 0) {
       if (!isFailedRun(w)) continue;
       const how = (w.conclusion ?? '').toLowerCase();
-      const ended = how === 'cancelled' ? 'was cancelled' : `failed (${how})`;
+      const ended =
+        how === 'cancelled' ? 'was cancelled' : how === 'stale' ? 'went stale' : `failed (${how})`;
       found.push({ key, text: `${w.name} ${ended}${where} for ${name}: ${w.url}` });
       continue;
     }
     const jobs = bad.map((j) => j.name).join(', ');
-    const log = (bad.find((j) => j.conclusion !== 'CANCELLED') ?? bad[0])!.url || w.url;
+    const shown = shownJob(bad)!;
+    const log = shown.url || w.url;
     const run = w.url && w.url !== log ? `; the run: ${w.url}` : '';
-    const ended = bad.every((j) => j.conclusion === 'CANCELLED') ? 'cancelled' : 'failed';
+    // Worded as the job named, which is one that failed whenever any did.
+    const how = shown.conclusion;
+    const ended = how === 'CANCELLED' ? 'cancelled' : how === 'STALE' ? 'went stale' : 'failed';
     const text = `${w.name}: ${jobs} ${ended}${where} for ${name}: ${log}${run}`;
     found.push({ key, text });
   }
@@ -1412,8 +1431,8 @@ const MARK_COLOR: Record<string, string> = { '✓': 'green', '✗': 'red', '●'
 
 // How a finished run that did not pass ended: `failed`, or its own word, as `stale`.
 const endOf = (w: Pick<Workflow | Job, 'conclusion'>) =>
-  w.conclusion === 'CANCELLED'
-    ? 'cancelled'
+  w.conclusion === 'CANCELLED' || w.conclusion === 'STALE'
+    ? w.conclusion.toLowerCase()
     : failed(w.conclusion) || !w.conclusion
       ? 'failed'
       : w.conclusion.toLowerCase();
@@ -1532,7 +1551,11 @@ function bodyOf(
     const jobbed = runs.workflows.find((w) => failedJobs(w).length > 0);
     const run = runs.workflows.find((w) => w.status === 'done' && !PASSED.has(w.conclusion ?? ''));
     const failure = app
-      ? { text: ` ${app.name} failed`, url: app.url || undefined, skip: null }
+      ? {
+          text: ` ${app.name} ${app.stale ? 'stale' : 'failed'}`,
+          url: app.url || undefined,
+          skip: null,
+        }
       : jobbed
         ? {
             text: ` ${jobbed.name}: ${shownJob(failedJobs(jobbed))!.name} ${endOf(shownJob(failedJobs(jobbed))!)}`,
