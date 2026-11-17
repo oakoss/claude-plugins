@@ -41,7 +41,15 @@ async function slopNote($: $, w: Omit<Written, 'file'>): Promise<string | null> 
       env: { LC_ALL: 'C', LANGUAGE: 'C' },
     });
     if (repo.exitCode !== 0) {
-      if (repo.stderr.includes('not a git repository')) return null;
+      // No repository found, up to the root or a mount point; `not a git
+      // repository: '<dir>'` is a broken GIT_DIR, which is reported.
+      if (
+        /not a git repository \(or any (of the parent directories|parent up to mount point)/.test(
+          repo.stderr,
+        )
+      ) {
+        return null;
+      }
       const line = repo.stderr.trim().split('\n')[0] ?? '';
       const why = line === '' ? `exit ${repo.exitCode}` : line;
       return `comment-check: git failed (${why}); comment-slop scan skipped.`;
