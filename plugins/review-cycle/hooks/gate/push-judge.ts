@@ -220,8 +220,12 @@ export async function judgePush(
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
     const unmet = update !== null && 'why' in update ? update : null;
-    // Asked as the push asks once covered, so a yes is not refused again.
-    const needs = outcome.missing === 'push' ? await pushNeeds(git, top, commits, spec, []) : null;
+    // Asked as the push asks once covered, so a yes is not refused again;
+    // refused either way, a target git cannot read leaves the plain question.
+    const needs =
+      outcome.missing === 'push'
+        ? await pushNeeds(git, top, commits, spec, []).catch(() => null)
+        : null;
     const after = needs === null || 'note' in needs ? null : needs;
     return {
       deny: pushRefusal(

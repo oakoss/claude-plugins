@@ -3567,6 +3567,19 @@ describe('the stop-before setting', () => {
       expect(ran(await bash($, command))).toBe(false);
     }
   });
+  test('a refused push whose target lookup throws is still refused', async ($, on) => {
+    fakeWorld(on, {
+      settings: { local: stops('push') },
+      git: github('fix/x'),
+      reject: (a) => a.startsWith('gh repo view') || a.includes('push --dry-run'),
+    });
+    await say($, 'fix the parser');
+    const files = { owner: 'o', repo: 'r', files: [], message: 'm', branch: 'main' };
+    const push = await mcp($, 'mcp__github__push_files', files);
+    expect(denied(push, 'The question: Push to `main`? The command:')).toBe(true);
+    const git = await bash($, 'git push origin main');
+    expect(denied(git, 'such as "Push `fix/x` to `origin`?"')).toBe(true);
+  });
   test('a forced update of a tag through GitHub needs a bare force, not a tag push', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('push') }, git: github('fix/x') });
     const moved = 'gh api -X PATCH repos/o/r/git/refs/tags/v1 -f sha=abc -F force=true';
