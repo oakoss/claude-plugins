@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.6.3 (2026-11-17)
+
+### Fixed
+
+`/pr-kit:fix-ci` no longer treats a check that passes on retry as settled. The retry only tells a flake from a real failure: the skill now reads the failed attempt for what stopped it, naming `gh run view --attempt`, since without it `gh` reads the attempt that passed, and the report's `Flakes:` line carries that cause, or "cause unknown" and what it read. It never retries again, adds sleeps, raises timeouts or skips the check to turn a flake green. A retry that fails again is handled as a real failure.
+
 ## 0.6.2 (2026-11-15)
 
 ### Fixed

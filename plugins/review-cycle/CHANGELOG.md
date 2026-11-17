@@ -4,6 +4,14 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.41.1 (2026-11-17)
+
+### Fixed
+
+"Merge them", "merge all of them" and "merge it" now answer a stack merge question ("Merge up to #402?", "Merge the stack?") as a yes does, merging that stack. Before, the commit gate read "merge it" as a merge of the question's pull request alone and "merge them" as no merge at all, so it refused `gh stack merge` and asked again. "Merge both" still names exactly two pull requests, since a stack question does not say how many layers it covers.
+
+`/review-cycle:review` loads less into the session: the skill no longer repeats rules its phases already state, what the ledger tools' own descriptions say, or the reviewer-facing half of the evidence policy, and the verified-message-fix rules move to `reference/message-fixes.md`, read only when a fix's diff is message text. The code-reviewer, pr-test-analyzer, silent-failure-hunter and type-design-analyzer agents drop their worked "When to invoke" scenarios. Nothing in a review's behavior changes.
+
 ## 0.41.0 (2026-11-16)
 
 ### Added
