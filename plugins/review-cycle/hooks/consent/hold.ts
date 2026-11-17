@@ -2,7 +2,7 @@
 // in force. Pure, and imports only the ladder, so the reader and the gate
 // read one order.
 
-import { atOrAbove, type Step } from './ladder';
+import { asks, atOrAbove, type Ladder, type Step } from './ladder';
 
 // Lowest first: a hold of one holds those after it, so the first of these an
 // offer names is the one a decline holds.
@@ -18,6 +18,11 @@ export function holds(held: Hold, step: Step | 'comment'): boolean {
   if (held === null || step === 'commit') return false;
   if (step === 'comment') return true;
   return held.step !== 'comment' && atOrAbove(step, held.step);
+}
+
+// Whether the setting runs a step nobody asked for: below its rung, unheld.
+export function settingLets(step: Step, ladder: Ladder, held: Hold): boolean {
+  return !holds(held, step) && !asks(ladder, step);
 }
 
 // The hold that holds more, the first on a tie.

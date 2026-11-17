@@ -2,14 +2,8 @@
 // the refusals when they may not. Pure: what it needs from gh or the settings
 // comes through `GhLookups`, which judge.ts builds.
 
-import {
-  covers,
-  NAMED_ELSEWHERE,
-  NO_GRANT,
-  type Grant,
-  type UnreadOffer,
-} from '../consent/consent';
-import { holds, type Hold, type HoldReason, type HoldStep } from '../consent/hold';
+import { covers, NAMED_ELSEWHERE, type Grant, type UnreadOffer } from '../consent/consent';
+import { holds, settingLets, type Hold, type HoldReason, type HoldStep } from '../consent/hold';
 import { asks, type Ladder, type Step } from '../consent/ladder';
 import { namedShort, phraseOffer, type Offer } from '../consent/offers';
 import { type MergeSet, mergeSet, type readStack } from '../shell/stack';
@@ -94,7 +88,7 @@ function read(r: Lookup, what: string): Lookup {
 // What may run: what the user asked for, and what the ladder lets through.
 type Allowed = Readonly<Record<Step, boolean>>;
 export function permitted(granted: Grant, ladder: Ladder, held: Hold): Allowed {
-  const free = (step: Step) => !holds(held, step) && !asks(ladder, step);
+  const free = (step: Step) => settingLets(step, ladder, held);
   return {
     commit: granted.commit || !asks(ladder, 'commit'),
     push: covers(granted, 'push') || free('push'),
@@ -710,9 +704,7 @@ export async function judgeGh(
         // An unnamed merge of one nothing pointed at, or whose lookup failed,
         // is judged as if unasked, so it is never stricter than the setting;
         // a refusal there still names the failure (`lost`).
-        const settingMay =
-          unnamedMay &&
-          permitted({ ...granted, merge: false, autoMerge: false }, ladder, held).merge;
+        const settingMay = unnamedMay && settingLets('merge', ladder, held);
         let unasked = false;
         let lost: string | null = null;
         // "release when the PR is ready" covers oakum's version pull request
@@ -820,11 +812,7 @@ export async function judgeGh(
             };
           }
           // `--auto` on oakum's version pull request is a release too.
-          const releases = permitted(
-            { ...granted, merge: true, release: granted.release || readyRelease },
-            ladder,
-            held,
-          ).release;
+          const releases = granted.release || readyRelease || settingLets('release', ladder, held);
           if ('asks' in now && !releases && !('cannot' in action.lookup)) {
             const which = await mergeStep(lookups, action.lookup);
             if ('step' in which && which.step === 'release') return refuse('release', null);
@@ -912,7 +900,7 @@ export async function judgeGh(
           // so one answer covers the command: a push asked for in this message
           // does not last to the answer.
           if (!may.pr && action.step === 'submit') {
-            const isPushSet = permitted(NO_GRANT, ladder, held).push;
+            const isPushSet = settingLets('push', ladder, held);
             const bound = !isPushSet
               ? null
               : 'unread' in action.where
@@ -1025,7 +1013,7 @@ export async function judgeGh(
         // needs each named, now or once ready, unless the setting merges
         // without asking.
         const named = [...now, ...ready];
-        const ladderMerges = permitted({ ...granted, merge: false }, ladder, held).merge;
+        const ladderMerges = settingLets('merge', ladder, held);
         const [bottom, ...above] = set.prs.map(String);
         if (
           !stacked &&
