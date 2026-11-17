@@ -28,7 +28,11 @@ test('after the commit, the review fixes the cheap deferrals and asks only about
   expect(text).toContain('When clean, commit it as one follow-up commit');
   expect(text).toContain('pass them to `mcp__review-cycle__ledger_record` as `resolve`');
   expect(text).toContain("once the commit is pushed, rewrite an open pull request's Known issues");
-  expect(text).toContain('whether to file any of them');
+  // The consent gate reads a yes only to the reply's last line, and only
+  // when a blank line sits above it, so an offer question keeps that line.
+  expect(text).toContain(
+    'one question in its own paragraph: whether to file any of them, above any offer question the reply must end with',
+  );
   expect(text).toContain('Under a job (Phase 1), report them instead of asking');
   expect(text).toContain('Phase 11 fixes the cheap ones and asks before filing any');
 });

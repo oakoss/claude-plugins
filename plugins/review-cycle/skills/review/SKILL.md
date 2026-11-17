@@ -409,7 +409,7 @@ Final state: clean / N findings remain / shelved (<why>)
 
 When `Growth:` is not `none`, your reply names the fixes that grew the diff, for the user to cut.
 
-**When anything was deferred or raised as a question, follow the summary in your reply, just before the question ending it, with a paste-ready markdown block** for the pull request description, since the summary is gone with the session: `## Known issues` with one bullet per deferred finding (`` `file:line` — the finding (deferred: the reason) ``), then `### Open questions` with one bullet per question. It repeats the summary, nothing new, and leaves out findings still held at the ceiling, which Phase 10 asks about, findings Phase 11 fixed, and a heading with nothing under it. Never file it in a tracker; when you open the pull request yourself, put it in the body, with any held findings the user chose in Phase 10 to defer added first.
+**When anything was deferred or raised as a question, follow the summary in your reply, just before the questions ending it, with a paste-ready markdown block** for the pull request description, since the summary is gone with the session: `## Known issues` with one bullet per deferred finding (`` `file:line` — the finding (deferred: the reason) ``), then `### Open questions` with one bullet per question. It repeats the summary, nothing new, and leaves out findings still held at the ceiling, which Phase 10 asks about, findings Phase 11 fixed, and a heading with nothing under it. Never file it in a tracker; when you open the pull request yourself, put it in the body, with any held findings the user chose in Phase 10 to defer added first.
 
 ### Phase 10: Finish
 
@@ -419,17 +419,17 @@ Push only when the user's latest message asked for one ("push it", "ship it"), o
 
 ### Phase 11: Follow-ups
 
-Only after Phase 10 committed and the cycle deferred something. Never ask the user which deferred findings to address: fix the cheap ones yourself.
+Only after Phase 10 committed and the cycle deferred something. Never ask the user which deferred findings to address.
 
 1. **Sort the deferred findings.** *Fix now*: the fix is a sentence or a test, below the bar and `pre-existing` included. *Leave*: held at the ceiling, cannot happen, deliberate design, the user's judgment call, or a fix-vs-defer criterion; each keeps its reason.
 2. **Fix the fix-now group**, then Phase 6's self-check and fact verification, then a confirmation pass by `review-cycle:code-reviewer` on the follow-up's delta, plus Codex when a fix rests on a claim about tool behavior; call `mcp__review-cycle__scratch` first and `mcp__review-cycle__sweep` after.
-3. **Never patch a follow-up fix.** When the pass faults any of them, discard the whole follow-up (restore what it changed, delete what it created) and move every fix-now finding to *Leave* (`follow-up failed review`). When clean, commit it as one follow-up commit and push under Phase 10's rules.
+3. **Never patch a follow-up fix.** When the pass faults any of them, discard the whole follow-up (restore what it changed, delete what it created) and move every fix-now finding to *Leave* (`follow-up failed review`). When clean, commit it as one follow-up commit and push per Phase 10.
 4. **Resolve the fixed findings**: read their ids with `mcp__review-cycle__ledger`, pass them to `mcp__review-cycle__ledger_record` as `resolve`, and once the commit is pushed, rewrite an open pull request's Known issues.
-5. **End the reply** with the commit and what it fixed, each left finding with its reason, then one question on a line of its own: whether to file any of them. Under a job (Phase 1), report them instead of asking.
+5. **End the reply** with the commit and what it fixed, each left finding with its reason, then one question in its own paragraph: whether to file any of them, above any offer question the reply must end with. Under a job (Phase 1), report them instead of asking.
 
 ## Things to NOT do
 
 - Do NOT push or open a pull request that the user did not ask for and neither their stop-before nor their prUpdates setting allows. The gate refuses it; ask them in your reply, naming what it pushes and where, and end your turn. Get the question from `mcp__review-cycle__offer` (`push`, `pr` or `push-pr`), and end the reply with it, on a line of its own.
 - Do NOT pass `name:` to Phase 7's spawns either (Phase 3 says why); Phase 7 has no watchdog to notice.
-- Do NOT auto-create beads, tm or trekker tickets for deferred findings: Phase 11 fixes the cheap ones and asks before filing any.
+- Do NOT auto-create tracker tickets for deferred findings: Phase 11 fixes the cheap ones and asks before filing any.
 - Do NOT try to turn the gate off. Only the user can, in `/config`.
