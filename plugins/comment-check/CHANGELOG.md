@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## 0.1.1 (2026-11-17)
+
+### Fixed
+
+A broken git setup, such as `GIT_DIR` pointing at a directory that does not exist, now tells the agent the comment-slop scan was skipped, naming git's error. Before, git's "not a git repository" message for it read as a file outside every repository, so the scan skipped the file without a word.
+
 ## 0.1.0 (2026-11-17)
 
 ### Added
