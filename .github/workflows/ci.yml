@@ -177,11 +177,12 @@ jobs:
       #
       # The binary comes in an optional dependency, whose failed download npm
       # skips; named here at the CLI's own version, a missing binary fails
-      # this step.
+      # this step. --global keeps `npm view` from checking the repository's
+      # devEngines Node against the runner's.
       # jactionlint ignore=adhoc-packages
       - name: Install Claude Code CLI
         run: |
-          v=$(npm view @anthropic-ai/claude-code version)
+          v=$(npm view --global @anthropic-ai/claude-code version)
           npm install -g "@anthropic-ai/claude-code@$v" "@anthropic-ai/claude-code-linux-x64@$v"
 
       - name: Validate plugin manifests
@@ -212,7 +213,7 @@ jobs:
       # jactionlint ignore=adhoc-packages
       - name: Install Claude Code CLI
         run: |
-          v=$(npm view @anthropic-ai/claude-code version)
+          v=$(npm view --global @anthropic-ai/claude-code version)
           npm install -g "@anthropic-ai/claude-code@$v" "@anthropic-ai/claude-code-linux-x64@$v"
 
       # A Claude Code without mods (before v2.1.287) prints a notice and exits
