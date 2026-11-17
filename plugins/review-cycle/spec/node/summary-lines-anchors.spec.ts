@@ -65,7 +65,7 @@ test('the summary block goes to the summary tool, and the reply ends with the de
   expect(nine).toContain(
     'your reply ends with the final state and what the user must read or answer',
   );
-  expect(nine).toContain('follow the summary in your reply, before any question Phase 10 asks');
+  expect(nine).toContain('follow the summary in your reply, just before the question ending it');
 });
 
 test('each fixed and deferred finding names its leg, side and iteration, for the rollup', () => {

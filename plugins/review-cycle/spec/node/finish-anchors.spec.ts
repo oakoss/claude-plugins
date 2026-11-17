@@ -6,6 +6,33 @@ import { expect, test } from 'vitest';
 
 import { skillText } from './agents';
 
+// After the commit, cheap deferrals are fixed, a follow-up fix that fails its
+// review is dropped rather than patched, and only filing waits for the user.
+test('after the commit, the review fixes the cheap deferrals and asks only about filing', () => {
+  const text = skillText('review-cycle', 'review');
+  expect(text).toContain('Only after Phase 10 committed and the cycle deferred something');
+  expect(text).toContain('Never ask the user which deferred findings to address');
+  expect(text).toContain(
+    '*Fix now*: the fix is a sentence or a test, below the bar and `pre-existing` included',
+  );
+  expect(text).toContain('*Leave*: held at the ceiling,');
+  expect(text).toContain('a confirmation pass by `review-cycle:code-reviewer` on the follow-up');
+  expect(text).toContain(
+    'call `mcp__review-cycle__scratch` first and `mcp__review-cycle__sweep` after',
+  );
+  expect(text).toContain('**Never patch a follow-up fix.**');
+  expect(text).toContain(
+    'When the pass faults any of them, discard the whole follow-up (restore what it changed, delete what it created)',
+  );
+  expect(text).toContain('move every fix-now finding to *Leave* (`follow-up failed review`)');
+  expect(text).toContain('When clean, commit it as one follow-up commit');
+  expect(text).toContain('pass them to `mcp__review-cycle__ledger_record` as `resolve`');
+  expect(text).toContain("once the commit is pushed, rewrite an open pull request's Known issues");
+  expect(text).toContain('whether to file any of them');
+  expect(text).toContain('Under a job (Phase 1), report them instead of asking');
+  expect(text).toContain('Phase 11 fixes the cheap ones and asks before filing any');
+});
+
 test('the review skill commits a clean result and pushes only on request', () => {
   const text = skillText('review-cycle', 'review');
   expect(text).toContain('commit the reviewed work now');
