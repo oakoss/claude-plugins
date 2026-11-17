@@ -1,6 +1,6 @@
 # review-cycle policies
 
-These policies are embedded in the review-cycle skill, so they apply automatically inside the cycle. Copy them into your global or project `CLAUDE.md` if you also want them active outside the cycle (for example, while Claude is implementing code or addressing a PR comment manually).
+The fix-vs-defer and evidence policies are embedded in the review-cycle skill, so they apply automatically inside the cycle. The comment policy is the cycle's fallback: it reviews comments by your project's own rules, and reads this one for what they leave unsaid. Copy them into your global or project `CLAUDE.md` if you also want them active outside the cycle (for example, while Claude is implementing code or addressing a PR comment manually).
 
 Each policy stands alone — copy whichever section applies to your workflow.
 
@@ -111,7 +111,7 @@ documents is not a weak claim but a question — ask it rather than asserting it
 
 ## How these interact with the cycle
 
-All three policies are already embedded in `/review-cycle:review`, so the cycle behaves correctly even without these reference snippets installed.
+`/review-cycle:review` embeds the fix-vs-defer and evidence policies and reads the comment policy from this file for what your project's comment rules leave unsaid, so the cycle behaves correctly without these snippets installed.
 
 The reference snippets matter when Claude is doing related work outside the cycle:
 

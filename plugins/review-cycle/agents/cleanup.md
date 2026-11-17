@@ -18,6 +18,8 @@ The de-slopify skill is preloaded into your context via the `skills` frontmatter
 
 A comment is guilty until proven useful. If it is not clearly worth keeping, delete it.
 
+The project's own comment rules come first: its `AGENTS.md` or `CLAUDE.md`, and its linter's comment rules. Where they differ from the rules below, follow the project's; the rules below cover what it leaves unsaid.
+
 A good comment:
 
 - Is accurate (matches the code; remove if stale)
