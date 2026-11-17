@@ -2231,6 +2231,13 @@ describe('the stop-before setting', () => {
     expect(latest.offer).toBe(closing);
     expect(latest.steps).toEqual(['merge']);
   });
+  test('a refused release the message read as release-when-ready is no miss', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('merge') }, git: github('fix/x') });
+    await say($, 'release when the release pull request is ready');
+    expect(denied(await bash($, 'gh release create v1'), 'release')).toBe(true);
+    const r = await $.tool.call({ tool: 'mcp__review-cycle__misses' });
+    expect(JSON.parse((r as { result: string }).result).misses).toEqual([]);
+  });
   test('a refused comment the message or its offer named is kept as a miss, with the offer', async ($, on) => {
     fakeWorld(on, { git: github('feat/x') });
     const misses = async () => {
