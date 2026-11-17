@@ -19,6 +19,17 @@ test('no agent description carries <example> blocks', () => {
   }
 });
 
+// A `model:` swallowed into the description passes `claude plugin validate
+// --strict` (measured on 2.1.326).
+test('every agent sets its model on a line of its own', () => {
+  for (const file of listAgents({ min: 7 })) {
+    const [, frontmatter] = readFileSync(file, 'utf8').split(/^---$/m);
+    const name = path.basename(file);
+    expect.soft(frontmatter, `${name}: no model line`).toMatch(/^model: [a-z]/m);
+    expect.soft(frontmatter, `${name}: model inside the description`).not.toMatch(/\S model: /);
+  }
+});
+
 // An agent with no `tools:` line inherits every tool, MCP servers included:
 // measured on 2.1.318, a do-nothing code-reviewer spawn cost 50,215 tokens
 // without one and 24,714 with it.

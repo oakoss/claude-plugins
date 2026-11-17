@@ -12,7 +12,7 @@ import { KEPT, RESUMED, resumeText } from '../../hooks/state/resume';
 const DIR = path.join(REPO_ROOT, 'plugins/review-cycle/skills/review');
 const EXPANDED = `Base directory for this skill: ${DIR}\n\n${skillText('review-cycle', 'review').replace(/^---\n[\s\S]*?\n---\n\s*/, '')}`;
 
-// The re-attached copy is cut inside Phase 3's ledger step.
+// The re-attached copy is cut inside Phase 3.
 test('hands back everything from Phase 3 on, and nothing the copy lacks', () => {
   const text = resumeText(EXPANDED);
   expect(text?.startsWith(RESUMED)).toBe(true);
