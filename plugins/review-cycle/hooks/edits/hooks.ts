@@ -1,4 +1,4 @@
-import type { Caught, CatchHandler, MatchedHook, ToolCallResult } from 'claude-code';
+import type { Caught, CatchHandler, MatchedHook } from 'claude-code';
 
 import { deny } from '../consent/refusal';
 import {
@@ -9,14 +9,13 @@ import {
   touchesGate,
 } from '../consent/settings';
 import { insideRepo } from '../gate/containment';
-import { firstLine, messageOf, reviewablePaths, worktreeTree, type Repo } from '../gate/git';
+import { messageOf, reviewablePaths, worktreeTree, type Repo } from '../gate/git';
 import { loadShellAliases } from '../shell/aliases-io';
 import { readCommand } from '../shell/command';
 import {
   currentText,
   ensureRoot,
   gitOf,
-  run,
   type $,
   type Input,
   type NextOf,
@@ -24,7 +23,6 @@ import {
 } from '../state/engine';
 import { runningLeg, state } from '../state/gate-state';
 import { editsSkipped, mayWrite, measureEdits } from './edits';
-import { MAX_BYTES, skipsPath, slopDirective, slopFindings, type Written } from './slop';
 
 export type BashHook = MatchedHook<'tool.call', { tool: 'Bash' }>;
 type EditHook = MatchedHook<'tool.call', { tool: 'Edit' }>;
@@ -107,62 +105,6 @@ export async function onWrite(
   if (!isJsonPath(e.file_path)) return next(e);
   if (touchesGate(await currentText($, e.file_path), e.content)) return deny(SWITCHED_BY_USER);
   return next(e);
-}
-
-// The comment-slop scan runs after the tool, beside the gate's own Edit and
-// Write hooks and also when the gate is switched off.
-export async function onEditSlop(
-  $: $,
-  e: Input<EditHook>,
-  next: NextOf<EditHook>,
-): Promise<Output<EditHook>> {
-  const r = await next(e);
-  return withSlop($, r, { path: e.file_path, text: e.new_string, replaced: e.old_string });
-}
-
-export async function onWriteSlop(
-  $: $,
-  e: Input<WriteHook>,
-  next: NextOf<WriteHook>,
-): Promise<Output<WriteHook>> {
-  const r = await next(e);
-  return withSlop($, r, { path: e.file_path, text: e.content, replaced: null });
-}
-
-// A refused or failed call wrote nothing, so it is not scanned.
-async function withSlop<N extends string>(
-  $: $,
-  r: ToolCallResult<N>,
-  w: Omit<Written, 'file'>,
-): Promise<ToolCallResult<N>> {
-  if (r.deny !== undefined || r.isError === true) return r;
-  const note = await slopNote($, w);
-  return note === null ? r : { ...r, context: [...(r.context ?? []), note] };
-}
-
-// Never refuses: the write has already happened. Files outside a git
-// repository are not scanned.
-async function slopNote($: $, w: Omit<Written, 'file'>): Promise<string | null> {
-  const { path } = w;
-  if (skipsPath(path)) return null;
-  try {
-    const slash = path.lastIndexOf('/');
-    const dir = slash === -1 ? '.' : path.slice(0, slash) || '/';
-    const repo = await run($, ['git', '-C', dir, 'rev-parse', '--show-toplevel']);
-    if (repo.exitCode !== 0) {
-      if (repo.stderr.includes('not a git repository')) return null;
-      const why = firstLine(repo.stderr) || `exit ${repo.exitCode}`;
-      return `review-cycle: git failed (${why}); comment-slop scan skipped.`;
-    }
-    if (!(await $.fs.exists(path))) return null;
-    const { kind, size } = await $.fs.stat(path);
-    if (kind !== 'file' || size > MAX_BYTES) return null;
-    const findings = slopFindings({ ...w, file: await $.fs.read(path) });
-    return findings.length > 0 ? slopDirective(path, findings) : null;
-  } catch (error) {
-    const why = error instanceof Error ? error.message : String(error);
-    return `review-cycle: comment-slop scan skipped (${why}).`;
-  }
 }
 
 // A settings file the gate could not read may be switching it off.

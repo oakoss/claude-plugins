@@ -1,5 +1,5 @@
 // Notes the files a Bash command changed, so its edits go through Edit and
-// Write, where the comment-slop and settings checks run. No `$`: the snapshot
+// Write, where the settings check runs. No `$`: the snapshot
 // and the comparison are passed in, as git.ts takes its runner.
 //
 // The working tree is compared around the command; `mayWrite` only picks the
@@ -136,7 +136,7 @@ export function mayWrite(command: string, aliases: ShellAliases = new Map()): bo
 export function editNote(paths: readonly string[]): string {
   const shown = paths.slice(0, SHOWN).join(', ');
   const more = paths.length > SHOWN ? ` and ${paths.length - SHOWN} more` : '';
-  return `review-cycle: files changed while this command ran: ${shown}${more}. If the command made those edits, make file changes with Edit or Write instead: the comment-slop and settings checks run there, not on Bash.`;
+  return `review-cycle: files changed while this command ran: ${shown}${more}. If the command made those edits, make file changes with Edit or Write instead: edit checks, such as the settings guard, run there, not on Bash.`;
 }
 
 export function editsSkipped(why: string): string {

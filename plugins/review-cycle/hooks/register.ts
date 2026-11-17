@@ -12,14 +12,12 @@ import {
   onEdit,
   onEditContained,
   onEditError,
-  onEditSlop,
   onMonitor,
   onMonitorError,
   onNotebookEdit,
   onWrite,
   onWriteContained,
   onWriteError,
-  onWriteSlop,
 } from './edits/hooks';
 import { onBash, onBashError, onGithubTool, onGithubToolError } from './gate/bash';
 import { NO_STANDING, permitted, standsFor } from './gate/gh-verdict';
@@ -402,8 +400,6 @@ export const register: Register = (on, options) => {
   on('config.set', { key: 'review-cycle.prUpdates' }, onConfigSet);
   on('config.set', { key: 'review-cycle.nudge' }, onConfigSet);
   on('config.set', { key: 'review-cycle.unaskedNotice' }, onConfigSet);
-  on('tool.call', { tool: 'Edit' }, onEditSlop);
-  on('tool.call', { tool: 'Write' }, onWriteSlop);
   on('session.start', onSessionStart);
   // `/clear` and a resume end the session without a fresh session.start.
   on('session.end', async ($, e, next) => {

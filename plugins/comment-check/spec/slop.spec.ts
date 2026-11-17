@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { skipsPath, slopDirective, slopFindings } from '../../hooks/edits/slop';
+import { skipsPath, slopDirective, slopFindings } from '../hooks/slop';
 
 function write(path: string, ...lines: string[]): string[] {
   const text = `${lines.join('\n')}\n`;

@@ -1,6 +1,6 @@
 // Pure. Narration that dodges the line patterns cannot dodge arithmetic, so
 // the text the tool wrote is also checked for comment density. Borderline
-// cases are left to the cleanup agent.
+// cases are left to review.
 
 export type Written = {
   path: string;
@@ -15,7 +15,7 @@ export type Written = {
 
 const BINARY = /\.(lock|lockb|png|jpe?g|gif|webp|pdf|zip|tar|gz|bin|exe|so|dylib|dll|wasm)$/i;
 const GENERATED = /\/(node_modules|\.git|dist|build|target|\.next|\.venv)\//;
-// '#' is a heading in prose, and prose cleanup is the de-slopify skill's job.
+// '#' is a heading in prose.
 const PROSE = /\.(md|markdown|txt|rst|adoc)$/i;
 // '#' documents these formats; a comment-heavy config is not slop.
 const CONFIG = /\.(ya?ml|toml|ini|cfg|conf)$/i;
@@ -116,5 +116,5 @@ export function slopFindings(w: Written): string[] {
 }
 
 export function slopDirective(path: string, findings: string[]): string {
-  return `review-cycle: comment slop detected in ${path}. Fix it NOW with a follow-up Edit, before continuing with the task — the comment policy is mandatory, not advisory. Remove every comment that restates WHAT the code does; keep a comment only when it states a non-obvious WHY the code cannot express, and compress kept comments to one or two lines — consequences the reader can derive, backstory, and before/after history go in the commit message, not the code. Do not wait to be asked.\n\n${findings.join('\n\n')}`;
+  return `comment-check: comment slop detected in ${path}. Fix it NOW with a follow-up Edit, before continuing with the task — the comment policy is mandatory, not advisory. Remove every comment that restates WHAT the code does; keep a comment only when it states a non-obvious WHY the code cannot express, and compress kept comments to one or two lines — consequences the reader can derive, backstory, and before/after history go in the commit message, not the code. Do not wait to be asked.\n\n${findings.join('\n\n')}`;
 }

@@ -1,0 +1,4 @@
+{
+  "description": "comment-check: flags comment slop in the files the agent writes with Edit or Write.",
+  "modules": ["./register.ts"]
+}
