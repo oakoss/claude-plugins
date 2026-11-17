@@ -509,13 +509,46 @@ describe('verdictOf', () => {
     expect(verdictAt(p, {})).toMatchObject({ url: 'https://x/run/1' });
   });
 
-  test.each(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'ACTION_REQUIRED'])(
+  test.each(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'STALE', 'STARTUP_FAILURE', 'ACTION_REQUIRED'])(
     'a job that ended %s fails the PR',
     (conclusion) => {
       const p = pull([ci([job('Build', conclusion), job('CI Summary', null, true)])]);
       expect(verdictAt(p, {}).kind).toBe('failing');
     },
   );
+
+  test('a stale job fails as stale, named after a job that failed beside it', () => {
+    const stale = pull([ci([job('Build', 'STALE'), job('CI Summary', null, true)])]);
+    expect(verdictAt(stale, {})).toMatchObject({ kind: 'failing', job: 'Build', stale: true });
+    expect(textOf(watched(stale))).toContain('CI: Build stale');
+    const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+    expect(wakeOf(pr, stale, verdictAt(stale, {}), {}).news).toEqual([
+      expect.stringContaining('CI: Build went stale for o/r#128'),
+    ]);
+    const mixed = pull([ci([job('Build', 'STALE'), job('Lint', 'FAILURE')])]);
+    expect(verdictAt(mixed, {})).toMatchObject({ job: 'Lint' });
+    expect(verdictAt(mixed, {})).not.toHaveProperty('stale');
+    expect(wakeOf(pr, mixed, verdictAt(mixed, {}), {}).news).toEqual([
+      expect.stringContaining('CI: Build, Lint failed for o/r#128: https://x/Lint'),
+    ]);
+    const draft = draftOn([green(), { ...codeql(null), status: 'done', conclusion: 'STALE' }], {
+      isGated: true,
+    });
+    expect(textOf(watched(draft))).toContain('✗ CodeQL stale');
+  });
+
+  test('a failed required App check blocks by name, over conflicts and a clean merge state', () => {
+    for (const merge of ['BLOCKED', 'CLEAN', 'DIRTY']) {
+      const app = pull([green()], { failedApps: [VERCEL], merge });
+      expect(verdictAt(app, {})).toEqual({ kind: 'blocked', reason: 'Vercel failed' });
+    }
+    const stale = pull([green()], { failedApps: [{ ...VERCEL, stale: true }], merge: 'BLOCKED' });
+    expect(verdictAt(stale, {})).toEqual({ kind: 'blocked', reason: 'Vercel stale' });
+    const pr = { repo: 'o/r', number: 128, url: 'https://github.com/o/r/pull/128' };
+    expect(wakeOf(pr, stale, verdictAt(stale, {}), {}).news).toContain(
+      'Vercel, a required check, went stale for o/r#128: https://x/vercel',
+    );
+  });
 
   test('a run that failed with no failed job fails the PR as a whole', () => {
     const startup = { ...ci([]), conclusion: 'STARTUP_FAILURE' };
@@ -1121,8 +1154,9 @@ describe('wakeOf', () => {
       flow(2, 'Docs', [job('Links', 'FAILURE')]),
     ]);
     const first = after(p);
+    // The log is the job the band and toast name: Lint, not the required Test.
     expect(first.text).toContain(
-      'CI: Test, Lint failed for o/r#128: https://x/Test; the run: https://x/run/1',
+      'CI: Test, Lint failed for o/r#128: https://x/Lint; the run: https://x/run/1',
     );
     expect(first.text).toContain('Docs: Links failed');
     expect(after(p, first).text).toBeNull();
@@ -1224,12 +1258,14 @@ describe('wakeOf', () => {
     expect(wakeOf(pr, own, verdictAt(own), {}, { isOwnMerge: true }).passed).toHaveLength(1);
   });
 
-  test('says nothing of a draft with no checks, a failed App or job, a stale run, or no head', () => {
+  test('says no draft passed with no checks, a failed App or job, a stale run, or no head', () => {
     expect(after(draftOn([])).text).toBeNull();
     expect(after(draftOn([green()], { failedApps: [VERCEL] })).passed).toEqual([]);
     const masked = { ...ci([job('Test', 'FAILURE', true)]), conclusion: 'SUCCESS' };
     expect(after(draftOn([masked])).passed).toEqual([]);
-    expect(after(draftOn([{ ...green(), conclusion: 'STALE' }])).text).toBeNull();
+    const stale = after(draftOn([{ ...green(), conclusion: 'STALE' }]));
+    expect(stale.passed).toEqual([]);
+    expect(stale.news).toEqual(['CI went stale for o/r#128: https://x/run/1']);
     expect(after(draftOn([green()], { headOid: undefined })).text).toBeNull();
   });
 
@@ -2739,6 +2775,9 @@ describe('lineOf', () => {
   });
 
   test('a draft says checks passed only once they all have, and names what failed', () => {
+    expect(textOf(draftWith([green()], { failedApps: [{ ...VERCEL, stale: true }] }))).toBe(
+      '#128 draft · ✗ Vercel stale',
+    );
     expect(textOf(draftWith([green()], { failedApps: [VERCEL] }))).toBe(
       '#128 draft · ✗ Vercel failed',
     );
