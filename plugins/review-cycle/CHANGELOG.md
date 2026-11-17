@@ -4,6 +4,20 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.42.0 (2026-11-17)
+
+### Added
+
+The comment-slop check has moved out of review-cycle into its own plugin, `comment-check`. review-cycle no longer scans the files the agent writes for section markers, restate-the-code comments, hedge words and the rest, while its gate is on or off. To keep that check, install the new plugin: `claude plugin install comment-check@oakoss`. It works as it did here, and its notes now begin `comment-check:` rather than `review-cycle:`. The note review-cycle gives after a Bash command changes files still tells the agent to make file changes with Edit or Write.
+
+### Fixed
+
+When the gate refuses a push, its first question is now the one whose yes lets the push run. A push to the default branch or of a tag asks "Push to `main`?" or "Push the `v1` tag?" straight away. Before, it asked the plain push question and then refused the yes, which named no target. This holds for `git push`, for a GitHub write through `gh api` or the GitHub MCP tools, and for `gh stack link`. A push that reaches several such targets still asks about them one at a time. A push no answer can cover says what to change, or hands the user the command, instead of asking, such as one whose branch is built at run time, a GitHub write that names no branch, or one that deletes a tag. Deleting a tag through `gh api`'s REST refs endpoint is no longer covered by "push the `v1` tag", and force-moving one there needs a request for a bare force, as `git push --force` of a tag does. Refusing a plain push now runs its dry run, or reads the default branch on GitHub, before answering.
+
+A refused release under "release when the release pull request is ready" is no longer kept as a miss: the consent reader did read that request, which waits for the version pull request, so the misses skill no longer drafts a corpus row for it.
+
+The commit gate and the settings guard read one list of programs that run code they are given. The commit gate now refuses a commit or push handed to `tmux`, `screen`, `su` or `flock`, or to a versioned Python such as `python3.12 -c`, as it already did for `bash -c` and `python3 -c`. The settings guard now treats `perl`, `ruby` and `php` as it treats `python` and `node`: a command that names one of them and a settings file is refused, so `perl -e` can no longer write to `settings.json` unseen. Reading the file through one, or searching it for the word (`grep perl ~/.claude/settings.json`), is refused too, as it already was for `python`.
+
 ## 0.41.1 (2026-11-17)
 
 ### Fixed
