@@ -5,6 +5,7 @@ type Run = { exitCode: number; stdout?: string; stderr?: string };
 type World = {
   files: Record<string, string>;
   calls: string[];
+  envs: (Record<string, string> | undefined)[];
   // git's answer for an argv, by its joined text; unset answers /repo.
   git?: (argv: string) => Run | undefined;
   // The engine refuses to start git.
@@ -18,14 +19,18 @@ type World = {
 const pathOf = (e: { path?: string } | string) => (typeof e === 'string' ? e : (e.path ?? ''));
 
 function fakeWorld(on: any, setup: Partial<World> = {}): World {
-  const w: World = { files: {}, calls: [], ...setup };
-  on('process.run', ($: unknown, e: { argv: string[] }) => {
-    const argv = e.argv.join(' ');
-    w.calls.push(argv);
-    if (w.gitRejects) return { deny: 'fatal: injected' };
-    const own = w.git?.(argv) ?? { exitCode: 0, stdout: '/repo\n' };
-    return { value: { stdout: '', stderr: '', isStdoutTruncated: false, ...own } };
-  });
+  const w: World = { files: {}, calls: [], envs: [], ...setup };
+  on(
+    'process.run',
+    ($: unknown, e: { argv: string[]; init?: { env?: Record<string, string> } }) => {
+      const argv = e.argv.join(' ');
+      w.calls.push(argv);
+      w.envs.push(e.init?.env);
+      if (w.gitRejects) return { deny: 'fatal: injected' };
+      const own = w.git?.(argv) ?? { exitCode: 0, stdout: '/repo\n' };
+      return { value: { stdout: '', stderr: '', isStdoutTruncated: false, ...own } };
+    },
+  );
   on('fs.exists', ($: unknown, e: { path?: string } | string) => ({
     value: w.files[pathOf(e)] !== undefined,
   }));
@@ -113,6 +118,8 @@ describe('comment slop', () => {
     expect(contextOf(await write($, `${SLOP}${'x'.repeat(1_048_577)}`))).toEqual([]);
     // Under 1 MiB of characters, over 1 MiB of UTF-8 bytes.
     expect(contextOf(await write($, `${SLOP}${'€'.repeat(400_000)}`))).toEqual([]);
+    const exactly = `${SLOP}${'x'.repeat(1_048_576 - SLOP.length)}`;
+    expect(contextOf(await write($, exactly)).join('\n')).toContain('Section-marker');
   });
   test('a refused call is passed through unscanned', async ($, on) => {
     fakeWorld(on, { files: { [FILE]: SLOP }, tool: () => ({ deny: 'denied below' }) });
@@ -145,10 +152,36 @@ describe('comment slop', () => {
     fakeWorld(on, {
       git: (a) =>
         a.startsWith('git -C /tmp ')
-          ? { exitCode: 128, stderr: 'fatal: not a git repository' }
+          ? {
+              exitCode: 128,
+              stderr: 'fatal: not a git repository (or any of the parent directories): .git',
+            }
           : undefined,
     });
     expect(contextOf(await write($, SLOP, '/tmp/f.ts'))).toEqual([]);
+  });
+  test('a file outside any repository on another filesystem is not scanned', async ($, on) => {
+    fakeWorld(on, {
+      git: () => ({
+        exitCode: 128,
+        stderr:
+          'fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n',
+      }),
+    });
+    expect(contextOf(await write($))).toEqual([]);
+  });
+  test('a broken GIT_DIR says the scan was skipped', async ($, on) => {
+    fakeWorld(on, {
+      git: () => ({ exitCode: 128, stderr: "fatal: not a git repository: '/nonexistent'" }),
+    });
+    expect(contextOf(await write($)).join('\n')).toContain(
+      "git failed (fatal: not a git repository: '/nonexistent'); comment-slop scan skipped.",
+    );
+  });
+  test('git runs in the C locale, whose messages the scan matches', async ($, on) => {
+    const w = fakeWorld(on);
+    await write($);
+    expect(w.envs[0]).toMatchObject({ LC_ALL: 'C', LANGUAGE: 'C' });
   });
   test('a git that fails says the scan was skipped, naming why', async ($, on) => {
     fakeWorld(on, { git: () => ({ exitCode: 128, stderr: 'fatal: injected\nmore' }) });
