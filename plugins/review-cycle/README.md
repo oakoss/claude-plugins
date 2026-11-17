@@ -52,7 +52,7 @@ One-time setup helper. Run after installing the plugin to:
 
 - Check for the optional Codex CLI, verify `multi_agent = true` in `~/.codex/config.toml`, and report stored-login state (advisory — auth doesn't gate the leg)
 - Check that `git` is present and that the commit gate loaded (see [Requirements](#requirements))
-- Optionally append the comment, fix-vs-defer, and evidence policies to your global or project `CLAUDE.md`
+- Optionally append the fix-vs-defer and evidence policies to your global or project `CLAUDE.md`; comment rules are your project's own, and the `comment-check` plugin flags comment slop as files are written
 
 Idempotent — safe to run multiple times. Replaces the manual setup steps below.
 

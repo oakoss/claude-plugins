@@ -1,6 +1,6 @@
 ---
 name: init
-description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, checks that the commit gate can load, and optionally appends the comment, fix-vs-defer, and evidence policies to CLAUDE.md (global or project). Idempotent — safe to run multiple times.
+description: One-time setup for review-cycle. Checks for the optional Codex CLI and multi_agent config, checks that the commit gate can load, and optionally appends the fix-vs-defer and evidence policies to CLAUDE.md (global or project). Idempotent — safe to run multiple times.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 ---
@@ -17,7 +17,7 @@ Five named checks, each idempotent:
 2. **Codex CLI** (optional) — verifies `codex --version` works
 3. **Codex multi_agent** (optional) — verifies `~/.codex/config.toml` has `multi_agent = true`
 4. **Codex auth** (optional) — reports stored-login state via `codex login status`, advisory only
-5. **CLAUDE.md policies** — offers to append the comment, fix-vs-defer, and evidence policies (global or project scope)
+5. **CLAUDE.md policies** — offers to append the fix-vs-defer and evidence policies (global or project scope)
 
 Each step checks state first. If something is already configured, it reports "✓ already done" and continues.
 
@@ -102,6 +102,8 @@ codex login status
 
 ### Step 5: CLAUDE.md policies
 
+These two policies are about how the agent works, so review-cycle offers them. Comment and style rules are the project's own: init offers none, and leaves alone a comment policy a `CLAUDE.md` already holds.
+
 Determine scope. If `PROJECT_ROOT` is set, use `AskUserQuestion`:
 
 - Question: "Where should the review-cycle policies live?"
@@ -115,18 +117,17 @@ If `PROJECT_ROOT` is not set, default to global without asking.
 
 For each chosen target file:
 
-1. Check which of the headings "Comment policy", "Fix-vs-defer policy", and "Evidence policy" it already contains. If all three are present, mark ✓ already done and continue; if some are, append only the missing ones, so re-running after an upgrade adds what is new without duplicating what is there.
+1. Check which of the headings "Fix-vs-defer policy" and "Evidence policy" it already contains. If both are present, mark ✓ already done and continue; if one is, append only the missing one, so re-running after an upgrade adds what is new without duplicating what is there.
 
    **Follow `@` imports before deciding.** A `CLAUDE.md` whose body is mostly `@path` lines keeps its real content elsewhere — a common setup is a one-line `CLAUDE.md` importing a shared `AGENTS.md`. Testing only the importing file reports every policy absent and appends duplicates of ones already active. Read the imported file, test its headings too, and append into whichever file already holds the others.
 2. If file exists: back it up to `${file}.bak`.
-3. Append the missing policy snippets from `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`. Test each heading with grep rather than skimming for it — `grep -qi '^#\+ *Evidence policy' "$file"` and the same for the other two — and append only the blocks that test absent. Whichever of these step 1 found missing:
-   - The "Comment policy" markdown block
+3. Append the missing policy snippets from `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`. Test each heading with grep rather than skimming for it — `grep -qi '^#\+ *Evidence policy' "$file"` and the same for the other — and append only the blocks that test absent. Whichever of these step 1 found missing:
    - The "Fix-vs-defer policy" markdown block
    - The "Evidence policy" markdown block
-   - Skip the meta/header content from `policies.md` — only the actual policy text in the code blocks gets appended.
+   - Skip the meta/header content from `policies.md`, and its "Comment policy" block — only the actual text of those two policies gets appended.
 4. Use `Edit` to append. Create the file if it doesn't exist.
 
-If user chose "Skip", print the policy snippets to the conversation so they can paste manually later. Note: snippets are also always available at `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`.
+If user chose "Skip", print the fix-vs-defer and evidence snippets to the conversation so they can paste manually later. Note: snippets are also always available at `${CLAUDE_PLUGIN_ROOT}/reference/policies.md`.
 
 ### Step 6: Summary
 
@@ -146,6 +147,7 @@ review-cycle init summary:
   ✓ Policies appended to ~/.claude/CLAUDE.md (backup: .bak)
 
 Run /review-cycle:review on a project with uncommitted changes.
+For comment slop flagged as files are written, install comment-check@oakoss.
 ```
 
 When something needs manual action, surface it inline with `⚠` and a clear next step. Example:
