@@ -176,6 +176,7 @@ describe('bashTouchesGate', () => {
     `ruby -e 'File.write("/Users/x/.claude/settings.json", "{}")'`,
     `php -r 'file_put_contents("/Users/x/.claude/settings.json", "{}");'`,
     `sed --in-place 's/a/b/' ~/.claude/settings.json`,
+    `gsed -i 's/a/b/' ~/.claude/settings.json`,
     `ruby -i -pe 'gsub(/a/, "b")' ~/.claude/settings.json`,
     '/bin/rm ~/.claude/settings.json',
     'truncate -s 0 ~/.claude/settings.json',

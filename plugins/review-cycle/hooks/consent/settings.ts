@@ -87,7 +87,7 @@ export function applyEdit(
 // `.claude` itself: a plugin's `.claude-plugin/` holds no settings.
 const CLAUDE_DIR = /\.claude(?![-\w])|CLAUDE_CONFIG_DIR/i;
 const WRITES =
-  /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|rsync|python3?|node|bun|deno|tsx|ts-node|lua|osascript)\b|\b(sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z0-9]*i|--in-place)/;
+  /(^|[^<&0-9])>|\b(rm|mv|cp|ln|tee|truncate|sponge|install|dd|rsync|python3?|node|bun|deno|tsx|ts-node|lua|osascript)\b|\b(g?sed|perl|ruby)\b[^|;&]*\s(-[a-zA-Z0-9]*i|--in-place)/;
 // Removing a marketplace uninstalls the plugins installed from it.
 const PLUGIN_CLI =
   /\bclaude\b[^|;&]*\bplugins?\s+(market(place)?\s+)?(disable|uninstall|remove|rm)\b/;
@@ -105,8 +105,6 @@ const WRITERS = new Set([
   'dd',
   'rsync',
 ]);
-// Commands that edit a file in place when given `-i` or `--in-place`.
-const IN_PLACE = new Set(['sed', 'perl', 'ruby']);
 // `claude` as installed, or run through npx and the like as its package.
 const CLAUDE = /^claude(-code)?(@[^/]*)?$/;
 // Discarding output writes nothing anyone reads.
@@ -224,6 +222,7 @@ function writes(st: Statement): boolean {
   const n = names(st);
   // A language's writes are in code this reader does not follow.
   if (n.some((name) => WRITERS.has(name) || runsLanguage(name))) return true;
+  // sed, or GNU sed as `gsed`, edits a file in place given `-i` or `--in-place`.
   const inPlace = st.words.some((w) => /^(-[a-zA-Z0-9]*i|--in-place)/.test(w.text));
-  return inPlace && n.some((name) => IN_PLACE.has(name));
+  return inPlace && n.some((name) => name === 'sed' || name === 'gsed');
 }
