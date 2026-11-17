@@ -18,7 +18,6 @@ import {
 import { firstLine, type Git } from './git';
 import {
   askingReason,
-  namingQuestion,
   parseDryRun,
   pushOutcome,
   unasked,
@@ -132,27 +131,28 @@ async function readPushTargets(
   return { refs, defaults, failed };
 }
 
-// What a push the user asked for still needs: their naming of the default
-// branch or tag it pushes, or a word to the agent that its targets went
-// unread. One whose targets a step before it can change asks.
-async function coveredAsks(
+// What a push still needs once the user's request covers it: a change to the
+// command, since no answer covers one whose targets a step before it can
+// change; their naming of the default branch or tag it pushes; or a word to
+// the agent that its targets went unread.
+type Needs = { change: { why: string; fix: string } } | { unnamed: Unnamed } | { note: string };
+
+async function pushNeeds(
   git: Git,
   top: string,
-  consent: PushConsent,
   commits: boolean,
   spec: PushSpec,
   named: readonly string[],
-): Promise<{ deny: string } | { note: string } | null> {
-  const asked = "the user's latest message asks for a push, but";
+): Promise<Needs | null> {
   if (spec.after !== null) {
+    const why = `\`git ${spec.after}\` runs before it in the same command, which can change where it goes`;
     return {
-      deny: `${asked} \`git ${spec.after}\` runs before it in the same command, which can change where it goes, so nothing ran. Run that step on its own first, and the push is judged after it.`,
+      change: { why, fix: 'Run that step on its own first, and the push is judged after it.' },
     };
   }
   if (spec.argv === null) {
-    return {
-      deny: `${asked} its remote or branch is built at run time, so the gate cannot tell where it goes, and nothing ran. Write the remote and branch out.`,
-    };
+    const why = 'its remote or branch is built at run time, which hides where it goes';
+    return { change: { why, fix: 'Write the remote and branch out.' } };
   }
   const t = await pushTargets(git, top, spec.argv);
   // Exit 1 is a detached HEAD; any other failure leaves the branch unknown.
@@ -166,7 +166,7 @@ async function coveredAsks(
           ? 'HEAD'
           : '*';
   const u = unnamedTarget(t.refs, t.defaults, named, moved);
-  if (u !== null) return { deny: unnamedRefusal(consent().shown, commits, u) };
+  if (u !== null) return { unnamed: u };
   const unread = [...t.defaults].filter(([, head]) => 'unreadable' in head);
   const why =
     t.refs.length === 0
@@ -198,9 +198,13 @@ export async function judgePush(
 ): Promise<PushVerdict> {
   const missing = unasked(spec, granted);
   if (missing === null) {
-    const c = await coveredAsks(git, top, consent, commits, spec, granted.pushNamed);
+    const c = await pushNeeds(git, top, commits, spec, granted.pushNamed);
     if (c === null) return { ran: null };
-    return 'deny' in c ? { deny: c.deny } : { ran: null, note: c.note };
+    if ('note' in c) return { ran: null, note: c.note };
+    const { shown } = consent();
+    const asked = "the user's latest message asks for a push, but";
+    if ('change' in c) return { deny: `${asked} ${c.change.why}, so nothing ran. ${c.change.fix}` };
+    return { deny: unnamedRefusal(shown, commits, c.unnamed) };
   }
   const ladder = await ladderOf();
   const forPr = granted.pr && !holds(consent().held, 'push');
@@ -216,8 +220,20 @@ export async function judgePush(
   if (outcome.kind === 'covered') return { ran: null };
   if (outcome.kind === 'refused') {
     const unmet = update !== null && 'why' in update ? update : null;
+    // Asked as the push asks once covered, so a yes is not refused again.
+    const needs = outcome.missing === 'push' ? await pushNeeds(git, top, commits, spec, []) : null;
+    const after = needs === null || 'note' in needs ? null : needs;
     return {
-      deny: pushRefusal(consent, commits, outcome.missing, granted, ladder, outcome.always, unmet),
+      deny: pushRefusal(
+        consent,
+        commits,
+        outcome.missing,
+        granted,
+        ladder,
+        outcome.always,
+        unmet,
+        after,
+      ),
       step: 'push',
     };
   }
@@ -279,6 +295,7 @@ function pushRefusal(
   ladder: InForce,
   always: string | null,
   unmet: { why: string } | null = null,
+  needs: Exclude<Needs, { note: string }> | null = null,
 ): string {
   const { held, unread, shown } = consent();
   const alone = commits ? ' To commit without pushing, run the commit on its own.' : '';
@@ -298,12 +315,21 @@ function pushRefusal(
     }
     case 'push': {
       const asksAnyway = always === null ? '' : ` This push asks whatever the setting: ${always}.`;
-      if (always === DELETES) {
-        return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('delete')}`;
+      const refused = `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}`;
+      if (needs !== null && 'change' in needs) {
+        const { why, fix } = needs.change;
+        return `${refused}${alone} No answer lets it run as written: ${why}. ${fix}`;
       }
-      const naming = namingQuestion(always);
-      const how = naming === null ? ask('push') : offerThem(naming, shown);
-      return `${notAsked('push', ladder, held, unread)}, so nothing ran.${asksAnyway}${update}${alone} To push, ${how}`;
+      const u = needs?.unnamed ?? null;
+      const offer = u?.offer ?? null;
+      if (u !== null && offer === null) {
+        return `${refused}${alone} Even asked for, ${u.why}, and the gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`;
+      }
+      if (always === DELETES) {
+        return `${refused}${alone} A merge the user asked for also covers \`gh pr merge --delete-branch\`. To delete it, ${ask('delete')}`;
+      }
+      const how = offer === null ? ask('push') : offerThem(offer, shown);
+      return `${refused}${update}${alone} To push, ${how}`;
     }
     default: {
       const unhandled: never = missing;

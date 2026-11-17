@@ -1786,6 +1786,40 @@ describe('the stop-before setting', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'git push origin main'))).toBe(true);
   });
+  // A yes to the generic push question names no target, so it would be refused again.
+  const named: [string, readonly string[], string][] = [
+    [
+      'git push origin main',
+      [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+      'Push to `main`?',
+    ],
+    ['git push origin v1', TAG, 'Push the `v1` tag?'],
+  ];
+  for (const [command, lines, question] of named) {
+    for (const rung of ['push', 'never stop']) {
+      test(`stopping before ${rung}, ${command} first asks "${question}", and a yes runs it`, async ($, on) => {
+        const git = remoteSide({ [command.replace(/^git push /, '')]: lines });
+        fakeWorld(on, pushing({ settings: { local: stops(rung) }, git }));
+        await say($, 'fix the parser');
+        expect(denied(await bash($, command), `The question: ${question} The command:`)).toBe(true);
+        await ($ as any).turn.complete({ answer: `Done.\n\n${question}`, reason: 'answer' });
+        await say($, 'yes');
+        expect(ran(await bash($, command))).toBe(true);
+      });
+    }
+  }
+  test('a push to a feature branch still asks the plain push question', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('push') } }));
+    await say($, 'fix the parser');
+    expect(denied(await bash($, 'git push'), 'such as "Push `fix/x` to `origin`?"')).toBe(true);
+  });
+  test('a push no yes can cover says what to change instead of asking', async ($, on) => {
+    fakeWorld(on, pushing({ settings: { local: stops('push') } }));
+    await say($, 'fix the parser');
+    const r = await bash($, 'git push origin "$BRANCH"');
+    expect(denied(r, 'Write the remote and branch out.')).toBe(true);
+    expect(denied(r, 'mcp__review-cycle__offer')).toBe(false);
+  });
   test('a push the user asked for that git partly rejects is judged by the refs it lands', async ($, on) => {
     const lines = [
       `To ${REMOTE}`,
@@ -2648,6 +2682,14 @@ describe('the stop-before setting', () => {
     expect(ran(await bash($, 'gh stack link feat/a feat/b'))).toBe(true);
     expect(denied(await bash($, 'cd .. && gh stack link feat/a'), 'Run it on its own')).toBe(true);
   });
+  test('gh stack link with no push asked for first asks the question naming the default branch', async ($, on) => {
+    fakeWorld(on, { git: github('fix/x') });
+    await say($, 'open a PR');
+    expect(denied(await bash($, 'gh stack link main feat/a'), OWN_PARAGRAPH('main'))).toBe(true);
+    expect(denied(await bash($, 'gh stack link feat/a feat/b'), "doesn't ask for a push")).toBe(
+      true,
+    );
+  });
   test('a stack merge reads GitHub, and merges only what the user named', async ($, on) => {
     const stack = JSON.stringify([
       {
@@ -3490,6 +3532,56 @@ describe('the stop-before setting', () => {
     expect(denied(unnamed, 'which the request did not name')).toBe(true);
     await say($, 'push it to main');
     expect(ran(await mcp($, 'mcp__github__push_files', { ...files, branch: 'main' }))).toBe(true);
+  });
+  for (const rung of ['push', 'open PR']) {
+    test(`stopping before ${rung}, a GitHub push to the default branch or a tag first asks the question naming it`, async ($, on) => {
+      fakeWorld(on, { settings: { local: stops(rung) }, git: github('fix/x') });
+      const files = { owner: 'o', repo: 'r', files: [], message: 'm', branch: 'main' };
+      const tag = 'gh api -X POST repos/o/r/git/refs -f ref=refs/tags/v1 -f sha=abc';
+      const pushes: [() => Promise<unknown>, string][] = [
+        [() => mcp($, 'mcp__github__push_files', files), 'Push to `main`?'],
+        [() => bash($, tag), 'Push the `v1` tag?'],
+      ];
+      for (const [push, question] of pushes) {
+        await say($, 'fix the parser');
+        expect(denied(await push(), `The question: ${question} The command:`)).toBe(true);
+        await ($ as any).turn.complete({ answer: `Done.\n\n${question}`, reason: 'answer' });
+        await say($, 'yes');
+        expect(ran(await push())).toBe(true);
+      }
+    });
+  }
+  test('deleting a tag, which no answer covers, asks no question', async ($, on) => {
+    const git = remoteSide({ 'origin :v1': ['-\t:refs/tags/v1\t[deleted]'] });
+    fakeWorld(
+      on,
+      pushing({ settings: { local: stops('push') }, git: (a) => git(a) ?? github('fix/x')(a) }),
+    );
+    for (const command of ['git push origin :v1', 'gh api -X DELETE repos/o/r/git/refs/tags/v1']) {
+      await say($, 'fix the parser');
+      const r = await bash($, command);
+      expect(denied(r, 'the gate never does that for the user')).toBe(true);
+      expect(denied(r, 'mcp__review-cycle__offer')).toBe(false);
+      expect(denied(r, 'The question:')).toBe(false);
+      await say($, 'push the v1 tag');
+      expect(ran(await bash($, command))).toBe(false);
+    }
+  });
+  test('a forced update of a tag through GitHub needs a bare force, not a tag push', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('push') }, git: github('fix/x') });
+    const moved = 'gh api -X PATCH repos/o/r/git/refs/tags/v1 -f sha=abc -F force=true';
+    await say($, 'fix the parser');
+    const r = await bash($, moved);
+    expect(denied(r, 'The question: Push the `v1` tag?')).toBe(false);
+    await say($, 'push the v1 tag');
+    expect(denied(await bash($, moved), 'bare force')).toBe(true);
+  });
+  test('a GitHub write that names no branch says to name one instead of asking', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('push') }, git: github('fix/x') });
+    await say($, 'fix the parser');
+    const r = await bash($, 'gh api -X PUT repos/o/r/contents/a.txt -f message=m -f content=x');
+    expect(denied(r, 'Write the branch and repository out in the call')).toBe(true);
+    expect(denied(r, 'mcp__review-cycle__offer')).toBe(false);
   });
   test('a hold stops a GitHub MCP pull request at every rung', async ($, on) => {
     fakeWorld(on, { settings: { local: stops('never stop') } });

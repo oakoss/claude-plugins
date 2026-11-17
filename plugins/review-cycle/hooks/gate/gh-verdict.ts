@@ -479,7 +479,8 @@ async function coveredAsks(
   named: readonly string[],
 ): Promise<{ unnamed: Unnamed } | { asks: string } | { unchecked: string } | null> {
   if ('asks' in ref && ref.tag !== undefined) {
-    const tag: DryRunRef = { flag: ' ', to: `refs/tags/${ref.tag}`, url: '' };
+    const flag = ref.deletes ? '-' : ' ';
+    const tag: DryRunRef = { flag, to: `refs/tags/${ref.tag}`, url: '' };
     return judged(unnamedTarget([tag], new Map(), named, null));
   }
   if ('asks' in ref && (ref.toDefault || ref.unknown)) return { asks: ref.asks };
@@ -516,6 +517,7 @@ function ghRefusal(
   held: Hold,
   unread: UnreadOffer | null,
   thread: Threads = null,
+  then: string | null = null,
 ): string {
   const asksAnyway = always === null ? '' : ` This asks whatever the setting: ${always}.`;
   const unreviewed =
@@ -525,7 +527,26 @@ function ghRefusal(
   }
   const resolves = thread === 'resolve' ? ` ${RESOLVE_TOOL}` : '';
   const ask = kind === 'comment' ? askComment(shown) : askThem(GH_ASK[kind], shown);
-  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed}${resolves} To go ahead, ${ask}`;
+  return `${notAsked(kind, ladder, held, unread)}, so nothing ran.${asksAnyway}${unreviewed}${resolves} ${then ?? `To go ahead, ${ask}`}`;
+}
+
+// How a refused GitHub push asks: as it asks once the user's request covers
+// it, so a yes is not refused again; null for the plain push question.
+function pushThen(
+  c: Awaited<ReturnType<typeof coveredAsks>>,
+  always: string | null,
+  shown: string,
+): string | null {
+  if (c === null || 'unchecked' in c) return null;
+  if ('asks' in c) {
+    const why = c.asks === always ? '' : `: ${c.asks}`;
+    return `No answer lets it run as written${why}. Write the branch and repository out in the call, and the push is judged by where it goes.`;
+  }
+  const { why, offer } = c.unnamed;
+  if (offer === null) {
+    return `Even asked for, ${why}, and the gate never does that for the user. Give them the command to run themselves, and say why it is needed. The command: ${shown}`;
+  }
+  return `To push there, ${offerThem(offer, shown)}`;
 }
 
 // The thread actions of a refused call: replies alone, which the reply tool
@@ -595,8 +616,13 @@ export async function judgeGh(
   const used = { ready: [] as string[], release: false };
   if (actions.length === 0) return { ran };
   const ladder = await lookups.ladder();
-  const refuse = (kind: GhKind, always: string | null, thread: Threads = null) => ({
-    deny: ghRefusal(shown, kind, ladder, always, held, unread, thread),
+  const refuse = (
+    kind: GhKind,
+    always: string | null,
+    thread: Threads = null,
+    then: string | null = null,
+  ) => ({
+    deny: ghRefusal(shown, kind, ladder, always, held, unread, thread, then),
     ...(kind !== 'approve' && { step: kind }),
   });
   // A stack merge is judged as the merges it expands to, in its place, each
@@ -666,7 +692,8 @@ export async function judgeGh(
             step: 'push',
           };
         }
-        return refuse('push', outcome.always);
+        const then = pushThen(await coveredAsks(lookups, ref, []), outcome.always, shown);
+        return refuse('push', outcome.always, null, then);
       }
       case 'merge': {
         if (action.admin) {
@@ -919,9 +946,9 @@ export async function judgeGh(
           if (!may.pr) return { deny: prRefusal(shown, ladder, held, unread), step: 'pr' };
           if (!granted.pr && may.pr) ran.push({ step: 'pr', ladder });
         }
-        // `link` pushes plainly; the rest lease every active branch.
+        // `link` pushes plainly, asking first for a branch the user must name;
+        // the rest lease every active branch.
         if (action.step === 'link') {
-          if (!may.push) return refuse('push', null);
           if ('unread' in action.where) {
             return {
               deny: `\`gh stack link\` pushes the branches it names, and ${action.where.unread}, so the gate cannot tell whether one is the default branch, and nothing ran. Run it on its own, from this repository, with at most one \`--remote\`. The command: ${shown}`,
@@ -947,8 +974,10 @@ export async function judgeGh(
                   : `To push there, ${offerThem(u.offer, shown)}`;
               return {
                 deny: `\`gh stack link\` pushes the branches it names, and ${u.why}, so nothing ran. ${then}`,
+                ...(!may.push && { step: 'push' as const }),
               };
             }
+            if (!may.push) return refuse('push', null);
             // As for `git push`: a push the setting let through asks when its
             // target is unchecked; one the user asked for runs with a note.
             if (r.asks !== undefined && !covers(granted, 'push')) {
@@ -960,7 +989,8 @@ export async function judgeGh(
               );
             }
           }
-          if (!covers(granted, 'push') && may.push) ran.push({ step: 'push', ladder });
+          if (!may.push) return refuse('push', null);
+          if (!covers(granted, 'push')) ran.push({ step: 'push', ladder });
           break;
         }
         if (covers(granted, 'lease')) break;

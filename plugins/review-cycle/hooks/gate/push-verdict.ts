@@ -62,16 +62,6 @@ export function askingReason(
   return null;
 }
 
-// The question whose yes names where a push that always asks goes, read from
-// `askingReason`'s words; null for a reason no yes names a target for. A yes to
-// the offer tool's push question names none, so it would be refused again.
-export function namingQuestion(reason: string | null): string | null {
-  const tag = /^it pushes the tag `([^`\s]+)`$/.exec(reason ?? '')?.[1];
-  if (tag !== undefined) return pushTagQuestion(tag);
-  const branch = /^it pushes to `([^`\s]+)`, the default branch$/.exec(reason ?? '')?.[1];
-  return branch === undefined ? null : pushToQuestion(branch);
-}
-
 const bare = (name: string) => name.toLowerCase().replace(/^v(?=\d)/, '');
 
 // Whether a request names a tag: `tag:*` any, else `tag:<name>`, with or

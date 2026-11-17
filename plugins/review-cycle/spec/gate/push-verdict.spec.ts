@@ -3,7 +3,6 @@ import { describe, expect, test } from 'vitest';
 import { NO_GRANT, type PushLevel } from '../../hooks/consent/consent';
 import {
   askingReason,
-  namingQuestion,
   neededFor,
   parseDryRun,
   namesTag,
@@ -93,20 +92,6 @@ describe("what git's dry run says a push updates", () => {
   ];
   test.each(cases)('%s', (_name, line, reason) => {
     expect(askingReason(parseDryRun(dry(line)), MAIN)).toBe(reason);
-  });
-  // Only a tag and the default branch have a question whose yes names them.
-  test('a reason that names a target has the question a yes names it with', () => {
-    const questions = cases.map(([name, line]) => [
-      name,
-      namingQuestion(askingReason(parseDryRun(dry(line)), MAIN)),
-    ]);
-    expect(questions.filter(([, q]) => q !== null)).toEqual([
-      ['an up-to-date default branch', 'Push to `main`?'],
-      ['the default branch', 'Push to `main`?'],
-      ['a tag', 'Push the `v1` tag?'],
-    ]);
-    expect(namingQuestion(null)).toBeNull();
-    expect(namingQuestion('its dry run named no ref it would update')).toBeNull();
   });
   test('a remote whose default branch could not be read asks, saying why', () => {
     const refs = parseDryRun(dry('*\tHEAD:refs/heads/fix/x\t[new branch]'));
