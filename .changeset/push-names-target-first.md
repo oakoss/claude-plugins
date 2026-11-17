@@ -1,0 +1,5 @@
+---
+review-cycle: patch
+---
+
+When the gate refuses a push, its first question is now the one whose yes lets the push run. A push to the default branch or of a tag asks "Push to `main`?" or "Push the `v1` tag?" straight away. Before, it asked the plain push question and then refused the yes, which named no target. This holds for `git push`, for a GitHub write through `gh api` or the GitHub MCP tools, and for `gh stack link`. A push that reaches several such targets still asks about them one at a time. A push no answer can cover says what to change, or hands the user the command, instead of asking, such as one whose branch is built at run time, a GitHub write that names no branch, or one that deletes a tag. Deleting a tag through `gh api`'s REST refs endpoint is no longer covered by "push the `v1` tag", and force-moving one there needs a request for a bare force, as `git push --force` of a tag does. Refusing a plain push now runs its dry run, or reads the default branch on GitHub, before answering.

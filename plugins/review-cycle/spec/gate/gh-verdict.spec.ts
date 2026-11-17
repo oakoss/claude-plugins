@@ -427,7 +427,8 @@ describe('a push through GitHub', () => {
     const w = world('push');
     const r = await judge([push({ branch: 'fix/x', repo: 'o/r' })], w, grant({ pr: true }));
     expect(r).toMatchObject({ deny: expect.stringContaining("doesn't ask for a push") });
-    expect(w.calls).toEqual(['ladder']);
+    // The default branch is read to pick the question a yes must answer.
+    expect(w.calls).toEqual(['ladder', 'defaultBranch o/r']);
   });
 
   test('a requested push to the default branch asks unless the request named it', async () => {

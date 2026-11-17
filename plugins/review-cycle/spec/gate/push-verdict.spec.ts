@@ -3,8 +3,9 @@ import { describe, expect, test } from 'vitest';
 import { NO_GRANT, type PushLevel } from '../../hooks/consent/consent';
 import {
   askingReason,
-  namingQuestion,
+  coveredRefusal,
   neededFor,
+  refusedTail,
   parseDryRun,
   namesTag,
   pushOutcome,
@@ -93,20 +94,6 @@ describe("what git's dry run says a push updates", () => {
   ];
   test.each(cases)('%s', (_name, line, reason) => {
     expect(askingReason(parseDryRun(dry(line)), MAIN)).toBe(reason);
-  });
-  // Only a tag and the default branch have a question whose yes names them.
-  test('a reason that names a target has the question a yes names it with', () => {
-    const questions = cases.map(([name, line]) => [
-      name,
-      namingQuestion(askingReason(parseDryRun(dry(line)), MAIN)),
-    ]);
-    expect(questions.filter(([, q]) => q !== null)).toEqual([
-      ['an up-to-date default branch', 'Push to `main`?'],
-      ['the default branch', 'Push to `main`?'],
-      ['a tag', 'Push the `v1` tag?'],
-    ]);
-    expect(namingQuestion(null)).toBeNull();
-    expect(namingQuestion('its dry run named no ref it would update')).toBeNull();
   });
   test('a remote whose default branch could not be read asks, saying why', () => {
     const refs = parseDryRun(dry('*\tHEAD:refs/heads/fix/x\t[new branch]'));
@@ -232,5 +219,33 @@ describe('what a push not covered may do', () => {
       });
       expect(a.calls).toEqual([]);
     }
+  });
+});
+
+describe('what a push that still needs something says, on either path', () => {
+  const change = { change: { why: 'it names no branch', fix: 'Name one.' } };
+  const tag = { unnamed: { why: 'it pushes the tag `v1`', offer: 'Push the `v1` tag?' } };
+  const never = { unnamed: { why: 'it deletes the tag `v1`', offer: null } };
+  test('asked for, it says what the request still lacks', () => {
+    expect(coveredRefusal(change, 'cmd')).toBe(
+      "the user's latest message asks for a push, but it names no branch, so nothing ran. Name one.",
+    );
+    expect(coveredRefusal(tag, 'cmd', ' Alone.')).toMatch(
+      /so nothing ran\. Alone\. To push there, .* The question: Push the `v1` tag\? The command: cmd$/,
+    );
+    expect(coveredRefusal(never, 'cmd')).toContain('The gate never does that for the user.');
+  });
+  test('refused, it asks what a yes must name, or says no answer covers it', () => {
+    expect(refusedTail(tag, 'cmd', null)).toContain('The question: Push the `v1` tag?');
+    expect(refusedTail(never, 'cmd', null)).toMatch(
+      /^Even asked for, it deletes the tag `v1`, and the gate never does that/,
+    );
+    expect(refusedTail(change, 'cmd', null)).toBe(
+      'No answer lets it run as written: it names no branch. Name one.',
+    );
+    // The reason the refusal already gave is not given again.
+    expect(refusedTail(change, 'cmd', 'it names no branch')).toBe(
+      'No answer lets it run as written. Name one.',
+    );
   });
 });

@@ -10,11 +10,13 @@ export type GhContext = 'fixed' | 'elsewhere' | 'beside';
 // `asks` says why the push asks whatever the setting; a `force` one needs a
 // request for a bare force, since the API has no lease. `toDefault`: no branch
 // named, so it lands on the default one; `unknown`: where it goes is decided at
-// run time; `branch`: the branch a forced update or delete names.
+// run time; `branch`: the branch a forced update or delete names; `deletes`:
+// the tag is deleted, which no request covers.
 export type Asking = {
   asks: string;
   force: boolean;
   tag?: string;
+  deletes?: true;
   toDefault?: true;
   unknown?: true;
   branch?: { name: string; repo: string | null; deletes: boolean };
@@ -289,6 +291,16 @@ function restAction(
   const ref = /^git\/refs\/(heads|tags)\/(.+)$/.exec(path);
   if (ref) {
     const name = ref[2] ?? '';
+    if (ref[1] === 'tags' && method === 'DELETE') {
+      const gone = asking(`it deletes the tag \`${name}\``, false, { tag: name, deletes: true });
+      return { kind: 'push', ref: gone };
+    }
+    const force = field('force');
+    const forced = force === null || (force !== undefined && force !== 'false');
+    if (ref[1] === 'tags' && forced) {
+      const moved = asking(`it force-updates the tag \`${name}\``, true, { tag: name });
+      return { kind: 'push', ref: moved };
+    }
     if (ref[1] === 'tags') {
       return { kind: 'push', ref: asking('it pushes a tag', false, { tag: name }) };
     }
@@ -300,8 +312,7 @@ function restAction(
     if (method === 'DELETE') {
       return { kind: 'push', ref: asking(`it deletes \`${name}\``, false, named(true)) };
     }
-    const force = field('force');
-    if (force === null || (force !== undefined && force !== 'false')) {
+    if (forced) {
       return { kind: 'push', ref: asking(`it force-updates \`${name}\``, true, named(false)) };
     }
     return push(name, '');
