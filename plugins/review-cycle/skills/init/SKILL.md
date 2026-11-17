@@ -36,7 +36,7 @@ Remember whether we're inside a git repo. Project-scope options only apply when 
 
 ### Step 1.5: Gate prerequisites
 
-The commit gate and the comment-slop check both run `git`. They live in a mod, which Claude Code loads by default from v2.1.287; where mods do not load, nothing is gated.
+The commit gate runs `git`. It lives in a mod, which Claude Code loads by default from v2.1.287; where mods do not load, nothing is gated.
 
 ```bash
 command -v git >/dev/null && echo "✓ git" || echo "⚠ git missing"

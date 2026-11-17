@@ -49,8 +49,8 @@ function bothOrders(handlers: Handler[], $: unknown, bottom: Next, e: unknown) {
 const SETTINGS = '/home/u/.claude/settings.json';
 const ON = '{"enabledPlugins":{"review-cycle@oakoss":true}}';
 
-// Enough of `$` for the Edit and Write hooks: the file reads as ON, git finds
-// no repository, so the slop scan stays quiet.
+// Enough of `$` for the Edit and Write hooks: the file reads as ON, and git
+// finds no repository.
 const $ = {
   fs: {
     exists: () => Promise.resolve(true),
@@ -73,19 +73,12 @@ const CALLS = [
 const edited = () => Promise.resolve({ result: 'edited' });
 
 describe('with the gate switched off', () => {
-  test('the comment-slop check still hooks Edit and Write; nothing is gated', () => {
+  test('nothing is gated, an edit or write to its own switch included', () => {
     const hooks = load(false);
-    expect(hooks.get('tool.call:Edit')).toHaveLength(1);
-    expect(hooks.get('tool.call:Write')).toHaveLength(1);
+    expect(hooks.has('tool.call:Edit')).toBe(false);
+    expect(hooks.has('tool.call:Write')).toBe(false);
     expect(hooks.has('tool.call:Bash')).toBe(false);
     expect(hooks.has('prompt.submit:')).toBe(false);
-  });
-  test('an edit or write to its own switch is not refused', async () => {
-    const hooks = load(false);
-    for (const [key, e] of CALLS) {
-      const results = await bothOrders(hooks.get(key) ?? [], $, edited, e);
-      expect(results, key).toEqual([{ result: 'edited' }, { result: 'edited' }]);
-    }
   });
 });
 
@@ -121,10 +114,10 @@ describe('the findings ledger with the gate off', () => {
 });
 
 describe('with the gate on', () => {
-  test('the slop check, reviewer containment and the switch guard all hook Edit and Write', () => {
+  test('reviewer containment and the switch guard both hook Edit and Write', () => {
     const hooks = load(true);
-    expect(hooks.get('tool.call:Edit')).toHaveLength(3);
-    expect(hooks.get('tool.call:Write')).toHaveLength(3);
+    expect(hooks.get('tool.call:Edit')).toHaveLength(2);
+    expect(hooks.get('tool.call:Write')).toHaveLength(2);
   });
   test('the stop-before value from the options reaches the gate', async () => {
     const logs: string[] = [];
