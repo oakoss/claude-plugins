@@ -174,9 +174,16 @@ jobs:
       # binary (bin `claude.exe`), so only its postinstall runs on Node, and
       # `npm` on pnpm's npm-less Node puts `claude` in a global folder off PATH
       # (measured on macOS).
+      #
+      # The binary comes in an optional dependency, whose failed download npm
+      # skips; named here at the CLI's own version, a missing binary fails
+      # this step. --global keeps `npm view` from checking the repository's
+      # devEngines Node against the runner's.
       # jactionlint ignore=adhoc-packages
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        run: |
+          v=$(npm view --global @anthropic-ai/claude-code version)
+          npm install -g "@anthropic-ai/claude-code@$v" "@anthropic-ai/claude-code-linux-x64@$v"
 
       - name: Validate plugin manifests
         run: |
@@ -201,10 +208,13 @@ jobs:
       - name: Harden and checkout
         uses: $/.github/actions/harden-checkout
 
-      # Unpinned and on the runner's Node, as in Plugin manifests.
+      # Unpinned, on the runner's Node and with the binary named, as in Plugin
+      # manifests.
       # jactionlint ignore=adhoc-packages
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        run: |
+          v=$(npm view --global @anthropic-ai/claude-code version)
+          npm install -g "@anthropic-ai/claude-code@$v" "@anthropic-ai/claude-code-linux-x64@$v"
 
       # A Claude Code without mods (before v2.1.287) prints a notice and exits
       # 0 having run nothing, so the step requires the run to report the
