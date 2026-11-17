@@ -24,8 +24,11 @@ function questionOf(closing: string): string {
 function grants(grant: Grant, step: MissStep): boolean {
   if (step === 'push') return covers(grant, 'push');
   if (step === 'merge') return grant.merge || grant.autoMerge || grant.mergeStack.length > 0;
-  // A merge the user asked for covers the version pull request too.
-  if (step === 'release') return grant.release || grant.merge || grant.mergeStack.length > 0;
+  // A merge the user asked for covers the version pull request too, and a
+  // release once it is ready was read, though it waits.
+  if (step === 'release') {
+    return grant.release || grant.readyRelease || grant.merge || grant.mergeStack.length > 0;
+  }
   if (step === 'comment') return grant.comment;
   return grant.pr;
 }
