@@ -386,6 +386,9 @@ describe('the offer tool', () => {
     await say($, 'yes');
     const tag = await bash($, 'git push origin --delete pr-kit@0.6.1');
     expect(denied(tag, 'it deletes the tag `pr-kit@0.6.1`')).toBe(true);
+    const cleanup = await bash($, 'gh release delete pr-kit@0.6.1 --cleanup-tag --yes');
+    expect(denied(cleanup, 'it deletes the tag `pr-kit@0.6.1`')).toBe(true);
+    expect(ran(await bash($, 'gh release delete pr-kit@0.6.1 --yes'))).toBe(true);
   });
 
   test('a yes to its bare force-push question lets that push run', async ($, on) => {

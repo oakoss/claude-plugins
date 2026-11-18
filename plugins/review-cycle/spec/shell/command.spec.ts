@@ -1676,6 +1676,17 @@ describe('gh steps', () => {
   ])('%s releases %j', (command, tag) => {
     expect(ghActions(command)).toEqual([{ kind: 'release', tag }]);
   });
+  test('a release delete with --cleanup-tag also deletes its tag', () => {
+    expect(ghActions('gh release delete v1 --cleanup-tag').map((a) => a.kind)).toEqual([
+      'release',
+      'push',
+    ]);
+    expect(ghActions('gh release delete v1 --yes').map((a) => a.kind)).toEqual(['release']);
+    expect(ghActions('gh release delete "$TAG" --yes').map((a) => a.kind)).toEqual(['release']);
+    expect(ghActions('gh release delete --yes "$TAG"').map((a) => a.kind)).toEqual(['release']);
+    const [, unread] = ghActions('gh release delete "$TAG" --cleanup-tag');
+    expect(unread).toMatchObject({ kind: 'push', ref: { unknown: true } });
+  });
   test('a package publish names no tag', () => {
     expect(ghActions('npm publish')).toEqual([{ kind: 'release', tag: null }]);
     expect(ghActions('pnpm exec oakum release')).toEqual([{ kind: 'release', tag: null }]);

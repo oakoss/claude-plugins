@@ -1504,7 +1504,19 @@ function ghAt(
   }
   if (group === 'issue' && verb === 'comment') return { kind: 'comment' };
   if (group === 'release' && RELEASE_WRITES.has(verb)) {
-    return { kind: 'release', tag: fed ? null : releaseTagOf(before, rest) };
+    const tag = fed ? null : releaseTagOf(before, rest);
+    const cleans = rest.some((w) => /^--cleanup-tag(=|$)/.test(w.text));
+    if (verb !== 'delete' || !cleans) return { kind: 'release', tag };
+    const gone =
+      tag === null
+        ? asking("it deletes the release's tag, which the gate cannot name", false, {
+            unknown: true,
+          })
+        : asking(`it deletes the tag \`${tag}\``, false, { tag, deletes: true });
+    return [
+      { kind: 'release', tag },
+      { kind: 'push', ref: gone },
+    ];
   }
   return null;
 }
