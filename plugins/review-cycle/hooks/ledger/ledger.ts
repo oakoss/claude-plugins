@@ -23,6 +23,8 @@ export type Entry = {
   blob: string;
   // When a cycle last settled it; carrying it forward does not move this.
   date: string;
+  // The general rule the finding is an instance of, in words cycles reuse.
+  class?: string;
 };
 
 export type NewEntry = Omit<Entry, 'id' | 'blob' | 'date'>;
@@ -40,6 +42,10 @@ export const MAX_PATH = 1024;
 export const MAX_REPOS = 10;
 export const EXPIRY_DAYS = 90;
 export const PREFIX = 'ledger:';
+export const MAX_CLASS = 60;
+// A class settled on this many dates has recurred, and is proposed as a
+// project rule once: on the record that brings it there.
+export const RECUR_DATES = 2;
 
 const ENTRY_KEYS = [
   'id',
@@ -51,6 +57,7 @@ const ENTRY_KEYS = [
   'source',
   'blob',
   'date',
+  'class',
 ] as const;
 const BLOB = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -123,6 +130,31 @@ function pathOf(v: unknown): string | { error: string } {
   return p;
 }
 
+// Invisible characters that make two classes that print alike differ. Joiners
+// (U+200C, U+200D) and emoji tags stay: words and emoji need them.
+const INVISIBLE = /[­​⁠﻿‪-‮⁦-⁩]/gu;
+
+const normalClass = (s: string) =>
+  s
+    .normalize('NFKC')
+    .toLowerCase()
+    .normalize('NFKC')
+    .replaceAll(INVISIBLE, '')
+    .trim()
+    .replaceAll(/\s+/g, ' ');
+
+// Classes compare exactly. storedOf reads one back only if normalizing it
+// again changes nothing, so an unstable form is refused here.
+function classOf(v: unknown): string | { error: string } {
+  if (typeof v !== 'string') return { error: 'class must be a string' };
+  if (/\p{Cc}/u.test(v.replaceAll(/\s/g, ' '))) return { error: 'class holds a control character' };
+  const c = normalClass(v);
+  if (normalClass(c) !== c) return { error: 'class does not normalize to a stable form' };
+  if (c === '') return { error: 'class is empty' };
+  if (c.length > MAX_CLASS) return { error: `class is over ${MAX_CLASS} characters` };
+  return c;
+}
+
 // One finding as the record tool takes it, or its first fault.
 function newEntryOf(raw: unknown): NewEntry | { error: string } {
   const e = (raw ?? {}) as Record<string, unknown>;
@@ -145,6 +177,8 @@ function newEntryOf(raw: unknown): NewEntry | { error: string } {
   if (line !== null && !(Number.isSafeInteger(line) && (line as number) > 0)) {
     return { error: 'line must be a positive integer' };
   }
+  const cls = e.class === undefined ? undefined : classOf(e.class);
+  if (typeof cls === 'object') return cls;
   return {
     path,
     line: line as number | null,
@@ -152,6 +186,7 @@ function newEntryOf(raw: unknown): NewEntry | { error: string } {
     finding: clip(finding),
     reason: clip(reason),
     source: clip(source),
+    ...(cls !== undefined && { class: cls }),
   };
 }
 
@@ -346,9 +381,10 @@ export function merge(
     const blob = blobs.get(n.path);
     if (blob === undefined) throw new Error(`no blob for ${n.path}`);
     const id = entryId(n.path, n.finding);
+    const cls = n.class ?? byId.get(id)?.class;
     if (byId.delete(id)) updated++;
     else added++;
-    byId.set(id, { id, ...n, blob, date });
+    byId.set(id, { id, ...n, ...(cls !== undefined && { class: cls }), blob, date });
   }
   const all = [...byId.values()];
   const sizes = all.map((e) => utf8Bytes(JSON.stringify(e)) + 1);
@@ -394,7 +430,7 @@ export const MAX_READ = 8000;
 
 export type Ranked = { entries: Entry[]; matched: number; reopened: number };
 
-// The entries whose finding or reason holds any of the query's words of three
+// The entries whose finding, reason or class holds any of the query's words of three
 // characters or more, those holding the most words first, then the newest, then
 // the last recorded. A reader stops paging once entries stop bearing on the
 // change, so the order has to put the closest first. No words keeps every entry.
@@ -411,7 +447,7 @@ export function ranked(
     .map((w) => w.replaceAll(/^[.-]+|[.-]+$/g, ''))
     .filter((w) => w.length >= 3);
   const rows = entries.map((e, at) => {
-    const text = `${e.finding} ${e.reason}`.toLowerCase();
+    const text = `${e.finding} ${e.reason} ${e.class ?? ''}`.toLowerCase();
     const score = words.filter((w) => text.includes(w)).length;
     return { e, at, score, open: reopen(e) };
   });
@@ -466,4 +502,63 @@ export function staleKeys(
 ): string[] {
   const others = ledgers.filter((l) => l.key !== keep).toSorted((a, b) => a.updated - b.updated);
   return others.slice(0, Math.max(0, others.length - (MAX_REPOS - 1))).map((l) => l.key);
+}
+
+function datesByClass(entries: readonly Entry[]): Map<string, Set<string>> {
+  const by = new Map<string, Set<string>>();
+  for (const e of entries) {
+    if (e.class === undefined) continue;
+    const dates = by.get(e.class) ?? new Set<string>();
+    dates.add(e.date);
+    by.set(e.class, dates);
+  }
+  return by;
+}
+
+// At most this many instances come with a proposal, the newest first.
+export const MAX_INSTANCES = 5;
+
+export type Proposal = {
+  class: string;
+  dates: number;
+  instances: Pick<Entry, 'id' | 'path' | 'finding' | 'reason' | 'date'>[];
+};
+
+// The classes a record brought to RECUR_DATES dates. One already there before
+// is not proposed again; one that fell below, as when its entries are resolved
+// or settled again on one day, is proposed when it next reaches it.
+export function recurring(before: readonly Entry[], after: readonly Entry[]): Proposal[] {
+  const was = datesByClass(before);
+  const out: Proposal[] = [];
+  for (const [cls, dates] of datesByClass(after)) {
+    if (dates.size < RECUR_DATES || (was.get(cls)?.size ?? 0) >= RECUR_DATES) continue;
+    const instances = after
+      .filter((e) => e.class === cls)
+      .toSorted((a, b) => b.date.localeCompare(a.date))
+      .slice(0, MAX_INSTANCES)
+      .map(({ id, path, finding, reason, date }) => ({ id, path, finding, reason, date }));
+    out.push({ class: cls, dates: dates.size, instances });
+  }
+  return out;
+}
+
+// The most characters of JSON the class list takes in a read's answer.
+export const MAX_CLASSES_TEXT = 1500;
+
+// The ledger's classes with their entry counts, most used first, so a cycle
+// reuses a class's words whichever files it reviews; `omitted` counts those
+// past MAX_CLASSES_TEXT.
+export function classesOf(entries: readonly Entry[]): {
+  classes: { class: string; entries: number }[];
+  omitted: number;
+} {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    if (e.class !== undefined) counts.set(e.class, (counts.get(e.class) ?? 0) + 1);
+  }
+  const all = [...counts]
+    .map(([c, n]) => ({ class: c, entries: n }))
+    .toSorted((a, b) => b.entries - a.entries || a.class.localeCompare(b.class));
+  const classes = paged(all, 0, MAX_CLASSES_TEXT).rows;
+  return { classes, omitted: all.length - classes.length };
 }

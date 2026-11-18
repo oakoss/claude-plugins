@@ -203,6 +203,62 @@ describe('recordInto', () => {
   });
 });
 
+const tagged = (path: string) => ({ ...DEFERRED, path, finding: `in ${path}`, class: 'c' });
+
+describe('recurring classes', () => {
+  test('a record that brings a class to a second date proposes it, and the next does not', async () => {
+    const { store } = fakeStore();
+    const files = tree({ 'a.ts': A, 'b.ts': B, 'c.ts': A });
+    const first = await record(store, files, rec({ add: [tagged('a.ts')] }));
+    expect(first).not.toHaveProperty('propose');
+    const second = await record(store, files, rec({ add: [tagged('b.ts')] }), NOW + DAY);
+    expect(second.propose).toEqual([
+      {
+        class: 'c',
+        dates: 2,
+        instances: [
+          expect.objectContaining({ path: 'b.ts', date: '2026-09-27' }),
+          expect.objectContaining({ path: 'a.ts', date: '2026-09-26' }),
+        ],
+      },
+    ]);
+    const third = await record(store, files, rec({ add: [tagged('c.ts')] }), NOW + 2 * DAY);
+    expect(third).not.toHaveProperty('propose');
+  });
+  test('a read from the start lists every class, whatever paths selects; a later page does not', async () => {
+    const { store } = fakeStore();
+    const files = tree({ 'a.ts': A, 'b.ts': B });
+    await record(store, files, rec({ add: [tagged('a.ts'), { ...DEFERRED, path: 'b.ts' }] }));
+    const first = await readLedger(store, files, COMMON, { paths: ['b.ts'] }, NOW);
+    expect(first.classes).toEqual([{ class: 'c', entries: 1 }]);
+    const zero = await readLedger(store, files, COMMON, { offset: 0 }, NOW);
+    expect(zero.classes).toEqual([{ class: 'c', entries: 1 }]);
+    const later = await readLedger(store, files, COMMON, { offset: 1 }, NOW);
+    expect(later).not.toHaveProperty('classes');
+  });
+  test('a query finds entries by their class words', async () => {
+    const { store } = fakeStore();
+    const files = tree({ 'a.ts': A, 'b.ts': B });
+    await record(
+      store,
+      files,
+      rec({
+        add: [
+          { ...tagged('a.ts'), class: 'evasion rule' },
+          { ...DEFERRED, path: 'b.ts' },
+        ],
+      }),
+    );
+    const found = await readLedger(store, files, COMMON, { query: 'evasion' }, NOW);
+    expect((found.entries as { path: string }[]).map((e) => e.path)).toEqual(['a.ts']);
+  });
+  test('a ledger with no class lists none', async () => {
+    const { store } = fakeStore();
+    await record(store, tree({ 'a.ts': A }), rec({ add: [DEFERRED] }));
+    expect(await read(store, tree({ 'a.ts': A }))).not.toHaveProperty('classes');
+  });
+});
+
 describe('readLedger', () => {
   test('marks each entry changed or not against the working tree, and stale by age', async () => {
     const { store } = fakeStore();

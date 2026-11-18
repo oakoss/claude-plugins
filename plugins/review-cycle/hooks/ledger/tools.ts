@@ -11,11 +11,13 @@ import {
 } from '../state/engine';
 import {
   KINDS,
+  MAX_CLASS,
   MAX_LEDGER_BYTES,
   MAX_READ,
   MAX_REPOS,
   MAX_TEXT,
   parseRecord,
+  RECUR_DATES,
   type Recording,
 } from './ledger';
 import { blobsAt, readLedger, recordInto } from './ledger-store';
@@ -28,7 +30,7 @@ export async function registerLedger($: $): Promise<void> {
   try {
     await $.tool.register({
       name: 'ledger',
-      description: `Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, \`date\` (when a cycle last settled it), \`changed\` (whether its file differs from what the last cycle to carry it reviewed; null when the working tree could not be read), and \`stale\` (settled more than 90 days ago); unless \`changed\` is false it also has \`blob\` and \`current\`, short ids for \`git diff <blob> <current>\`. Entries come ranked, in an answer of at most ${MAX_READ} characters unless its first entry and the answer's header together are longer: first every stale entry, query or not, since it is open again, then those holding the most \`query\` words, then the newest. \`reopened\` counts the stale entries, \`matched\` the rest, and \`next\`, when present, is the \`offset\` that reads on. \`unreadable\` counts stored entries this version cannot read; the next record drops them. Read-only.`,
+      description: `Findings earlier review cycles in this repository settled without fixing: deferred, rebutted, left alone on purpose, or raised as questions. Each entry has an id, path, line, kind, finding, reason, source, \`date\` (when a cycle last settled it), \`changed\` (whether its file differs from what the last cycle to carry it reviewed; null when the working tree could not be read), and \`stale\` (settled more than 90 days ago); unless \`changed\` is false it also has \`blob\` and \`current\`, short ids for \`git diff <blob> <current>\`. Entries come ranked, in an answer of at most ${MAX_READ} characters unless its first entry and the answer's header together are longer: first every stale entry, query or not, since it is open again, then those holding the most \`query\` words, then the newest. \`reopened\` counts the stale entries, \`matched\` the rest, and \`next\`, when present, is the \`offset\` that reads on. \`unreadable\` counts stored entries this version cannot read; the next record drops them. An entry may have a \`class\`, the general rule it is an instance of; a read from the start lists \`classes\`, the ledger's classes with their entry counts, most used first, whatever \`paths\` selects, and \`classesOmitted\` counts those that did not fit. Read-only.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -40,7 +42,7 @@ export async function registerLedger($: $): Promise<void> {
           query: {
             type: 'string',
             description:
-              'Only the entries whose finding or reason holds any of these words (three characters or more), plus every stale one, ranked first.',
+              'Only the entries whose finding, reason or class holds any of these words (three characters or more), plus every stale one, ranked first.',
           },
           offset: { type: 'integer', minimum: 0, description: 'Where to start: a `next` value.' },
         },
@@ -48,7 +50,7 @@ export async function registerLedger($: $): Promise<void> {
     });
     await $.tool.register({
       name: 'ledger_record',
-      description: `Records what a review cycle settled without fixing into this repository's findings ledger. \`entries\` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at ${MAX_TEXT} characters, and the same finding at the same path replaces its entry. \`keep\` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. \`move\` does the same for an entry whose code moved to another file, giving it that path and a new id; it needs no \`keep\`. \`resolve\` removes entries by id. The ledger keeps the newest entries that fit in ${MAX_LEDGER_BYTES / 1024} KiB per repository, and ledgers for the ${MAX_REPOS} most recently recorded repositories.`,
+      description: `Records what a review cycle settled without fixing into this repository's findings ledger. \`entries\` adds findings, each stamped with its file's blob in the working tree and today's date, so every path must be a file there; text is collapsed to one line and clipped at ${MAX_TEXT} characters, and the same finding at the same path replaces its entry. \`keep\` carries entries by id: each gets its file's current blob and keeps its date, and one whose file is gone is dropped. \`move\` does the same for an entry whose code moved to another file, giving it that path and a new id; it needs no \`keep\`. \`resolve\` removes entries by id. When a \`class\` reaches entries settled on ${RECUR_DATES} different dates by this record, the answer's \`propose\` lists it with its newest instances: a finding that keeps recurring, which the project could encode as code, a check, or a line in its \`AGENTS.md\` or \`CLAUDE.md\`. A class already there is not proposed again unless its entries fall below ${RECUR_DATES} dates, as when they are resolved, and reach it again. The ledger keeps the newest entries that fit in ${MAX_LEDGER_BYTES / 1024} KiB per repository, and ledgers for the ${MAX_REPOS} most recently recorded repositories.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -67,6 +69,12 @@ export async function registerLedger($: $): Promise<void> {
                     'Why it was not fixed: the deferral criterion, the measurement or documentation that rebutted it, or why it was left alone.',
                 },
                 source: { type: 'string', description: 'The reviewer that raised it.' },
+                class: {
+                  type: 'string',
+                  maxLength: MAX_CLASS,
+                  description:
+                    "The general rule this finding is an instance of, when it has one, such as 'evasion outside the gate threat model': the words of a class in the read's `classes` when one fits, else a new short phrase. Compared lowercased with spacing collapsed. Left out, an entry recorded again keeps its class.",
+                },
               },
               required: ['path', 'kind', 'finding', 'reason', 'source'],
             },
