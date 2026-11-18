@@ -1652,6 +1652,45 @@ describe('gh steps', () => {
   ])('%s', (command, expected) => {
     expect(kinds(command)).toEqual(expected);
   });
+  test.each([
+    ['gh release create v1.0.0 --notes x', 'v1.0.0'],
+    ['gh release create v1 -dn notes --verify-tag', 'v1'],
+    ['gh release create v1 --notes "$NOTES"', 'v1'],
+    ['gh release create v1 -n "$(cat n.md)"', 'v1'],
+    ['gh release create v1 --notes="$NOTES"', 'v1'],
+    ['gh release upload v1 ~/dist/a.tgz', 'v1'],
+    ['gh release delete-asset v6 a.tgz', 'v6'],
+    ['gh release create --draft v1', null],
+    ['gh release create -tn v0 v2', null],
+    ['gh release create -- v1', null],
+    ['gh release edit v4 --tag v5', null],
+    ['gh release edit v4 --tag=v5', null],
+    ['gh release --tag=v2 edit v1', null],
+    ['gh release -dn create v1 v2', null],
+    ['gh -R o/r release create v1', null],
+    ['gh release create v1 "$FLAGS"', null],
+    ['gh release create v1 --notes $NOTES', null],
+    ['gh release create "$TAG" --notes x', null],
+    ['gh release create --verify-tag', null],
+    ['echo v7 | xargs gh release create', null],
+  ])('%s releases %j', (command, tag) => {
+    expect(ghActions(command)).toEqual([{ kind: 'release', tag }]);
+  });
+  test('a release delete with --cleanup-tag also deletes its tag', () => {
+    expect(ghActions('gh release delete v1 --cleanup-tag').map((a) => a.kind)).toEqual([
+      'release',
+      'push',
+    ]);
+    expect(ghActions('gh release delete v1 --yes').map((a) => a.kind)).toEqual(['release']);
+    expect(ghActions('gh release delete "$TAG" --yes').map((a) => a.kind)).toEqual(['release']);
+    expect(ghActions('gh release delete --yes "$TAG"').map((a) => a.kind)).toEqual(['release']);
+    const [, unread] = ghActions('gh release delete "$TAG" --cleanup-tag');
+    expect(unread).toMatchObject({ kind: 'push', ref: { unknown: true } });
+  });
+  test('a package publish names no tag', () => {
+    expect(ghActions('npm publish')).toEqual([{ kind: 'release', tag: null }]);
+    expect(ghActions('pnpm exec oakum release')).toEqual([{ kind: 'release', tag: null }]);
+  });
   // Measured on gh 2.102.0 outside a repository. A help word after a flag
   // (`--admin --help`) prints help too, but still asks.
   test.each([

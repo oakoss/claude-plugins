@@ -92,18 +92,24 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
     [
       { step: 'release', version: 'v0.25.0' },
       'Release `v0.25.0`?',
-      { release: true, push: 'push', pushNamed: ['tag:v0.25.0'] },
+      { release: true, releaseNamed: ['v0.25.0'], push: 'push', pushNamed: ['tag:v0.25.0'] },
     ],
     [
       { step: 'release', version: 'review-cycle@0.27.0' },
       'Release `review-cycle@0.27.0`?',
-      { release: true, push: 'push', pushNamed: ['tag:review-cycle@0.27.0'] },
+      {
+        release: true,
+        releaseNamed: ['review-cycle@0.27.0'],
+        push: 'push',
+        pushNamed: ['tag:review-cycle@0.27.0'],
+      },
     ],
     [
       { step: 'release', versions: ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'] },
       'Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?',
       {
         release: true,
+        releaseNamed: ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'],
         push: 'push',
         pushNamed: ['tag:pr-kit@0.6.1', 'tag:pr-watch@0.9.0', 'tag:review-cycle@0.39.0'],
       },

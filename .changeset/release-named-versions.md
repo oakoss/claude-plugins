@@ -1,0 +1,5 @@
+---
+review-cycle: minor
+---
+
+A release you approve by naming its versions now covers only those versions. After a yes to "Release `pr-kit@0.6.1`?", the commit gate refuses a `gh release create`, `edit`, `delete` or `upload`, or a `gh api` call to the releases endpoint, for any other tag, and asks the question that names it. It also refuses what it cannot tie to a named version: a tag built at run time, a package publish such as `npm publish` or `oakum release`, and a merge of the version pull request. Before, any release ran once one was approved; tag pushes were already held to the named versions, but `gh release create` without `--verify-tag` makes its tag on GitHub without a push, and `oakum release` releases every pending version. A release asked for without naming a version still covers any, as does a stop-before setting that lets releases run. `gh release delete --cleanup-tag` also deletes the tag on GitHub, so the gate refuses it whatever was approved, as it does `git push --delete` of a tag, and hands you the command to run yourself.

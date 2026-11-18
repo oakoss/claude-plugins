@@ -169,5 +169,5 @@ function publishAt(
   // `yarn npm publish` is Yarn's, whose dry run the gate does not know.
   const dryRuns = publisher.dryRuns && !(name === 'npm' && underYarn);
   const all = words.slice(at + 1).map((w) => w.text);
-  return dryRuns && dryRun(name, all) ? null : { kind: 'release' };
+  return dryRuns && dryRun(name, all) ? null : { kind: 'release', tag: null };
 }

@@ -170,7 +170,7 @@ export function fakeWorld(on: any, setup: Partial<World> = {}): World {
     w.keptRead = true;
     if (w.kept === 'unreadable') return { deny: 'store unreadable' };
     if (w.kept === undefined) return { value: { version: 0 } };
-    return { value: { value: { shape: 'gate-11', value: w.kept.record }, version: 1 } };
+    return { value: { value: { shape: 'gate-12', value: w.kept.record }, version: 1 } };
   });
   const filesOf = (ref: string) => w.trees.get(ref) ?? w.commits[ref] ?? {};
   on(
@@ -437,6 +437,7 @@ export const NO_GRANT_KEPT = {
   mergeStack: [],
   approve: false,
   release: false,
+  releaseNamed: [],
   comment: false,
 };
 

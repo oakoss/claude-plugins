@@ -639,6 +639,24 @@ export async function judgeGh(
       }
       case 'release': {
         if (!may.release) return refuse('release', null);
+        const named = granted.releaseNamed;
+        const { tag } = action;
+        if (
+          named.length > 0 &&
+          !settingLets('release', ladder, held) &&
+          (tag === null || !named.includes(tag))
+        ) {
+          const asked = named.map((v) => `\`${v}\``).join(', ');
+          const which = tag === null ? 'a release the gate cannot name' : `\`${tag}\``;
+          const ask =
+            tag === null
+              ? askThem(GH_ASK.release, shown)
+              : askFor({ step: 'release', versions: [tag] }, shown);
+          return {
+            deny: `the user asked to release ${asked}, and this releases ${which}, so nothing ran. To go ahead, ${ask}`,
+            step: 'release',
+          };
+        }
         if (!granted.release && may.release) ran.push({ step: 'release', ladder });
         break;
       }
@@ -845,10 +863,13 @@ export async function judgeGh(
             };
           }
         }
+        // A release that named versions cannot say which a version pull
+        // request carries, so it does not cover merging one.
+        const anyRelease = granted.release && granted.releaseNamed.length === 0;
         const asked = {
           ...granted,
           merge: covers.now || covers.ready,
-          release: granted.release || readyRelease,
+          release: anyRelease || readyRelease,
         };
         const mayHere = permitted(asked, ladder, held);
         // A merge the user asked for covers oakum's version pull request too:
@@ -890,6 +911,34 @@ export async function judgeGh(
         }
         if ('asks' in which) return refuse('merge', which.asks);
         const step = which.step;
+        const pull =
+          target !== null
+            ? target.home
+              ? target.number
+              : `${target.repo}#${target.number}`
+            : 'cannot' in lookup
+              ? undefined
+              : lookup
+                  .map((x) => /^(?:\d+|https:\/\/\S+\/pull\/(\d+)\/?)$/.exec(x))
+                  .map((m) => m?.[1] ?? m?.[0])
+                  .find((n) => n !== undefined);
+        if (step === 'release' && !mayHere.release && !anyRelease && granted.release) {
+          const named = granted.releaseNamed.map((v) => `\`${v}\``).join(', ');
+          const merging =
+            pull === undefined
+              ? 'the version pull request'
+              : pull.includes('#')
+                ? pull
+                : `#${pull}`;
+          const ask =
+            pull === undefined
+              ? askThem({ step: 'release', pull: '130' }, shown)
+              : askFor({ step: 'release', pull }, shown);
+          return {
+            deny: `the user asked to release ${named}, and merging ${merging} releases what it carries, which the gate does not read, so nothing ran. To go ahead, ${ask}`,
+            step: 'release',
+          };
+        }
         if (!mayHere[step]) return refuse(step, null);
         if (!asked[step] && mayHere[step]) ran.push({ step, ladder });
         break;

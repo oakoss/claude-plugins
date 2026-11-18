@@ -45,7 +45,9 @@ export type GhAction =
   // instead, or a resolve, which it does only under one setting. It cannot
   // unresolve.
   | { kind: 'comment'; thread?: 'reply' | 'resolve' }
-  | { kind: 'release' }
+  // `tag`: the release a `gh release` write or a REST call acts on; null when
+  // the words cannot show it, or for a package publish, which names none.
+  | { kind: 'release'; tag: string | null }
   | { kind: 'push'; ref: PushRef }
   // github/gh-stack: `push`, `sync` and `submit` push every active branch of
   // the stack with a per-branch lease; `submit` and `link` also open pull
@@ -230,7 +232,10 @@ function restAction(
     ref: pushRef(name, missing, repo, where, toDefault),
   });
   if (path === 'pulls') return method === 'POST' ? { kind: 'pr' } : null;
-  if (path === 'releases' || path.startsWith('releases/')) return { kind: 'release' };
+  if (path === 'releases') return { kind: 'release', tag: field('tag_name') ?? null };
+  const byTag = /^releases\/tags\/([^/]+)$/.exec(path)?.[1];
+  if (byTag !== undefined) return { kind: 'release', tag: byTag };
+  if (path.startsWith('releases/')) return { kind: 'release', tag: null };
   const pull = /^pulls\/([^/]+)\/(.+)$/.exec(path);
   if (pull?.[2] === 'merge') {
     const number = pull[1] ?? '';

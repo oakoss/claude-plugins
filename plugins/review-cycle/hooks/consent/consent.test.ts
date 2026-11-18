@@ -297,6 +297,55 @@ describe('the offer tool', () => {
     expect(ran(await bash($, 'gh release create pr-kit@0.6.1'))).toBe(true);
   });
 
+  test('a release naming versions refuses a release of any other, or of one the gate cannot name', async ($, on) => {
+    fakeWorld(on, byHand());
+    await endTurn($, 'answer', await offered($, { step: 'release', version: 'pr-kit@0.6.1' }));
+    await say($, 'yes');
+    const other = await bash($, 'gh release create pr-watch@0.9.0 --verify-tag');
+    expect(
+      denied(other, 'the user asked to release `pr-kit@0.6.1`, and this releases `pr-watch@0.9.0`'),
+    ).toBe(true);
+    expect(denied(other, 'The question: Release `pr-watch@0.9.0`?')).toBe(true);
+    expect(denied(await bash($, 'gh release create "$TAG"'), 'cannot name')).toBe(true);
+    expect(
+      denied(await bash($, 'gh api repos/{owner}/{repo}/releases -f tag_name=v9'), '`v9`'),
+    ).toBe(true);
+    expect(ran(await bash($, 'gh release edit pr-kit@0.6.1 --notes x'))).toBe(true);
+    // A publish names no version, and oakum's releases every pending one.
+    expect(denied(await bash($, 'npm publish'), 'cannot name')).toBe(true);
+    expect(denied(await bash($, 'pnpm exec oakum release'), 'cannot name')).toBe(true);
+  });
+
+  test('a release naming versions does not merge the version pull request', async ($, on) => {
+    fakeWorld(on, { settings: { local: stops('release') }, git: github('oakum/version-packages') });
+    await endTurn($, 'answer', await offered($, { step: 'release', version: 'v0.25.0' }));
+    await say($, 'yes');
+    const r = await bash($, 'gh pr merge 130');
+    expect(denied(r, 'the user asked to release `v0.25.0`, and merging #130')).toBe(true);
+    const byUrl = await bash($, 'gh pr merge https://github.com/o/r/pull/130');
+    expect(denied(byUrl, 'the user asked to release `v0.25.0`, and merging #130')).toBe(true);
+    const bare = await bash($, 'gh pr merge');
+    expect(denied(bare, 'merging the version pull request releases')).toBe(true);
+    await endTurn($, 'answer', await offered($, { step: 'release', pulls: ['130'] }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh pr merge 130'))).toBe(true);
+  });
+
+  test('a setting that frees releases does not hold one to the versions named', async ($, on) => {
+    fakeWorld(on, { ...byHand(), settings: { local: stops('never stop') } });
+    await endTurn($, 'answer', await offered($, { step: 'release', version: 'pr-kit@0.6.1' }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh release create pr-watch@0.9.0'))).toBe(true);
+  });
+
+  test('a release that names no version still covers any', async ($, on) => {
+    fakeWorld(on, byHand());
+    await endTurn($, 'answer', await offered($, { step: 'release', pulls: ['343'] }));
+    await say($, 'yes');
+    expect(ran(await bash($, 'gh release create pr-watch@0.9.0'))).toBe(true);
+    expect(ran(await bash($, 'gh release create "$TAG"'))).toBe(true);
+  });
+
   test('a tag push nobody asked for is refused with the tag’s own question, and "yes, push the tag" answers it', async ($, on) => {
     fakeWorld(on, byHand());
     await say($, 'fix the parser');
@@ -337,6 +386,9 @@ describe('the offer tool', () => {
     await say($, 'yes');
     const tag = await bash($, 'git push origin --delete pr-kit@0.6.1');
     expect(denied(tag, 'it deletes the tag `pr-kit@0.6.1`')).toBe(true);
+    const cleanup = await bash($, 'gh release delete pr-kit@0.6.1 --cleanup-tag --yes');
+    expect(denied(cleanup, 'it deletes the tag `pr-kit@0.6.1`')).toBe(true);
+    expect(ran(await bash($, 'gh release delete pr-kit@0.6.1 --yes'))).toBe(true);
   });
 
   test('a yes to its bare force-push question lets that push run', async ($, on) => {
