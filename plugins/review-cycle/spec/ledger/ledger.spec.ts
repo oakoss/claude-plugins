@@ -570,30 +570,39 @@ describe('class', () => {
     ['empty', '  ', 'class is empty'],
     ['too long', 'x'.repeat(MAX_CLASS + 1), `class is over ${MAX_CLASS} characters`],
     ['not a string', 3, 'class must be a string'],
-    ['control character', 'a\u0007b', 'class holds a control character'],
+    ['control character', 'a\u0007b', 'class holds the control character U+0007'],
   ])('refuses a class that is %s', (_, cls, error) => {
     expect(refusal({ entries: [finding({ class: cls as string })] })).toBe(`entries[0]: ${error}`);
   });
   test('normalizes Unicode form, so composed and decomposed spellings are one class', () => {
-    const composed = parseRecord({ entries: [finding({ class: 'café rule' })] });
-    const decomposed = parseRecord({ entries: [finding({ class: 'café rule' })] });
-    expect(composed).toMatchObject({ add: [{ class: 'café rule' }] });
+    const composed = parseRecord({ entries: [finding({ class: 'caf\u{E9} rule' })] });
+    const decomposed = parseRecord({ entries: [finding({ class: 'cafe\u{301} rule' })] });
+    expect(composed).toMatchObject({ add: [{ class: 'caf\u{E9} rule' }] });
     expect(decomposed).toEqual(composed);
   });
   test('strips invisible characters, keeping the joiners words and emoji need', () => {
-    expect(parseRecord({ entries: [finding({ class: 'cafe​ ﻿rule' })] })).toMatchObject({
+    expect(
+      parseRecord({ entries: [finding({ class: 'cafe\u{200B} \u{FEFF}rule' })] }),
+    ).toMatchObject({
       add: [{ class: 'cafe rule' }],
     });
-    for (const kept of ['family \u{1F468}‍\u{1F469}', 'می‌خواهم']) {
+    for (const kept of [
+      'family \u{1F468}\u{200D}\u{1F469}',
+      '\u{645}\u{6CC}\u{200C}\u{62E}\u{648}\u{627}\u{647}\u{645}',
+    ]) {
       const r = parseRecord({ entries: [finding({ class: kept })] });
       expect(r).toMatchObject({ add: [{ class: kept.normalize('NFKC').toLowerCase() }] });
     }
   });
+  test('an invisible character between a letter and its mark is stripped, not refused', () => {
+    const r = parseRecord({ entries: [finding({ class: 'e\u{200B}\u{301} rule' })] });
+    expect(r).toMatchObject({ add: [{ class: '\u{E9} rule' }] });
+  });
   test('a class whose case folding recomposes reads back after a record', () => {
-    const r = parseRecord({ entries: [finding({ class: 'J̌ rule' })] });
+    const r = parseRecord({ entries: [finding({ class: 'J\u{30C} rule' })] });
     if ('error' in r) throw new Error(r.error);
     const m = merge([], r, blobs('a.ts'), DATE);
-    expect(m.entries[0]?.class).toBe('ǰ rule');
+    expect(m.entries[0]?.class).toBe('\u{1F0} rule');
     expect(storedOf({ entries: m.entries, updated: 1 })).toMatchObject({ unreadable: 0 });
   });
   test('accepts a class of exactly MAX_CLASS characters', () => {
@@ -695,24 +704,29 @@ describe('recurring', () => {
     delete plain.class;
     expect(recurring([plain], [plain, { ...plain, date: '2026-11-01', id: 'x' }])).toEqual([]);
   });
-  test('lists at most MAX_INSTANCES instances, the newest first', () => {
+  test('lists at most MAX_INSTANCES instances, the newest first, whatever the storage order', () => {
     const before = [on('2026-10-01', 'z.ts')];
-    const after = [
-      ...before,
-      ...Array.from({ length: 7 }, (_, i) => on(`2026-11-0${i + 1}`, `${i}.ts`)),
-    ];
+    const after = [...before, ...[3, 7, 1, 5, 2, 6, 4].map((d) => on(`2026-11-0${d}`, `${d}.ts`))];
     const [p] = recurring(before, after);
-    expect(p?.instances).toHaveLength(MAX_INSTANCES);
-    expect(p?.instances[0]?.date).toBe('2026-11-07');
+    expect(p?.instances.map((i) => i.date)).toEqual([7, 6, 5, 4, 3].map((d) => `2026-11-0${d}`));
+    expect(MAX_INSTANCES).toBe(5);
     expect(p?.dates).toBe(8);
   });
 });
 
 describe('classesOf', () => {
   test('counts each class, most used first, ties by name', () => {
-    expect(classesOf([tagged('a', 'y'), tagged('b', 'x'), tagged('c', 'y'), tagged('d')])).toEqual({
+    const entries = [
+      tagged('a', 'y'),
+      tagged('b', 'x'),
+      tagged('c', 'y'),
+      tagged('d'),
+      tagged('e', 'w'),
+    ];
+    expect(classesOf(entries)).toEqual({
       classes: [
         { class: 'y', entries: 2 },
+        { class: 'w', entries: 1 },
         { class: 'x', entries: 1 },
       ],
       omitted: 0,

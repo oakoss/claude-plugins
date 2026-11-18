@@ -132,24 +132,30 @@ function pathOf(v: unknown): string | { error: string } {
 
 // Invisible characters that make two classes that print alike differ. Joiners
 // (U+200C, U+200D) and emoji tags stay: words and emoji need them.
-const INVISIBLE = /[­​⁠﻿‪-‮⁦-⁩]/gu;
+const INVISIBLE = /[\u{AD}\u{200B}\u{2060}\u{FEFF}\u{202A}-\u{202E}\u{2066}-\u{2069}]/gu;
 
 const normalClass = (s: string) =>
   s
+    .replaceAll(INVISIBLE, '')
     .normalize('NFKC')
     .toLowerCase()
     .normalize('NFKC')
-    .replaceAll(INVISIBLE, '')
     .trim()
     .replaceAll(/\s+/g, ' ');
+
+const codePoint = (ch: string) =>
+  `U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`;
 
 // Classes compare exactly. storedOf reads one back only if normalizing it
 // again changes nothing, so an unstable form is refused here.
 function classOf(v: unknown): string | { error: string } {
   if (typeof v !== 'string') return { error: 'class must be a string' };
-  if (/\p{Cc}/u.test(v.replaceAll(/\s/g, ' '))) return { error: 'class holds a control character' };
+  const control = /\p{Cc}/u.exec(v.replaceAll(/\s/g, ' '))?.[0];
+  if (control) return { error: `class holds the control character ${codePoint(control)}` };
   const c = normalClass(v);
-  if (normalClass(c) !== c) return { error: 'class does not normalize to a stable form' };
+  if (normalClass(c) !== c) {
+    return { error: `class does not normalize to a stable form: ${JSON.stringify(c)}` };
+  }
   if (c === '') return { error: 'class is empty' };
   if (c.length > MAX_CLASS) return { error: `class is over ${MAX_CLASS} characters` };
   return c;

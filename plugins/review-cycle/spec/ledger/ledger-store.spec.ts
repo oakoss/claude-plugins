@@ -252,6 +252,23 @@ describe('recurring classes', () => {
     const found = await readLedger(store, files, COMMON, { query: 'evasion' }, NOW);
     expect((found.entries as { path: string }[]).map((e) => e.path)).toEqual(['a.ts']);
   });
+  test('a first page listing classes still fits in MAX_READ', async () => {
+    const { store } = fakeStore();
+    const paths = Array.from({ length: 60 }, (_, i) => `${i}.ts`);
+    const files = tree(Object.fromEntries(paths.map((p) => [p, A])));
+    const add = paths.map((p, i) => ({
+      ...DEFERRED,
+      path: p,
+      finding: `${p} ${'f'.repeat(300)}`,
+      class: `${'k'.repeat(55)}${i}`,
+    }));
+    await record(store, files, rec({ add }));
+    const page = await readLedger(store, files, COMMON, {}, NOW);
+    expect(page.classes).toBeDefined();
+    expect(page.classesOmitted).toBeGreaterThan(0);
+    expect(page.next).toBeDefined();
+    expect(JSON.stringify(page).length).toBeLessThanOrEqual(MAX_READ);
+  });
   test('a ledger with no class lists none', async () => {
     const { store } = fakeStore();
     await record(store, tree({ 'a.ts': A }), rec({ add: [DEFERRED] }));

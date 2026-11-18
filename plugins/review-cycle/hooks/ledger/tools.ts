@@ -71,9 +71,7 @@ export async function registerLedger($: $): Promise<void> {
                 source: { type: 'string', description: 'The reviewer that raised it.' },
                 class: {
                   type: 'string',
-                  maxLength: MAX_CLASS,
-                  description:
-                    "The general rule this finding is an instance of, when it has one, such as 'evasion outside the gate threat model': the words of a class in the read's `classes` when one fits, else a new short phrase. Compared lowercased with spacing collapsed. Left out, an entry recorded again keeps its class.",
+                  description: `The general rule this finding is an instance of, when it has one, such as 'evasion outside the gate threat model': the words of a class in the read's \`classes\` when one fits, else a new short phrase of at most ${MAX_CLASS} characters once normalized. Compared lowercased with spacing collapsed. Left out, an entry recorded again keeps its class; to drop one, resolve the entry and record it again.`,
                 },
               },
               required: ['path', 'kind', 'finding', 'reason', 'source'],
