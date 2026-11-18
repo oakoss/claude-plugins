@@ -15,7 +15,7 @@ import { isKept, keptOf, offKept, restoredOf, type Restored } from './kept';
 // latest message's grant included, so a reload mid-step does not ask twice.
 // Bump the shape whenever Kept changes, so a reload into new code starts fresh.
 const gate = atom({ plugin: 'review-cycle', key: 'gate' } as const, null, {
-  shape: 'gate-11',
+  shape: 'gate-12',
 });
 let keptText = '';
 let isKeepFailing = false;

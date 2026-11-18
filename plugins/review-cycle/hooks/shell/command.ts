@@ -1027,6 +1027,41 @@ const MERGE_VALUE = new Set([
   '--author-email',
 ]);
 const RELEASE_WRITES = new Set(['create', 'new', 'edit', 'delete', 'delete-asset', 'upload']);
+// The `gh release` options that take a value as the next word.
+const RELEASE_VALUE = new Set([
+  '-t',
+  '--title',
+  '-n',
+  '--notes',
+  '-F',
+  '--notes-file',
+  '--target',
+  '--discussion-category',
+  '--notes-start-tag',
+  '--tag',
+  '-R',
+  '--repo',
+]);
+
+const renames = (w: Word) => w.text === '--tag' || w.text.startsWith('--tag=');
+
+// Whether a run-time word could expand into an option such as `--tag`.
+function mayBeOption(w: Word, prev: Word | undefined): boolean {
+  if (!w.dynamic) return false;
+  if (w.splits) return true;
+  if (prev !== undefined && !prev.dynamic && RELEASE_VALUE.has(prev.text)) return false;
+  return /^[$`]/.test(w.text) || (w.text.startsWith('-') && !/^--[\w-]+=/.test(w.text));
+}
+
+// Read only from the first word after the verb: gh's grouped short options
+// make any other position ambiguous.
+function releaseTagOf(before: Word[], rest: Word[]): string | null {
+  const [first, ...after] = rest;
+  if (first === undefined || first.dynamic || first.text.startsWith('-')) return null;
+  if (before.length > 0) return null;
+  const unread = after.some((w, i) => renames(w) || mayBeOption(w, i === 0 ? first : after[i - 1]));
+  return unread ? null : first.text;
+}
 // Read as text when the command does not parse: opening a pull request, and
 // any other gh write, which then cannot be read further.
 const GH_PR = /\bgh\b[^|;&\n]*\bpr\s+(?:[^\s;&|]+\s+)*?(create|new|ready)\b/;
@@ -1468,7 +1503,9 @@ function ghAt(
     }
   }
   if (group === 'issue' && verb === 'comment') return { kind: 'comment' };
-  if (group === 'release' && RELEASE_WRITES.has(verb)) return { kind: 'release' };
+  if (group === 'release' && RELEASE_WRITES.has(verb)) {
+    return { kind: 'release', tag: fed ? null : releaseTagOf(before, rest) };
+  }
   return null;
 }
 

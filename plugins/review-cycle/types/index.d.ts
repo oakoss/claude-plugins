@@ -45,6 +45,7 @@ export type KeptGrant = Readonly<{
   mergeStack: readonly string[];
   approve: boolean;
   release: boolean;
+  releaseNamed: readonly string[];
   comment: boolean;
 }>;
 

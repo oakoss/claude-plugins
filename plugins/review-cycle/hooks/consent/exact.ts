@@ -113,11 +113,16 @@ const ticked = (list: string): string[] =>
   [...list.matchAll(/`([^`\s]+)`/g)].map((m) => m[1] ?? '');
 
 // A release by hand pushes each version's tag before it creates the release,
-// so a release of named versions covers those tags too.
+// so a release of named versions covers those tags too, and only those.
 const releasing = (versions: readonly string[]): Part =>
   versions.length === 0
     ? { release: true }
-    : { release: true, push: 'push', pushNamed: versions.map((v) => `tag:${v}`) };
+    : {
+        release: true,
+        releaseNamed: versions,
+        push: 'push',
+        pushNamed: versions.map((v) => `tag:${v}`),
+      };
 
 // The answer's last line, when it stands alone in its paragraph under nothing
 // that leads into it ("If CI passes:"): where a question is read from.
@@ -297,7 +302,7 @@ function parts(text: string, before: string): Part[] | null {
     // What follows a standing ask may wait on the same condition, so only a
     // release joins one, as a release once the version pull request is ready.
     // A release's own tag pushes are part of it, and wait with it.
-    const own = new Set(['release', 'push', 'pushNamed']);
+    const own = new Set(['release', 'releaseNamed', 'push', 'pushNamed']);
     const releases = second.release === true && Object.keys(second).every((k) => own.has(k));
     return releases ? [first, { readyRelease: true }] : null;
   }

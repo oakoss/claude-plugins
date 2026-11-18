@@ -50,6 +50,15 @@ describe('gh api', () => {
     expect(kinds(command)).toEqual(expected);
   });
 
+  test.each([
+    ['gh api repos/{owner}/{repo}/releases -f tag_name=v1', 'v1'],
+    ['gh api repos/{owner}/{repo}/releases -f tag_name="$T"', null],
+    ['gh api -X PATCH repos/{owner}/{repo}/releases/tags/v2 -f name=x', 'v2'],
+    ['gh api -X DELETE repos/{owner}/{repo}/releases/7', null],
+  ])('%s releases %j', (command, tag) => {
+    expect(one(command)).toEqual({ kind: 'release', tag });
+  });
+
   test('a review thread reply and resolve are marked; an unresolve or top-level comment is not', () => {
     const reply = { kind: 'comment', thread: 'reply' };
     expect(one('gh api repos/{owner}/{repo}/pulls/116/comments/5/replies -f body=x')).toEqual(

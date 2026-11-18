@@ -149,7 +149,7 @@ describe('GitHub writes on the ladder', () => {
 
   test.each<[GhAction, HoldStep, string]>([
     [{ kind: 'pr' }, 'pr', 'a pull request'],
-    [{ kind: 'release' }, 'merge', 'a merge'],
+    [{ kind: 'release', tag: 'v1' }, 'merge', 'a merge'],
     [{ kind: 'approve' }, 'merge', 'a merge'],
   ])('a hold stops %j at every rung', async (action, step, named) => {
     const r = await judge([action], world('never stop'), grant(), { step, how: 'mentioned' });
@@ -162,7 +162,7 @@ describe('GitHub writes on the ladder', () => {
 
   test.each<[string, GhAction, () => ReturnType<typeof world>, Grant, MissStep | undefined]>([
     ['a pull request', { kind: 'pr' }, () => world('open PR'), grant(), 'pr'],
-    ['a release', { kind: 'release' }, () => world('release'), grant(), 'release'],
+    ['a release', { kind: 'release', tag: 'v1' }, () => world('release'), grant(), 'release'],
     ['a merge', merge(false), () => world('merge'), grant(), 'merge'],
     ['a push', push({ branch: 'fix/x', repo: 'o/r' }), () => world('push'), grant(), 'push'],
     [

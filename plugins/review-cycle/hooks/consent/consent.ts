@@ -25,7 +25,8 @@ export const pushRank = (level: PushLevel): number => PUSH_LEVELS.indexOf(level)
 // `gh stack merge` alone: `stack` for the whole stack, `upto:<n>` for the
 // layers up to pull request <n>. `finish` holds the history commands a request
 // to finish named ("finish the rebase"): a commit of that command's
-// `--continue` only.
+// `--continue` only. `releaseNamed` holds the versions a release question
+// named, empty for a release that named none.
 export type Grant = Readonly<{
   commit: boolean;
   finish: readonly Finishes[];
@@ -43,6 +44,7 @@ export type Grant = Readonly<{
   mergeStack: readonly string[];
   approve: boolean;
   release: boolean;
+  releaseNamed: readonly string[];
   comment: boolean;
 }>;
 
@@ -61,6 +63,7 @@ export const NO_GRANT: Grant = Object.freeze({
   mergeStack: [],
   approve: false,
   release: false,
+  releaseNamed: [],
   comment: false,
 });
 
@@ -93,6 +96,7 @@ const GRANT_CHECKS: { readonly [K in keyof Grant]-?: (v: unknown) => v is Grant[
   mergeStack: isStrings,
   approve: isFlag,
   release: isFlag,
+  releaseNamed: isStrings,
   comment: isFlag,
 };
 
@@ -108,11 +112,12 @@ export function covers(grant: Grant, level: PushLevel): boolean {
   return pushRank(grant.push) >= pushRank(level);
 }
 
-// A merge with no pull request named covers any, so adding a named one must not
-// narrow it. readyNamed stays whole: it also keeps those pull requests out of an
-// open merge-now.
+// A merge or release with nothing named covers any, so adding a named one must
+// not narrow it. readyNamed stays whole: it also keeps those pull requests out
+// of an open merge-now.
 export function combine(a: Grant, b: Grant): Grant {
   const open = (g: Grant) => g.merge && g.mergeNamed.length === 0;
+  const anyRelease = (g: Grant) => g.release && g.releaseNamed.length === 0;
   return Object.freeze({
     commit: a.commit || b.commit,
     finish: [...a.finish, ...b.finish],
@@ -128,6 +133,8 @@ export function combine(a: Grant, b: Grant): Grant {
     mergeStack: [...new Set([...a.mergeStack, ...b.mergeStack])],
     approve: a.approve || b.approve,
     release: a.release || b.release,
+    releaseNamed:
+      anyRelease(a) || anyRelease(b) ? [] : [...new Set([...a.releaseNamed, ...b.releaseNamed])],
     comment: a.comment || b.comment,
   });
 }

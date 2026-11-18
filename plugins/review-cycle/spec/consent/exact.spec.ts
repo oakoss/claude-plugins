@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { NO_GRANT, type Grant } from '../../hooks/consent/consent';
+import { combine, NO_GRANT, type Grant } from '../../hooks/consent/consent';
 import {
   besideOf,
   dropsGrant,
@@ -214,19 +214,30 @@ const SAMPLES: Record<OfferStep, readonly [object, Partial<Grant>][]> = {
     [{ pulls: ['343'] }, { release: true }],
     [
       { version: 'review-cycle@0.39.0' },
-      { release: true, push: 'push', pushNamed: ['tag:review-cycle@0.39.0'] },
+      {
+        release: true,
+        releaseNamed: ['review-cycle@0.39.0'],
+        push: 'push',
+        pushNamed: ['tag:review-cycle@0.39.0'],
+      },
     ],
     [
       { versions: ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'] },
       {
         release: true,
+        releaseNamed: ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'],
         push: 'push',
         pushNamed: ['tag:pr-kit@0.6.1', 'tag:pr-watch@0.9.0', 'tag:review-cycle@0.39.0'],
       },
     ],
     [
       { versions: ['v1.2.0', 'v1.3.0'] },
-      { release: true, push: 'push', pushNamed: ['tag:v1.2.0', 'tag:v1.3.0'] },
+      {
+        release: true,
+        releaseNamed: ['v1.2.0', 'v1.3.0'],
+        push: 'push',
+        pushNamed: ['tag:v1.2.0', 'tag:v1.3.0'],
+      },
     ],
   ],
   'push-tag': [[{ version: 'pr-kit@0.6.1' }, { push: 'push', pushNamed: ['tag:pr-kit@0.6.1'] }]],
@@ -321,8 +332,14 @@ describe("a yes to the offer tool's question", () => {
 describe('a release by hand', () => {
   const THREE = 'Release `pr-kit@0.6.1`, `pr-watch@0.9.0` and `review-cycle@0.39.0`?';
   const tags = ['tag:pr-kit@0.6.1', 'tag:pr-watch@0.9.0', 'tag:review-cycle@0.39.0'];
-  const all = grant({ release: true, push: 'push', pushNamed: tags });
-  const one = grant({ release: true, push: 'push', pushNamed: ['tag:v0.25.0'] });
+  const versions = ['pr-kit@0.6.1', 'pr-watch@0.9.0', 'review-cycle@0.39.0'];
+  const all = grant({ release: true, releaseNamed: versions, push: 'push', pushNamed: tags });
+  const one = grant({
+    release: true,
+    releaseNamed: ['v0.25.0'],
+    push: 'push',
+    pushNamed: ['tag:v0.25.0'],
+  });
 
   test.each(['yes', 'ok, lets release it', 'yes, lets release them', 'release them', 'publish it'])(
     '%j to a question naming versions covers each tag and the release',
@@ -331,6 +348,16 @@ describe('a release by hand', () => {
       expect(grantOf(answer, 'Release `v0.25.0`?')).toEqual(one);
     },
   );
+
+  test('a release naming nothing is never narrowed by one naming versions', () => {
+    const v1 = grant({ release: true, releaseNamed: ['v1'] });
+    const v2 = grant({ release: true, releaseNamed: ['v2'] });
+    const any = grant({ release: true });
+    expect(combine(v1, v2).releaseNamed).toEqual(['v1', 'v2']);
+    expect(combine(v1, any).releaseNamed).toEqual([]);
+    expect(combine(any, v1).releaseNamed).toEqual([]);
+    expect(combine(v1, NO_GRANT).releaseNamed).toEqual(['v1']);
+  });
 
   test('a release asked with no versions offered names no tag', () => {
     const bare = grant({ release: true });
