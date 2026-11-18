@@ -1528,7 +1528,9 @@ describe('a push the user asked for', () => {
           name: 'above',
           tier: 'prepend',
           register(on) {
-            on('tool.call', { tool: 'mcp__github__create_pull_request' }, async ($, e, next) => {
+            // A pattern, not the name: validate types a name against this
+            // machine's connected MCP tools, which may lack GitHub's.
+            on('tool.call', { tool: /^mcp__github__create_pull_request$/ }, async ($, e, next) => {
               void next(e);
               return { deny: 'above' };
             });
