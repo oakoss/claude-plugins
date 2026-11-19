@@ -5,6 +5,7 @@ import {
   create,
   draftJson,
   type Gh,
+  held,
   lineIn,
   mergedJson,
   OPEN_VIEW,
@@ -409,10 +410,9 @@ describe('the tools', () => {
     world(on, gh);
     await start($);
     const answer = tool($, 'watch', { pull: '128' });
-    // Until the first read is held.
-    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    const release = await held(gh);
     await tool($, 'unwatch', { pull: '128' });
-    gh.release!();
+    release();
     expect(await answer).toBe(
       'o/r#128 is no longer watched: its line was removed while pr-watch read it.',
     );
