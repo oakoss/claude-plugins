@@ -404,6 +404,15 @@ export function world(
   return seen;
 }
 
+// The turns the engine takes to reach a held gh call change between Claude Code
+// builds (2.1.328 needs more than 50), so the bound is wide, and a call never
+// held throws rather than let the test go on unheld.
+export async function held(gh: Gh): Promise<() => void> {
+  for (let i = 0; i < 10_000 && !gh.release; i += 1) await Promise.resolve();
+  if (!gh.release) throw new Error('no gh call was held');
+  return gh.release;
+}
+
 export async function start($: any) {
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true });
 }

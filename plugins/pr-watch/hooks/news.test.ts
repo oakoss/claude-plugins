@@ -7,6 +7,7 @@ import {
   draftJson,
   FAILING_CI,
   type Gh,
+  held,
   ID,
   lineIn,
   PASSED_CI,
@@ -150,7 +151,7 @@ describe('news held through a turn', () => {
     await clock.advance(1000);
     gh.holdView = true;
     await ($ as any).turn.complete(done);
-    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await held(gh);
     await ($ as any).turn.start(turn);
     gh.release!();
     await clock.advance(1);
@@ -173,7 +174,7 @@ describe('news held through a turn', () => {
     await clock.advance(1000);
     gh.holdView = true;
     await ($ as any).turn.complete(done);
-    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await held(gh);
     await ($ as any).turn.start(turn);
     await ($ as any).turn.complete(done);
     await clock.advance(1);
@@ -219,7 +220,7 @@ describe('news held through a turn', () => {
     await clock.advance(1000);
     gh.holdView = true;
     await ($ as any).turn.complete(done);
-    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await held(gh);
     await start($);
     await clock.advance(1);
     expect(seen.wakes).toHaveLength(1);
@@ -777,7 +778,7 @@ describe('ready to merge, while merges need asking', () => {
     await start($);
     gh.holdView = true;
     const dropped = $.prompt.submit(person());
-    for (let i = 0; i < 50 && !gh.release; i += 1) await Promise.resolve();
+    await held(gh);
     await create($);
     await clock.advance(1000);
     gh.release!();
