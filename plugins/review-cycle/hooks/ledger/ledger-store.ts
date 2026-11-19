@@ -5,6 +5,7 @@
 import { firstLine, worktreeTree, type Git } from '../gate/git';
 import {
   blobsOf,
+  classesOf,
   isStale,
   keyOf,
   MAX_READ,
@@ -12,6 +13,7 @@ import {
   paged,
   PREFIX,
   ranked,
+  recurring,
   select,
   staleKeys,
   storedOf,
@@ -76,6 +78,11 @@ export async function readLedger(
     reopened: found.reopened,
     unreadable: stored.unreadable,
   };
+  if (!read.offset) {
+    const { classes, omitted } = classesOf(stored.entries);
+    if (classes.length > 0) status.classes = classes;
+    if (omitted > 0) status.classesOmitted = omitted;
+  }
   let current: Map<string, string> | null = null;
   try {
     current = await blobs([...new Set(shown.map((e) => e.path))]);
@@ -145,11 +152,13 @@ export async function recordInto(
   const m = merge(stored.entries, rec, found, new Date(now).toISOString().slice(0, 10));
   await store.set(key, { entries: m.entries, updated: now });
   const { entries, ...counts } = m;
+  const propose = recurring(stored.entries, entries);
   return JSON.stringify(
     {
       ...counts,
       total: entries.length,
       ...(stored.unreadable > 0 ? { dropped: stored.unreadable } : {}),
+      ...(propose.length > 0 ? { propose } : {}),
       ...status,
     },
     null,

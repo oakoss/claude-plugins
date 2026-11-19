@@ -52,3 +52,15 @@ test('Phase 9 records what the cycle settled and resolves what it fixed', () => 
   expect(text).toContain('Ledger: carried N from earlier cycles');
   expect(text).toContain('K kept, R resolved[, G gone][, E evicted][, D dropped unreadable]');
 });
+
+test('a recurring class is proposed as a project rule, never written unasked', () => {
+  const text = skillText('review-cycle', 'review');
+  expect(text).toContain('and a `class` when it instances a general rule');
+  expect(text).toContain('in the words of a class Phase 3 kept when one fits');
+  expect(text).toContain("and keep the first read's `classes`; Phase 9 needs them.");
+  expect(text).toContain('When the answer lists `propose`, a finding keeps recurring');
+  expect(text).toContain('(code, then a check, then a line in the project');
+  expect(text).toContain(
+    "Never write one without the user's yes; under a job (Phase 1), report them instead.",
+  );
+});

@@ -2,10 +2,14 @@ import { describe, expect, test } from 'vitest';
 
 import {
   blobsOf,
+  classesOf,
   entryId,
   EXPIRY_DAYS,
   isStale,
   keyOf,
+  MAX_CLASS,
+  MAX_CLASSES_TEXT,
+  MAX_INSTANCES,
   MAX_KEY,
   MAX_LEDGER_BYTES,
   MAX_PATH,
@@ -17,6 +21,8 @@ import {
   parseRecord,
   PREFIX,
   ranked,
+  RECUR_DATES,
+  recurring,
   select,
   staleKeys,
   storedOf,
@@ -550,6 +556,192 @@ describe('storedOf', () => {
       entries: [good],
       unreadable: 1,
     });
+  });
+});
+
+describe('class', () => {
+  test('parseRecord normalizes a class, so cycles that space or case it differently agree', () => {
+    const r = parseRecord({ entries: [finding({ class: '  Gate\tThreat   model ' })] });
+    expect(r).toMatchObject({ add: [{ class: 'gate threat model' }] });
+    expect(parseRecord({ entries: [finding()] })).toMatchObject({ add: [finding()] });
+    expect(parseRecord({ entries: [finding()] })).not.toHaveProperty('add.0.class');
+  });
+  test.each([
+    ['empty', '  ', 'class is empty'],
+    ['too long', 'x'.repeat(MAX_CLASS + 1), `class is over ${MAX_CLASS} characters`],
+    ['not a string', 3, 'class must be a string'],
+    ['control character', 'a\u0007b', 'class holds the control character U+0007'],
+  ])('refuses a class that is %s', (_, cls, error) => {
+    expect(refusal({ entries: [finding({ class: cls as string })] })).toBe(`entries[0]: ${error}`);
+  });
+  test('normalizes Unicode form, so composed and decomposed spellings are one class', () => {
+    const composed = parseRecord({ entries: [finding({ class: 'caf\u{E9} rule' })] });
+    const decomposed = parseRecord({ entries: [finding({ class: 'cafe\u{301} rule' })] });
+    expect(composed).toMatchObject({ add: [{ class: 'caf\u{E9} rule' }] });
+    expect(decomposed).toEqual(composed);
+  });
+  test('strips invisible characters, keeping the joiners words and emoji need', () => {
+    expect(
+      parseRecord({ entries: [finding({ class: 'cafe\u{200B} \u{FEFF}rule' })] }),
+    ).toMatchObject({
+      add: [{ class: 'cafe rule' }],
+    });
+    for (const kept of [
+      'family \u{1F468}\u{200D}\u{1F469}',
+      '\u{645}\u{6CC}\u{200C}\u{62E}\u{648}\u{627}\u{647}\u{645}',
+    ]) {
+      const r = parseRecord({ entries: [finding({ class: kept })] });
+      expect(r).toMatchObject({ add: [{ class: kept.normalize('NFKC').toLowerCase() }] });
+    }
+  });
+  test('an invisible character between a letter and its mark is stripped, not refused', () => {
+    const r = parseRecord({ entries: [finding({ class: 'e\u{200B}\u{301} rule' })] });
+    expect(r).toMatchObject({ add: [{ class: '\u{E9} rule' }] });
+  });
+  test('a class whose case folding recomposes reads back after a record', () => {
+    const r = parseRecord({ entries: [finding({ class: 'J\u{30C} rule' })] });
+    if ('error' in r) throw new Error(r.error);
+    const m = merge([], r, blobs('a.ts'), DATE);
+    expect(m.entries[0]?.class).toBe('\u{1F0} rule');
+    expect(storedOf({ entries: m.entries, updated: 1 })).toMatchObject({ unreadable: 0 });
+  });
+  test('accepts a class of exactly MAX_CLASS characters', () => {
+    expect(
+      parseRecord({ entries: [finding({ class: 'x'.repeat(MAX_CLASS) })] }),
+    ).not.toHaveProperty('error');
+  });
+  test('storedOf reads back an entry with a class, and refuses an unnormalized one', () => {
+    const tagged = recorded(finding({ class: 'gate threat model' }));
+    expect(storedOf({ entries: [tagged], updated: 1 }).entries).toEqual([tagged]);
+    const cased = { ...tagged, class: 'Gate threat model' };
+    expect(storedOf({ entries: [cased], updated: 1 })).toMatchObject({
+      entries: [],
+      unreadable: 1,
+    });
+  });
+  test('an entry recorded again without a class keeps its class; one with a class replaces it', () => {
+    const tagged = recorded(finding({ class: 'old' }));
+    const none = merge(
+      [tagged],
+      { add: [finding()], resolve: [], keep: [], move: [] },
+      blobs('a.ts'),
+      'later',
+    );
+    expect(none.entries[0]?.class).toBe('old');
+    const renamed = merge(
+      [tagged],
+      { add: [finding({ class: 'new' })], resolve: [], keep: [], move: [] },
+      blobs('a.ts'),
+      'later',
+    );
+    expect(renamed.entries[0]?.class).toBe('new');
+  });
+  test('keep and move carry the class', () => {
+    const tagged = recorded(finding({ class: 'c' }));
+    const kept = merge(
+      [tagged],
+      { add: [], resolve: [], keep: [tagged.id], move: [] },
+      blobs('a.ts'),
+      'later',
+    );
+    expect(kept.entries[0]?.class).toBe('c');
+    const moved = merge(
+      [tagged],
+      { add: [], resolve: [], keep: [], move: [{ id: tagged.id, path: 'b.ts', line: null }] },
+      blobs('b.ts'),
+      'later',
+    );
+    expect(moved.entries[0]?.class).toBe('c');
+  });
+});
+
+// An entry of class `c` settled at `path` on `date`.
+const on = (date: string, path: string): Entry => ({
+  ...recorded(finding({ path, finding: `${path}@${date}`, class: 'c' })),
+  date,
+});
+
+const tagged = (path: string, cls?: string) =>
+  recorded(finding({ path, ...(cls && { class: cls }) }));
+
+describe('recurring', () => {
+  test('proposes a class when this record brings it to RECUR_DATES dates', () => {
+    expect(RECUR_DATES).toBe(2);
+    const before = [on('2026-10-01', 'a.ts')];
+    const after = [...before, on('2026-11-01', 'b.ts')];
+    expect(recurring(before, after)).toEqual([
+      {
+        class: 'c',
+        dates: 2,
+        instances: [after[1], after[0]].map((e) => ({
+          id: e?.id,
+          path: e?.path,
+          finding: e?.finding,
+          reason: e?.reason,
+          date: e?.date,
+        })),
+      },
+    ]);
+  });
+  test('counts dates, not files: one file settled on two dates recurs', () => {
+    const before = [on('2026-10-01', 'a.ts')];
+    expect(
+      recurring(before, [...before, { ...on('2026-11-01', 'a.ts'), finding: 'other' }]),
+    ).toHaveLength(1);
+  });
+  test('does not propose a class already recurring before the record, so each is asked once', () => {
+    const before = [on('2026-10-01', 'a.ts'), on('2026-10-02', 'b.ts')];
+    expect(recurring(before, [...before, on('2026-11-01', 'c.ts')])).toEqual([]);
+  });
+  test('a class whose entries fell below RECUR_DATES is proposed again when it returns', () => {
+    const a = on('2026-10-01', 'a.ts');
+    expect(recurring([a], [a, on('2026-10-02', 'b.ts')])).toHaveLength(1);
+    expect(recurring([a], [a, on('2026-11-01', 'c.ts')])).toHaveLength(1);
+  });
+  test('two entries on one date, or untagged entries, are not a recurrence', () => {
+    expect(recurring([], [on('2026-11-01', 'a.ts'), on('2026-11-01', 'b.ts')])).toEqual([]);
+    const plain = { ...on('2026-10-01', 'a.ts') };
+    delete plain.class;
+    expect(recurring([plain], [plain, { ...plain, date: '2026-11-01', id: 'x' }])).toEqual([]);
+  });
+  test('lists at most MAX_INSTANCES instances, the newest first, whatever the storage order', () => {
+    const before = [on('2026-10-01', 'z.ts')];
+    const after = [...before, ...[3, 7, 1, 5, 2, 6, 4].map((d) => on(`2026-11-0${d}`, `${d}.ts`))];
+    const [p] = recurring(before, after);
+    expect(p?.instances.map((i) => i.date)).toEqual([7, 6, 5, 4, 3].map((d) => `2026-11-0${d}`));
+    expect(MAX_INSTANCES).toBe(5);
+    expect(p?.dates).toBe(8);
+  });
+});
+
+describe('classesOf', () => {
+  test('counts each class, most used first, ties by name', () => {
+    const entries = [
+      tagged('a', 'y'),
+      tagged('b', 'x'),
+      tagged('c', 'y'),
+      tagged('d'),
+      tagged('e', 'w'),
+    ];
+    expect(classesOf(entries)).toEqual({
+      classes: [
+        { class: 'y', entries: 2 },
+        { class: 'w', entries: 1 },
+        { class: 'x', entries: 1 },
+      ],
+      omitted: 0,
+    });
+  });
+  test('keeps the most used within MAX_CLASSES_TEXT and counts the rest as omitted', () => {
+    const many = Array.from({ length: 200 }, (_, i) =>
+      recorded(finding({ path: `${i}.ts`, class: `${'k'.repeat(50)}${i}` })),
+    );
+    const common = ['x.ts', 'y.ts'].map((p) => tagged(p, 'zz common'));
+    const { classes, omitted } = classesOf([...many, ...common]);
+    expect(classes[0]).toEqual({ class: 'zz common', entries: 2 });
+    expect(JSON.stringify(classes).length).toBeLessThanOrEqual(MAX_CLASSES_TEXT);
+    expect(classes.length + omitted).toBe(201);
+    expect(omitted).toBeGreaterThan(0);
   });
 });
 
