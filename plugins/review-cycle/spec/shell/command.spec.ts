@@ -1835,6 +1835,14 @@ describe('gh steps', () => {
     expect(kinds('gh co 116')).toEqual(['unread']);
     expect(kinds('gh pr co 116')).toEqual([]);
   });
+  test('gh event, built in since gh 2.105.0, is read and holds no gated step', () => {
+    const pr = 'https://github.com/o/r/pull/416';
+    expect(kinds('gh event --help')).toEqual([]);
+    expect(
+      kinds(`gh event listen --resource ${pr} --event com.github.pull_request.state.changed.v1`),
+    ).toEqual([]);
+    expect(kinds('gh event subscription list')).toEqual([]);
+  });
   describe('gh stack', () => {
     test.each([
       'gh stack view --json',

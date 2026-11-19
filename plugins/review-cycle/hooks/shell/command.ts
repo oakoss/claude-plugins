@@ -909,7 +909,7 @@ function tame(text: string): string {
     .replaceAll(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '\u{FFFD}');
 }
 
-// gh's own commands (gh 2.102.0's `gh --help`). Any other word is a gh alias
+// gh's own commands (gh 2.105.0's `gh --help`). Any other word is a gh alias
 // or an extension, which the gate does not read.
 const GH_COMMANDS = new Set([
   'agent-task',
@@ -925,6 +925,7 @@ const GH_COMMANDS = new Set([
   'config',
   'copilot',
   'discussion',
+  'event',
   'extension',
   'ext',
   'extensions',
