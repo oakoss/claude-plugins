@@ -4,6 +4,20 @@ All notable changes to the `review-cycle` plugin will be documented in this file
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.44.0 (2026-11-19)
+
+### Added
+
+A finding that keeps recurring is proposed as a project rule. When `/review-cycle:review` records a finding in the ledger that instances a general rule, it tags it with a `class` naming that rule, reusing the wording of a class the ledger already holds when one fits. When a class has been settled on two different days, the review ends by proposing to fix it at the source: in code first, then a check, then a line in your `AGENTS.md` or `CLAUDE.md`. It writes nothing until you say yes, and does not propose the same class again while it stays recurring, whatever you answer; a class whose entries are resolved can come back.
+
+An older review-cycle version reading the same ledger drops the entries that carry a class, as it does any entry a newer version wrote.
+
+A release you approve by naming its versions now covers only those versions. After a yes to "Release `pr-kit@0.6.1`?", the commit gate refuses a `gh release create`, `edit`, `delete` or `upload`, or a `gh api` call to the releases endpoint, for any other tag, and asks the question that names it. It also refuses what it cannot tie to a named version: a tag built at run time, a package publish such as `npm publish` or `oakum release`, and a merge of the version pull request. Before, any release ran once one was approved; tag pushes were already held to the named versions, but `gh release create` without `--verify-tag` makes its tag on GitHub without a push, and `oakum release` releases every pending version. A release asked for without naming a version still covers any, as does a stop-before setting that lets releases run. `gh release delete --cleanup-tag` also deletes the tag on GitHub, so the gate refuses it whatever was approved, as it does `git push --delete` of a tag, and hands you the command to run yourself.
+
+### Fixed
+
+The commit gate reads `gh event`, built into GitHub CLI since 2.105.0, as one of gh's own commands. It had refused every `gh event` command, `gh event listen` and `--help` included, as an alias or extension it cannot read; they now run like the other gh commands it does not gate.
+
 ## 0.43.0 (2026-11-17)
 
 ### Added
