@@ -339,12 +339,19 @@ const QUESTIONS = whole([
   [String.raw`Reply to the review on ${PULL}\?`, () => ({ comment: true })],
   [String.raw`Merge the stack\?`, () => ({ mergeStack: ['stack'] })],
   [String.raw`Merge up to (${PULL})\?`, (m) => ({ mergeStack: [`upto:${allIn(m[1] ?? '')[0]}`] })],
-  [String.raw`Push ${PUSHED}\?`, () => ({ push: 'push' })],
+  // A plain push names its branch, so a yes covers it when it is the default
+  // branch; a force-push names nothing, so one to the default branch asks again.
+  [
+    String.raw`Push ${PUSHED}\?`,
+    (m) => ({ push: 'push', pushNamed: [(m[1] ?? '').toLowerCase()] }),
+  ],
   [String.raw`Force-push ${PUSHED} with a lease\?`, () => ({ push: 'lease' })],
   [String.raw`Force-push ${PUSHED} without a lease\?`, () => ({ push: 'bare' })],
-  [String.raw`Push ${PUSHED} and open a pull request\?`, () => ({ push: 'push', pr: true })],
-  // The two a push refusal writes itself (push-verdict.ts), which name where
-  // the push goes; the offer tool's push questions name nothing.
+  [
+    String.raw`Push ${PUSHED} and open a pull request\?`,
+    (m) => ({ push: 'push', pushNamed: [(m[1] ?? '').toLowerCase()], pr: true }),
+  ],
+  // The two a push refusal writes itself (push-verdict.ts).
   [
     String.raw`Push to \`(${BRANCH})\`\?`,
     (m) => ({ push: 'push', pushNamed: [(m[1] ?? '').toLowerCase()] }),
