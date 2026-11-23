@@ -1788,7 +1788,33 @@ describe('the stop-before setting', () => {
     await say($, 'yes');
     expect(ran(await bash($, 'git push origin main'))).toBe(true);
   });
-  // A yes to the generic push question names no target, so it would be refused again.
+  test("a yes to the offer tool's push question for the default branch runs it at once", async ($, on) => {
+    const git = remoteSide({
+      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+    });
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
+    await say($, 'fix the parser');
+    await ($ as any).turn.complete({
+      answer: 'Done.\n\nPush `main` to `origin`?',
+      reason: 'answer',
+    });
+    await say($, 'yes');
+    expect(ran(await bash($, 'git push origin main'))).toBe(true);
+  });
+  test('a yes to a push question for another branch still asks before the default branch', async ($, on) => {
+    const git = remoteSide({
+      'origin main': [' \trefs/heads/main:refs/heads/main\tb65222b..9f4a349'],
+    });
+    fakeWorld(on, pushing({ settings: { local: stops('never stop') }, git }));
+    await say($, 'fix the parser');
+    await ($ as any).turn.complete({
+      answer: 'Done.\n\nPush `fix/x` to `origin`?',
+      reason: 'answer',
+    });
+    await say($, 'yes');
+    const r = await bash($, 'git push origin main');
+    expect(denied(r, '`main`, the default branch, which the request did not name')).toBe(true);
+  });
   const named: [string, readonly string[], string][] = [
     [
       'git push origin main',

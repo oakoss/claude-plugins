@@ -28,7 +28,11 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
     [{ step: 'comment', pulls: ['95'] }, 'Reply to the review on #95?', { comment: true }],
     [{ step: 'stack' }, 'Merge the stack?', { mergeStack: ['stack'] }],
     [{ step: 'stack', pulls: ['42'] }, 'Merge up to #42?', { mergeStack: ['upto:42'] }],
-    [{ step: 'push', branch: 'fix/x' }, 'Push `fix/x` to `origin`?', { push: 'push' }],
+    [
+      { step: 'push', branch: 'fix/x' },
+      'Push `fix/x` to `origin`?',
+      { push: 'push', pushNamed: ['fix/x'] },
+    ],
     [
       { step: 'force-push', branch: 'fix/x' },
       'Force-push `fix/x` to `origin` with a lease?',
@@ -37,7 +41,7 @@ describe('a yes to each question, ending an answer, grants exactly its step', ()
     [
       { step: 'push-pr', branch: 'fix/x' },
       'Push `fix/x` to `origin` and open a pull request?',
-      { push: 'push', pr: true },
+      { push: 'push', pushNamed: ['fix/x'], pr: true },
     ],
     [{ step: 'pr' }, 'Open a pull request?', { pr: true }],
     [{ step: 'commit', branch: 'fix/x' }, 'Commit the changes to `fix/x`?', { commit: true }],
